@@ -34,7 +34,10 @@ $this->beginPage();
 
 <nav class="navbar navbar-expand-md navbar-dark bg-dark mb-4">
     <div class="container-fluid">
-        <a class="navbar-brand" href="<?= \yii\helpers\Url::to(['/']) ?>">Ansilume</a>
+        <a class="navbar-brand d-flex align-items-center gap-2" href="<?= \yii\helpers\Url::to(['/']) ?>">
+            <img src="/ansilume.png" alt="Ansilume" height="28" style="object-fit:contain">
+            Ansilume
+        </a>
         <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMain">
             <span class="navbar-toggler-icon"></span>
         </button>

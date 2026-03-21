@@ -1,5 +1,9 @@
 # Ansilume
 
+<p align="center">
+  <img src="ansilume.png" alt="Ansilume" width="420">
+</p>
+
 Web-based Ansible automation platform. Manage inventories, credentials, projects, templates, and run Ansible playbooks through a UI with proper access control, execution history, logging, and auditability.
 
 **Stack:** PHP 8.2 · Yii2 · MariaDB · Redis · Docker
