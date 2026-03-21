@@ -46,8 +46,6 @@ class JobLaunchService extends Component
             $job->status    = Job::STATUS_QUEUED;
             $job->queued_at = time();
 
-            \Yii::$app->queue->push(new RunAnsibleJob(['jobId' => $job->id]));
-
             if (!$job->save()) {
                 throw new \RuntimeException('Failed to update job status to queued: ' . json_encode($job->errors));
             }
@@ -56,6 +54,17 @@ class JobLaunchService extends Component
         } catch (\Throwable $e) {
             $transaction->rollBack();
             throw new \RuntimeException('Job launch failed: ' . $e->getMessage(), 0, $e);
+        }
+
+        // Push to queue AFTER commit so the worker sees the committed job record.
+        // If the push fails, mark the job failed rather than leaving it stuck in queued.
+        try {
+            \Yii::$app->queue->push(new RunAnsibleJob(['jobId' => $job->id]));
+        } catch (\Throwable $e) {
+            $job->status      = Job::STATUS_FAILED;
+            $job->finished_at = time();
+            $job->save(false);
+            throw new \RuntimeException('Failed to enqueue job: ' . $e->getMessage(), 0, $e);
         }
 
         \Yii::$app->get('auditService')->log(
