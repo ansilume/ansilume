@@ -1,0 +1,43 @@
+{
+    "name": "ansilume/ansilume",
+    "description": "Web-based Ansible automation platform",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2",
+        "yiisoft/yii2": "~2.0.49",
+        "yiisoft/yii2-redis": "~2.0.0",
+        "yiisoft/yii2-queue": "~2.3.0",
+        "vlucas/phpdotenv": "^5.6",
+        "dragonmantank/cron-expression": "^3.3"
+    },
+    "require-dev": {
+        "yiisoft/yii2-debug": "~2.1.0",
+        "yiisoft/yii2-gii": "~2.2.0",
+        "phpunit/phpunit": "^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "app\\": ""
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "app\\tests\\": "tests/"
+        }
+    },
+    "config": {
+        "process-timeout": 1800,
+        "allow-plugins": {
+            "yiisoft/yii2-composer": true
+        }
+    },
+    "extra": {
+        "asset-installer-paths": {
+            "npm-asset-dir": "vendor/npm-asset",
+            "bower-asset-dir": "vendor/bower-asset"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
