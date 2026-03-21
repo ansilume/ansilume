@@ -15,14 +15,17 @@ $this->beginPage();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?= Html::encode($this->title) ?> — Ansilume</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
-          integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN"
-          crossorigin="anonymous">
+    <link rel="stylesheet" href="/css/bootstrap.min.css">
     <style>
         body { background-color: #f8f9fa; }
         .navbar-brand { font-weight: 700; letter-spacing: .05em; }
         .job-status-badge { font-size: .75rem; }
         pre.job-log { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: .375rem; overflow-x: auto; }
+        /* Yii2 ActiveForm uses Bootstrap 3 classes — make them visible under Bootstrap 5 */
+        .help-block { display: block; font-size: .875em; color: #dc3545; margin-top: .25rem; }
+        .has-error .form-control { border-color: #dc3545; }
+        .has-error .control-label { color: #dc3545; }
+        .has-success .form-control { border-color: #198754; }
     </style>
     <?php $this->head() ?>
 </head>
@@ -96,9 +99,7 @@ $this->beginPage();
     <?= $content ?>
 </main>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"
-        integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL"
-        crossorigin="anonymous"></script>
+<script src="/js/bootstrap.bundle.min.js"></script>
 
 <?php $this->endBody() ?>
 </body>
