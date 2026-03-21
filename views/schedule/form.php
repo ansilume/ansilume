@@ -31,8 +31,9 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
     </div>
     <div class="col-md-6">
         <?= $form->field($model, 'cron_expression')
-            ->textInput(['maxlength' => 64, 'placeholder' => '0 2 * * *'])
+            ->textInput(['maxlength' => 64, 'placeholder' => '0 2 * * *', 'id' => 'cron-input'])
             ->hint('Standard 5-field cron: min hour dom mon dow. Example: <code>0 2 * * *</code> = daily at 02:00.') ?>
+        <div id="cron-preview" class="form-text mt-1" style="min-height:1.25em"></div>
     </div>
     <div class="col-md-6">
         <?= $form->field($model, 'timezone')
@@ -54,3 +55,26 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
 </div>
 
 <?php ActiveForm::end(); ?>
+
+<script src="/js/cronstrue.min.js"></script>
+<script>
+(function () {
+    var input   = document.getElementById('cron-input');
+    var preview = document.getElementById('cron-preview');
+    if (!input || !preview) return;
+
+    function update() {
+        var val = input.value.trim();
+        if (!val) { preview.textContent = ''; return; }
+        try {
+            var text = cronstrue.toString(val, { use24HourTimeFormat: true });
+            preview.innerHTML = '<span class="text-success">&#10003; ' + text + '</span>';
+        } catch (e) {
+            preview.innerHTML = '<span class="text-danger">Invalid expression</span>';
+        }
+    }
+
+    input.addEventListener('input', update);
+    update();
+})();
+</script>
