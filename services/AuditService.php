@@ -33,6 +33,7 @@ class AuditService extends Component
         array   $context    = []
     ): void {
         $request = \Yii::$app->has('request') ? \Yii::$app->request : null;
+        $isWebRequest = $request instanceof \yii\web\Request;
 
         $entry = new AuditLog();
         $entry->action      = $action;
@@ -40,8 +41,8 @@ class AuditService extends Component
         $entry->object_id   = $objectId;
         $entry->user_id     = $userId ?? $this->resolveUserId();
         $entry->metadata    = !empty($context) ? json_encode($context, JSON_UNESCAPED_UNICODE) : null;
-        $entry->ip_address  = $request?->getUserIP();
-        $entry->user_agent  = $request?->getUserAgent();
+        $entry->ip_address  = $isWebRequest ? $request->getUserIP() : null;
+        $entry->user_agent  = $isWebRequest ? $request->getUserAgent() : null;
         $entry->created_at  = time();
 
         if (!$entry->save()) {
