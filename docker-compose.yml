@@ -66,7 +66,7 @@ services:
     container_name: ansilume_worker
     restart: unless-stopped
     working_dir: /var/www
-    command: php yii worker/start
+    command: ["php", "yii", "worker/start"]
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini

@@ -8,7 +8,7 @@ use yii\db\Migration;
  * Creates the audit_logs table.
  * Immutable append-only record of meaningful user and system actions.
  */
-class m000009_create_audit_logs_table extends Migration
+class m000009_000000_create_audit_logs_table extends Migration
 {
     public function safeUp(): void
     {

@@ -7,7 +7,7 @@ use yii\db\Migration;
 /**
  * Creates the RBAC tables required by yii\rbac\DbManager.
  */
-class m000001_create_rbac_tables extends Migration
+class m000001_000000_create_rbac_tables extends Migration
 {
     public function safeUp(): void
     {

@@ -8,7 +8,7 @@ use yii\db\Migration;
  * Creates the api_tokens table for Bearer-token authentication.
  * Tokens are stored as SHA-256 hashes — the raw token is shown once at creation.
  */
-class m000012_create_api_tokens_table extends Migration
+class m000012_000000_create_api_tokens_table extends Migration
 {
     public function safeUp(): void
     {

@@ -26,10 +26,18 @@
             "app\\tests\\": "tests/"
         }
     },
+    "repositories": [
+        {
+            "type": "composer",
+            "url": "https://asset-packagist.org"
+        }
+    ],
     "config": {
         "process-timeout": 1800,
         "allow-plugins": {
-            "yiisoft/yii2-composer": true
+            "yiisoft/yii2-composer": true,
+            "oomphinc/composer-installers-extender": true,
+            "composer/installers": true
         }
     },
     "extra": {

@@ -13,7 +13,7 @@ use yii\db\Migration;
  *   operator    — launch jobs, manage templates/inventories/credentials/projects
  *   viewer      — read-only access (default role)
  */
-class m000010_seed_rbac_roles extends Migration
+class m000010_000000_seed_rbac_roles extends Migration
 {
     public function safeUp(): void
     {

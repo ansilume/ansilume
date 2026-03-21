@@ -7,7 +7,7 @@ use yii\db\Migration;
 /**
  * Creates the inventories table.
  */
-class m000004_create_inventories_table extends Migration
+class m000004_000000_create_inventories_table extends Migration
 {
     public function safeUp(): void
     {

@@ -10,7 +10,7 @@ use yii\db\Migration;
  * Teams group users together and can be granted access to specific
  * projects with an assigned role (viewer or operator).
  */
-class m000016_create_teams_table extends Migration
+class m000016_000000_create_teams_table extends Migration
 {
     public function safeUp(): void
     {

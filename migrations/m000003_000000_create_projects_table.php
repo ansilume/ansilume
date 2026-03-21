@@ -7,7 +7,7 @@ use yii\db\Migration;
 /**
  * Creates the projects table.
  */
-class m000003_create_projects_table extends Migration
+class m000003_000000_create_projects_table extends Migration
 {
     public function safeUp(): void
     {

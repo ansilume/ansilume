@@ -10,7 +10,7 @@ use yii\db\Migration;
  * cron_expression follows standard 5-field cron syntax: min hour dom mon dow
  * Example: "0 2 * * *" = every day at 02:00 UTC
  */
-class m000013_create_schedules_table extends Migration
+class m000013_000000_create_schedules_table extends Migration
 {
     public function safeUp(): void
     {

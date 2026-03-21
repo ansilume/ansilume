@@ -7,7 +7,7 @@ use yii\db\Migration;
 /**
  * Creates the users table.
  */
-class m000002_create_users_table extends Migration
+class m000002_000000_create_users_table extends Migration
 {
     public function safeUp(): void
     {

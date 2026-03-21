@@ -7,7 +7,7 @@ use yii\db\Migration;
 /**
  * Creates the job_templates table.
  */
-class m000006_create_job_templates_table extends Migration
+class m000006_000000_create_job_templates_table extends Migration
 {
     public function safeUp(): void
     {

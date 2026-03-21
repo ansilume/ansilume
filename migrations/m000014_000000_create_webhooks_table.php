@@ -10,7 +10,7 @@ use yii\db\Migration;
  * Webhooks are fired when job events occur (e.g. job.success, job.failure).
  * Each delivery is signed with HMAC-SHA256 using the stored secret.
  */
-class m000014_create_webhooks_table extends Migration
+class m000014_000000_create_webhooks_table extends Migration
 {
     public function safeUp(): void
     {

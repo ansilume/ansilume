@@ -32,6 +32,12 @@ COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
 
 RUN groupmod -g ${GROUP_ID} www-data && usermod -u ${USER_ID} -g ${GROUP_ID} www-data
 
+COPY --chown=root:root docker/php/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 WORKDIR /var/www
 
 USER www-data
+
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["php-fpm"]

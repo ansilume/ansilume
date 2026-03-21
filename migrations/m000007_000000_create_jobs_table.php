@@ -8,7 +8,7 @@ use yii\db\Migration;
  * Creates the jobs table.
  * Statuses: pending | queued | running | succeeded | failed | canceled
  */
-class m000007_create_jobs_table extends Migration
+class m000007_000000_create_jobs_table extends Migration
 {
     public function safeUp(): void
     {

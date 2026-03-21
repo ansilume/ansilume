@@ -9,7 +9,7 @@ use yii\db\Migration;
  * Sensitive values are stored encrypted. The secret_data column holds a JSON
  * blob of encrypted field values — never raw secrets.
  */
-class m000005_create_credentials_table extends Migration
+class m000005_000000_create_credentials_table extends Migration
 {
     public function safeUp(): void
     {

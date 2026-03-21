@@ -13,7 +13,7 @@ use yii\db\Migration;
  * The token is a 32-byte random hex string (64 hex chars), generated once
  * and stored in plain text. Operators treat it like a secret URL.
  */
-class m000015_add_trigger_token_to_job_template extends Migration
+class m000015_000000_add_trigger_token_to_job_template extends Migration
 {
     public function safeUp(): void
     {

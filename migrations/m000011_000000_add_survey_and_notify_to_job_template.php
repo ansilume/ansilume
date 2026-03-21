@@ -13,7 +13,7 @@ use yii\db\Migration;
  * notify_on_failure: send an email when the job fails
  * notify_emails:     JSON array of email addresses to notify
  */
-class m000011_add_survey_and_notify_to_job_template extends Migration
+class m000011_000000_add_survey_and_notify_to_job_template extends Migration
 {
     public function safeUp(): void
     {

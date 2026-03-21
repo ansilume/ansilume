@@ -3,7 +3,6 @@
 /web/assets/
 /web/index-test.php
 /.env
-/composer.lock
 *.swp
 *.swo
 .DS_Store

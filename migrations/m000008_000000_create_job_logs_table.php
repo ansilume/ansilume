@@ -7,7 +7,7 @@ use yii\db\Migration;
 /**
  * Creates the job_logs table for incremental stdout/stderr storage.
  */
-class m000008_create_job_logs_table extends Migration
+class m000008_000000_create_job_logs_table extends Migration
 {
     public function safeUp(): void
     {
