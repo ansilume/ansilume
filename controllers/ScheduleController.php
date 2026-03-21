@@ -130,10 +130,16 @@ class ScheduleController extends BaseController
 
     private function getTemplateList(): array
     {
-        return JobTemplate::find()
+        $rows = JobTemplate::find()
             ->select(['id', 'name'])
             ->orderBy('name')
-            ->indexBy('id')
-            ->column();
+            ->asArray()
+            ->all();
+
+        $list = [];
+        foreach ($rows as $row) {
+            $list[$row['id']] = $row['name'] . ' (' . $row['id'] . ')';
+        }
+        return $list;
     }
 }
