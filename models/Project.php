@@ -17,6 +17,7 @@ use yii\db\ActiveRecord;
  * @property int|null    $scm_credential_id
  * @property string      $status
  * @property int|null    $last_synced_at
+ * @property string|null $last_sync_error
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at

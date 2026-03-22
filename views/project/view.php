@@ -38,6 +38,15 @@ $this->title = $model->name;
     </div>
 </div>
 
+<?php if ($model->status === Project::STATUS_ERROR && $model->last_sync_error): ?>
+<div class="alert alert-danger d-flex align-items-start gap-2">
+    <div>
+        <strong>Last sync failed</strong><br>
+        <code class="user-select-all" style="white-space:pre-wrap;"><?= Html::encode($model->last_sync_error) ?></code>
+    </div>
+</div>
+<?php endif; ?>
+
 <div class="row g-3">
     <div class="col-md-6">
         <div class="card">

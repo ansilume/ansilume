@@ -66,10 +66,12 @@ class ProjectService extends Component
                 $this->gitClone($project->scm_url, $dest, $project->scm_branch, $env);
             }
 
-            $project->status         = Project::STATUS_SYNCED;
-            $project->last_synced_at = time();
+            $project->status          = Project::STATUS_SYNCED;
+            $project->last_synced_at  = time();
+            $project->last_sync_error = null;
         } catch (\RuntimeException $e) {
-            $project->status = Project::STATUS_ERROR;
+            $project->status          = Project::STATUS_ERROR;
+            $project->last_sync_error = $e->getMessage();
             throw $e;
         } finally {
             $project->save(false);
