@@ -85,8 +85,13 @@ $this->title = $model->name;
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Public Key</span>
                 <?php if ($sshInfo && $sshInfo['public_key']): ?>
-                    <button type="button" class="btn btn-sm btn-outline-secondary"
-                            onclick="navigator.clipboard.writeText(document.getElementById('pubkey-display').value)">Copy</button>
+                    <button type="button" id="btn-copy-pubkey" class="btn btn-sm btn-outline-secondary"
+                            onclick="navigator.clipboard.writeText(document.getElementById('pubkey-display').value).then(function(){
+                                var btn = document.getElementById('btn-copy-pubkey');
+                                btn.textContent = 'Copied!';
+                                btn.classList.replace('btn-outline-secondary','btn-success');
+                                setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
+                            })">Copy</button>
                 <?php endif; ?>
             </div>
             <?php if ($sshInfo && $sshInfo['public_key']): ?>
