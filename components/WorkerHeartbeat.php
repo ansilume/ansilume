@@ -66,13 +66,16 @@ class WorkerHeartbeat
     public static function all(): array
     {
         try {
-            $redis = static::connectRedisStatic();
-            $keys  = $redis->keys('ansilume:worker:*');
+            $redis  = static::connectRedisStatic();
+            $keys   = $redis->keys('ansilume:worker:*');
+            $cutoff = time() - 2 * self::HEARTBEAT_INTERVAL;
+
             $workers = [];
             foreach ($keys as $key) {
-                $raw = $redis->get($key);
-                if ($raw !== false) {
-                    $workers[] = json_decode($raw, true);
+                $raw  = $redis->get($key);
+                $data = $raw !== false ? json_decode($raw, true) : null;
+                if ($data && ($data['seen_at'] ?? 0) >= $cutoff) {
+                    $workers[] = $data;
                 }
             }
             return $workers;
