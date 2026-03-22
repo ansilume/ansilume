@@ -14,15 +14,17 @@ use yii\db\ActiveRecord;
  * @property string|null $scm_url
  * @property string      $scm_branch
  * @property string|null $local_path
+ * @property int|null    $scm_credential_id
  * @property string      $status
  * @property int|null    $last_synced_at
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at
  *
- * @property User         $creator
- * @property JobTemplate[] $jobTemplates
- * @property Inventory[]   $inventories
+ * @property User            $creator
+ * @property Credential|null $scmCredential
+ * @property JobTemplate[]   $jobTemplates
+ * @property Inventory[]     $inventories
  */
 class Project extends ActiveRecord
 {
@@ -54,8 +56,15 @@ class Project extends ActiveRecord
             [['scm_url'], 'url', 'when' => fn($m) => $m->scm_type === self::SCM_TYPE_GIT],
             [['scm_url', 'local_path'], 'string', 'max' => 512],
             [['scm_branch'], 'string', 'max' => 128],
+            [['scm_credential_id'], 'integer'],
+            [['scm_credential_id'], 'exist', 'skipOnError' => true, 'targetClass' => Credential::class, 'targetAttribute' => ['scm_credential_id' => 'id']],
             [['status'], 'in', 'range' => [self::STATUS_NEW, self::STATUS_SYNCING, self::STATUS_SYNCED, self::STATUS_ERROR]],
         ];
+    }
+
+    public function getScmCredential(): \yii\db\ActiveQuery
+    {
+        return $this->hasOne(Credential::class, ['id' => 'scm_credential_id']);
     }
 
     public function getCreator(): \yii\db\ActiveQuery

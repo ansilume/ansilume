@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\models\Credential;
 use app\models\Project;
 use app\services\AuditService;
 use app\services\ProjectAccessChecker;
@@ -73,7 +74,7 @@ class ProjectController extends BaseController
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', ['model' => $model, 'sshCredentials' => $this->sshCredentials()]);
     }
 
     public function actionUpdate(int $id): Response|string
@@ -85,7 +86,7 @@ class ProjectController extends BaseController
             \Yii::$app->session->setFlash('success', "Project \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', ['model' => $model, 'sshCredentials' => $this->sshCredentials()]);
     }
 
     public function actionDelete(int $id): Response
@@ -112,6 +113,14 @@ class ProjectController extends BaseController
         $svc->queueSync($model);
         \Yii::$app->session->setFlash('success', "Sync queued for \"{$model->name}\".");
         return $this->redirect(['view', 'id' => $id]);
+    }
+
+    private function sshCredentials(): array
+    {
+        return Credential::find()
+            ->where(['credential_type' => Credential::TYPE_SSH_KEY])
+            ->orderBy('name')
+            ->all();
     }
 
     private function findModel(int $id): Project
