@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
 use yii\helpers\Html;
+use yii\helpers\Url;
 use yii\widgets\LinkPager;
 
 $this->title = 'Schedules';
@@ -71,15 +72,13 @@ $this->title = 'Schedules';
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
                         <?php if (\Yii::$app->user->can('job.launch')): ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
-                            <?= Html::a(
-                                $model->enabled ? 'Disable' : 'Enable',
-                                ['toggle', 'id' => $model->id],
-                                [
-                                    'class' => 'btn btn-sm btn-outline-' . ($model->enabled ? 'warning' : 'success') . ' ms-1',
-                                    'data-method' => 'post',
-                                    'data-confirm' => $model->enabled ? 'Disable this schedule?' : 'Enable this schedule?',
-                                ]
-                            ) ?>
+                            <form method="post" action="<?= Url::to(['toggle', 'id' => $model->id]) ?>" style="display:inline"
+                                  onsubmit="return confirm('<?= $model->enabled ? 'Disable this schedule?' : 'Enable this schedule?' ?>')">
+                                <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
+                                <button type="submit" class="btn btn-sm btn-outline-<?= $model->enabled ? 'warning' : 'success' ?> ms-1">
+                                    <?= $model->enabled ? 'Disable' : 'Enable' ?>
+                                </button>
+                            </form>
                         <?php endif; ?>
                     </td>
                 </tr>
