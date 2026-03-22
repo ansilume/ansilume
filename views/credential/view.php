@@ -79,21 +79,29 @@ $this->title = $model->name;
         <?php endif; ?>
     </div>
 
-    <?php if ($model->credential_type === Credential::TYPE_SSH_KEY && $sshInfo && $sshInfo['public_key']): ?>
+    <?php if ($model->credential_type === Credential::TYPE_SSH_KEY): ?>
     <div class="col-md-7">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Public Key</span>
-                <button type="button" class="btn btn-sm btn-outline-secondary"
-                        onclick="navigator.clipboard.writeText(document.getElementById('pubkey-display').value)">Copy</button>
+                <?php if ($sshInfo && $sshInfo['public_key']): ?>
+                    <button type="button" class="btn btn-sm btn-outline-secondary"
+                            onclick="navigator.clipboard.writeText(document.getElementById('pubkey-display').value)">Copy</button>
+                <?php endif; ?>
             </div>
-            <div class="card-body p-0">
-                <textarea id="pubkey-display" class="form-control font-monospace border-0 rounded-0"
-                          rows="3" readonly style="background:transparent;resize:none;"><?= Html::encode($sshInfo['public_key']) ?></textarea>
-            </div>
-            <div class="card-footer text-muted small">
-                Add this public key as a Deploy Key on GitHub / GitLab, or to <code>~/.ssh/authorized_keys</code> on the target host.
-            </div>
+            <?php if ($sshInfo && $sshInfo['public_key']): ?>
+                <div class="card-body p-0">
+                    <textarea id="pubkey-display" class="form-control font-monospace border-0 rounded-0"
+                              rows="3" readonly style="background:transparent;resize:none;"><?= Html::encode($sshInfo['public_key']) ?></textarea>
+                </div>
+                <div class="card-footer text-muted small">
+                    Add this public key as a Deploy Key on GitHub / GitLab, or to <code>~/.ssh/authorized_keys</code> on the target host.
+                </div>
+            <?php else: ?>
+                <div class="card-body text-muted small">
+                    Public key not available. Re-save this credential to derive and store the public key automatically.
+                </div>
+            <?php endif; ?>
         </div>
     </div>
     <?php endif; ?>

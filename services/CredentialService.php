@@ -89,7 +89,8 @@ class CredentialService extends Component
     public function analyzePrivateKey(string $privateKey): array
     {
         $tmp = tempnam(sys_get_temp_dir(), 'ansilume_key_');
-        file_put_contents($tmp, $privateKey);
+        // Ensure trailing newline — ssh-keygen requires it for OpenSSH format keys
+        file_put_contents($tmp, rtrim($privateKey) . "\n");
         chmod($tmp, 0600);
 
         try {
@@ -119,7 +120,8 @@ class CredentialService extends Component
                 'bits'          => $bits,
                 'key_secure'    => $secure,
             ];
-        } catch (\RuntimeException) {
+        } catch (\RuntimeException $e) {
+            \Yii::warning('CredentialService: analyzePrivateKey failed: ' . $e->getMessage(), __CLASS__);
             return ['public_key' => '', 'algorithm' => 'unknown', 'bits' => 0, 'key_secure' => null];
         } finally {
             @unlink($tmp);
