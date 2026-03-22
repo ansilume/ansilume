@@ -31,10 +31,9 @@ $this->title = $model->isNewRecord ? 'New Project' : 'Edit: ' . $model->name;
         <?= $form->field($model, 'scm_url')->textInput(['maxlength' => 512, 'placeholder' => 'git@github.com:org/repo.git']) ?>
         <?= $form->field($model, 'scm_branch')->textInput(['maxlength' => 128]) ?>
         <?= $form->field($model, 'scm_credential_id')->dropDownList(
-            array_merge(['' => '— None (public repo) —'], array_column(
+            ['' => '— None (public repo) —'] + array_column(
                 array_map(fn($c) => ['id' => $c->id, 'name' => $c->name], $sshCredentials), 'name', 'id'
-            )),
-            ['prompt' => false]
+            )
         )->hint('Select an SSH Key credential to authenticate with a private repository. The public key must be added as a Deploy Key on GitHub/GitLab.') ?>
     </div>
 
