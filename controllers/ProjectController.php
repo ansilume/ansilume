@@ -96,15 +96,22 @@ class ProjectController extends BaseController
     private function detectPlaybooks(string $base): array
     {
         $playbooks = [];
-        foreach (glob($base . '/*.{yml,yaml}', GLOB_BRACE) ?: [] as $file) {
-            $name = basename($file);
-            if ($name === '' || str_starts_with($name, '.')) {
-                continue;
-            }
-            // Quick heuristic: file starts with "---", "- " or "- name:"
-            $head = file_get_contents($file, false, null, 0, 512);
-            if ($head !== false && preg_match('/^\s*(---\s*\n.*- |- )/s', $head)) {
-                $playbooks[] = $name;
+        $searchDirs = [$base];
+        if (is_dir($base . '/playbooks')) {
+            $searchDirs[] = $base . '/playbooks';
+        }
+        foreach ($searchDirs as $dir) {
+            foreach (glob($dir . '/*.{yml,yaml}', GLOB_BRACE) ?: [] as $file) {
+                $name = basename($file);
+                if ($name === '' || str_starts_with($name, '.')) {
+                    continue;
+                }
+                // Quick heuristic: file starts with "---", "- " or "- name:"
+                $head = file_get_contents($file, false, null, 0, 512);
+                if ($head !== false && preg_match('/^\s*(---\s*\n.*- |- )/s', $head)) {
+                    $rel = ($dir === $base) ? $name : 'playbooks/' . $name;
+                    $playbooks[] = $rel;
+                }
             }
         }
         sort($playbooks);
