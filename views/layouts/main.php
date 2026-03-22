@@ -6,11 +6,14 @@ declare(strict_types=1);
 /** @var string $content */
 
 use yii\helpers\Html;
+use yii\helpers\Url;
 
 $this->beginPage();
 
 // Required for Html::a() data-method="post" and data-confirm to work
 \yii\web\YiiAsset::register($this);
+
+$route = Yii::$app->requestedRoute ?? '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -20,8 +23,75 @@ $this->beginPage();
     <title><?= Html::encode($this->title) ?> — Ansilume</title>
     <link rel="stylesheet" href="/css/bootstrap.min.css">
     <style>
-        body { background-color: #f8f9fa; }
-        .navbar-brand { font-weight: 700; letter-spacing: .05em; }
+        :root { --sidebar-width: 220px; }
+
+        body { background-color: #f0f2f5; }
+
+        /* Sidebar */
+        #sidebar {
+            position: fixed; top: 0; left: 0; bottom: 0;
+            width: var(--sidebar-width);
+            background: #1a1d21;
+            display: flex; flex-direction: column;
+            z-index: 100;
+            overflow-y: auto;
+        }
+        #sidebar .sidebar-brand {
+            display: flex; align-items: center; gap: .6rem;
+            padding: 1.1rem 1.2rem;
+            color: #fff; font-weight: 700; font-size: 1.05rem;
+            letter-spacing: .04em; text-decoration: none;
+            border-bottom: 1px solid rgba(255,255,255,.07);
+        }
+        #sidebar .sidebar-brand:hover { color: #fff; }
+        #sidebar .nav-section {
+            font-size: .68rem; font-weight: 600; text-transform: uppercase;
+            letter-spacing: .08em; color: #6c757d;
+            padding: 1.1rem 1.2rem .3rem;
+        }
+        #sidebar .nav-link {
+            color: #adb5bd; padding: .45rem 1.2rem;
+            border-radius: 0; font-size: .9rem;
+            display: flex; align-items: center; gap: .55rem;
+        }
+        #sidebar .nav-link:hover { color: #fff; background: rgba(255,255,255,.06); }
+        #sidebar .nav-link.active { color: #fff; background: rgba(255,255,255,.1); }
+        #sidebar .sidebar-footer {
+            margin-top: auto;
+            border-top: 1px solid rgba(255,255,255,.07);
+            padding: .75rem 1.2rem;
+        }
+        #sidebar .sidebar-footer .nav-link { padding: .4rem 0; }
+
+        /* Main content offset */
+        #main-wrapper {
+            margin-left: var(--sidebar-width);
+            min-height: 100vh;
+            display: flex; flex-direction: column;
+        }
+        #page-content {
+            flex: 1;
+            padding: 1.75rem 2rem;
+        }
+
+        /* Responsive: collapse sidebar on small screens */
+        @media (max-width: 767px) {
+            #sidebar { transform: translateX(-100%); transition: transform .2s; }
+            #sidebar.show { transform: translateX(0); }
+            #main-wrapper { margin-left: 0; }
+            #sidebar-toggle { display: flex !important; }
+        }
+
+        /* Top bar (mobile toggle + flash messages) */
+        #topbar {
+            background: #fff;
+            border-bottom: 1px solid #dee2e6;
+            padding: .5rem 1.5rem;
+            display: flex; align-items: center; gap: 1rem;
+        }
+        #sidebar-toggle { display: none; }
+
+        /* Content tweaks */
         .job-status-badge { font-size: .75rem; }
         pre.job-log { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: .375rem; overflow-x: auto; }
         /* Yii2 ActiveForm uses Bootstrap 3 classes — make them visible under Bootstrap 5 */
@@ -35,75 +105,82 @@ $this->beginPage();
 <body>
 <?php $this->beginBody() ?>
 
-<nav class="navbar navbar-expand-md navbar-dark bg-dark mb-4">
-    <div class="container-fluid">
-        <a class="navbar-brand d-flex align-items-center gap-2" href="<?= \yii\helpers\Url::to(['/']) ?>">
-            <img src="/ansilume.png" alt="Ansilume" height="28" style="object-fit:contain">
-            Ansilume
-        </a>
-        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMain">
-            <span class="navbar-toggler-icon"></span>
-        </button>
-        <div class="collapse navbar-collapse" id="navbarMain">
-            <?php if (!\Yii::$app->user->isGuest): ?>
-            <ul class="navbar-nav me-auto mb-2 mb-md-0">
-                <li class="nav-item"><a class="nav-link" href="<?= \yii\helpers\Url::to(['/project/index']) ?>">Projects</a></li>
-                <li class="nav-item"><a class="nav-link" href="<?= \yii\helpers\Url::to(['/inventory/index']) ?>">Inventories</a></li>
-                <li class="nav-item"><a class="nav-link" href="<?= \yii\helpers\Url::to(['/credential/index']) ?>">Credentials</a></li>
-                <li class="nav-item"><a class="nav-link" href="<?= \yii\helpers\Url::to(['/job-template/index']) ?>">Templates</a></li>
-                <li class="nav-item"><a class="nav-link" href="<?= \yii\helpers\Url::to(['/job/index']) ?>">Jobs</a></li>
-                <?php if (\Yii::$app->user->can('job.launch')): ?>
-                <li class="nav-item"><a class="nav-link" href="<?= \yii\helpers\Url::to(['/schedule/index']) ?>">Schedules</a></li>
-                <?php endif; ?>
-                <?php if (\Yii::$app->user->can('user.view')): ?>
-                <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">Admin</a>
-                    <ul class="dropdown-menu">
-                        <li><?= Html::a('Users', ['/user/index'], ['class' => 'dropdown-item']) ?></li>
-                        <li><?= Html::a('Teams', ['/team/index'], ['class' => 'dropdown-item']) ?></li>
-                        <li><?= Html::a('Audit Log', ['/audit-log/index'], ['class' => 'dropdown-item']) ?></li>
-                        <li><?= Html::a('Webhooks', ['/webhook/index'], ['class' => 'dropdown-item']) ?></li>
-                    </ul>
-                </li>
-                <?php endif; ?>
-            </ul>
-            <ul class="navbar-nav">
-                <li class="nav-item dropdown">
-                    <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">
-                        <?= Html::encode(\Yii::$app->user->identity->username) ?>
-                        <?php if (\Yii::$app->user->identity->is_superadmin): ?>
-                            <span class="badge text-bg-warning ms-1" style="font-size:.65rem">SA</span>
-                        <?php endif; ?>
-                    </a>
-                    <ul class="dropdown-menu dropdown-menu-end">
-                        <li><?= Html::a('API Tokens', ['/profile/tokens'], ['class' => 'dropdown-item']) ?></li>
-                        <li><hr class="dropdown-divider"></li>
-                        <li>
-                            <?= Html::a('Logout', ['/site/logout'], [
-                                'class' => 'dropdown-item',
-                                'data'  => ['method' => 'post'],
-                            ]) ?>
-                        </li>
-                    </ul>
-                </li>
-            </ul>
+<?php
+// Helper: is a given route prefix active?
+$active = fn(string $prefix): string => str_starts_with($route, $prefix) ? ' active' : '';
+?>
+
+<div id="sidebar">
+    <a class="sidebar-brand" href="<?= Url::to(['/']) ?>">
+        <img src="/ansilume.png" alt="" height="26" style="object-fit:contain">
+        Ansilume
+    </a>
+
+    <?php if (!\Yii::$app->user->isGuest): ?>
+
+    <span class="nav-section">Automation</span>
+    <nav class="nav flex-column">
+        <a class="nav-link<?= $active('project') ?>"      href="<?= Url::to(['/project/index']) ?>">Projects</a>
+        <a class="nav-link<?= $active('inventory') ?>"    href="<?= Url::to(['/inventory/index']) ?>">Inventories</a>
+        <a class="nav-link<?= $active('credential') ?>"   href="<?= Url::to(['/credential/index']) ?>">Credentials</a>
+        <a class="nav-link<?= $active('job-template') ?>" href="<?= Url::to(['/job-template/index']) ?>">Templates</a>
+    </nav>
+
+    <span class="nav-section">Operations</span>
+    <nav class="nav flex-column">
+        <a class="nav-link<?= $active('job') ?>"      href="<?= Url::to(['/job/index']) ?>">Jobs</a>
+        <?php if (\Yii::$app->user->can('job.launch')): ?>
+        <a class="nav-link<?= $active('schedule') ?>" href="<?= Url::to(['/schedule/index']) ?>">Schedules</a>
+        <?php endif; ?>
+    </nav>
+
+    <?php if (\Yii::$app->user->can('user.view')): ?>
+    <span class="nav-section">Admin</span>
+    <nav class="nav flex-column">
+        <a class="nav-link<?= $active('user') ?>"      href="<?= Url::to(['/user/index']) ?>">Users</a>
+        <a class="nav-link<?= $active('team') ?>"      href="<?= Url::to(['/team/index']) ?>">Teams</a>
+        <a class="nav-link<?= $active('audit-log') ?>" href="<?= Url::to(['/audit-log/index']) ?>">Audit Log</a>
+        <a class="nav-link<?= $active('webhook') ?>"   href="<?= Url::to(['/webhook/index']) ?>">Webhooks</a>
+    </nav>
+    <?php endif; ?>
+
+    <div class="sidebar-footer">
+        <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="text-white" style="font-size:.85rem"><?= Html::encode(\Yii::$app->user->identity->username) ?></span>
+            <?php if (\Yii::$app->user->identity->is_superadmin): ?>
+                <span class="badge text-bg-warning" style="font-size:.6rem">SA</span>
             <?php endif; ?>
         </div>
+        <nav class="nav flex-column">
+            <a class="nav-link" href="<?= Url::to(['/profile/tokens']) ?>">API Tokens</a>
+            <?= Html::a('Logout', ['/site/logout'], [
+                'class' => 'nav-link',
+                'data'  => ['method' => 'post'],
+            ]) ?>
+        </nav>
     </div>
-</nav>
 
-<main class="container-fluid px-4">
-    <?php foreach (\Yii::$app->session->getAllFlashes() as $type => $messages): ?>
-        <?php foreach ((array)$messages as $message): ?>
-            <div class="alert alert-<?= Html::encode($type) ?> alert-dismissible fade show" role="alert">
-                <?= Html::encode($message) ?>
-                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-            </div>
+    <?php endif; ?>
+</div>
+
+<div id="main-wrapper">
+    <div id="topbar">
+        <button id="sidebar-toggle" class="btn btn-sm btn-outline-secondary" onclick="document.getElementById('sidebar').classList.toggle('show')">&#9776;</button>
+    </div>
+
+    <div id="page-content">
+        <?php foreach (\Yii::$app->session->getAllFlashes() as $type => $messages): ?>
+            <?php foreach ((array)$messages as $message): ?>
+                <div class="alert alert-<?= Html::encode($type) ?> alert-dismissible fade show" role="alert">
+                    <?= Html::encode($message) ?>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            <?php endforeach; ?>
         <?php endforeach; ?>
-    <?php endforeach; ?>
 
-    <?= $content ?>
-</main>
+        <?= $content ?>
+    </div>
+</div>
 
 <script src="/js/bootstrap.bundle.min.js"></script>
 
