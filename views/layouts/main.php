@@ -95,6 +95,14 @@ $route = Yii::$app->requestedRoute ?? '';
         /* Content tweaks */
         .job-status-badge { font-size: .75rem; }
         pre.job-log { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: .375rem; overflow-x: auto; }
+        /* ANSI color overrides for dark terminal background.
+           The default 16-color palette has dim variants (30-37) that are
+           near-black and unreadable on #1e1e1e. Remap the worst offenders. */
+        pre.job-log .ansi-black-fg   { color: #767676; }
+        pre.job-log .ansi-blue-fg    { color: #4d9fec; }
+        pre.job-log .ansi-magenta-fg { color: #c678dd; }
+        pre.job-log .ansi-cyan-fg    { color: #56b6c2; }
+        pre.job-log .ansi-white-fg   { color: #d4d4d4; }
         /* Yii2 ActiveForm uses Bootstrap 3 classes — make them visible under Bootstrap 5 */
         .help-block { display: block; font-size: .875em; color: #dc3545; margin-top: .25rem; }
         .has-error .form-control { border-color: #dc3545; }

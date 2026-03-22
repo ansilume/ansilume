@@ -169,7 +169,7 @@ foreach ($tasks as $t) { $counts[$t->status] = ($counts[$t->status] ?? 0) + 1; }
 <script src="/js/ansi_up.min.js"></script>
 <script>
 var _au    = new AnsiUp();
-_au.use_classes = false;
+_au.use_classes = true;
 var logEl  = document.getElementById('job-log');
 
 function appendAnsi(text) {
