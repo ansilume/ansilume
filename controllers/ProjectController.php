@@ -58,12 +58,35 @@ class ProjectController extends BaseController
         }
         $playbooks = [];
         $tree      = [];
-        $localPath = $model->local_path ? \Yii::getAlias($model->local_path) : null;
-        if ($localPath && is_dir($localPath)) {
+        $localPath = $this->resolveLocalPath($model->local_path);
+        if ($localPath !== null) {
             $playbooks = $this->detectPlaybooks($localPath);
             $tree      = $this->buildTree($localPath, $localPath, 0, 3);
         }
         return $this->render('view', ['model' => $model, 'playbooks' => $playbooks, 'tree' => $tree]);
+    }
+
+    /**
+     * Resolve a stored local_path to a real absolute filesystem path.
+     * Handles Yii aliases (@runtime/…) and relative paths from old records.
+     */
+    private function resolveLocalPath(?string $stored): ?string
+    {
+        if (!$stored) {
+            return null;
+        }
+        // Try Yii alias resolution first
+        $resolved = \Yii::getAlias($stored, false);
+        if ($resolved !== false && is_dir($resolved)) {
+            return $resolved;
+        }
+        // Fallback: relative path rooted at the app base path (legacy behaviour
+        // where git created the directory literally, e.g. /var/www/@runtime/…)
+        $fallback = \Yii::$app->basePath . '/' . $stored;
+        if (is_dir($fallback)) {
+            return $fallback;
+        }
+        return null;
     }
 
     /**
