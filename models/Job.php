@@ -21,6 +21,7 @@ use yii\db\ActiveRecord;
  * @property int|null    $exit_code
  * @property int|null    $pid
  * @property string|null $worker_id
+ * @property int         $has_changes
  * @property int         $created_at
  * @property int         $updated_at
  *

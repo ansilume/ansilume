@@ -6,6 +6,7 @@ namespace app\controllers;
 
 use app\models\Job;
 use app\models\JobSearchForm;
+use app\models\JobTask;
 use app\models\JobTemplate;
 use app\models\User;
 use app\services\AuditService;
@@ -48,8 +49,9 @@ class JobController extends BaseController
     public function actionView(int $id): string
     {
         $job  = $this->findModel($id);
-        $logs = $job->getLogs()->all();
-        return $this->render('view', ['job' => $job, 'logs' => $logs]);
+        $logs  = $job->getLogs()->all();
+        $tasks = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
+        return $this->render('view', ['job' => $job, 'logs' => $logs, 'tasks' => $tasks]);
     }
 
     public function actionLogPoll(int $id, int $after = -1): Response

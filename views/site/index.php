@@ -197,6 +197,9 @@ $this->title = 'Dashboard';
                             <span class="badge text-bg-<?= Job::statusCssClass($job->status) ?>">
                                 <?= Html::encode(Job::statusLabel($job->status)) ?>
                             </span>
+                            <?php if ($job->has_changes): ?>
+                                <span class="badge text-bg-warning ms-1">changed</span>
+                            <?php endif; ?>
                         </td>
                         <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                         <td><code class="small"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></code></td>

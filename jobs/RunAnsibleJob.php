@@ -6,6 +6,7 @@ namespace app\jobs;
 
 use app\models\Job;
 use app\models\JobLog;
+use app\models\JobTask;
 use app\models\Webhook;
 use app\services\AuditService;
 use app\services\NotificationService;
@@ -111,8 +112,10 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      */
     private function runPlaybook(Job $job): int
     {
-        $payload = json_decode($job->runner_payload ?? '{}', true);
-        $cmd     = $this->buildCommand($job, $payload);
+        $payload      = json_decode($job->runner_payload ?? '{}', true);
+        $cmd          = $this->buildCommand($job, $payload);
+        $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $job->id . '_' . uniqid('', true) . '.ndjson';
+        $pluginDir    = dirname(__DIR__) . '/ansible/callback_plugins';
 
         \Yii::info("RunAnsibleJob: starting job #{$job->id}: " . implode(' ', $cmd), __CLASS__);
 
@@ -122,7 +125,16 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             2 => ['pipe', 'w'],
         ];
 
-        $process = proc_open($cmd, $descriptorspec, $pipes);
+        $env = array_merge(getenv() ?: [], [
+            'ANSIBLE_CALLBACK_PLUGINS'  => $pluginDir,
+            'ANSIBLE_CALLBACKS_ENABLED' => 'ansilume_callback',
+            'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
+            'ANSILUME_CALLBACK_FILE'    => $callbackFile,
+            'ANSIBLE_FORCE_COLOR'       => '1',
+            'PYTHONUNBUFFERED'          => '1',
+        ]);
+
+        $process = proc_open($cmd, $descriptorspec, $pipes, null, $env);
 
         if (!is_resource($process)) {
             throw new \RuntimeException('proc_open failed for job #' . $job->id);
@@ -131,7 +143,6 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         fclose($pipes[0]);
 
         $sequence = 0;
-        // Stream stdout/stderr in 4 KB chunks
         while (!feof($pipes[1]) || !feof($pipes[2])) {
             $stdout = fread($pipes[1], 4096);
             if ($stdout !== false && $stdout !== '') {
@@ -150,7 +161,55 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         $job->pid = null;
         $job->save(false);
 
+        $this->saveTaskResults($job, $callbackFile);
+
         return $exitCode;
+    }
+
+    /**
+     * Parse the NDJSON callback file and persist JobTask records.
+     * Sets job->has_changes if any task reported a change.
+     */
+    private function saveTaskResults(Job $job, string $callbackFile): void
+    {
+        if (!file_exists($callbackFile)) {
+            return;
+        }
+
+        $hasChanges = false;
+
+        try {
+            $lines = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            foreach ($lines as $line) {
+                $data = json_decode($line, true);
+                if (!is_array($data)) {
+                    continue;
+                }
+
+                $task              = new JobTask();
+                $task->job_id      = $job->id;
+                $task->sequence    = (int)($data['seq'] ?? 0);
+                $task->task_name   = (string)($data['name'] ?? '');
+                $task->task_action = (string)($data['action'] ?? '');
+                $task->host        = (string)($data['host'] ?? '');
+                $task->status      = (string)($data['status'] ?? 'ok');
+                $task->changed     = (int)(bool)($data['changed'] ?? false);
+                $task->duration_ms = (int)($data['duration_ms'] ?? 0);
+                $task->created_at  = time();
+                $task->save(false);
+
+                if ($task->changed) {
+                    $hasChanges = true;
+                }
+            }
+        } finally {
+            @unlink($callbackFile);
+        }
+
+        if ($hasChanges) {
+            $job->has_changes = 1;
+            $job->save(false);
+        }
     }
 
     /**
