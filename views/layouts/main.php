@@ -101,6 +101,7 @@ $route = Yii::$app->requestedRoute ?? '';
         .has-error .control-label { color: #dc3545; }
         .has-success .form-control { border-color: #198754; }
     </style>
+    <meta name="csrf-token" content="<?= \Yii::$app->request->getCsrfToken() ?>">
     <?php $this->head() ?>
 </head>
 <body>
