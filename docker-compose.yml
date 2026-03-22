@@ -86,15 +86,43 @@ services:
     networks:
       - ansilume
 
-  # Runner example — copy and adjust per runner group/site.
-  # Create the runner in the UI first to get RUNNER_TOKEN.
-  # runner:
-  #   image: ghcr.io/ansilume/ansilume:latest
-  #   restart: unless-stopped
-  #   command: ["php", "yii", "runner/start"]
-  #   environment:
-  #     - RUNNER_TOKEN=your-token-here
-  #     - API_URL=http://nginx
+  runner-1:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: ansilume_runner_1
+    restart: unless-stopped
+    working_dir: /var/www
+    command: ["php", "yii", "runner/start"]
+    volumes:
+      - .:/var/www
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+    environment:
+      - RUNNER_TOKEN=${RUNNER_1_TOKEN}
+      - API_URL=http://nginx
+    depends_on:
+      - nginx
+    networks:
+      - ansilume
+
+  runner-2:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: ansilume_runner_2
+    restart: unless-stopped
+    working_dir: /var/www
+    command: ["php", "yii", "runner/start"]
+    volumes:
+      - .:/var/www
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+    environment:
+      - RUNNER_TOKEN=${RUNNER_2_TOKEN}
+      - API_URL=http://nginx
+    depends_on:
+      - nginx
+    networks:
+      - ansilume
 
 networks:
   ansilume:
