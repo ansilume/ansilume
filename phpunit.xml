@@ -14,6 +14,19 @@
             <directory>tests/functional</directory>
         </testsuite>
     </testsuites>
+    <source>
+        <include>
+            <directory>controllers</directory>
+            <directory>models</directory>
+            <directory>services</directory>
+            <directory>jobs</directory>
+            <directory>components</directory>
+        </include>
+        <exclude>
+            <directory>vendor</directory>
+            <directory>runtime</directory>
+        </exclude>
+    </source>
     <php>
         <env name="YII_ENV"   value="test"/>
         <env name="YII_DEBUG" value="0"/>
