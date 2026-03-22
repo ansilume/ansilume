@@ -59,6 +59,15 @@ services:
     networks:
       - ansilume
 
+  adminer:
+    image: adminer:4-standalone
+    container_name: ansilume_adminer
+    restart: unless-stopped
+    ports:
+      - "${ADMINER_PORT:-8081}:8080"
+    networks:
+      - ansilume
+
   mailhog:
     image: mailhog/mailhog:latest
     container_name: ansilume_mailhog
