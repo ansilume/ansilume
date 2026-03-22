@@ -112,8 +112,9 @@ $route = Yii::$app->requestedRoute ?? '';
 <?php $this->beginBody() ?>
 
 <?php
-// Helper: is a given route prefix active?
-$active = fn(string $prefix): string => str_starts_with($route, $prefix) ? ' active' : '';
+// Helper: is a given route prefix active? Match at segment boundary (/ or end).
+$active = fn(string $prefix): string =>
+    $route === $prefix || str_starts_with($route, $prefix . '/') ? ' active' : '';
 ?>
 
 <div id="sidebar">
