@@ -93,7 +93,14 @@ class ProjectController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireAccess($model);
-        $name  = $model->name;
+
+        $templateCount = $model->getJobTemplates()->count();
+        if ($templateCount > 0) {
+            \Yii::$app->session->setFlash('danger', "Cannot delete \"{$model->name}\": {$templateCount} job template(s) still reference this project. Remove or reassign them first.");
+            return $this->redirect(['view', 'id' => $id]);
+        }
+
+        $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log('project.deleted', 'project', $id, null, ['name' => $name]);
         \Yii::$app->session->setFlash('success', "Project \"{$name}\" deleted.");
