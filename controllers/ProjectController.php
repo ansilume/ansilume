@@ -58,9 +58,10 @@ class ProjectController extends BaseController
         }
         $playbooks = [];
         $tree      = [];
-        if ($model->local_path && is_dir($model->local_path)) {
-            $playbooks = $this->detectPlaybooks($model->local_path);
-            $tree      = $this->buildTree($model->local_path, $model->local_path, 0, 3);
+        $localPath = $model->local_path ? \Yii::getAlias($model->local_path) : null;
+        if ($localPath && is_dir($localPath)) {
+            $playbooks = $this->detectPlaybooks($localPath);
+            $tree      = $this->buildTree($localPath, $localPath, 0, 3);
         }
         return $this->render('view', ['model' => $model, 'playbooks' => $playbooks, 'tree' => $tree]);
     }
