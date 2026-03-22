@@ -20,6 +20,7 @@ use yii\db\ActiveRecord;
  * @property int|null    $finished_at
  * @property int|null    $exit_code
  * @property int|null    $pid
+ * @property string|null $worker_id
  * @property int         $created_at
  * @property int         $updated_at
  *

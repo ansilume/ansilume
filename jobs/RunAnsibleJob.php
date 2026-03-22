@@ -57,6 +57,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         $job->status     = Job::STATUS_RUNNING;
         $job->started_at = time();
         $job->pid        = null;
+        $job->worker_id  = gethostname() . ':' . getmypid();
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(
