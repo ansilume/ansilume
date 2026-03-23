@@ -18,8 +18,11 @@ use yii\console\ExitCode;
  *   php yii runner/start
  *
  * Environment variables:
- *   RUNNER_TOKEN   — the runner's authentication token (required)
- *   API_URL        — base URL of the ansilume server, e.g. https://your-host (required)
+ *   RUNNER_TOKEN             — the runner's authentication token; if omitted,
+ *                              self-registration is attempted using the variables below
+ *   RUNNER_NAME              — name to register under (required for self-registration)
+ *   RUNNER_BOOTSTRAP_SECRET  — shared secret that authorises self-registration
+ *   API_URL                  — base URL of the ansilume server, e.g. https://your-host (required)
  */
 class RunnerController extends Controller
 {
@@ -33,15 +36,19 @@ class RunnerController extends Controller
 
     public function actionStart(): int
     {
-        $this->token  = $_ENV['RUNNER_TOKEN'] ?? '';
         $this->apiUrl = rtrim($_ENV['API_URL'] ?? '', '/');
 
-        if ($this->token === '') {
-            $this->stderr("ERROR: RUNNER_TOKEN environment variable is required.\n");
-            return ExitCode::CONFIG;
-        }
         if ($this->apiUrl === '') {
             $this->stderr("ERROR: API_URL environment variable is required.\n");
+            return ExitCode::CONFIG;
+        }
+
+        $this->token = $this->resolveToken();
+        if ($this->token === '') {
+            $this->stderr(
+                "ERROR: No runner token available.\n" .
+                "Set RUNNER_TOKEN, or set RUNNER_NAME + RUNNER_BOOTSTRAP_SECRET for auto-registration.\n"
+            );
             return ExitCode::CONFIG;
         }
 
@@ -92,6 +99,82 @@ class RunnerController extends Controller
 
         $this->stdout("Runner shutting down.\n");
         return ExitCode::OK;
+    }
+
+    // -------------------------------------------------------------------------
+    // Token resolution — static env var or self-registration
+    // -------------------------------------------------------------------------
+
+    /**
+     * Return the runner token to use, in order of preference:
+     *   1. RUNNER_TOKEN env var (explicit)
+     *   2. Cached token file (from a previous self-registration)
+     *   3. Self-registration via RUNNER_BOOTSTRAP_SECRET
+     */
+    private function resolveToken(): string
+    {
+        $explicit = $_ENV['RUNNER_TOKEN'] ?? '';
+        if ($explicit !== '') {
+            return $explicit;
+        }
+
+        $name            = $_ENV['RUNNER_NAME'] ?? '';
+        $bootstrapSecret = $_ENV['RUNNER_BOOTSTRAP_SECRET'] ?? '';
+
+        if ($name === '' || $bootstrapSecret === '') {
+            return '';
+        }
+
+        // Check for a cached token from a previous registration
+        $cacheFile = '/var/www/runtime/runner-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $name) . '.token';
+        if (file_exists($cacheFile)) {
+            $cached = trim((string)file_get_contents($cacheFile));
+            if ($cached !== '') {
+                return $cached;
+            }
+        }
+
+        // Self-register with the server
+        $this->stdout("No token found — registering as '{$name}' with the server...\n");
+
+        $url     = $this->apiUrl . '/api/runner/v1/register';
+        $payload = json_encode(['name' => $name, 'bootstrap_secret' => $bootstrapSecret]);
+
+        $context = stream_context_create([
+            'http' => [
+                'method'        => 'POST',
+                'header'        => implode("\r\n", [
+                    'Content-Type: application/json',
+                    'Accept: application/json',
+                    'Content-Length: ' . strlen($payload),
+                ]),
+                'content'       => $payload,
+                'ignore_errors' => true,
+                'timeout'       => 30,
+            ],
+        ]);
+
+        $raw = @file_get_contents($url, false, $context);
+        if ($raw === false || $raw === '') {
+            $this->stderr("ERROR: Could not reach the server at {$this->apiUrl} for registration.\n");
+            return '';
+        }
+
+        $response = json_decode($raw, true);
+        if (empty($response['ok']) || empty($response['data']['token'])) {
+            $error = $response['error'] ?? 'unknown error';
+            $this->stderr("ERROR: Registration failed: {$error}\n");
+            return '';
+        }
+
+        $token = $response['data']['token'];
+
+        // Cache the token so we don't re-register on every restart
+        @file_put_contents($cacheFile, $token);
+        @chmod($cacheFile, 0600);
+
+        $this->stdout("Registered successfully. Token cached.\n");
+        return $token;
     }
 
     // -------------------------------------------------------------------------

@@ -18,6 +18,7 @@ $config = [
         'api/v1/credentials'   => 'app\controllers\api\v1\CredentialsController',
         'api/v1/schedules'        => 'app\controllers\api\v1\SchedulesController',
         'runner-api'              => 'app\controllers\api\runner\JobsController',
+        'runner-register'         => 'app\controllers\api\runner\RegisterController',
     ],
     'aliases'             => [
         '@bower' => '@vendor/bower-asset',
@@ -150,6 +151,7 @@ $config = [
                 ['pattern' => 'api/v1/schedules/<id:\d+>',   'route' => 'api/v1/schedules/view'],
                 ['pattern' => 'api/v1/schedules',            'route' => 'api/v1/schedules/index'],
                 // Runner pull API
+                ['pattern' => 'api/runner/v1/register',               'route' => 'runner-register/register', 'verb' => 'POST'],
                 ['pattern' => 'api/runner/v1/heartbeat',              'route' => 'runner-api/heartbeat', 'verb' => 'POST'],
                 ['pattern' => 'api/runner/v1/jobs/claim',              'route' => 'runner-api/claim',     'verb' => 'POST'],
                 ['pattern' => 'api/runner/v1/jobs/<id:\d+>/logs',      'route' => 'runner-api/logs'],
