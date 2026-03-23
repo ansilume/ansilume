@@ -126,7 +126,8 @@ services:
     container_name: ansilume_schedule_runner
     restart: unless-stopped
     working_dir: /var/www
-    command: ["/bin/sh", "-c", "while true; do php yii schedule/run; sleep 60; done"]
+    command: ["/bin/sh", "-c",
+      "while true; do php yii schedule/run && touch /tmp/schedule-alive; sleep 60; done"]
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
@@ -135,6 +136,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c",
+        "test -f /tmp/schedule-alive && test $(( $(date +%s) - $(stat -c %Y /tmp/schedule-alive) )) -lt 150"]
+      interval: 60s
+      timeout: 5s
+      retries: 2
+      start_period: 90s
     networks:
       - ansilume
 
