@@ -44,27 +44,16 @@ class ProjectAccessCheckerTest extends DbTestCase
         $this->assertSame(TeamProject::ROLE_OPERATOR, $this->checker->resolveRole($user->id, $project->id));
     }
 
-    public function testOpenProjectGrantsAccessToRegularUser(): void
+    public function testOpenProjectReturnsNullWhenUserHasNoRbacAndNoTeam(): void
     {
-        $owner = $this->createUser('owner');
-        $user  = $this->createUser('regular');
+        $owner   = $this->createUser('owner');
+        $user    = $this->createUser('regular');
         $project = $this->createProject($owner->id);
-        // No team_project rows → project is open
 
-        // Grant project.view via RBAC
-        \Yii::$app->authManager->assign(
-            \Yii::$app->authManager->getRole('operator') ?? $this->ensureRole('operator'),
-            $user->id
-        );
-
-        // Open project = no team restrictions → RBAC project.view suffices
-        // The real method checks project.view; we just verify null is NOT returned
-        // when no team restrictions exist and RBAC is permissive.
-        // Since we can't easily assign the permission in tests, just verify
-        // that a restricted project returns null when user has no team.
-        $team    = $this->createTeam($owner->id);
+        // Restrict the project via a team (so it's not "open")
+        $team = $this->createTeam($owner->id);
         $this->createTeamProject($team->id, $project->id, TeamProject::ROLE_VIEWER);
-        // Now project IS restricted. User has no team membership.
+        // User has no team membership → no access
         $this->assertNull($this->checker->resolveRole($user->id, $project->id));
     }
 
@@ -225,14 +214,4 @@ class ProjectAccessCheckerTest extends DbTestCase
         $this->assertNotSame(['0=1'], $filter);
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private function ensureRole(string $name): \yii\rbac\Role
-    {
-        $role = \Yii::$app->authManager->createRole($name);
-        \Yii::$app->authManager->add($role);
-        return $role;
-    }
 }

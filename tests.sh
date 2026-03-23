@@ -292,7 +292,7 @@ else
 fi
 
 # =============================================================================
-# 10. PHPUnit — unit tests
+# 10. PHPUnit — unit tests (always, fast, no coverage overhead)
 # =============================================================================
 section "PHPUnit — unit tests"
 
@@ -303,28 +303,6 @@ if echo "$UNIT_OUT" | grep -qP "^OK|Tests: .* Failures: 0"; then
 else
     fail "Unit tests failed"
     echo "$UNIT_OUT" | tail -30 | sed 's/^/     /'
-fi
-
-# =============================================================================
-# 11. PHPUnit — integration tests
-# =============================================================================
-section "PHPUnit — integration tests"
-
-if [[ $FAST -eq 1 ]]; then
-    skip "Integration tests (--fast mode)"
-else
-    INT_OUT=$(dc php vendor/bin/phpunit --testsuite=Integration --colors=never 2>&1 || true)
-    if echo "$INT_OUT" | grep -qP "^OK|Tests: .* Failures: 0"; then
-        SUMMARY=$(echo "$INT_OUT" | grep -P "^OK|Tests:")
-        ok "Integration tests passed ($SUMMARY)"
-    elif echo "$INT_OUT" | grep -q "No tests executed"; then
-        skip "Integration tests (no tests executed)"
-    elif echo "$INT_OUT" | grep -qi "Access denied\|Connection refused\|SQLSTATE\[HY000\] \[1044\]"; then
-        skip "Integration tests (test database not available — run: php yii setup/test-db)"
-    else
-        fail "Integration tests failed"
-        echo "$INT_OUT" | tail -30 | sed 's/^/     /'
-    fi
 fi
 
 # =============================================================================
@@ -364,27 +342,47 @@ else
 fi
 
 # =============================================================================
-# 13. Code coverage
+# 11. PHPUnit — integration tests + coverage (one combined run with pcov)
+#
+# Unit tests ran above without pcov for fast feedback. Here we run
+# Unit+Integration once with pcov enabled, giving us both the integration
+# pass/fail result and the full combined coverage report from a single
+# phpunit invocation — saving one redundant process compared to running
+# integration and coverage separately.
 # =============================================================================
-section "Code coverage"
+section "PHPUnit — integration tests + coverage"
 
 if [[ $FAST -eq 1 ]]; then
+    skip "Integration tests (--fast mode)"
     skip "Code coverage (--fast mode)"
 else
-    COV_OUT=$(dc php -d pcov.enabled=1 vendor/bin/phpunit \
+    COMBINED_OUT=$(dc php -d pcov.enabled=1 vendor/bin/phpunit \
         --testsuite=Unit,Integration \
         --coverage-text \
         --colors=never \
         2>&1 || true)
 
-    if echo "$COV_OUT" | grep -q "Summary:"; then
-        # Extract the three summary lines that follow " Summary:"
-        SUMMARY_BLOCK=$(echo "$COV_OUT" | grep -A3 'Summary:')
+    # ── Integration pass/fail ────────────────────────────────────────────────
+    if echo "$COMBINED_OUT" | grep -qP "^OK|Tests: .* Failures: 0"; then
+        INT_SUMMARY=$(echo "$COMBINED_OUT" | grep -P "^OK|Tests:")
+        ok "Integration tests passed ($INT_SUMMARY)"
+    elif echo "$COMBINED_OUT" | grep -q "No tests executed"; then
+        skip "Integration tests (no tests executed)"
+    elif echo "$COMBINED_OUT" | grep -qi "Access denied\|Connection refused\|SQLSTATE\[HY000\] \[1044\]"; then
+        skip "Integration tests (test database not available — run: php yii setup/test-db)"
+    else
+        fail "Integration tests failed"
+        echo "$COMBINED_OUT" | tail -30 | sed 's/^/     /'
+    fi
+
+    # ── Coverage (from the same run) ─────────────────────────────────────────
+    if echo "$COMBINED_OUT" | grep -q "Summary:"; then
+        SUMMARY_BLOCK=$(echo "$COMBINED_OUT" | grep -A3 'Summary:')
         CLASS_COV=$(echo "$SUMMARY_BLOCK"  | grep -oP 'Classes:\s+\K[\d.]+%')
-        METHOD_COV=$(echo "$SUMMARY_BLOCK" | grep -oP 'Methods:\s+\K[\d.]+%' | head -1)
-        LINE_COV=$(echo "$SUMMARY_BLOCK"   | grep -oP 'Lines:\s+\K[\d.]+%'   | head -1)
+        METHOD_COV=$(echo "$COMBINED_OUT"  | grep -oP 'Methods:\s+\K[\d.]+%' | head -1)
+        LINE_COV=$(echo "$COMBINED_OUT"    | grep -oP 'Lines:\s+\K[\d.]+%'   | head -1)
         ok "Coverage — Lines: ${LINE_COV}  Methods: ${METHOD_COV}  Classes: ${CLASS_COV}"
-    elif echo "$COV_OUT" | grep -qi "No code coverage driver"; then
+    elif echo "$COMBINED_OUT" | grep -qi "No code coverage driver"; then
         skip "Code coverage (no coverage driver — install pcov or xdebug)"
     else
         skip "Code coverage (could not parse output)"

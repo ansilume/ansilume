@@ -15,12 +15,18 @@ use PHPUnit\Framework\TestCase;
 class CredentialServiceTest extends TestCase
 {
     private CredentialService $service;
+    private string $originalKey;
 
     protected function setUp(): void
     {
-        // Provide a test key via environment
+        $this->originalKey = $_ENV['APP_SECRET_KEY'] ?? '';
         $_ENV['APP_SECRET_KEY'] = 'test-secret-key-that-is-32-bytes!';
         $this->service = new CredentialService();
+    }
+
+    protected function tearDown(): void
+    {
+        $_ENV['APP_SECRET_KEY'] = $this->originalKey;
     }
 
     public function testEncryptDecryptRoundTrip(): void

@@ -17,8 +17,16 @@ use yii\db\BaseActiveRecord;
  */
 class JobCompletionServiceTest extends TestCase
 {
+    /** @var array<string, mixed> Original Yii app components to restore after each test */
+    private array $originalComponents = [];
+
     protected function setUp(): void
     {
+        // Save originals before replacing with stubs
+        foreach (['auditService', 'webhookService', 'notificationService'] as $id) {
+            $this->originalComponents[$id] = \Yii::$app->has($id) ? \Yii::$app->get($id) : null;
+        }
+
         // Stub Yii services so complete() doesn't need real implementations
         $audit = $this->createStub(AuditService::class);
         \Yii::$app->set('auditService', $audit);
@@ -28,6 +36,17 @@ class JobCompletionServiceTest extends TestCase
 
         $notify = $this->getMockBuilder(NotificationService::class)->onlyMethods(['notifyJobFailed'])->getMock();
         \Yii::$app->set('notificationService', $notify);
+    }
+
+    protected function tearDown(): void
+    {
+        // Restore original components so integration tests run after this suite
+        // see the real implementations and not these stubs.
+        foreach ($this->originalComponents as $id => $component) {
+            if ($component !== null) {
+                \Yii::$app->set($id, $component);
+            }
+        }
     }
 
     public function testExitCodeZeroSetsStatusSucceeded(): void
