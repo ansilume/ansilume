@@ -55,6 +55,7 @@ class HealthController extends Controller
         return [
             'database' => $this->checkDatabase(),
             'redis'    => $this->checkRedis(),
+            'worker'   => $this->checkWorker(),
         ];
     }
 
@@ -75,6 +76,23 @@ class HealthController extends Controller
             return ['ok' => true];
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => 'Redis unreachable'];
+        }
+    }
+
+    private function checkWorker(): array
+    {
+        try {
+            $workers = WorkerHeartbeat::all();
+            $now     = time();
+            $alive   = array_filter($workers, fn($w) => ($now - ($w['seen_at'] ?? 0)) < WorkerHeartbeat::STALE_AFTER);
+
+            if (count($alive) === 0) {
+                return ['ok' => false, 'error' => 'No active workers'];
+            }
+
+            return ['ok' => true, 'count' => count($alive)];
+        } catch (\Throwable) {
+            return ['ok' => false, 'error' => 'Worker check failed'];
         }
     }
 

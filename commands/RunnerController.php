@@ -30,9 +30,10 @@ class RunnerController extends Controller
     private const HEARTBEAT_INTERVAL = 30;  // seconds between heartbeats
     private const LOG_CHUNK_BYTES    = 8192;
 
-    private string $token  = '';
-    private string $apiUrl = '';
-    private bool   $running = true;
+    private string $token         = '';
+    private string $apiUrl        = '';
+    private bool   $running       = true;
+    private int    $lastHttpStatus = 0;
 
     public function actionStart(): int
     {
@@ -54,7 +55,19 @@ class RunnerController extends Controller
 
         // Verify token on startup
         $info = $this->apiPost('/api/runner/v1/heartbeat', []);
-        if ($info === null) {
+        if ($this->lastHttpStatus === 401) {
+            $name      = $_ENV['RUNNER_NAME'] ?? '';
+            $cacheFile = $name !== '' ? $this->tokenCacheFile($name) : '';
+            if ($cacheFile !== '' && file_exists($cacheFile)) {
+                $this->stdout("Cached token rejected (401) — clearing cache and re-registering...\n");
+                @unlink($cacheFile);
+                $this->token = $this->resolveToken();
+                if ($this->token !== '') {
+                    $info = $this->apiPost('/api/runner/v1/heartbeat', []);
+                }
+            }
+        }
+        if ($info === null || empty($info['ok'])) {
             $this->stderr("ERROR: Failed to authenticate with the server. Check RUNNER_TOKEN and API_URL.\n");
             return ExitCode::UNSPECIFIED_ERROR;
         }
@@ -126,7 +139,7 @@ class RunnerController extends Controller
         }
 
         // Check for a cached token from a previous registration
-        $cacheFile = '/var/www/runtime/runner-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $name) . '.token';
+        $cacheFile = $this->tokenCacheFile($name);
         if (file_exists($cacheFile)) {
             $cached = trim((string)file_get_contents($cacheFile));
             if ($cached !== '') {
@@ -355,6 +368,11 @@ class RunnerController extends Controller
         return $cmd;
     }
 
+    private function tokenCacheFile(string $name): string
+    {
+        return '/var/www/runtime/runner-' . preg_replace('/[^a-zA-Z0-9_-]/', '_', $name) . '.token';
+    }
+
     private function writeInventoryTempFile(string $content): string
     {
         $path = sys_get_temp_dir() . '/ansilume_inv_' . uniqid('', true);
@@ -393,6 +411,12 @@ class RunnerController extends Controller
         ]);
 
         $raw = @file_get_contents($url, false, $context);
+
+        $this->lastHttpStatus = 0;
+        if (!empty($http_response_header)) {
+            preg_match('/HTTP\/\S+\s+(\d+)/', $http_response_header[0], $m);
+            $this->lastHttpStatus = (int)($m[1] ?? 0);
+        }
 
         if ($raw === false || $raw === '') {
             return null;
