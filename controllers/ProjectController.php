@@ -7,6 +7,7 @@ namespace app\controllers;
 use app\models\Credential;
 use app\models\Project;
 use app\services\AuditService;
+use app\services\LintService;
 use app\services\ProjectAccessChecker;
 use app\services\ProjectService;
 use yii\data\ActiveDataProvider;
@@ -20,14 +21,14 @@ class ProjectController extends BaseController
         return [
             ['actions' => ['index', 'view'],   'allow' => true, 'roles' => ['project.view']],
             ['actions' => ['create'],           'allow' => true, 'roles' => ['project.create']],
-            ['actions' => ['update', 'sync'],   'allow' => true, 'roles' => ['project.update']],
+            ['actions' => ['update', 'sync', 'lint'], 'allow' => true, 'roles' => ['project.update']],
             ['actions' => ['delete'],           'allow' => true, 'roles' => ['project.delete']],
         ];
     }
 
     protected function verbRules(): array
     {
-        return ['delete' => ['POST'], 'sync' => ['POST']];
+        return ['delete' => ['POST'], 'sync' => ['POST'], 'lint' => ['POST']];
     }
 
     public function actionIndex(): string
@@ -236,6 +237,17 @@ class ProjectController extends BaseController
         \Yii::$app->get('auditService')->log('project.deleted', 'project', $id, null, ['name' => $name]);
         \Yii::$app->session->setFlash('success', "Project \"{$name}\" deleted.");
         return $this->redirect(['index']);
+    }
+
+    public function actionLint(int $id): Response
+    {
+        $model = $this->findModel($id);
+        $this->requireAccess($model);
+        /** @var LintService $lintSvc */
+        $lintSvc = \Yii::$app->get('lintService');
+        $lintSvc->runForProject($model);
+        \Yii::$app->session->setFlash('success', "Lint completed for \"{$model->name}\".");
+        return $this->redirect(['view', 'id' => $id]);
     }
 
     public function actionSync(int $id): Response

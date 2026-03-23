@@ -189,6 +189,7 @@ $config = [
                 'audit-log'                          => 'audit-log/index',
                 'audit-log/<action>'                 => 'audit-log/<action>',
                 'audit-log/<action>/<id:\d+>'        => 'audit-log/<action>',
+                'project/lint/<id:\d+>' => 'project/lint',
                 // Generic
                 '<controller>/<action>'              => '<controller>/<action>',
                 '<controller>/<id:\d+>'              => '<controller>/view',

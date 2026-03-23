@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\models\JobTemplate;
+use app\models\Project;
 use yii\base\Component;
 
 /**
@@ -16,6 +17,31 @@ use yii\base\Component;
  */
 class LintService extends Component
 {
+    /**
+     * Run ansible-lint on an entire project directory (no specific playbook —
+     * ansible-lint auto-discovers all playbooks, roles, tasks, and collections).
+     * Stores the result on the Project record.
+     */
+    public function runForProject(Project $project): void
+    {
+        $projectPath = $this->resolveProjectPath($project);
+        if ($projectPath === null) {
+            return;
+        }
+
+        if (!is_dir($projectPath)) {
+            $this->storeProject($project, null, 'Project path not found: ' . $projectPath);
+            return;
+        }
+
+        if (!$this->isAvailable()) {
+            return;
+        }
+
+        [$output, $exitCode] = $this->execute('.', $projectPath);
+        $this->storeProject($project, $exitCode, $output ?: '(no output)');
+    }
+
     public function runForTemplate(JobTemplate $template): void
     {
         $project = $template->project;
@@ -24,22 +50,15 @@ class LintService extends Component
             return;
         }
 
-        $isManual = $project->scm_type === \app\models\Project::SCM_TYPE_MANUAL;
+        $projectPath = $this->resolveProjectPath($project);
 
-        if ($isManual) {
-            $projectPath = $project->local_path;
-            if (empty($projectPath)) {
-                $this->store($template, null, 'No local path configured for this project.');
-                return;
-            }
-        } else {
-            /** @var ProjectService $projectService */
-            $projectService = \Yii::$app->get('projectService');
-            $projectPath    = $projectService->localPath($project);
+        if ($projectPath === null) {
+            $this->store($template, null, 'No local path configured for this project.');
+            return;
         }
 
         if (!is_dir($projectPath)) {
-            $message = $isManual
+            $message = $project->scm_type === Project::SCM_TYPE_MANUAL
                 ? "Project path not found: {$projectPath}"
                 : 'Project workspace not found — sync the project first.';
             $this->store($template, null, $message);
@@ -58,6 +77,29 @@ class LintService extends Component
 
         [$output, $exitCode] = $this->execute($template->playbook, $projectPath);
         $this->store($template, $exitCode, $output ?: '(no output)');
+    }
+
+    /**
+     * Resolve the filesystem path for a project, regardless of SCM type.
+     * Returns null if no path is configured (e.g. new git project not yet synced).
+     */
+    private function resolveProjectPath(Project $project): ?string
+    {
+        if ($project->scm_type === Project::SCM_TYPE_MANUAL) {
+            return !empty($project->local_path) ? $project->local_path : null;
+        }
+
+        /** @var ProjectService $projectService */
+        $projectService = \Yii::$app->get('projectService');
+        return $projectService->localPath($project);
+    }
+
+    private function storeProject(Project $project, ?int $exitCode, string $output): void
+    {
+        $project->lint_output    = $output;
+        $project->lint_at        = time();
+        $project->lint_exit_code = $exitCode;
+        $project->save(false, ['lint_output', 'lint_at', 'lint_exit_code']);
     }
 
     private function isAvailable(): bool

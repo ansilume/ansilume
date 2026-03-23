@@ -26,9 +26,15 @@ $this->title = $model->name;
     <div class="btn-group">
         <?php if (\Yii::$app->user->can('project.update')): ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
+            <?php if ($model->scm_type === Project::SCM_TYPE_GIT): ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['sync', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Queue a sync for this project?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-primary ms-1">Sync</button>
+            </form>
+            <?php endif; ?>
+            <form method="post" action="<?= \yii\helpers\Url::to(['lint', 'id' => $model->id]) ?>" style="display:inline">
+                <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
+                <button type="submit" class="btn btn-outline-secondary ms-1">Run Lint</button>
             </form>
         <?php endif; ?>
         <?php if (\Yii::$app->user->can('project.delete')): ?>
@@ -118,6 +124,39 @@ $this->title = $model->name;
                             </li>
                         <?php endforeach; ?>
                     </ul>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-12">
+        <div class="card">
+            <?php
+            $lintBadge = '';
+            if ($model->lint_exit_code === null) {
+                $lintBadge = '<span class="badge text-bg-secondary">not run</span>';
+            } elseif ($model->lint_exit_code === 0) {
+                $lintBadge = '<span class="badge text-bg-success">clean</span>';
+            } else {
+                $lintBadge = '<span class="badge text-bg-warning">issues found</span>';
+            }
+            ?>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Ansible Lint <small class="text-muted fw-normal">(--profile production, full project)</small></span>
+                <span>
+                    <?= $lintBadge // xss-ok: hardcoded badge HTML ?>
+                    <?php if ($model->lint_at): ?>
+                        <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output ?></small>
+                    <?php endif; ?>
+                </span>
+            </div>
+            <div class="card-body p-0">
+                <?php if ($model->lint_output): ?>
+                    <pre class="job-log m-0" style="max-height:400px;overflow-y:auto;"><?= Html::encode($model->lint_output) ?></pre>
+                <?php else: ?>
+                    <p class="text-muted p-3 mb-0">No lint output yet. Click "Run Lint" or sync the project to generate a report.</p>
                 <?php endif; ?>
             </div>
         </div>

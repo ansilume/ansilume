@@ -37,6 +37,7 @@ class SyncProjectJob extends BaseObject implements JobInterface
 
             /** @var LintService $lintSvc */
             $lintSvc = \Yii::$app->get('lintService');
+            $lintSvc->runForProject($project);
             foreach (JobTemplate::find()->where(['project_id' => $project->id])->all() as $tpl) {
                 $lintSvc->runForTemplate($tpl);
             }
