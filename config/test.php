@@ -23,6 +23,25 @@ return [
         'authManager' => [
             'class' => 'yii\rbac\DbManager',
         ],
+        'auditService' => [
+            'class' => 'app\services\AuditService',
+        ],
+        'jobLaunchService' => [
+            'class' => 'app\services\JobLaunchService',
+        ],
+        'scheduleService' => [
+            'class' => 'app\services\ScheduleService',
+        ],
+        'notificationService' => [
+            'class' => 'app\services\NotificationService',
+        ],
+        'webhookService' => [
+            'class' => 'app\services\WebhookService',
+        ],
+        'mailer' => [
+            'class'            => 'yii\swiftmailer\SwiftMailer',
+            'useFileTransport' => true,
+        ],
     ],
     'params' => $params,
 ];

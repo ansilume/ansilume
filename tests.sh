@@ -372,7 +372,7 @@ if [[ $FAST -eq 1 ]]; then
     skip "Code coverage (--fast mode)"
 else
     COV_OUT=$(dc php -d pcov.enabled=1 vendor/bin/phpunit \
-        --testsuite=Unit \
+        --testsuite=Unit,Integration \
         --coverage-text \
         --colors=never \
         2>&1 || true)
