@@ -16,7 +16,7 @@ class JobTest extends TestCase
     public function testAllStatusesAreDefined(): void
     {
         $statuses = Job::statuses();
-        $expected = ['pending', 'queued', 'running', 'succeeded', 'failed', 'canceled'];
+        $expected = ['pending', 'queued', 'running', 'succeeded', 'failed', 'canceled', 'timed_out'];
         $this->assertEqualsCanonicalizing($expected, $statuses);
     }
 
