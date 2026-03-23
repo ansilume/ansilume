@@ -30,6 +30,8 @@ RUN docker-php-ext-install \
 
 RUN pecl install redis && docker-php-ext-enable redis
 
+RUN pecl install pcov && docker-php-ext-enable pcov
+
 COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
 
 RUN groupmod -g ${GROUP_ID} www-data && usermod -u ${USER_ID} -g ${GROUP_ID} www-data
