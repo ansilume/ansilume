@@ -47,7 +47,7 @@ class WebhookService extends \yii\base\Component
     /**
      * Build the payload and POST it to the webhook URL.
      */
-    private function deliver(Webhook $webhook, string $event, Job $job): void
+    protected function deliver(Webhook $webhook, string $event, Job $job): void
     {
         $payload = json_encode($this->buildPayload($event, $job), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 

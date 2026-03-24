@@ -54,14 +54,17 @@ class ScheduleServiceTest extends TestCase
         $this->assertTrue($this->isDue->invoke($this->service, $schedule));
     }
 
-    public function testIsNotDueWhenNextRunNullAndCronIsYearAway(): void
+    public function testIsNotDueWhenNextRunNullAndCronDoesNotMatchNow(): void
     {
-        // Cron that will never fire right now: "0 0 29 2 *" (leap-day only)
-        $schedule = $this->makeSchedule(['next_run_at' => null, 'cron_expression' => '0 0 29 2 *']);
-        // Most of the time this is false; it IS false on non-leap-Feb-29-midnight
-        $result = $this->isDue->invoke($this->service, $schedule);
-        // Just check it returns a boolean (it may or may not be due depending on system time)
-        $this->assertIsBool($result);
+        // Use a minute offset guaranteed to not be the current minute.
+        // If it's currently :00 we check :30, otherwise :00. This avoids
+        // time-dependent flakiness while still exercising the cron path.
+        $safeMinute = ((int)date('i') === 0) ? 30 : 0;
+        $safeHour   = ((int)date('G') === 3) ? 4 : 3;
+        $cron = "{$safeMinute} {$safeHour} 15 6 *"; // June 15 at an hour/minute that is not now
+
+        $schedule = $this->makeSchedule(['next_run_at' => null, 'cron_expression' => $cron]);
+        $this->assertFalse($this->isDue->invoke($this->service, $schedule));
     }
 
     public function testIsNotDueWhenNextRunNullAndCronIsInvalid(): void

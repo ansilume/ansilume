@@ -15,6 +15,22 @@ use yii\db\BaseActiveRecord;
  */
 class UserFormTest extends TestCase
 {
+    private mixed $originalAuthManager = null;
+
+    protected function setUp(): void
+    {
+        if (\Yii::$app->has('authManager')) {
+            $this->originalAuthManager = \Yii::$app->get('authManager');
+        }
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->originalAuthManager !== null) {
+            \Yii::$app->set('authManager', $this->originalAuthManager);
+        }
+    }
+
     public function testRoleOptionsContainsThreeEntries(): void
     {
         $options = UserForm::roleOptions();

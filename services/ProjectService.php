@@ -97,7 +97,7 @@ class ProjectService extends Component
      *
      * @param string|null $keyFile  Set to the temp key path if one was written (caller must delete it).
      */
-    private function buildGitEnv(Project $project, ?string &$keyFile): array
+    protected function buildGitEnv(Project $project, ?string &$keyFile): array
     {
         $env = [
             'HOME'               => getenv('HOME') ?: '/root',
@@ -134,12 +134,12 @@ class ProjectService extends Component
         return $env;
     }
 
-    private function gitClone(string $url, string $dest, string $branch, array $env): void
+    protected function gitClone(string $url, string $dest, string $branch, array $env): void
     {
         $this->runGit(['git', 'clone', '--branch', $branch, '--depth', '1', '--', $url, $dest], $env);
     }
 
-    private function gitPull(string $dest, string $branch, array $env): void
+    protected function gitPull(string $dest, string $branch, array $env): void
     {
         $this->runGit(['git', '-C', $dest, 'fetch', '--depth', '1', 'origin', $branch], $env);
         $this->runGit(['git', '-C', $dest, 'reset', '--hard', 'FETCH_HEAD'], $env);
