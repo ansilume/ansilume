@@ -24,7 +24,7 @@ $this->title = 'Job Templates';
     <div class="table-responsive">
         <table class="table table-hover">
             <thead class="table-light">
-                <tr><th>#</th><th>Name</th><th>Project</th><th>Playbook</th><th>Inventory</th><th>Created by</th><th></th></tr>
+                <tr><th>#</th><th>Name</th><th>Project</th><th>Playbook</th><th>Inventory</th><th>Runner</th><th></th></tr>
             </thead>
             <tbody>
             <?php foreach ($models as $model): ?>
@@ -34,7 +34,7 @@ $this->title = 'Job Templates';
                     <td><?= Html::encode($model->project->name ?? '—') ?></td>
                     <td><code><?= Html::encode($model->playbook) ?></code></td>
                     <td><?= Html::encode($model->inventory->name ?? '—') ?></td>
-                    <td><?= Html::encode($model->creator->username ?? '—') ?></td>
+                    <td><?= Html::encode($model->runnerGroup->name ?? '—') ?></td>
                     <td class="text-end text-nowrap">
                         <?php if (\Yii::$app->user->can('job.launch')): ?>
                             <?= Html::a('Launch', ['launch', 'id' => $model->id], ['class' => 'btn btn-sm btn-success']) ?>
