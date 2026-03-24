@@ -223,6 +223,12 @@ Add `export UID GID` to your shell profile to apply automatically. Not needed wh
 
 ---
 
+## Troubleshooting
+
+See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues — container race conditions, runner registration, health checks, and more.
+
+---
+
 ## License
 
 [Apache 2.0](LICENSE)

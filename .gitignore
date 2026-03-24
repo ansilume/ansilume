@@ -10,3 +10,5 @@
 .ssh/
 /.composer/
 .phpunit.result.cache
+.composer.install.lock
+.migrate.lock

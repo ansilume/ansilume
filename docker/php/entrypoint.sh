@@ -3,9 +3,10 @@ set -e
 
 # Always run composer install to ensure dependencies are up-to-date.
 # This catches missing vendor/, new packages, and failed prior installs.
-# --no-interaction and --optimize-autoloader keep it safe for unattended use.
+# flock prevents concurrent composer installs when multiple containers
+# (app, runner-1, runner-2, …) start simultaneously on the same volume.
 echo "[entrypoint] running composer install..."
-cd /var/www && composer install --no-interaction --optimize-autoloader
+cd /var/www && flock /var/www/.composer.install.lock composer install --no-interaction --optimize-autoloader
 
 # Create runtime directories required by Yii2 and set permissions for www-data.
 # These are git-ignored and must exist on every fresh checkout.
@@ -22,7 +23,7 @@ done
 # migrate --interactive=0 is idempotent — safe to run on every start.
 if [ "$1" = "php-fpm" ]; then
     echo "[entrypoint] running migrations..."
-    php /var/www/yii migrate --interactive=0
+    flock /var/www/.migrate.lock php /var/www/yii migrate --interactive=0
 fi
 
 exec "$@"
