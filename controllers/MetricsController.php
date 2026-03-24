@@ -8,6 +8,8 @@ use app\components\WorkerHeartbeat;
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobTask;
+use app\models\Runner;
+use app\models\RunnerGroup;
 use yii\web\Controller;
 use yii\web\Response;
 
@@ -56,6 +58,7 @@ class MetricsController extends Controller
             'tasks'   => $this->collectTasks(),
             'hosts'   => $this->collectHosts(),
             'workers' => $this->collectWorkers(),
+            'runners' => $this->collectRunners(),
             'queue'   => $this->collectQueue(),
         ];
     }
@@ -248,6 +251,23 @@ class MetricsController extends Controller
         }
     }
 
+    private function collectRunners(): array
+    {
+        try {
+            $cutoff = time() - RunnerGroup::STALE_AFTER;
+            $total  = (int)Runner::find()->count();
+            $online = (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count();
+
+            return [
+                'total'   => $total,
+                'online'  => $online,
+                'offline' => $total - $online,
+            ];
+        } catch (\Throwable) {
+            return ['total' => 0, 'online' => 0, 'offline' => 0];
+        }
+    }
+
     private function collectQueue(): array
     {
         try {
@@ -378,6 +398,20 @@ class MetricsController extends Controller
         $lines[] = '# HELP ansilume_workers_stale Number of stale worker processes.';
         $lines[] = '# TYPE ansilume_workers_stale gauge';
         $lines[] = 'ansilume_workers_stale ' . $w['stale'];
+
+        // Runners
+        $r = $metrics['runners'];
+        $lines[] = '# HELP ansilume_runners_total Total number of registered runners.';
+        $lines[] = '# TYPE ansilume_runners_total gauge';
+        $lines[] = 'ansilume_runners_total ' . $r['total'];
+
+        $lines[] = '# HELP ansilume_runners_online Runners that checked in recently.';
+        $lines[] = '# TYPE ansilume_runners_online gauge';
+        $lines[] = 'ansilume_runners_online ' . $r['online'];
+
+        $lines[] = '# HELP ansilume_runners_offline Registered runners that are not responding.';
+        $lines[] = '# TYPE ansilume_runners_offline gauge';
+        $lines[] = 'ansilume_runners_offline ' . $r['offline'];
 
         // Queue
         $q = $metrics['queue'];

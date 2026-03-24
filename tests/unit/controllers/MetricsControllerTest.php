@@ -27,6 +27,7 @@ class MetricsControllerTest extends TestCase
         $this->assertArrayHasKey('tasks', $data);
         $this->assertArrayHasKey('hosts', $data);
         $this->assertArrayHasKey('workers', $data);
+        $this->assertArrayHasKey('runners', $data);
         $this->assertArrayHasKey('queue', $data);
     }
 
@@ -125,6 +126,7 @@ class MetricsControllerTest extends TestCase
                 'jobs_with_changes' => 35,
             ],
             'workers' => ['alive' => 2, 'stale' => 1],
+            'runners' => ['total' => 4, 'online' => 2, 'offline' => 2],
             'queue' => ['pending' => 8, 'running' => 2],
         ];
     }
@@ -151,6 +153,9 @@ class MetricsControllerTest extends TestCase
             'ansilume_jobs_with_changes',
             'ansilume_workers_alive',
             'ansilume_workers_stale',
+            'ansilume_runners_total',
+            'ansilume_runners_online',
+            'ansilume_runners_offline',
             'ansilume_queue_pending',
             'ansilume_queue_running',
         ];
@@ -322,5 +327,29 @@ class MetricsControllerTest extends TestCase
         $this->assertStringContainsString('ansilume_jobs_with_changes 35', $output);
         $this->assertStringContainsString('ansilume_host_results_total{result="changed"} 300', $output);
         $this->assertStringContainsString('ansilume_host_results_total{result="rescued"} 3', $output);
+    }
+
+    // ── Runners ─────────────────────────────────────────────────────────────
+
+    public function testCollectRunnersKeys(): void
+    {
+        $ctrl = new MetricsController('metrics', \Yii::$app);
+        $runners = $ctrl->collect()['runners'];
+
+        $this->assertArrayHasKey('total', $runners);
+        $this->assertArrayHasKey('online', $runners);
+        $this->assertArrayHasKey('offline', $runners);
+        $this->assertIsInt($runners['total']);
+        $this->assertIsInt($runners['online']);
+        $this->assertIsInt($runners['offline']);
+    }
+
+    public function testPrometheusRunnerValues(): void
+    {
+        $output = MetricsController::renderPrometheus($this->sampleMetrics());
+
+        $this->assertStringContainsString('ansilume_runners_total 4', $output);
+        $this->assertStringContainsString('ansilume_runners_online 2', $output);
+        $this->assertStringContainsString('ansilume_runners_offline 2', $output);
     }
 }

@@ -6,6 +6,8 @@ namespace app\controllers;
 
 use app\components\WorkerHeartbeat;
 use app\models\Job;
+use app\models\Runner;
+use app\models\RunnerGroup;
 use yii\filters\ContentNegotiator;
 use yii\web\Controller;
 use yii\web\Response;
@@ -92,15 +94,19 @@ class HealthController extends Controller
     private function checkWorker(): array
     {
         try {
+            // Check both internal workers (Redis heartbeat) and runners (DB)
             $workers = $this->getWorkerHeartbeats();
             $now     = time();
-            $alive   = array_filter($workers, fn($w) => ($now - ($w['seen_at'] ?? 0)) < WorkerHeartbeat::STALE_AFTER);
+            $aliveWorkers = array_filter($workers, fn($w) => ($now - ($w['seen_at'] ?? 0)) < WorkerHeartbeat::STALE_AFTER);
 
-            if (count($alive) === 0) {
-                return ['ok' => false, 'error' => 'No active workers'];
+            $runnerCounts = $this->getRunnerCounts();
+            $totalAlive = count($aliveWorkers) + $runnerCounts['online'];
+
+            if ($totalAlive === 0) {
+                return ['ok' => false, 'error' => 'No active workers or runners'];
             }
 
-            return ['ok' => true, 'count' => count($alive)];
+            return ['ok' => true, 'count' => $totalAlive];
         } catch (\Throwable) {
             return ['ok' => false, 'error' => 'Worker check failed'];
         }
@@ -113,6 +119,8 @@ class HealthController extends Controller
             $now     = time();
             $alive   = array_filter($workers, fn($w) => ($now - ($w['seen_at'] ?? 0)) < WorkerHeartbeat::STALE_AFTER);
 
+            $runnerCounts = $this->getRunnerCounts();
+
             return [
                 'count'   => count($alive),
                 'workers' => array_values(array_map(fn($w) => [
@@ -122,9 +130,27 @@ class HealthController extends Controller
                     'seen_at'    => $w['seen_at'],
                     'age_s'      => $now - ($w['seen_at'] ?? $now),
                 ], $alive)),
+                'runners' => $runnerCounts,
             ];
         } catch (\Throwable) {
-            return ['count' => 0, 'workers' => []];
+            return ['count' => 0, 'workers' => [], 'runners' => ['total' => 0, 'online' => 0, 'offline' => 0]];
+        }
+    }
+
+    protected function getRunnerCounts(): array
+    {
+        try {
+            $cutoff = time() - RunnerGroup::STALE_AFTER;
+            $total  = (int)Runner::find()->count();
+            $online = (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count();
+
+            return [
+                'total'   => $total,
+                'online'  => $online,
+                'offline' => $total - $online,
+            ];
+        } catch (\Throwable) {
+            return ['total' => 0, 'online' => 0, 'offline' => 0];
         }
     }
 
