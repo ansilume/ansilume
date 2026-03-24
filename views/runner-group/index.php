@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var app\models\RunnerGroup[] $groups */
 /** @var array $total   group_id → total runner count */
 /** @var array $online  group_id → online runner count */
+/** @var array $templateCounts  group_id → linked template count */
 
 use yii\helpers\Html;
 use yii\helpers\Url;
@@ -32,6 +33,7 @@ $this->title = 'Runner Groups';
                 <tr>
                     <th>Name</th>
                     <th>Description</th>
+                    <th class="text-center">Templates</th>
                     <th class="text-center">Runners</th>
                     <th></th>
                 </tr>
@@ -47,6 +49,7 @@ $this->title = 'Runner Groups';
                 <tr>
                     <td><?= Html::a(Html::encode($group->name), ['view', 'id' => $group->id]) ?></td>
                     <td class="text-muted small"><?= Html::encode($group->description ?? '') ?></td>
+                    <td class="text-center"><?= $templateCounts[$group->id] ?? 0 ?></td>
                     <td class="text-center">
                         <span class="badge text-bg-<?= $badge ?>"><?= $on ?>/<?= $cnt ?> online</span>
                     </td>

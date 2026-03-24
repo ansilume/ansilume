@@ -49,7 +49,16 @@ class RunnerGroupController extends BaseController
             foreach ($rows as $r) { $online[(int)$r['runner_group_id']] = (int)$r['cnt']; }
         }
 
-        return $this->render('index', compact('groups', 'total', 'online'));
+        // Template counts per runner group
+        $templateCounts = [];
+        if (!empty($ids)) {
+            $rows = \Yii::$app->db->createCommand(
+                'SELECT runner_group_id, COUNT(*) AS cnt FROM {{%job_template}} WHERE runner_group_id IN (' . implode(',', $ids) . ') GROUP BY runner_group_id'
+            )->queryAll();
+            foreach ($rows as $r) { $templateCounts[(int)$r['runner_group_id']] = (int)$r['cnt']; }
+        }
+
+        return $this->render('index', compact('groups', 'total', 'online', 'templateCounts'));
     }
 
     public function actionView(int $id): string
