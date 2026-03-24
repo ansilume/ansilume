@@ -79,14 +79,13 @@ git clone https://github.com/ansilume/ansilume.git
 cd ansilume
 
 cp .env.example .env
-```
 
-Edit `.env` and set at minimum:
-
-```dotenv
-COOKIE_VALIDATION_KEY=<random-32+-char-string>
-APP_SECRET_KEY=<another-random-32+-char-string>
-RUNNER_BOOTSTRAP_SECRET=<secret-for-runner-registration>
+# Generate random secrets automatically
+sed -i \
+  -e "s|^COOKIE_VALIDATION_KEY=.*|COOKIE_VALIDATION_KEY=$(openssl rand -hex 32)|" \
+  -e "s|^APP_SECRET_KEY=.*|APP_SECRET_KEY=$(openssl rand -hex 32)|" \
+  -e "s|^RUNNER_BOOTSTRAP_SECRET=.*|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
+  .env
 ```
 
 Then start the stack:
