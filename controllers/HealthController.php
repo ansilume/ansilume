@@ -63,7 +63,7 @@ class HealthController extends Controller
         ];
     }
 
-    private function checkDatabase(): array
+    protected function checkDatabase(): array
     {
         try {
             \Yii::$app->db->createCommand('SELECT 1')->queryScalar();
@@ -73,7 +73,7 @@ class HealthController extends Controller
         }
     }
 
-    private function checkRedis(): array
+    protected function checkRedis(): array
     {
         try {
             \Yii::$app->cache->set('health_probe', 1, 5);

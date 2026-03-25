@@ -42,6 +42,8 @@ class HealthControllerTest extends TestCase
             protected function getRunnerCounts(): array { return $this->fakeRunnerCounts; }
             protected function getScheduleCounts(): array { return $this->fakeScheduleCounts; }
             protected function setHttpStatus(int $code): void { $this->capturedStatus = $code; }
+            protected function checkDatabase(): array { return $this->fakeDbOk ? ['ok' => true, 'latency_ms' => null] : ['ok' => false, 'error' => 'DB unreachable']; }
+            protected function checkRedis(): array { return $this->fakeRedisOk ? ['ok' => true] : ['ok' => false, 'error' => 'Redis unreachable']; }
 
             public function testCheckRunners(): array { return $this->checkRunners(); }
             public function testCheckScheduler(): array { return $this->checkScheduler(); }

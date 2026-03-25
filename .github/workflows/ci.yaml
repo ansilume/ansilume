@@ -48,6 +48,17 @@ jobs:
           done
           docker compose ps
 
+      - name: Set up test database
+        run: |
+          DB_ROOT_PASSWORD=$(grep '^DB_ROOT_PASSWORD=' .env | cut -d= -f2)
+          DB_USER=$(grep '^DB_USER=' .env | cut -d= -f2)
+          DB_TEST_NAME=$(grep '^DB_TEST_NAME=' .env | cut -d= -f2)
+          docker compose exec -T db mariadb -uroot -p"${DB_ROOT_PASSWORD}" -e \
+            "CREATE DATABASE IF NOT EXISTS \`${DB_TEST_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
+             GRANT ALL PRIVILEGES ON \`${DB_TEST_NAME}\`.* TO '${DB_USER}'@'%'; \
+             FLUSH PRIVILEGES;"
+          docker compose exec -T app bash -c "DB_NAME=${DB_TEST_NAME} php yii migrate --interactive=0"
+
       - name: Run test suite
         run: docker compose exec -T app bash -c './tests.sh'
 
