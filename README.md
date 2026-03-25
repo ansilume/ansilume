@@ -128,16 +128,6 @@ Browser → Nginx → PHP-FPM (Yii2) → MariaDB
 | `models/` | ActiveRecord models + form models |
 | `migrations/` | Forward-only schema migrations |
 
-### Job lifecycle
-
-```
-pending → queued → running → succeeded
-                           → failed
-                           → canceled
-```
-
-Jobs are created by web requests, executed by runner agents, and never block the HTTP layer.
-
 ### Runners
 
 Runners are pull-based agents that poll the server for queued jobs. They self-register on first start using `RUNNER_BOOTSTRAP_SECRET` — no manual token management required in development.
