@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# =============================================================================
+# bin/release — bump version, commit, tag, push
+#
+# Usage:
+#   ./bin/release patch    0.1.0 → 0.1.1
+#   ./bin/release minor    0.1.0 → 0.2.0
+#   ./bin/release major    0.1.0 → 1.0.0
+# =============================================================================
+
+set -euo pipefail
+
+BUMP="${1:-}"
+if [[ "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
+    echo "Usage: $0 <patch|minor|major>" >&2
+    exit 1
+fi
+
+# Ensure working tree is clean.
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Error: working tree is not clean. Commit or stash changes first." >&2
+    exit 1
+fi
+
+CURRENT=$(cat VERSION)
+IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+case "$BUMP" in
+    major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+    minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+    patch) PATCH=$((PATCH + 1)) ;;
+esac
+
+NEW="${MAJOR}.${MINOR}.${PATCH}"
+TAG="v${NEW}"
+
+echo "${NEW}" > VERSION
+
+git add VERSION
+git commit -m "chore: release ${TAG}"
+git tag -a "${TAG}" -m "Release ${TAG}"
+git push origin main
+git push origin "${TAG}"
+
+echo ""
+echo "Released ${TAG}"

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 return [
+    'version'            => trim((string)@file_get_contents(dirname(__DIR__) . '/VERSION')) ?: 'dev',
     'adminEmail'         => $_ENV['ADMIN_EMAIL'] ?? 'admin@example.com',
     'senderEmail'        => $_ENV['SENDER_EMAIL'] ?? 'noreply@example.com',
     'senderName'         => 'Ansilume',

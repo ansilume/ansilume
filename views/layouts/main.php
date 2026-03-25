@@ -157,7 +157,7 @@ $active = fn(string $prefix): string =>
     </nav>
     <?php endif; ?>
 
-    <div class="sidebar-footer">
+    <div class="sidebar-footer" title="Ansilume <?= Html::encode(\Yii::$app->params['version']) ?>">
         <div class="d-flex align-items-center gap-2 mb-1">
             <span class="text-white" style="font-size:.85rem"><?= Html::encode(\Yii::$app->user->identity->username) ?></span>
             <?php if (\Yii::$app->user->identity->is_superadmin): ?>
@@ -172,6 +172,7 @@ $active = fn(string $prefix): string =>
                 <button type="submit" class="nav-link" style="background:none;border:none;width:100%;text-align:left;cursor:pointer;">Logout</button>
             </form>
         </nav>
+        <div class="mt-2" style="font-size:.7rem;opacity:.5">v<?= Html::encode(\Yii::$app->params['version']) ?></div>
     </div>
 
     <?php endif; ?>
