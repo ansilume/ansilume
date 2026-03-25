@@ -221,7 +221,64 @@ elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
         skip "Migration end-to-end test (cannot connect to DB container as root)"
     fi
 else
-    skip "Migration end-to-end test (Docker not available)"
+    # No Docker — try a direct PHP/PDO path (works when running inside the container).
+    # Read DB_ROOT_PASSWORD from the environment or fall back to .env file.
+    DB_ROOT_PWD="${DB_ROOT_PASSWORD:-}"
+    if [[ -z "$DB_ROOT_PWD" ]] && [[ -f ".env" ]]; then
+        DB_ROOT_PWD=$(grep -m1 '^DB_ROOT_PASSWORD=' .env | cut -d= -f2-)
+    fi
+
+    if [[ -n "$DB_ROOT_PWD" ]]; then
+        SCRATCH_DB="ansilume_migrate_test"
+        _DB_HOST="${DB_HOST:-db}"
+        _DB_PORT="${DB_PORT:-3306}"
+        _DB_USER="${DB_USER:-ansilume}"
+
+        # Write a small PHP helper to a temp file to avoid inline-escaping hell.
+        _PHP_HELPER=$(mktemp /tmp/ansilume_migrate_XXXXXX.php)
+        cat > "$_PHP_HELPER" <<'PHPEOF'
+<?php
+// $argv[0] is the script path; actual args start at index 1.
+[, $action, $host, $port, $rootPwd, $db, $user] = $argv + [1=>'',2=>'',3=>'',4=>'',5=>'',6=>'',7=>''];
+try {
+    $pdo = new PDO("mysql:host={$host};port={$port}", 'root', $rootPwd);
+    if ($action === 'setup') {
+        $pdo->exec("DROP DATABASE IF EXISTS `{$db}`");
+        $pdo->exec("CREATE DATABASE `{$db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+        $pdo->exec("GRANT ALL PRIVILEGES ON `{$db}`.* TO '{$user}'@'%'");
+        $pdo->exec("FLUSH PRIVILEGES");
+    } elseif ($action === 'drop') {
+        $pdo->exec("DROP DATABASE IF EXISTS `{$db}`");
+    }
+    echo 'ok';
+} catch (Exception $e) {
+    echo 'error: ' . $e->getMessage();
+    exit(1);
+}
+PHPEOF
+
+        SETUP_OUT=$(php "$_PHP_HELPER" setup "$_DB_HOST" "$_DB_PORT" "$DB_ROOT_PWD" "$SCRATCH_DB" "$_DB_USER" 2>&1)
+
+        if [[ "$SETUP_OUT" == "ok" ]]; then
+            MIGRATE_OUT=$(DB_NAME=${SCRATCH_DB} php yii migrate --interactive=0 2>&1 || true)
+
+            if echo "$MIGRATE_OUT" | grep -q "Migrated up successfully\|No new migrations found"; then
+                MIGRATION_COUNT=$(echo "$MIGRATE_OUT" | grep -cP '^\*\*\* applied' || true)
+                ok "All migrations applied cleanly on a fresh schema (${MIGRATION_COUNT} migrations)"
+            else
+                fail "Migrations failed on a fresh schema"
+                echo "$MIGRATE_OUT" | tail -30 | sed 's/^/     /'
+            fi
+
+            php "$_PHP_HELPER" drop "$_DB_HOST" "$_DB_PORT" "$DB_ROOT_PWD" "$SCRATCH_DB" 2>/dev/null || true
+        else
+            skip "Migration end-to-end test (cannot connect to DB as root: ${SETUP_OUT})"
+        fi
+
+        rm -f "$_PHP_HELPER"
+    else
+        skip "Migration end-to-end test (Docker not available and DB_ROOT_PASSWORD not set)"
+    fi
 fi
 
 # =============================================================================
