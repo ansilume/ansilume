@@ -38,12 +38,15 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Full audit trail** — every launch, change, and access event is recorded
 - **Role-based access** — `viewer`, `operator`, `admin` roles with team-scoped project access
 - **Secure credential storage** — AES-256-CBC encrypted at rest, never exposed in logs or HTML
+- **Two-factor authentication** — optional TOTP 2FA per user (Google Authenticator, Authy, 1Password, …) with recovery codes
 - **Pull-based runners** — lightweight runner agents poll for work and self-register via bootstrap token
 - **Scheduled jobs** — cron-based scheduling with next/last run tracking
 - **Inbound webhooks** — trigger template executions from external systems
 - **Live job output** — streaming stdout/stderr with per-task play recap
 - **Git-backed projects** — sync playbooks from remote repositories
 - **Lint integration** — automatic ansible-lint on project sync
+- **Email notifications** — configurable success/failure alerts per job template with cross-client HTML email templates
+- **Password reset** — self-service password reset via email
 - **Monitoring endpoints** — [Prometheus and JSON metrics](docs/monitoring.md) for jobs, tasks, hosts, runners, and infrastructure health
 - **Production deployment** — [Ansible role](docs/deployment.md) for automated production installation
 
@@ -217,11 +220,15 @@ Add `export UID GID` to your shell profile to apply automatically. Not needed wh
 ## Security
 
 - Credentials are AES-256-CBC encrypted at rest — raw secrets never appear in logs or HTML
+- TOTP secrets are AES-256-CBC encrypted at rest — the same key used for credentials
 - RBAC roles: `viewer` (read-only) · `operator` (launch + manage) · `admin` (full access)
 - Superadmin flag (`is_superadmin`) bypasses team-scoped restrictions
 - All state-changing actions require explicit authorization
+- Optional TOTP 2FA per user — disabling requires a current authenticator code or recovery code
+- Recovery codes are bcrypt-hashed; rate limiting (5 attempts, 5 min lockout) on TOTP verification
 - Ansible execution runs in isolated worker processes with auditable command construction
 - Runner tokens are stored as SHA-256 hashes — raw tokens are shown exactly once
+- Artifact collection skips symlinks to prevent path traversal and file exfiltration
 
 ---
 
