@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\commands;
 
 use app\models\User;
+use app\services\AuditService;
 use yii\console\Controller;
 use yii\console\ExitCode;
 
@@ -52,6 +53,16 @@ class SetupController extends Controller
         if ($role !== null) {
             $auth->assign($role, $user->id);
         }
+
+        /** @var AuditService $audit */
+        $audit = \Yii::$app->get('auditService');
+        $audit->log(
+            AuditService::ACTION_USER_CREATED,
+            'user',
+            $user->id,
+            $user->id,
+            ['username' => $username, 'email' => $email, 'source' => 'console:setup/admin']
+        );
 
         $this->stdout("Admin user '{$username}' created with ID {$user->id}.\n");
         return ExitCode::OK;

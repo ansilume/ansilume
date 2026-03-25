@@ -93,6 +93,14 @@ class HealthController extends Controller
         try {
             $counts = $this->getRunnerCounts();
 
+            if ($counts['total'] === 0) {
+                return ['ok' => false, 'error' => 'No runners registered', 'online' => 0, 'total' => 0];
+            }
+
+            if ($counts['online'] === 0) {
+                return ['ok' => false, 'error' => 'All runners offline', 'online' => 0, 'total' => $counts['total']];
+            }
+
             return [
                 'ok'     => true,
                 'online' => $counts['online'],
