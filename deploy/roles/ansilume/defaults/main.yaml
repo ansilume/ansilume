@@ -135,6 +135,14 @@ ansilume_job_workspace_path: /tmp/ansilume/jobs
 # Directory for job log storage inside the container.
 ansilume_job_log_path: /var/www/runtime/job-logs
 
+# -- Artifacts ---------------------------------------------------------------
+
+# Directory for artifact storage inside the container.
+ansilume_artifact_storage_path: /var/www/runtime/artifacts
+
+# Maximum single artifact file size in bytes (default 10 MB).
+ansilume_artifact_max_file_size: 10485760
+
 # -- Mail / SMTP -------------------------------------------------------------
 
 # SMTP settings for outgoing notifications.

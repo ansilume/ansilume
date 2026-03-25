@@ -91,6 +91,15 @@ return [
         'jobClaimService' => [
             'class' => 'app\services\JobClaimService',
         ],
+        'inventoryService' => [
+            'class'   => 'app\services\InventoryService',
+            'timeout' => 30,
+        ],
+        'artifactService' => [
+            'class'       => 'app\services\ArtifactService',
+            'storagePath' => '@runtime/artifacts',
+            'maxFileSize' => (int)(getenv('ARTIFACT_MAX_FILE_SIZE') ?: 10485760),
+        ],
         'queue' => [
             'class'   => 'yii\queue\redis\Queue',
             'redis'   => [

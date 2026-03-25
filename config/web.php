@@ -136,6 +136,15 @@ $config = [
         'jobClaimService' => [
             'class' => 'app\services\JobClaimService',
         ],
+        'inventoryService' => [
+            'class'   => 'app\services\InventoryService',
+            'timeout' => 30,
+        ],
+        'artifactService' => [
+            'class'       => 'app\services\ArtifactService',
+            'storagePath' => '@runtime/artifacts',
+            'maxFileSize' => (int)(getenv('ARTIFACT_MAX_FILE_SIZE') ?: 10485760),
+        ],
         'urlManager' => [
             'enablePrettyUrl'     => true,
             'showScriptName'      => false,
@@ -203,6 +212,10 @@ $config = [
                 'audit-log/<action>'                 => 'audit-log/<action>',
                 'audit-log/<action>/<id:\d+>'        => 'audit-log/<action>',
                 'project/lint/<id:\d+>' => 'project/lint',
+                // Job artifacts
+                ['pattern' => 'job/<id:\d+>/artifact/<artifact_id:\d+>', 'route' => 'job/download-artifact'],
+                // Inventory
+                'inventory/parse-hosts/<id:\d+>'     => 'inventory/parse-hosts',
                 // Generic
                 '<controller>/<action>'              => '<controller>/<action>',
                 '<controller>/<id:\d+>'              => '<controller>/view',

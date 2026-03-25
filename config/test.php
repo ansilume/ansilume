@@ -57,6 +57,13 @@ return [
         'projectService' => [
             'class' => 'app\services\ProjectService',
         ],
+        'inventoryService' => [
+            'class' => 'app\services\InventoryService',
+        ],
+        'artifactService' => [
+            'class'       => 'app\services\ArtifactService',
+            'storagePath' => '@runtime/test-artifacts',
+        ],
         'mailer' => [
             'class'            => 'yii\swiftmailer\SwiftMailer',
             'useFileTransport' => true,

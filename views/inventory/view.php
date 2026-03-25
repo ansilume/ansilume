@@ -67,3 +67,136 @@ $this->title = $model->name;
     </div>
     <?php endif; ?>
 </div>
+
+<div class="mt-4">
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Resolved Hosts &amp; Groups</span>
+            <button type="button" class="btn btn-sm btn-outline-primary" id="btn-parse-inventory">
+                Parse Inventory
+            </button>
+        </div>
+        <div class="card-body" id="inventory-result">
+            <p class="text-muted mb-0">Click "Parse Inventory" to resolve hosts and groups via <code>ansible-inventory</code>.</p>
+        </div>
+    </div>
+</div>
+
+<?php
+$parseUrl = \yii\helpers\Url::to(['parse-hosts', 'id' => $model->id]);
+$csrf = \Yii::$app->request->csrfParam;
+$csrfToken = \Yii::$app->request->getCsrfToken();
+
+$js = <<<JS
+document.getElementById('btn-parse-inventory').addEventListener('click', function() {
+    var btn = this;
+    var container = document.getElementById('inventory-result');
+    btn.disabled = true;
+    btn.textContent = 'Parsing…';
+    container.innerHTML = '<p class="text-muted">Running ansible-inventory…</p>';
+
+    fetch('{$parseUrl}', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: '{$csrf}=' + encodeURIComponent('{$csrfToken}')
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        btn.disabled = false;
+        btn.textContent = 'Parse Inventory';
+
+        if (data.error) {
+            container.innerHTML = '<div class="alert alert-danger mb-0">' + escapeHtml(data.error) + '</div>';
+            return;
+        }
+
+        var html = '';
+
+        // Groups
+        var groupNames = Object.keys(data.groups).sort();
+        if (groupNames.length > 0) {
+            html += '<h6>Groups <span class="badge text-bg-secondary">' + groupNames.length + '</span></h6>';
+            html += '<div class="accordion mb-3" id="inv-groups">';
+            groupNames.forEach(function(name, idx) {
+                var g = data.groups[name];
+                var hosts = g.hosts || [];
+                var children = g.children || [];
+                var vars = g.vars || {};
+                var varKeys = Object.keys(vars);
+                var collapseId = 'group-' + idx;
+
+                html += '<div class="accordion-item">';
+                html += '<h2 class="accordion-header">';
+                html += '<button class="accordion-button collapsed py-2" type="button" data-bs-toggle="collapse" data-bs-target="#' + collapseId + '">';
+                html += '<strong>' + escapeHtml(name) + '</strong>';
+                html += '<span class="badge text-bg-info ms-2">' + hosts.length + ' host' + (hosts.length !== 1 ? 's' : '') + '</span>';
+                if (children.length) html += '<span class="badge text-bg-warning ms-2">' + children.length + ' children</span>';
+                html += '</button></h2>';
+                html += '<div id="' + collapseId + '" class="accordion-collapse collapse" data-bs-parent="#inv-groups">';
+                html += '<div class="accordion-body py-2">';
+
+                if (hosts.length) {
+                    html += '<div class="mb-2"><strong>Hosts:</strong> ' + hosts.map(escapeHtml).join(', ') + '</div>';
+                }
+                if (children.length) {
+                    html += '<div class="mb-2"><strong>Children:</strong> ' + children.map(escapeHtml).join(', ') + '</div>';
+                }
+                if (varKeys.length) {
+                    html += '<div><strong>Group vars:</strong>';
+                    html += '<pre class="mb-0 mt-1" style="font-size:.85em">' + escapeHtml(JSON.stringify(vars, null, 2)) + '</pre>';
+                    html += '</div>';
+                }
+                if (!hosts.length && !children.length && !varKeys.length) {
+                    html += '<em class="text-muted">Empty group</em>';
+                }
+
+                html += '</div></div></div>';
+            });
+            html += '</div>';
+        }
+
+        // Hosts
+        var hostNames = Object.keys(data.hosts).sort();
+        if (hostNames.length > 0) {
+            html += '<h6>All Hosts <span class="badge text-bg-secondary">' + hostNames.length + '</span></h6>';
+            html += '<div class="table-responsive"><table class="table table-sm table-striped mb-0">';
+            html += '<thead><tr><th>Host</th><th>Variables</th></tr></thead><tbody>';
+            hostNames.forEach(function(h) {
+                var vars = data.hosts[h];
+                var varKeys = Object.keys(vars);
+                html += '<tr><td><code>' + escapeHtml(h) + '</code></td><td>';
+                if (varKeys.length) {
+                    html += '<pre class="mb-0" style="font-size:.85em">' + escapeHtml(JSON.stringify(vars, null, 2)) + '</pre>';
+                } else {
+                    html += '<span class="text-muted">—</span>';
+                }
+                html += '</td></tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+
+        if (!groupNames.length && !hostNames.length) {
+            html = '<p class="text-muted mb-0">No hosts or groups found.</p>';
+        }
+
+        container.innerHTML = html;
+    })
+    .catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = 'Parse Inventory';
+        container.innerHTML = '<div class="alert alert-danger mb-0">Request failed: ' + escapeHtml(err.message) + '</div>';
+    });
+});
+
+function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+}
+JS;
+
+$this->registerJs($js);
+?>

@@ -6,6 +6,7 @@ namespace app\controllers;
 
 use app\models\AuditLog;
 use app\models\Job;
+use app\models\JobArtifact;
 use app\models\JobLog;
 use app\models\JobSearchForm;
 use app\models\JobTask;
@@ -21,7 +22,7 @@ class JobController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view', 'log-poll'], 'allow' => true, 'roles' => ['job.view']],
+            ['actions' => ['index', 'view', 'log-poll', 'download-artifact'], 'allow' => true, 'roles' => ['job.view']],
             ['actions' => ['cancel', 'relaunch'],        'allow' => true, 'roles' => ['job.cancel']],
         ];
     }
@@ -51,11 +52,18 @@ class JobController extends BaseController
 
     public function actionView(int $id): string
     {
-        $job          = $this->findModel($id);
-        $logs         = $job->getLogs()->all();
-        $tasks        = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
+        $job           = $this->findModel($id);
+        $logs          = $job->getLogs()->all();
+        $tasks         = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
         $hostSummaries = $job->getHostSummaries()->all();
-        return $this->render('view', ['job' => $job, 'logs' => $logs, 'tasks' => $tasks, 'hostSummaries' => $hostSummaries]);
+        $artifacts     = $job->getArtifacts()->all();
+        return $this->render('view', [
+            'job' => $job,
+            'logs' => $logs,
+            'tasks' => $tasks,
+            'hostSummaries' => $hostSummaries,
+            'artifacts' => $artifacts,
+        ]);
     }
 
     public function actionLogPoll(int $id, int $after = -1): Response
@@ -127,6 +135,26 @@ class JobController extends BaseController
             \Yii::$app->session->setFlash('danger', 'Re-launch failed: ' . $e->getMessage());
             return $this->redirect(['view', 'id' => $id]);
         }
+    }
+
+    public function actionDownloadArtifact(int $id, int $artifact_id): Response
+    {
+        $this->findModel($id);
+
+        $artifact = JobArtifact::findOne(['id' => $artifact_id, 'job_id' => $id]);
+        if ($artifact === null) {
+            throw new NotFoundHttpException("Artifact not found.");
+        }
+
+        if (!file_exists($artifact->storage_path)) {
+            throw new NotFoundHttpException("Artifact file no longer exists on disk.");
+        }
+
+        return \Yii::$app->response->sendFile(
+            $artifact->storage_path,
+            $artifact->display_name,
+            ['mimeType' => $artifact->mime_type, 'inline' => false]
+        );
     }
 
     private function findModel(int $id): Job

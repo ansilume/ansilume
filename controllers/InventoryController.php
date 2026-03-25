@@ -16,7 +16,7 @@ class InventoryController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],   'allow' => true, 'roles' => ['inventory.view']],
+            ['actions' => ['index', 'view', 'parse-hosts'], 'allow' => true, 'roles' => ['inventory.view']],
             ['actions' => ['create'],           'allow' => true, 'roles' => ['inventory.create']],
             ['actions' => ['update'],           'allow' => true, 'roles' => ['inventory.update']],
             ['actions' => ['delete'],           'allow' => true, 'roles' => ['inventory.delete']],
@@ -25,7 +25,7 @@ class InventoryController extends BaseController
 
     protected function verbRules(): array
     {
-        return ['delete' => ['POST']];
+        return ['delete' => ['POST'], 'parse-hosts' => ['POST']];
     }
 
     public function actionIndex(): string
@@ -85,6 +85,19 @@ class InventoryController extends BaseController
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_DELETED, 'inventory', $id, null, ['name' => $name]);
         \Yii::$app->session->setFlash('success', "Inventory \"{$name}\" deleted.");
         return $this->redirect(['index']);
+    }
+
+    public function actionParseHosts(int $id): Response
+    {
+        \Yii::$app->response->format = Response::FORMAT_JSON;
+
+        $model = $this->findModel($id);
+
+        /** @var \app\services\InventoryService $service */
+        $service = \Yii::$app->get('inventoryService');
+        $result  = $service->resolve($model);
+
+        return $this->asJson($result);
     }
 
     private function findModel(int $id): Inventory

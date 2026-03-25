@@ -154,11 +154,15 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             2 => ['pipe', 'w'],
         ];
 
+        $artifactDir = sys_get_temp_dir() . '/ansilume_artifacts_' . $job->id . '_' . uniqid('', true);
+        mkdir($artifactDir, 0750, true);
+
         $env = array_merge(getenv() ?: [], [
             'ANSIBLE_CALLBACK_PLUGINS'  => $pluginDir,
             'ANSIBLE_CALLBACKS_ENABLED' => 'ansilume_callback',
             'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
             'ANSILUME_CALLBACK_FILE'    => $callbackFile,
+            'ANSILUME_ARTIFACT_DIR'     => $artifactDir,
             'ANSIBLE_FORCE_COLOR'       => '1',
             'PYTHONUNBUFFERED'          => '1',
         ]);
@@ -219,6 +223,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         }
 
         $this->saveTaskResults($job, $callbackFile);
+        $this->collectArtifacts($job, $env);
 
         return $exitCode;
     }
@@ -419,6 +424,75 @@ class RunAnsibleJob extends BaseObject implements JobInterface
     {
         $base = $this->resolveProjectPath($payload);
         return rtrim($base, '/') . '/' . ltrim($payload['playbook'] ?? 'site.yml', '/');
+    }
+
+    /**
+     * Collect artifacts from the job's artifact directory if present.
+     */
+    private function collectArtifacts(Job $job, array $env): void
+    {
+        $artifactDir = $env['ANSILUME_ARTIFACT_DIR'] ?? null;
+        if ($artifactDir === null || !is_dir($artifactDir)) {
+            return;
+        }
+
+        try {
+            /** @var \app\services\ArtifactService $service */
+            $service = \Yii::$app->get('artifactService');
+            $artifacts = $service->collectFromDirectory($job, $artifactDir);
+            if (!empty($artifacts)) {
+                \Yii::info("RunAnsibleJob: collected " . count($artifacts) . " artifact(s) for job #{$job->id}", __CLASS__);
+            }
+        } catch (\Throwable $e) {
+            \Yii::error("RunAnsibleJob: artifact collection failed for job #{$job->id}: " . $e->getMessage(), __CLASS__);
+        } finally {
+            $this->cleanupDirectory($artifactDir);
+        }
+    }
+
+    /**
+     * Recursively remove a temporary directory.
+     *
+     * Symlinks are removed (unlinked) but never followed — this prevents
+     * a malicious playbook from tricking cleanup into deleting files
+     * outside the artifact directory.
+     */
+    private function cleanupDirectory(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+
+        $realDir = realpath($dir);
+        if ($realDir === false) {
+            return;
+        }
+
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+
+        foreach ($iterator as $item) {
+            /** @var \SplFileInfo $item */
+            $path = $item->getPathname();
+
+            // Remove symlinks themselves but don't follow them
+            if ($item->isLink()) {
+                @unlink($path);
+                continue;
+            }
+
+            // Verify the real path is inside our directory (defense in depth)
+            $realPath = $item->getRealPath();
+            if ($realPath === false || !str_starts_with($realPath, $realDir)) {
+                continue;
+            }
+
+            $item->isDir() ? @rmdir($path) : @unlink($path);
+        }
+
+        @rmdir($dir);
     }
 
     private function appendLog(Job $job, string $stream, string $content, int $sequence = 0): void

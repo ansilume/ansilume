@@ -7,6 +7,7 @@ declare(strict_types=1);
 /** @var app\models\JobLog[] $logs */
 /** @var app\models\JobTask[] $tasks */
 /** @var app\models\JobHostSummary[] $hostSummaries */
+/** @var app\models\JobArtifact[] $artifacts */
 
 use app\models\Job;
 use app\models\JobHostSummary;
@@ -193,6 +194,45 @@ foreach ($tasks as $t) { $counts[$t->status] = ($counts[$t->status] ?? 0) + 1; }
                             ? number_format($ms / 1000, 2) . ' s'
                             : $ms . ' ms';
                         ?>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php if (!empty($artifacts)): ?>
+<div class="card mb-3">
+    <div class="card-header">Artifacts <span class="badge text-bg-secondary"><?= count($artifacts) ?></span></div>
+    <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0 small">
+            <thead>
+                <tr>
+                    <th>File</th>
+                    <th>Type</th>
+                    <th class="text-end">Size</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+            <?php foreach ($artifacts as $artifact): ?>
+                <tr>
+                    <td><code><?= Html::encode($artifact->display_name) ?></code></td>
+                    <td class="text-muted"><?= Html::encode($artifact->mime_type) ?></td>
+                    <td class="text-end text-nowrap"><?php
+                        $bytes = $artifact->size_bytes;
+                        if ($bytes >= 1048576) {
+                            echo number_format($bytes / 1048576, 1) . ' MB';
+                        } elseif ($bytes >= 1024) {
+                            echo number_format($bytes / 1024, 1) . ' KB';
+                        } else {
+                            echo $bytes . ' B'; // xss-ok: integer
+                        }
+                    ?></td>
+                    <td class="text-end">
+                        <?= Html::a('Download', ['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
                     </td>
                 </tr>
             <?php endforeach; ?>

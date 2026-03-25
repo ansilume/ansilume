@@ -54,6 +54,9 @@ SMTP_PASSWORD=
 ADMIN_EMAIL={{ ansilume_admin_email }}
 SENDER_EMAIL={{ ansilume_sender_email }}
 
+# Artifacts
+ARTIFACT_MAX_FILE_SIZE={{ ansilume_artifact_max_file_size }}
+
 # Audit / SIEM
 AUDIT_SYSLOG_ENABLED={{ ansilume_audit_syslog_enabled | ternary('true', 'false') }}
 AUDIT_SYSLOG_IDENT={{ ansilume_audit_syslog_ident }}

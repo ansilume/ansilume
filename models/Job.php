@@ -32,6 +32,7 @@ use yii\db\ActiveRecord;
  * @property Runner|null          $runner
  * @property JobLog[]             $logs
  * @property JobHostSummary[]     $hostSummaries
+ * @property JobArtifact[]        $artifacts
  */
 class Job extends ActiveRecord
 {
@@ -163,5 +164,10 @@ class Job extends ActiveRecord
     public function getLogs(): \yii\db\ActiveQuery
     {
         return $this->hasMany(JobLog::class, ['job_id' => 'id'])->orderBy('sequence ASC');
+    }
+
+    public function getArtifacts(): \yii\db\ActiveQuery
+    {
+        return $this->hasMany(JobArtifact::class, ['job_id' => 'id'])->orderBy('display_name ASC');
     }
 }
