@@ -79,6 +79,37 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 
 **Prerequisites:** Docker + Docker Compose
 
+### Prebuilt images (recommended for homelab / production)
+
+No git required — pull directly from the GitHub Container Registry.
+
+```bash
+# 1. Download the compose file and a production .env template
+curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/docker-compose.prebuilt.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/.env.prod.example -o .env
+
+# 2. Generate secrets and set passwords
+sed -i \
+  -e "s|COOKIE_VALIDATION_KEY=CHANGE-ME|COOKIE_VALIDATION_KEY=$(openssl rand -hex 32)|" \
+  -e "s|APP_SECRET_KEY=CHANGE-ME|APP_SECRET_KEY=$(openssl rand -hex 32)|" \
+  -e "s|RUNNER_BOOTSTRAP_SECRET=CHANGE-ME|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
+  -e "s|DB_ROOT_PASSWORD=CHANGE-ME|DB_ROOT_PASSWORD=$(openssl rand -hex 16)|" \
+  -e "s|DB_PASSWORD=CHANGE-ME|DB_PASSWORD=$(openssl rand -hex 16)|" \
+  .env
+
+# 3. Start
+docker compose up -d
+
+# 4. Create the first admin user
+docker compose exec app php yii setup/admin admin admin@example.com yourpassword
+```
+
+Open **http://localhost:8080** and log in.
+
+> Migrations run automatically on startup. No manual steps required.
+
+### Build from source (development / CI)
+
 ```bash
 git clone https://github.com/ansilume/ansilume.git
 cd ansilume
@@ -91,11 +122,7 @@ sed -i \
   -e "s|^APP_SECRET_KEY=.*|APP_SECRET_KEY=$(openssl rand -hex 32)|" \
   -e "s|^RUNNER_BOOTSTRAP_SECRET=.*|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
   .env
-```
 
-Then start the stack:
-
-```bash
 # Linux: export host UID if it differs from 1000
 # export UID GID
 
@@ -106,8 +133,6 @@ docker compose exec app php yii setup/admin admin admin@example.com yourpassword
 ```
 
 Open **http://localhost:8080** and log in.
-
-> Migrations run automatically on startup. No manual steps required.
 
 ---
 

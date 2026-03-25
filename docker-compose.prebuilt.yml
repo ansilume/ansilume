@@ -1,0 +1,151 @@
+# Ansilume — prebuilt images from ghcr.io
+#
+# Use this file if you want to run Ansilume without cloning the source.
+# Pull the latest release and start:
+#
+#   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/docker-compose.prebuilt.yml -o docker-compose.yml
+#   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/.env.prod.example         -o .env
+#   # edit .env — set secrets and passwords
+#   docker compose up -d
+#   docker compose exec app php yii setup/admin admin admin@example.com yourpassword
+
+services:
+  app:
+    image: ghcr.io/ansilume/ansilume:latest
+    container_name: ansilume_app
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "/var/www/yii", "health/check"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - ansilume
+
+  nginx:
+    image: ghcr.io/ansilume/ansilume-nginx:latest
+    container_name: ansilume_nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT:-8080}:80"
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health 2>/dev/null | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      - ansilume
+
+  queue-worker:
+    image: ghcr.io/ansilume/ansilume:latest
+    container_name: ansilume_queue_worker
+    restart: unless-stopped
+    command: ["php", "yii", "worker/start"]
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "/var/www/yii", "health/check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - ansilume
+
+  schedule-runner:
+    image: ghcr.io/ansilume/ansilume:latest
+    container_name: ansilume_schedule_runner
+    restart: unless-stopped
+    command: ["/bin/sh", "-c",
+      "while true; do php yii schedule/run && touch /tmp/schedule-alive; sleep 60; done"]
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c",
+        "test -f /tmp/schedule-alive && test $(( $(date +%s) - $(stat -c %Y /tmp/schedule-alive) )) -lt 150"]
+      interval: 60s
+      timeout: 5s
+      retries: 2
+      start_period: 90s
+    networks:
+      - ansilume
+
+  runner-1:
+    image: ghcr.io/ansilume/ansilume-runner:latest
+    container_name: ansilume_runner_1
+    restart: unless-stopped
+    environment:
+      - RUNNER_NAME=runner-1
+      - RUNNER_BOOTSTRAP_SECRET=${RUNNER_BOOTSTRAP_SECRET}
+      - API_URL=http://nginx
+    depends_on:
+      nginx:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /var/www/runtime/runner-runner-1.token"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
+    networks:
+      - ansilume
+
+  db:
+    image: mariadb:10.11
+    container_name: ansilume_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-ansilume}
+      MYSQL_USER: ${DB_USER:-ansilume}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "${DB_USER:-ansilume}", "-p${DB_PASSWORD}", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ansilume
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: ansilume_redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-h", "localhost", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ansilume
+
+networks:
+  ansilume:
+    driver: bridge
+
+volumes:
+  db_data:
