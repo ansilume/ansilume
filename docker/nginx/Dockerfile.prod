@@ -1,0 +1,24 @@
+# =============================================================================
+# Production nginx image
+#
+# Bakes in the nginx config and static assets (CSS, JS, SVGs).
+# Proxies PHP requests to the app container via FastCGI.
+#
+# Used by: ghcr.io/ansilume/ansilume-nginx
+# =============================================================================
+
+FROM nginx:1.25-alpine
+
+# Remove default config
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Bake in the ansilume nginx config
+COPY docker/nginx/default.conf /etc/nginx/conf.d/default.conf
+
+# Bake in static assets so nginx can serve them directly
+COPY web/css      /var/www/web/css
+COPY web/js       /var/www/web/js
+COPY web/*.svg    /var/www/web/
+COPY web/index.php /var/www/web/index.php
+
+EXPOSE 80

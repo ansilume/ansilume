@@ -1,0 +1,67 @@
+# =============================================================================
+# Production image for: app (php-fpm), queue-worker, schedule-runner
+#
+# Multi-stage build:
+#   1. composer — install PHP dependencies
+#   2. runtime  — slim production image with baked-in source
+#
+# Used by: ghcr.io/ansilume/ansilume
+# =============================================================================
+
+# -- Stage 1: Composer dependencies -------------------------------------------
+FROM composer:2.6 AS composer
+
+WORKDIR /build
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --no-interaction --no-scripts --optimize-autoloader --prefer-dist
+
+# -- Stage 2: Runtime ---------------------------------------------------------
+FROM php:8.2-fpm
+
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    libzip-dev \
+    zip \
+    unzip \
+    openssh-client \
+    ansible \
+    python3-pip \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --break-system-packages ansible-lint
+
+RUN docker-php-ext-install \
+    pdo_mysql \
+    mbstring \
+    exif \
+    pcntl \
+    bcmath \
+    gd \
+    zip \
+    sockets
+
+RUN pecl install redis && docker-php-ext-enable redis
+
+# Production PHP config
+COPY docker/php/php.ini /usr/local/etc/php/conf.d/local.ini
+
+# Application source
+WORKDIR /var/www
+COPY . /var/www/
+
+# Composer dependencies from stage 1
+COPY --from=composer /build/vendor /var/www/vendor
+
+# Ensure runtime directories exist
+RUN mkdir -p /var/www/runtime /var/www/web/assets \
+    && chown -R www-data:www-data /var/www/runtime /var/www/web/assets
+
+# Production entrypoint
+COPY docker/php/entrypoint-prod.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["php-fpm"]

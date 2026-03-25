@@ -163,6 +163,17 @@ ansilume_audit_syslog_enabled: false
 ansilume_audit_syslog_ident: ansilume
 ansilume_audit_syslog_facility: LOG_LOCAL0
 
+# -- Container images --------------------------------------------------------
+
+# Pre-built container images from ghcr.io. Set ansilume_use_prebuilt_images
+# to true to pull these instead of building from source.
+ansilume_use_prebuilt_images: false
+
+# Image references (tag defaults to ansilume_version when using prebuilt).
+ansilume_app_image: "ghcr.io/ansilume/ansilume"
+ansilume_nginx_prebuilt_image: "ghcr.io/ansilume/ansilume-nginx"
+ansilume_runner_image: "ghcr.io/ansilume/ansilume-runner"
+
 # -- Docker Compose ----------------------------------------------------------
 
 # Docker Compose project name.

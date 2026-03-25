@@ -2,20 +2,28 @@
 # Ansilume production docker-compose — do not edit manually.
 services:
   app:
+{% if ansilume_use_prebuilt_images %}
+    image: {{ ansilume_app_image }}:{{ ansilume_version }}
+{% else %}
     build:
       context: .
       dockerfile: docker/php/Dockerfile
       args:
         USER_ID: ${UID:-{{ ansilume_uid }}}
         GROUP_ID: ${GID:-{{ ansilume_gid }}}
+{% endif %}
     container_name: {{ ansilume_compose_project }}_app
     restart: {{ ansilume_restart_policy }}
     working_dir: /var/www
+{% if not ansilume_use_prebuilt_images %}
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+{% endif %}
     environment:
       - APP_ENV=${APP_ENV:-{{ ansilume_app_env }}}
+    env_file:
+      - .env
     depends_on:
 {% if ansilume_db_local %}
       db:
@@ -35,14 +43,20 @@ services:
       - {{ ansilume_network_name }}
 
   nginx:
+{% if ansilume_use_prebuilt_images %}
+    image: {{ ansilume_nginx_prebuilt_image }}:{{ ansilume_version }}
+{% else %}
     image: {{ ansilume_nginx_image }}
+{% endif %}
     container_name: {{ ansilume_compose_project }}_nginx
     restart: {{ ansilume_restart_policy }}
     ports:
       - "${NGINX_PORT:-{{ ansilume_nginx_port }}}:80"
+{% if not ansilume_use_prebuilt_images %}
     volumes:
       - .:/var/www
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+{% endif %}
     depends_on:
       app:
         condition: service_healthy
@@ -95,20 +109,28 @@ services:
 {% endif %}
 
   schedule-runner:
+{% if ansilume_use_prebuilt_images %}
+    image: {{ ansilume_app_image }}:{{ ansilume_version }}
+{% else %}
     build:
       context: .
       dockerfile: docker/php/Dockerfile
       args:
         USER_ID: ${UID:-{{ ansilume_uid }}}
         GROUP_ID: ${GID:-{{ ansilume_gid }}}
+{% endif %}
     container_name: {{ ansilume_compose_project }}_schedule_runner
     restart: {{ ansilume_restart_policy }}
     working_dir: /var/www
     command: ["/bin/sh", "-c",
       "while true; do php yii schedule/run && touch /tmp/schedule-alive; sleep 60; done"]
+{% if not ansilume_use_prebuilt_images %}
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+{% endif %}
+    env_file:
+      - .env
     depends_on:
 {% if ansilume_db_local %}
       db:
@@ -129,19 +151,27 @@ services:
       - {{ ansilume_network_name }}
 
   queue-worker:
+{% if ansilume_use_prebuilt_images %}
+    image: {{ ansilume_app_image }}:{{ ansilume_version }}
+{% else %}
     build:
       context: .
       dockerfile: docker/php/Dockerfile
       args:
         USER_ID: ${UID:-{{ ansilume_uid }}}
         GROUP_ID: ${GID:-{{ ansilume_gid }}}
+{% endif %}
     container_name: {{ ansilume_compose_project }}_queue_worker
     restart: {{ ansilume_restart_policy }}
     working_dir: /var/www
     command: ["php", "yii", "worker/start"]
+{% if not ansilume_use_prebuilt_images %}
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+{% endif %}
+    env_file:
+      - .env
     depends_on:
 {% if ansilume_db_local %}
       db:
@@ -162,19 +192,25 @@ services:
 
 {% for i in range(1, ansilume_runner_count + 1) %}
   runner-{{ i }}:
+{% if ansilume_use_prebuilt_images %}
+    image: {{ ansilume_runner_image }}:{{ ansilume_version }}
+{% else %}
     build:
       context: .
       dockerfile: docker/php/Dockerfile
       args:
         USER_ID: ${UID:-{{ ansilume_uid }}}
         GROUP_ID: ${GID:-{{ ansilume_gid }}}
+{% endif %}
     container_name: {{ ansilume_compose_project }}_runner_{{ i }}
     restart: {{ ansilume_restart_policy }}
     working_dir: /var/www
     command: ["php", "yii", "runner/start"]
+{% if not ansilume_use_prebuilt_images %}
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+{% endif %}
     environment:
       - RUNNER_NAME=runner-{{ i }}
       - RUNNER_BOOTSTRAP_SECRET=${RUNNER_BOOTSTRAP_SECRET}

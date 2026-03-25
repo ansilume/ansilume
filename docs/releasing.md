@@ -54,3 +54,48 @@ $version = \Yii::$app->params['version']; // e.g. "0.1.1"
 ```
 
 If the `VERSION` file is missing (e.g. a fresh clone from a branch that predates versioning), the value falls back to `"dev"`.
+
+## Container images
+
+When a version tag (`v*`) is pushed, GitHub Actions automatically builds and publishes three Docker images to the GitHub Container Registry:
+
+| Image | Purpose |
+|---|---|
+| `ghcr.io/ansilume/ansilume` | App (PHP-FPM), queue-worker, schedule-runner |
+| `ghcr.io/ansilume/ansilume-nginx` | Nginx with baked-in config and static assets |
+| `ghcr.io/ansilume/ansilume-runner` | Standalone runner (PHP CLI + Ansible, no DB/Redis) |
+
+### Tags
+
+Each image is tagged with:
+
+- Full version: `0.2.0`
+- Minor: `0.2`
+- Major: `0`
+- `latest`
+
+### How it works
+
+The release workflow (`.github/workflows/release.yml`) triggers on `v*` tags and uses Docker Buildx with GitHub Actions cache for efficient multi-platform builds. Images are pushed to `ghcr.io` using the repository's `GITHUB_TOKEN`.
+
+### Using prebuilt images in production
+
+The Ansible deploy role supports pulling prebuilt images instead of building from source:
+
+```yaml
+# In your inventory or group_vars:
+ansilume_use_prebuilt_images: true
+ansilume_version: v0.2.0   # tag to pull
+```
+
+### Standalone runner
+
+The runner image (`ghcr.io/ansilume/ansilume-runner`) is designed for independent deployment in separate networks. It communicates with the ansilume server exclusively via HTTP API and has no database or Redis dependencies.
+
+```bash
+docker run -d \
+  -e RUNNER_NAME=remote-runner-1 \
+  -e RUNNER_BOOTSTRAP_SECRET=your-secret \
+  -e API_URL=https://ansilume.example.com \
+  ghcr.io/ansilume/ansilume-runner:latest
+```

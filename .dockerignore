@@ -1,0 +1,33 @@
+# Version control
+.git
+.gitignore
+
+# Development
+.env
+.env.example
+docker-compose.yml
+docker/adminer
+docker/mysql
+
+# IDE / OS
+.idea
+.vscode
+*.swp
+*.swo
+.DS_Store
+
+# Runtime / generated
+runtime/
+web/assets/*
+vendor/
+
+# Tests and docs (not needed in production images)
+tests/
+tests.sh
+phpunit.xml
+phpstan.neon
+docs/
+deploy/
+
+# CI
+.github/
