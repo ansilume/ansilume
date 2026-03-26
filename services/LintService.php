@@ -41,7 +41,7 @@ class LintService extends Component
             return;
         }
 
-        [$output, $exitCode] = $this->execute('.', $projectPath);
+        [$output, $exitCode] = $this->execute(null, $projectPath);
         $this->storeProject($project, $exitCode, $output ?: '(no output)');
     }
 
@@ -114,9 +114,15 @@ class LintService extends Component
     /**
      * @return array{string, int}  [combined output, exit code]
      */
-    protected function execute(string $playbook, string $cwd): array
+    protected function execute(?string $playbook, string $cwd): array
     {
-        $cmd = ['ansible-lint', '--profile', 'production', '--nocolor', $playbook];
+        $cmd = ['ansible-lint', '--profile', 'production', '--nocolor'];
+        // For project-level runs, omit the path argument so ansible-lint uses
+        // full auto-discovery from the CWD (picks up playbooks/ and roles/).
+        // For template-level runs, pass the specific playbook as entry point.
+        if ($playbook !== null) {
+            $cmd[] = $playbook;
+        }
 
         $descriptors = [
             0 => ['pipe', 'r'],

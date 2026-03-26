@@ -169,7 +169,10 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             'PYTHONUNBUFFERED'          => '1',
         ]);
 
-        $process = proc_open($cmd, $descriptorspec, $pipes, null, $env);
+        // Run from the project root so Ansible finds ansible.cfg there, which
+        // sets roles_path, collections_path, etc. relative to that directory.
+        $projectCwd = $this->resolveProjectPath($payload);
+        $process    = proc_open($cmd, $descriptorspec, $pipes, is_dir($projectCwd) ? $projectCwd : null, $env);
 
         if (!is_resource($process)) {
             throw new \RuntimeException('proc_open failed for job #' . $job->id);
