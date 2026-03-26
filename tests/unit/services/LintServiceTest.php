@@ -40,7 +40,7 @@ class LintServiceTest extends TestCase
                 return $this->available;
             }
 
-            protected function execute(string $playbook, string $cwd): array
+            protected function execute(?string $playbook, string $cwd): array
             {
                 return [$this->execOutput, $this->execExit];
             }

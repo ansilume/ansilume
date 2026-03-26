@@ -102,17 +102,19 @@ class MetricsController extends Controller
 
     private function collectJobs(): array
     {
+        $jobStatuses = [
+            Job::STATUS_PENDING,
+            Job::STATUS_QUEUED,
+            Job::STATUS_RUNNING,
+            Job::STATUS_SUCCEEDED,
+            Job::STATUS_FAILED,
+            Job::STATUS_CANCELED,
+            Job::STATUS_TIMED_OUT,
+        ];
+        $counts = array_fill_keys($jobStatuses, 0);
+
         try {
-            $counts = [];
-            foreach ([
-                Job::STATUS_PENDING,
-                Job::STATUS_QUEUED,
-                Job::STATUS_RUNNING,
-                Job::STATUS_SUCCEEDED,
-                Job::STATUS_FAILED,
-                Job::STATUS_CANCELED,
-                Job::STATUS_TIMED_OUT,
-            ] as $status) {
+            foreach ($jobStatuses as $status) {
                 $counts[$status] = (int)Job::find()->where(['status' => $status])->count();
             }
 
@@ -132,36 +134,32 @@ class MetricsController extends Controller
                 'avg_duration_1h_sec' => $avgDuration !== null ? round((float)$avgDuration, 1) : null,
             ];
         } catch (\Throwable) {
-            return ['total' => 0, 'by_status' => [], 'avg_duration_1h_sec' => null];
+            return ['total' => 0, 'by_status' => $counts, 'avg_duration_1h_sec' => null];
         }
     }
 
     private function collectTasks(): array
     {
+        $taskStatuses = [
+            JobTask::STATUS_OK,
+            JobTask::STATUS_CHANGED,
+            JobTask::STATUS_FAILED,
+            JobTask::STATUS_SKIPPED,
+            JobTask::STATUS_UNREACHABLE,
+        ];
+        $counts       = array_fill_keys($taskStatuses, 0);
+        $recentCounts = array_fill_keys($taskStatuses, 0);
+
         try {
-            $counts = [];
-            foreach ([
-                JobTask::STATUS_OK,
-                JobTask::STATUS_CHANGED,
-                JobTask::STATUS_FAILED,
-                JobTask::STATUS_SKIPPED,
-                JobTask::STATUS_UNREACHABLE,
-            ] as $status) {
+            foreach ($taskStatuses as $status) {
                 $counts[$status] = (int)JobTask::find()->where(['status' => $status])->count();
             }
 
             $total = (int)JobTask::find()->count();
 
             // Task results from the last hour only
-            $recentCounts = [];
             $oneHourAgo = time() - 3600;
-            foreach ([
-                JobTask::STATUS_OK,
-                JobTask::STATUS_CHANGED,
-                JobTask::STATUS_FAILED,
-                JobTask::STATUS_SKIPPED,
-                JobTask::STATUS_UNREACHABLE,
-            ] as $status) {
+            foreach ($taskStatuses as $status) {
                 $recentCounts[$status] = (int)JobTask::find()
                     ->where(['status' => $status])
                     ->andWhere(['>', 'created_at', $oneHourAgo])
@@ -174,7 +172,7 @@ class MetricsController extends Controller
                 'last_1h'   => $recentCounts,
             ];
         } catch (\Throwable) {
-            return ['total' => 0, 'by_status' => [], 'last_1h' => []];
+            return ['total' => 0, 'by_status' => $counts, 'last_1h' => $recentCounts];
         }
     }
 
