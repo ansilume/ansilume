@@ -153,12 +153,39 @@ class ProjectController extends BaseController
 
     private function looksLikePlaybook(string $path): bool
     {
-        $name = basename($path);
+        $name = strtolower(basename($path));
+
         if (str_starts_with($name, '.')) {
             return false;
         }
+
+        // Known non-playbook YAML files — exclude by filename.
+        $excluded = [
+            'requirements.yml', 'requirements.yaml',
+            'galaxy.yml',        'galaxy.yaml',
+            'molecule.yml',      'molecule.yaml',
+        ];
+        if (in_array($name, $excluded, true)) {
+            return false;
+        }
+
         $head = file_get_contents($path, false, null, 0, 512);
-        return $head !== false && preg_match('/^\s*(---\s*\n.*- |- )/s', $head);
+        if ($head === false) {
+            return false;
+        }
+
+        // A playbook is a YAML list at the document root.
+        // Skip blank lines, the document-start marker (---), and comments.
+        // The first real content line must start with "- " (no indentation).
+        foreach (explode("\n", $head) as $line) {
+            $trimmed = rtrim($line);
+            if ($trimmed === '' || $trimmed === '---' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+            return str_starts_with($trimmed, '- ') || $trimmed === '-';
+        }
+
+        return false;
     }
 
     /**
