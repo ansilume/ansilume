@@ -349,6 +349,19 @@ else
 fi
 
 # =============================================================================
+# 9b. Apply migrations to the test database
+# =============================================================================
+section "Test database migrations"
+
+TEST_MIGRATE_OUT=$(dc sh -c 'DB_NAME=ansilume_test php yii migrate --interactive=0 2>&1' || true)
+if echo "$TEST_MIGRATE_OUT" | grep -qP "applied|No new migrations"; then
+    ok "Test database migrations up to date"
+else
+    fail "Test database migration failed"
+    echo "$TEST_MIGRATE_OUT" | tail -15 | sed 's/^/     /'
+fi
+
+# =============================================================================
 # 10. PHPUnit — unit tests (always, fast, no coverage overhead)
 # =============================================================================
 section "PHPUnit — unit tests"

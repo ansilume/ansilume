@@ -37,6 +37,27 @@ class HealthController extends Controller
             $healthy = false;
         }
 
+        // Migrations
+        try {
+            $path     = \Yii::getAlias('@app/migrations');
+            $files    = glob($path . '/m*.php');
+            $expected = $files !== false ? count($files) : 0;
+            $applied  = (int)\Yii::$app->db->createCommand(
+                "SELECT COUNT(*) FROM {{%migration}} WHERE version != 'm000000_000000_base'"
+            )->queryScalar();
+
+            if ($applied < $expected) {
+                $pending = $expected - $applied;
+                $this->stderr("[health] migrations: {$pending} pending ({$applied}/{$expected})\n");
+                $healthy = false;
+            } else {
+                $this->stdout("[health] migrations: ok ({$applied}/{$expected})\n");
+            }
+        } catch (\Throwable $e) {
+            $this->stderr("[health] migrations: error — " . $e->getMessage() . "\n");
+            $healthy = false;
+        }
+
         if (!$healthy) {
             $this->stderr("[health] status: degraded\n");
             return ExitCode::UNSPECIFIED_ERROR;

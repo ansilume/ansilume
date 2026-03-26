@@ -23,20 +23,23 @@ class HealthControllerTest extends TestCase
         array $scheduleCounts = ['enabled' => 0, 'overdue' => 0],
         bool $dbOk = true,
         bool $redisOk = true,
+        bool $migrationsOk = true,
     ): HealthController {
-        return new class('health', \Yii::$app, $runnerCounts, $scheduleCounts, $dbOk, $redisOk) extends HealthController {
+        return new class('health', \Yii::$app, $runnerCounts, $scheduleCounts, $dbOk, $redisOk, $migrationsOk) extends HealthController {
             public int    $capturedStatus = 0;
             private array $fakeRunnerCounts;
             private array $fakeScheduleCounts;
             private bool  $fakeDbOk;
             private bool  $fakeRedisOk;
+            private bool  $fakeMigrationsOk;
 
-            public function __construct($id, $module, array $rc, array $sc, bool $dbOk, bool $redisOk) {
+            public function __construct($id, $module, array $rc, array $sc, bool $dbOk, bool $redisOk, bool $migrationsOk) {
                 parent::__construct($id, $module);
                 $this->fakeRunnerCounts   = $rc;
                 $this->fakeScheduleCounts = $sc;
                 $this->fakeDbOk           = $dbOk;
                 $this->fakeRedisOk        = $redisOk;
+                $this->fakeMigrationsOk   = $migrationsOk;
             }
 
             protected function getRunnerCounts(): array { return $this->fakeRunnerCounts; }
@@ -44,6 +47,7 @@ class HealthControllerTest extends TestCase
             protected function setHttpStatus(int $code): void { $this->capturedStatus = $code; }
             protected function checkDatabase(): array { return $this->fakeDbOk ? ['ok' => true, 'latency_ms' => null] : ['ok' => false, 'error' => 'DB unreachable']; }
             protected function checkRedis(): array { return $this->fakeRedisOk ? ['ok' => true] : ['ok' => false, 'error' => 'Redis unreachable']; }
+            protected function checkMigrations(): array { return $this->fakeMigrationsOk ? ['ok' => true, 'applied' => 36, 'expected' => 36] : ['ok' => false, 'error' => '3 pending migration(s)', 'applied' => 33, 'expected' => 36]; }
 
             public function testCheckRunners(): array { return $this->checkRunners(); }
             public function testCheckScheduler(): array { return $this->checkScheduler(); }
@@ -91,6 +95,7 @@ class HealthControllerTest extends TestCase
 
         $this->assertArrayHasKey('database', $checks);
         $this->assertArrayHasKey('redis', $checks);
+        $this->assertArrayHasKey('migrations', $checks);
         $this->assertArrayHasKey('runners', $checks);
         $this->assertArrayHasKey('scheduler', $checks);
     }
@@ -159,6 +164,24 @@ class HealthControllerTest extends TestCase
         $this->assertArrayHasKey('schedules', $response);
         $this->assertArrayHasKey('total', $response['schedules']);
         $this->assertArrayHasKey('enabled', $response['schedules']);
+    }
+
+    // ── migrations ────────────────────────────────────────────────────
+
+    public function testActionIndexReturnsDegradedWhenMigrationsPending(): void
+    {
+        $ctrl = $this->makeController(
+            ['total' => 2, 'online' => 2, 'offline' => 0],
+            ['enabled' => 0, 'overdue' => 0],
+            true,
+            true,
+            false,
+        );
+        $response = $ctrl->actionIndex();
+
+        $this->assertSame('degraded', $response['status']);
+        $this->assertSame(503, $ctrl->capturedStatus);
+        $this->assertFalse($response['checks']['migrations']['ok']);
     }
 
     // ── checkScheduler() ────────────────────────────────────────────────

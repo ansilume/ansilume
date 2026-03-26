@@ -56,10 +56,11 @@ class HealthController extends Controller
     protected function runChecks(): array
     {
         return [
-            'database'  => $this->checkDatabase(),
-            'redis'     => $this->checkRedis(),
-            'runners'   => $this->checkRunners(),
-            'scheduler' => $this->checkScheduler(),
+            'database'   => $this->checkDatabase(),
+            'redis'      => $this->checkRedis(),
+            'migrations' => $this->checkMigrations(),
+            'runners'    => $this->checkRunners(),
+            'scheduler'  => $this->checkScheduler(),
         ];
     }
 
@@ -81,6 +82,42 @@ class HealthController extends Controller
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => 'Redis unreachable'];
         }
+    }
+
+    protected function checkMigrations(): array
+    {
+        try {
+            $expected = $this->countMigrationFiles();
+            $applied  = $this->countAppliedMigrations();
+
+            if ($applied < $expected) {
+                return [
+                    'ok'       => false,
+                    'error'    => ($expected - $applied) . ' pending migration(s)',
+                    'applied'  => $applied,
+                    'expected' => $expected,
+                ];
+            }
+
+            return ['ok' => true, 'applied' => $applied, 'expected' => $expected];
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'error' => 'Migration check failed'];
+        }
+    }
+
+    protected function countMigrationFiles(): int
+    {
+        $path  = \Yii::getAlias('@app/migrations');
+        $files = glob($path . '/m*.php');
+        return $files !== false ? count($files) : 0;
+    }
+
+    protected function countAppliedMigrations(): int
+    {
+        // Yii's migration table always has m000000_000000_base; exclude it.
+        return (int)\Yii::$app->db->createCommand(
+            "SELECT COUNT(*) FROM {{%migration}} WHERE version != 'm000000_000000_base'"
+        )->queryScalar();
     }
 
     protected function setHttpStatus(int $code): void
