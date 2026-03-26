@@ -34,7 +34,6 @@ class ProfileController extends BaseController
             'create-token' => ['POST'],
             'delete-token' => ['POST'],
             'enable-totp'  => ['POST'],
-            'disable-totp' => ['POST'],
         ];
     }
 
