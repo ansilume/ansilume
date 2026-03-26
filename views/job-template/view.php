@@ -101,7 +101,8 @@ $this->title = $model->name;
             <div class="card-body">
                 <?php $rawToken = \Yii::$app->session->getFlash('trigger_token_raw'); ?>
                 <?php if ($rawToken): ?>
-                    <div class="alert alert-warning">
+                    <?php $triggerUrl = \yii\helpers\Url::to(['/trigger/fire', 'token' => $rawToken], true) ?>
+                    <div class="alert alert-warning mb-3">
                         <strong>Copy this token now — it will not be shown again.</strong>
                         <div class="mt-2">
                             <code id="trigger-token-display"><?= Html::encode($rawToken) ?></code>
@@ -109,9 +110,22 @@ $this->title = $model->name;
                                     onclick="navigator.clipboard.writeText('<?= Html::encode($rawToken) ?>')">Copy</button>
                         </div>
                         <div class="mt-2 text-muted small">
-                            Trigger URL: <code><?= \yii\helpers\Url::to(['/trigger/fire', 'token' => $rawToken], true) ?></code>
+                            Trigger URL: <code><?= Html::encode($triggerUrl) ?></code>
                         </div>
                     </div>
+                    <p class="mb-1 small fw-semibold">cURL example</p>
+                    <?php
+                        $curlExample = 'curl -X POST ' . $triggerUrl;
+                    ?>
+                    <div class="input-group">
+                        <code id="trigger-curl-example" class="form-control bg-light font-monospace small text-break" style="white-space:pre-wrap;"><?= Html::encode($curlExample) ?></code>
+                        <button class="btn btn-outline-secondary btn-sm"
+                                onclick="navigator.clipboard.writeText('<?= Html::encode($curlExample) ?>')">Copy</button>
+                    </div>
+                    <p class="mt-2 mb-0 small text-muted">
+                        Pass optional overrides via JSON body:
+                        <code>curl -X POST -H 'Content-Type: application/json' -d '{"extra_vars":{"env":"prod"},"limit":"host1"}' <?= Html::encode($triggerUrl) ?></code>
+                    </p>
                 <?php elseif ($model->trigger_token): ?>
                     <p class="mb-1 text-muted">A trigger token is active. The trigger URL is:</p>
                     <code><?= \yii\helpers\Url::to('/trigger/' . str_repeat('*', 16), true) ?></code>
