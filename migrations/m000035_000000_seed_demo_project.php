@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use app\jobs\SyncProjectJob;
 use yii\db\Migration;
 
 /**
@@ -166,7 +167,11 @@ class m000035_000000_seed_demo_project extends Migration
             ]);
         }
 
+        // Queue an initial sync so the project is cloned without manual intervention.
+        \Yii::$app->queue->push(new SyncProjectJob(['projectId' => $projectId]));
+
         echo "    > Demo project, inventory, and " . count($templates) . " job templates created.\n";
+        echo "    > Sync job queued — project will be cloned when the queue worker runs.\n";
     }
 
     public function safeDown(): void

@@ -30,7 +30,10 @@ class LintService extends Component
         }
 
         if (!is_dir($projectPath)) {
-            $this->storeProject($project, null, 'Project path not found: ' . $projectPath);
+            $message = $project->scm_type === Project::SCM_TYPE_MANUAL
+                ? 'Project path not found: ' . $projectPath
+                : 'Project workspace not found — sync the project first.';
+            $this->storeProject($project, null, $message);
             return;
         }
 
