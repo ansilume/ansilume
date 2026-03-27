@@ -10,7 +10,7 @@ build:
       - composer install --no-interaction --prefer-dist
   tests:
     before:
-      - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\nDB_TEST_NAME=ansilume_test\nREDIS_HOST=127.0.0.1\n' > .env
+      - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\nDB_TEST_NAME=ansilume_test\nREDIS_HOST=127.0.0.1\nAPP_SECRET_KEY=scrutinizer-test-key-that-is-32-bytes!\n' > .env
       - mysql -u root -h 127.0.0.1 -e "CREATE DATABASE ansilume; CREATE DATABASE ansilume_test; CREATE USER 'ansilume'@'%' IDENTIFIED BY 'secret'; GRANT ALL ON ansilume.* TO 'ansilume'@'%'; GRANT ALL ON ansilume_test.* TO 'ansilume'@'%'; FLUSH PRIVILEGES;"
       - php yii migrate --interactive=0
       - sed -i 's/DB_NAME=ansilume/DB_NAME=ansilume_test/' .env && php yii migrate --interactive=0 && sed -i 's/DB_NAME=ansilume_test/DB_NAME=ansilume/' .env

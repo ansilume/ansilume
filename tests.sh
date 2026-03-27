@@ -117,6 +117,19 @@ check_pattern "No raw \$_GET/\$_POST/\$_REQUEST" -P '\$_(GET|POST|REQUEST|COOKIE
 check_pattern "No var_dump / print_r left in"    -P '\b(var_dump|print_r|dd)\s*\('
 check_pattern "No die()/exit() with debug data"  -P '\b(die|exit)\s*\([^)]{10,}\)'
 
+# @ error suppression: only @stream_select is allowed (known PHP quirk)
+AT_SUPPRESS=$(grep -rn --include="*.php" \
+    --exclude-dir=vendor --exclude-dir=.composer \
+    -P '@[a-z_]+\(' . 2>/dev/null \
+    | grep -v '@stream_select' \
+    || true)
+if [[ -z "$AT_SUPPRESS" ]]; then
+    ok "No inline error suppression (@) outside allowed exceptions"
+else
+    fail "Inline error suppression (@) found — use proper error handling"
+    echo "$AT_SUPPRESS" | head -20 | sed 's/^/     /'
+fi
+
 # =============================================================================
 # 4. XSS: unescaped output in views
 # =============================================================================

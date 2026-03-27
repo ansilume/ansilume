@@ -75,8 +75,8 @@ class ProjectService extends Component
             throw $e;
         } finally {
             $project->save(false);
-            if ($keyFile !== null && file_exists($keyFile)) {
-                @unlink($keyFile);
+            if ($keyFile !== null) {
+                \app\helpers\FileHelper::safeUnlink($keyFile);
             }
         }
     }

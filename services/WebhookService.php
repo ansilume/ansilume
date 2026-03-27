@@ -72,13 +72,20 @@ class WebhookService extends \yii\base\Component
             ],
         ]);
 
-        $response = @file_get_contents($webhook->url, false, $ctx);
+        $networkError = '';
+        set_error_handler(function (int $errno, string $errstr) use (&$networkError): bool {
+            $networkError = $errstr;
+            return true;
+        }, E_WARNING);
+        $response = file_get_contents($webhook->url, false, $ctx);
+        restore_error_handler();
 
         // Log non-2xx responses for diagnostics but do not throw.
         $statusLine = $http_response_header[0] ?? '';
         if ($response === false || !str_contains($statusLine, '2')) {
+            $detail = $networkError !== '' ? " ({$networkError})" : '';
             \Yii::warning(
-                "Webhook #{$webhook->id} non-success for event={$event} job={$job->id}: {$statusLine}",
+                "Webhook #{$webhook->id} non-success for event={$event} job={$job->id}: {$statusLine}{$detail}",
                 __CLASS__
             );
         }

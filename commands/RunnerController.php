@@ -60,7 +60,7 @@ class RunnerController extends Controller
             $cacheFile = $name !== '' ? $this->tokenCacheFile($name) : '';
             if ($cacheFile !== '' && file_exists($cacheFile)) {
                 $this->stdout("Cached token rejected (401) — clearing cache and re-registering...\n");
-                @unlink($cacheFile);
+                \app\helpers\FileHelper::safeUnlink($cacheFile);
                 $this->token = $this->resolveToken();
                 if ($this->token !== '') {
                     $info = $this->apiPost('/api/runner/v1/heartbeat', []);
@@ -167,9 +167,16 @@ class RunnerController extends Controller
             ],
         ]);
 
-        $raw = @file_get_contents($url, false, $context);
+        $networkError = '';
+        set_error_handler(function (int $errno, string $errstr) use (&$networkError): bool {
+            $networkError = $errstr;
+            return true;
+        }, E_WARNING);
+        $raw = file_get_contents($url, false, $context);
+        restore_error_handler();
         if ($raw === false || $raw === '') {
-            $this->stderr("ERROR: Could not reach the server at {$this->apiUrl} for registration.\n");
+            $detail = $networkError !== '' ? " ({$networkError})" : '';
+            $this->stderr("ERROR: Could not reach the server at {$this->apiUrl} for registration.{$detail}\n");
             return '';
         }
 
@@ -183,8 +190,8 @@ class RunnerController extends Controller
         $token = $response['data']['token'];
 
         // Cache the token so we don't re-register on every restart
-        @file_put_contents($cacheFile, $token);
-        @chmod($cacheFile, 0600);
+        \app\helpers\FileHelper::safeFilePutContents($cacheFile, $token);
+        \app\helpers\FileHelper::safeChmod($cacheFile, 0600);
 
         $this->stdout("Registered successfully. Token cached.\n");
         return $token;
@@ -274,7 +281,8 @@ class RunnerController extends Controller
             $read    = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
             $write   = null;
             $except  = null;
-            $changed = @stream_select($read, $write, $except, min($remaining, 5));
+            // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
+            $changed = @stream_select($read, $write, $except, min($remaining, 5)); // @phpcs:ignore
 
             if ($changed === false || $changed === 0) {
                 continue;
@@ -317,7 +325,7 @@ class RunnerController extends Controller
                     $tasks[] = $data;
                 }
             }
-            @unlink($callbackFile);
+            \app\helpers\FileHelper::safeUnlink($callbackFile);
 
             if (!empty($tasks)) {
                 $this->apiPost("/api/runner/v1/jobs/{$jobId}/tasks", ['tasks' => $tasks]);
@@ -332,8 +340,8 @@ class RunnerController extends Controller
             'has_changes' => $hasChanges,
         ]);
 
-        if ($inventoryTmpFile && file_exists($inventoryTmpFile)) {
-            @unlink($inventoryTmpFile);
+        if ($inventoryTmpFile) {
+            \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
         }
 
         $this->stdout("Job #{$jobId} finished with exit code {$exitCode}.\n");
@@ -443,7 +451,13 @@ class RunnerController extends Controller
             ],
         ]);
 
-        $raw = @file_get_contents($url, false, $context);
+        $networkError = '';
+        set_error_handler(function (int $errno, string $errstr) use (&$networkError): bool {
+            $networkError = $errstr;
+            return true;
+        }, E_WARNING);
+        $raw = file_get_contents($url, false, $context);
+        restore_error_handler();
 
         $this->lastHttpStatus = 0;
         if (!empty($http_response_header)) {

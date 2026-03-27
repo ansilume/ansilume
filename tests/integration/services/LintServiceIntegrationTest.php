@@ -147,8 +147,8 @@ class LintServiceIntegrationTest extends DbTestCase
             // exit_code should be an integer (0 = clean, 2 = violations, -1 = process error)
             $this->assertNotNull($project->lint_exit_code);
         } finally {
-            @unlink($dir . '/site.yml');
-            @rmdir($dir);
+            \app\helpers\FileHelper::safeUnlink($dir . '/site.yml');
+            \app\helpers\FileHelper::safeRmdir($dir);
         }
     }
 }

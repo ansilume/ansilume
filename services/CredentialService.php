@@ -62,7 +62,7 @@ class CredentialService extends Component
     public function generateSshKeyPair(): array
     {
         $tmp = tempnam(sys_get_temp_dir(), 'ansilume_gen_');
-        @unlink($tmp); // ssh-keygen creates its own file
+        unlink($tmp); // ssh-keygen creates its own file
 
         $cmd = ['ssh-keygen', '-t', 'ed25519', '-N', '', '-C', 'ansilume-generated', '-f', $tmp];
         $this->runCommand($cmd);
@@ -76,8 +76,8 @@ class CredentialService extends Component
                 'public_key'  => trim(file_get_contents($tmp . '.pub')),
             ];
         } finally {
-            @unlink($tmp);
-            @unlink($tmp . '.pub');
+            \app\helpers\FileHelper::safeUnlink($tmp);
+            \app\helpers\FileHelper::safeUnlink($tmp . '.pub');
         }
     }
 
@@ -127,7 +127,7 @@ class CredentialService extends Component
             \Yii::warning('CredentialService: analyzePrivateKey failed: ' . $e->getMessage(), __CLASS__);
             return ['public_key' => '', 'algorithm' => 'unknown', 'bits' => 0, 'key_secure' => null];
         } finally {
-            @unlink($tmp);
+            \app\helpers\FileHelper::safeUnlink($tmp);
         }
     }
 

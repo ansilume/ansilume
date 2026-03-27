@@ -97,7 +97,7 @@ class InventoryService extends Component
             chmod($tmpFile, 0600);
             return $this->runAnsibleInventory($tmpFile);
         } finally {
-            @unlink($tmpFile);
+            \app\helpers\FileHelper::safeUnlink($tmpFile);
         }
     }
 
@@ -173,7 +173,8 @@ class InventoryService extends Component
                 return ['groups' => [], 'hosts' => [], 'error' => 'ansible-inventory timed out.'];
             }
 
-            $changed = @stream_select($read, $write, $except, $remaining);
+            // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
+            $changed = @stream_select($read, $write, $except, $remaining); // @phpcs:ignore
             if ($changed === false) {
                 break;
             }

@@ -39,9 +39,9 @@ class ProjectSyncTest extends TestCase
         foreach (scandir($dir) ?: [] as $entry) {
             if ($entry === '.' || $entry === '..') continue;
             $path = $dir . '/' . $entry;
-            is_dir($path) ? $this->rmDir($path) : @unlink($path);
+            is_dir($path) ? $this->rmDir($path) : \app\helpers\FileHelper::safeUnlink($path);
         }
-        @rmdir($dir);
+        \app\helpers\FileHelper::safeRmdir($dir);
     }
 
     // -------------------------------------------------------------------------
@@ -106,7 +106,9 @@ class ProjectSyncTest extends TestCase
             {
                 $dest = $this->tmpDir . '/' . $project->id;
                 if ($this->simulateExistingClone) {
-                    @mkdir($dest . '/.git', 0755, true);
+                    if (!is_dir($dest . '/.git')) {
+                        mkdir($dest . '/.git', 0755, true);
+                    }
                 }
                 return $dest;
             }

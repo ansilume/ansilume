@@ -106,7 +106,7 @@ class ArtifactService extends Component
                 $artifacts[] = $artifact;
                 $count++;
             } else {
-                @unlink($destPath);
+                \app\helpers\FileHelper::safeUnlink($destPath);
             }
         }
 
@@ -133,16 +133,12 @@ class ArtifactService extends Component
     {
         $artifacts = $this->getArtifacts($job);
         foreach ($artifacts as $artifact) {
-            if (file_exists($artifact->storage_path)) {
-                @unlink($artifact->storage_path);
-            }
+            \app\helpers\FileHelper::safeUnlink($artifact->storage_path);
             $artifact->delete();
         }
 
         $dir = $this->resolveStoragePath($job);
-        if (is_dir($dir)) {
-            @rmdir($dir);
-        }
+        \app\helpers\FileHelper::safeRmdir($dir);
     }
 
     /**

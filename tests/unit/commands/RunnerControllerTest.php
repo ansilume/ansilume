@@ -37,9 +37,9 @@ class RunnerControllerTest extends TestCase
     {
         // Clean up any token files written during tests
         foreach (glob($this->tmpDir . '/*') ?: [] as $f) {
-            @unlink($f);
+            \app\helpers\FileHelper::safeUnlink($f);
         }
-        @rmdir($this->tmpDir);
+        \app\helpers\FileHelper::safeRmdir($this->tmpDir);
 
         unset($_ENV['API_URL'], $_ENV['RUNNER_NAME'], $_ENV['RUNNER_BOOTSTRAP_SECRET'], $_ENV['RUNNER_TOKEN']);
     }

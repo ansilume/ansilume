@@ -270,7 +270,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
                 }
             }
         } finally {
-            @unlink($callbackFile);
+            \app\helpers\FileHelper::safeUnlink($callbackFile);
         }
 
         if ($hasChanges) {
@@ -484,7 +484,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
             // Remove symlinks themselves but don't follow them
             if ($item->isLink()) {
-                @unlink($path);
+                \app\helpers\FileHelper::safeUnlink($path);
                 continue;
             }
 
@@ -494,10 +494,12 @@ class RunAnsibleJob extends BaseObject implements JobInterface
                 continue;
             }
 
-            $item->isDir() ? @rmdir($path) : @unlink($path);
+            $item->isDir()
+                ? \app\helpers\FileHelper::safeRmdir($path)
+                : \app\helpers\FileHelper::safeUnlink($path);
         }
 
-        @rmdir($dir);
+        \app\helpers\FileHelper::safeRmdir($dir);
     }
 
     private function appendLog(Job $job, string $stream, string $content, int $sequence = 0): void
