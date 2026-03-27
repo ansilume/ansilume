@@ -1,0 +1,31 @@
+build:
+  environment:
+    php:
+      version: "8.2"
+    postgresql: false
+    redis: false
+  dependencies:
+    override:
+      - composer self-update --2
+      - composer install --no-interaction --prefer-dist
+
+checks:
+  php:
+    code_rating: true
+    duplication: true
+
+tools:
+  php_code_sniffer:
+    config:
+      standard: PSR12
+  php_mess_detector: true
+  php_cpd: true
+
+filter:
+  excluded_paths:
+    - vendor/*
+    - tests/*
+    - runtime/*
+    - web/assets/*
+    - docker/*
+    - migrations/*
