@@ -13,7 +13,7 @@ $this->title = Html::encode($model->name);
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0"><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('admin')): ?>
+        <?php if (\Yii::$app->user->can('admin')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
             <form method="post" action="<?= Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline"
                   onsubmit="return confirm('Delete this webhook?')">
@@ -41,7 +41,7 @@ $this->title = Html::encode($model->name);
 
             <dt class="col-sm-3">Events</dt>
             <dd class="col-sm-9">
-                <?php foreach ($model->getEventList() as $event): ?>
+                <?php foreach ($model->getEventList() as $event) : ?>
                     <span class="badge text-bg-secondary me-1"><?= Html::encode($event) ?></span>
                 <?php endforeach; ?>
             </dd>

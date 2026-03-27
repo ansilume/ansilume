@@ -13,7 +13,7 @@ $this->title = 'Users';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Users</h2>
-    <?php if (\Yii::$app->user->can('user.create')): ?>
+    <?php if (\Yii::$app->user->can('user.create')) : ?>
         <?= Html::a('New User', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
@@ -24,9 +24,9 @@ $this->title = 'Users';
             <tr><th>#</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Superadmin</th><th>Created</th><th></th></tr>
         </thead>
         <tbody>
-        <?php foreach ($dataProvider->getModels() as $user): ?>
+        <?php foreach ($dataProvider->getModels() as $user) : ?>
             <?php
-            /** @var \yii\rbac\ManagerInterface $auth */
+ /** @var \yii\rbac\ManagerInterface $auth */
             $auth = \Yii::$app->authManager;
             $roles = $auth->getRolesByUser($user->id);
             ?>
@@ -35,15 +35,17 @@ $this->title = 'Users';
                 <td><?= Html::a(Html::encode($user->username), ['view', 'id' => $user->id]) ?></td>
                 <td><?= Html::encode($user->email) ?></td>
                 <td>
-                    <?php foreach ($roles as $role): ?>
+                    <?php foreach ($roles as $role) : ?>
                         <span class="badge text-bg-secondary"><?= Html::encode($role->name) ?></span>
                     <?php endforeach; ?>
-                    <?php if (empty($roles)): ?><span class="text-muted">—</span><?php endif; ?>
+                    <?php if (empty($roles)) :
+                        ?><span class="text-muted">—</span><?php
+                    endif; ?>
                 </td>
                 <td>
-                    <?php if ($user->status === User::STATUS_ACTIVE): ?>
+                    <?php if ($user->status === User::STATUS_ACTIVE) : ?>
                         <span class="badge text-bg-success">Active</span>
-                    <?php else: ?>
+                    <?php else : ?>
                         <span class="badge text-bg-secondary">Inactive</span>
                     <?php endif; ?>
                 </td>
@@ -51,7 +53,7 @@ $this->title = 'Users';
                 <td><?= date('Y-m-d', $user->created_at) ?></td>
                 <td class="text-end text-nowrap">
                     <?= Html::a('View', ['view', 'id' => $user->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                    <?php if (\Yii::$app->user->can('user.update')): ?>
+                    <?php if (\Yii::$app->user->can('user.update')) : ?>
                         <?= Html::a('Edit', ['update', 'id' => $user->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                     <?php endif; ?>
                 </td>

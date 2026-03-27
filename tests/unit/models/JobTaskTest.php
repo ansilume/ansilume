@@ -57,13 +57,15 @@ class JobTaskTest extends TestCase
 
     public function testStatusConstantsAreStrings(): void
     {
-        foreach ([
+        foreach (
+            [
             JobTask::STATUS_OK,
             JobTask::STATUS_CHANGED,
             JobTask::STATUS_FAILED,
             JobTask::STATUS_SKIPPED,
             JobTask::STATUS_UNREACHABLE,
-        ] as $status) {
+            ] as $status
+        ) {
             $this->assertIsString($status);
             $this->assertNotEmpty($status);
         }

@@ -64,10 +64,10 @@ class WebhookService extends \yii\base\Component
 
         $ctx = stream_context_create([
             'http' => [
-                'method'        => 'POST',
-                'header'        => implode("\r\n", $headers),
-                'content'       => $payload,
-                'timeout'       => 10,
+                'method' => 'POST',
+                'header' => implode("\r\n", $headers),
+                'content' => $payload,
+                'timeout' => 10,
                 'ignore_errors' => true,
             ],
         ]);
@@ -94,16 +94,16 @@ class WebhookService extends \yii\base\Component
     protected function buildPayload(string $event, Job $job): array
     {
         return [
-            'event'      => $event,
-            'timestamp'  => time(),
-            'job'        => [
-                'id'              => $job->id,
-                'status'          => $job->status,
+            'event' => $event,
+            'timestamp' => time(),
+            'job' => [
+                'id' => $job->id,
+                'status' => $job->status,
                 'job_template_id' => $job->job_template_id,
-                'launched_by'     => $job->launched_by,
-                'started_at'      => $job->started_at,
-                'finished_at'     => $job->finished_at,
-                'exit_code'       => $job->exit_code,
+                'launched_by' => $job->launched_by,
+                'started_at' => $job->started_at,
+                'finished_at' => $job->finished_at,
+                'exit_code' => $job->exit_code,
             ],
         ];
     }

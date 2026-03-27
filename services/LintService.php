@@ -99,8 +99,8 @@ class LintService extends Component
 
     protected function storeProject(Project $project, ?int $exitCode, string $output): void
     {
-        $project->lint_output    = $output;
-        $project->lint_at        = time();
+        $project->lint_output = $output;
+        $project->lint_at = time();
         $project->lint_exit_code = $exitCode;
         $project->save(false, ['lint_output', 'lint_at', 'lint_exit_code']);
     }
@@ -149,8 +149,8 @@ class LintService extends Component
 
     protected function store(JobTemplate $template, ?int $exitCode, string $output): void
     {
-        $template->lint_output    = $output;
-        $template->lint_at        = time();
+        $template->lint_output = $output;
+        $template->lint_at = time();
         $template->lint_exit_code = $exitCode;
         $template->save(false, ['lint_output', 'lint_at', 'lint_exit_code']);
     }

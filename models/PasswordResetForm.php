@@ -39,7 +39,7 @@ class PasswordResetForm extends Model
     public function attributeLabels(): array
     {
         return [
-            'password'         => 'New Password',
+            'password' => 'New Password',
             'password_confirm' => 'Confirm Password',
         ];
     }

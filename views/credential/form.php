@@ -23,10 +23,10 @@ $isEdit = !$model->isNewRecord;
     <?= $form->field($model, 'description')->textarea(['rows' => 2]) ?>
 
     <?= $form->field($model, 'credential_type')->dropDownList([
-        Credential::TYPE_SSH_KEY           => 'SSH Key',
+        Credential::TYPE_SSH_KEY => 'SSH Key',
         Credential::TYPE_USERNAME_PASSWORD => 'Username / Password',
-        Credential::TYPE_VAULT             => 'Vault Secret',
-        Credential::TYPE_TOKEN             => 'Token',
+        Credential::TYPE_VAULT => 'Vault Secret',
+        Credential::TYPE_TOKEN => 'Token',
     ], ['id' => 'credential-type']) ?>
 
     <?= $form->field($model, 'username')->textInput(['maxlength' => 128, 'autocomplete' => 'off']) ?>

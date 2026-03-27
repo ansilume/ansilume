@@ -19,13 +19,13 @@ $this->title = $model->name;
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('job.launch')): ?>
+        <?php if (\Yii::$app->user->can('job.launch')) : ?>
             <?= Html::a('Launch', ['launch', 'id' => $model->id], ['class' => 'btn btn-success']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('job-template.update')): ?>
+        <?php if (\Yii::$app->user->can('job-template.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary ms-1']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('job-template.delete')): ?>
+        <?php if (\Yii::$app->user->can('job-template.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this template?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
@@ -54,14 +54,20 @@ $this->title = $model->name;
                     <dd class="col-7"><?= $model->verbosity // xss-ok: integer ?></dd>
                     <dt class="col-5">Timeout</dt>
                     <dd class="col-7"><?= $model->timeout_minutes // xss-ok: integer ?> min</dd>
-                    <?php if ($model->limit): ?><dt class="col-5">Limit</dt><dd class="col-7"><code><?= Html::encode($model->limit) ?></code></dd><?php endif; ?>
-                    <?php if ($model->tags): ?><dt class="col-5">Tags</dt><dd class="col-7"><code><?= Html::encode($model->tags) ?></code></dd><?php endif; ?>
-                    <?php if ($model->skip_tags): ?><dt class="col-5">Skip tags</dt><dd class="col-7"><code><?= Html::encode($model->skip_tags) ?></code></dd><?php endif; ?>
+                    <?php if ($model->limit) :
+                        ?><dt class="col-5">Limit</dt><dd class="col-7"><code><?= Html::encode($model->limit) ?></code></dd><?php
+                    endif; ?>
+                    <?php if ($model->tags) :
+                        ?><dt class="col-5">Tags</dt><dd class="col-7"><code><?= Html::encode($model->tags) ?></code></dd><?php
+                    endif; ?>
+                    <?php if ($model->skip_tags) :
+                        ?><dt class="col-5">Skip tags</dt><dd class="col-7"><code><?= Html::encode($model->skip_tags) ?></code></dd><?php
+                    endif; ?>
                     <dt class="col-5">Become</dt>
                     <dd class="col-7">
-                        <?php if ($model->become): ?>
+                        <?php if ($model->become) : ?>
                             Yes — <code><?= Html::encode($model->become_method) ?></code> as <code><?= Html::encode($model->become_user) ?></code>
-                        <?php else: ?>
+                        <?php else : ?>
                             No
                         <?php endif; ?>
                     </dd>
@@ -70,7 +76,7 @@ $this->title = $model->name;
         </div>
     </div>
 
-    <?php if ($model->extra_vars): ?>
+    <?php if ($model->extra_vars) : ?>
     <div class="col-lg-6">
         <div class="card">
             <div class="card-header">Default Extra Vars</div>
@@ -81,17 +87,17 @@ $this->title = $model->name;
     </div>
     <?php endif; ?>
 
-    <?php if (\Yii::$app->user->can('job-template.update')): ?>
+    <?php if (\Yii::$app->user->can('job-template.update')) : ?>
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Inbound Trigger</span>
-                <?php if ($model->trigger_token): ?>
+                <?php if ($model->trigger_token) : ?>
                     <form method="post" action="<?= \yii\helpers\Url::to(['revoke-trigger-token', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Revoke the trigger token? Any existing integrations will stop working.')">
                         <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                         <button type="submit" class="btn btn-sm btn-outline-danger">Revoke Token</button>
                     </form>
-                <?php else: ?>
+                <?php else : ?>
                     <form method="post" action="<?= \yii\helpers\Url::to(['generate-trigger-token', 'id' => $model->id]) ?>" style="display:inline">
                         <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                         <button type="submit" class="btn btn-sm btn-outline-primary">Generate Token</button>
@@ -100,7 +106,7 @@ $this->title = $model->name;
             </div>
             <div class="card-body">
                 <?php $rawToken = \Yii::$app->session->getFlash('trigger_token_raw'); ?>
-                <?php if ($rawToken): ?>
+                <?php if ($rawToken) : ?>
                     <?php $triggerUrl = \yii\helpers\Url::to(['/trigger/fire', 'token' => $rawToken], true) ?>
                     <div class="alert alert-warning mb-3">
                         <strong>Copy this token now — it will not be shown again.</strong>
@@ -115,7 +121,7 @@ $this->title = $model->name;
                     </div>
                     <p class="mb-1 small fw-semibold">cURL example</p>
                     <?php
-                        $curlExample = 'curl -X POST ' . $triggerUrl;
+                    $curlExample = 'curl -X POST ' . $triggerUrl;
                     ?>
                     <div class="input-group">
                         <code id="trigger-curl-example" class="form-control bg-body-secondary font-monospace small text-break" style="white-space:pre-wrap;"><?= Html::encode($curlExample) ?></code>
@@ -126,14 +132,14 @@ $this->title = $model->name;
                         Pass optional overrides via JSON body:
                         <code class="bg-body-secondary px-1 rounded">curl -X POST -H 'Content-Type: application/json' -d '{"extra_vars":{"env":"prod"},"limit":"host1"}' <?= Html::encode($triggerUrl) ?></code>
                     </p>
-                <?php elseif ($model->trigger_token): ?>
+                <?php elseif ($model->trigger_token) : ?>
                     <p class="mb-1 text-muted">A trigger token is active. The trigger URL is:</p>
                     <code><?= \yii\helpers\Url::to('/trigger/' . str_repeat('*', 16), true) ?></code>
                     <p class="mt-2 mb-0 small text-muted">
                         POST to <code>/trigger/{token}</code> with optional JSON body:
                         <code>{"extra_vars": {}, "limit": "host1"}</code>
                     </p>
-                <?php else: ?>
+                <?php else : ?>
                     <p class="mb-0 text-muted">No trigger token configured. Generate one to allow external systems to launch this template via HTTP POST.</p>
                 <?php endif; ?>
             </div>
@@ -157,15 +163,15 @@ $this->title = $model->name;
                 <span>Ansible Lint <small class="text-muted fw-normal">(--profile production)</small></span>
                 <span>
                     <?= $lintBadge // xss-ok: hardcoded badge HTML ?>
-                    <?php if ($model->lint_at): ?>
+                    <?php if ($model->lint_at) : ?>
                         <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output ?></small>
                     <?php endif; ?>
                 </span>
             </div>
             <div class="card-body p-0">
-                <?php if ($model->lint_output): ?>
+                <?php if ($model->lint_output) : ?>
                     <pre class="job-log m-0" style="max-height:300px;overflow-y:auto;"><?= Html::encode($model->lint_output) ?></pre>
-                <?php else: ?>
+                <?php else : ?>
                     <p class="text-muted p-3 mb-0">Lint output will appear here after saving the template or syncing the project.</p>
                 <?php endif; ?>
             </div>
@@ -177,22 +183,24 @@ $this->title = $model->name;
             <div class="card-header">Recent Jobs</div>
             <div class="card-body p-0">
                 <?php $jobs = $model->getJobs()->with('launcher')->orderBy(['id' => SORT_DESC])->limit(10)->all(); ?>
-                <?php if (empty($jobs)): ?>
+                <?php if (empty($jobs)) : ?>
                     <p class="text-muted p-3 mb-0">No jobs yet.</p>
-                <?php else: ?>
+                <?php else : ?>
                     <table class="table table-sm table-hover mb-0">
                         <thead class="table-light"><tr><th>#</th><th>Status</th><th>Launched by</th><th>Started</th><th>Duration</th></tr></thead>
                         <tbody>
-                        <?php foreach ($jobs as $job): ?>
+                        <?php foreach ($jobs as $job) : ?>
                             <tr>
                                 <td><?= Html::a('#' . $job->id, ['/job/view', 'id' => $job->id]) ?></td>
                                 <td><span class="badge text-bg-<?= \app\models\Job::statusCssClass($job->status) ?>"><?= Html::encode(\app\models\Job::statusLabel($job->status)) ?></span></td>
                                 <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                                 <td><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
                                 <td><?php
-                                    if ($job->started_at && $job->finished_at) {
+                                if ($job->started_at && $job->finished_at) {
                                         echo gmdate('i:s', $job->finished_at - $job->started_at);
-                                    } else { echo '—'; }
+                                } else {
+                                    echo '—';
+                                }
                                 ?></td>
                             </tr>
                         <?php endforeach; ?>

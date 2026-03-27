@@ -134,16 +134,19 @@ class ScheduleServiceTest extends DbTestCase
         $project     = $this->createProject($user->id);
         $inventory   = $this->createInventory($user->id);
         $template    = $this->createJobTemplate(
-            $project->id, $inventory->id, $runnerGroup->id, $user->id
+            $project->id,
+            $inventory->id,
+            $runnerGroup->id,
+            $user->id
         );
         return [$template, $user];
     }
 
     private function createSchedule(
-        int    $templateId,
-        int    $createdBy,
-        bool   $enabled,
-        ?int   $nextRunAt,
+        int $templateId,
+        int $createdBy,
+        bool $enabled,
+        ?int $nextRunAt,
         string $cron = '0 * * * *'
     ): Schedule {
         $s = new Schedule();

@@ -41,7 +41,7 @@ class JobLaunchService extends Component
                 throw new \RuntimeException('Failed to save job record: ' . json_encode($job->errors));
             }
 
-            $job->status    = Job::STATUS_QUEUED;
+            $job->status = Job::STATUS_QUEUED;
             $job->queued_at = time();
 
             if (!$job->save()) {
@@ -69,10 +69,10 @@ class JobLaunchService extends Component
     {
         $job = new Job();
         $job->job_template_id = $template->id;
-        $job->launched_by     = $launchedBy;
-        $job->status          = Job::STATUS_PENDING;
-        $job->created_at      = time();
-        $job->updated_at      = time();
+        $job->launched_by = $launchedBy;
+        $job->status = Job::STATUS_PENDING;
+        $job->created_at = time();
+        $job->updated_at = time();
 
         // Merge extra_vars: template defaults ← survey answers ← explicit overrides
         $merged = $this->mergeExtraVars($template, $overrides);
@@ -134,21 +134,21 @@ class JobLaunchService extends Component
     protected function buildRunnerPayload(\app\models\JobTemplate $template, \app\models\Job $job): string
     {
         return json_encode([
-            'template_id'   => $template->id,
+            'template_id' => $template->id,
             'template_name' => $template->name,
-            'project_id'    => $template->project_id,
-            'inventory_id'  => $template->inventory_id,
+            'project_id' => $template->project_id,
+            'inventory_id' => $template->inventory_id,
             'credential_id' => $template->credential_id,
-            'playbook'      => $template->playbook,
-            'extra_vars'    => $job->extra_vars ?? $template->extra_vars,
-            'limit'         => $job->limit ?? $template->limit,
-            'verbosity'     => $job->verbosity ?? $template->verbosity,
-            'forks'         => $template->forks,
-            'become'        => $template->become,
+            'playbook' => $template->playbook,
+            'extra_vars' => $job->extra_vars ?? $template->extra_vars,
+            'limit' => $job->limit ?? $template->limit,
+            'verbosity' => $job->verbosity ?? $template->verbosity,
+            'forks' => $template->forks,
+            'become' => $template->become,
             'become_method' => $template->become_method,
-            'become_user'   => $template->become_user,
-            'tags'            => $template->tags,
-            'skip_tags'       => $template->skip_tags,
+            'become_user' => $template->become_user,
+            'tags' => $template->tags,
+            'skip_tags' => $template->skip_tags,
             'timeout_minutes' => $template->timeout_minutes,
         ], JSON_UNESCAPED_UNICODE);
     }

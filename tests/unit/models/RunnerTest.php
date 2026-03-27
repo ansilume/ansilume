@@ -60,7 +60,7 @@ class RunnerTest extends TestCase
     public function testGenerateTokenReturnsRawAndHashKeys(): void
     {
         $result = Runner::generateToken();
-        $this->assertArrayHasKey('raw',  $result);
+        $this->assertArrayHasKey('raw', $result);
         $this->assertArrayHasKey('hash', $result);
     }
 
@@ -80,7 +80,7 @@ class RunnerTest extends TestCase
     {
         $a = Runner::generateToken();
         $b = Runner::generateToken();
-        $this->assertNotSame($a['raw'],  $b['raw']);
+        $this->assertNotSame($a['raw'], $b['raw']);
         $this->assertNotSame($a['hash'], $b['hash']);
     }
 
@@ -90,7 +90,7 @@ class RunnerTest extends TestCase
     {
         $runner = new Runner();
         $runner->validate();
-        $this->assertArrayHasKey('name',            $runner->errors);
+        $this->assertArrayHasKey('name', $runner->errors);
         $this->assertArrayHasKey('runner_group_id', $runner->errors);
     }
 }

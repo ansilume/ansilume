@@ -10,7 +10,7 @@ class LoginForm extends Model
 {
     public string $username = '';
     public string $password = '';
-    public bool   $rememberMe = true;
+    public bool $rememberMe = true;
 
     private ?User $_user = null;
 
@@ -26,8 +26,8 @@ class LoginForm extends Model
     public function attributeLabels(): array
     {
         return [
-            'username'   => 'Username',
-            'password'   => 'Password',
+            'username' => 'Username',
+            'password' => 'Password',
             'rememberMe' => 'Remember me',
         ];
     }

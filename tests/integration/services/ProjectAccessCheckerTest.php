@@ -213,5 +213,4 @@ class ProjectAccessCheckerTest extends DbTestCase
         $this->assertIsArray($filter);
         $this->assertNotSame(['0=1'], $filter);
     }
-
 }

@@ -23,7 +23,7 @@ class JobController extends BaseController
     {
         return [
             ['actions' => ['index', 'view', 'log-poll', 'download-artifact'], 'allow' => true, 'roles' => ['job.view']],
-            ['actions' => ['cancel', 'relaunch'],        'allow' => true, 'roles' => ['job.cancel']],
+            ['actions' => ['cancel', 'relaunch'], 'allow' => true, 'roles' => ['job.cancel']],
         ];
     }
 
@@ -34,15 +34,15 @@ class JobController extends BaseController
 
     public function actionIndex(): string
     {
-        $searchForm   = new JobSearchForm();
+        $searchForm = new JobSearchForm();
         $dataProvider = $searchForm->search(\Yii::$app->request->queryParams);
 
         return $this->render('index', [
-            'searchForm'    => $searchForm,
-            'dataProvider'  => $dataProvider,
-            'templates'     => JobTemplate::find()->orderBy('name')->all(),
-            'runnerGroups'  => RunnerGroup::find()->orderBy('name')->all(),
-            'users'         => User::find()->orderBy('username')->all(),
+            'searchForm' => $searchForm,
+            'dataProvider' => $dataProvider,
+            'templates' => JobTemplate::find()->orderBy('name')->all(),
+            'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
+            'users' => User::find()->orderBy('username')->all(),
             'statusOptions' => array_combine(
                 Job::statuses(),
                 array_map(fn($s) => Job::statusLabel($s), Job::statuses())
@@ -52,11 +52,11 @@ class JobController extends BaseController
 
     public function actionView(int $id): string
     {
-        $job           = $this->findModel($id);
-        $logs          = $job->getLogs()->all();
-        $tasks         = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
+        $job = $this->findModel($id);
+        $logs = $job->getLogs()->all();
+        $tasks = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
         $hostSummaries = $job->getHostSummaries()->all();
-        $artifacts     = $job->getArtifacts()->all();
+        $artifacts = $job->getArtifacts()->all();
         return $this->render('view', [
             'job' => $job,
             'logs' => $logs,
@@ -69,16 +69,16 @@ class JobController extends BaseController
     public function actionLogPoll(int $id, int $after = -1): Response
     {
         \Yii::$app->response->format = Response::FORMAT_JSON;
-        $job    = $this->findModel($id);
+        $job = $this->findModel($id);
         /** @var JobLog[] $chunks */
         $chunks = $job->getLogs()->andWhere(['>', 'sequence', $after])->all();
 
         return $this->asJson([
-            'status'   => $job->status,
-            'chunks'   => array_map(fn($l) => [
+            'status' => $job->status,
+            'chunks' => array_map(fn($l) => [
                 'sequence' => $l->sequence,
-                'stream'   => $l->stream,
-                'content'  => $l->content,
+                'stream' => $l->stream,
+                'content' => $l->content,
             ], $chunks),
             'finished' => $job->isFinished(),
         ]);
@@ -91,7 +91,7 @@ class JobController extends BaseController
             $this->session()->setFlash('warning', "Job #{$job->id} cannot be canceled in status \"{$job->status}\".");
             return $this->redirect(['view', 'id' => $id]);
         }
-        $job->status      = Job::STATUS_CANCELED;
+        $job->status = Job::STATUS_CANCELED;
         $job->finished_at = time();
         $job->save(false);
 

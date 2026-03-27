@@ -21,7 +21,7 @@ class SetupController extends Controller
      */
     public function actionAdmin(
         string $username = 'admin',
-        string $email    = 'admin@example.com',
+        string $email = 'admin@example.com',
         string $password = ''
     ): int {
         if (User::find()->where(['is_superadmin' => true])->exists()) {
@@ -37,9 +37,9 @@ class SetupController extends Controller
         }
 
         $user = new User();
-        $user->username     = $username;
-        $user->email        = $email;
-        $user->status       = User::STATUS_ACTIVE;
+        $user->username = $username;
+        $user->email = $email;
+        $user->status = User::STATUS_ACTIVE;
         $user->is_superadmin = true;
         $user->setPassword($password);
         $user->generateAuthKey();

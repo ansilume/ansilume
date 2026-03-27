@@ -27,7 +27,7 @@ $this->title = Html::encode($team->name);
     </div>
 </div>
 
-<?php if ($team->description): ?>
+<?php if ($team->description) : ?>
     <p class="text-muted mb-4"><?= Html::encode($team->description) ?></p>
 <?php endif; ?>
 
@@ -37,12 +37,12 @@ $this->title = Html::encode($team->name);
         <div class="card h-100">
             <div class="card-header">Members (<?= count($team->teamMembers) ?>)</div>
             <div class="card-body p-0">
-                <?php if (empty($team->teamMembers)): ?>
+                <?php if (empty($team->teamMembers)) : ?>
                     <p class="text-muted p-3 mb-0">No members yet.</p>
-                <?php else: ?>
+                <?php else : ?>
                     <table class="table table-sm mb-0">
                         <tbody>
-                        <?php foreach ($team->teamMembers as $tm): ?>
+                        <?php foreach ($team->teamMembers as $tm) : ?>
                             <tr>
                                 <td><?= Html::encode($tm->user->username ?? '—') ?></td>
                                 <td class="text-end">
@@ -58,13 +58,13 @@ $this->title = Html::encode($team->name);
                     </table>
                 <?php endif; ?>
             </div>
-            <?php if (!empty($allUsers)): ?>
+            <?php if (!empty($allUsers)) : ?>
             <div class="card-footer">
                 <?php $form = ActiveForm::begin(['action' => ['add-member', 'id' => $team->id], 'method' => 'post', 'id' => 'add-member-form']); ?>
                 <div class="d-flex gap-2">
                     <select name="user_id" class="form-select form-select-sm" required>
                         <option value="">— Add member —</option>
-                        <?php foreach ($allUsers as $u): ?>
+                        <?php foreach ($allUsers as $u) : ?>
                             <option value="<?= $u->id ?>"><?= Html::encode($u->username) ?></option>
                         <?php endforeach; ?>
                     </select>
@@ -81,12 +81,12 @@ $this->title = Html::encode($team->name);
         <div class="card h-100">
             <div class="card-header">Project Access (<?= count($team->teamProjects) ?>)</div>
             <div class="card-body p-0">
-                <?php if (empty($team->teamProjects)): ?>
+                <?php if (empty($team->teamProjects)) : ?>
                     <p class="text-muted p-3 mb-0">No project access assigned yet.</p>
-                <?php else: ?>
+                <?php else : ?>
                     <table class="table table-sm mb-0">
                         <tbody>
-                        <?php foreach ($team->teamProjects as $tp): ?>
+                        <?php foreach ($team->teamProjects as $tp) : ?>
                             <tr>
                                 <td><?= $tp->project ? Html::a(Html::encode($tp->project->name), ['/project/view', 'id' => $tp->project_id]) : "#{$tp->project_id}" ?></td>
                                 <td>
@@ -107,13 +107,13 @@ $this->title = Html::encode($team->name);
                     </table>
                 <?php endif; ?>
             </div>
-            <?php if (!empty($allProjects)): ?>
+            <?php if (!empty($allProjects)) : ?>
             <div class="card-footer">
                 <?php $form = ActiveForm::begin(['action' => ['add-project', 'id' => $team->id], 'method' => 'post', 'id' => 'add-project-form']); ?>
                 <div class="d-flex gap-2">
                     <select name="project_id" class="form-select form-select-sm" required>
                         <option value="">— Add project —</option>
-                        <?php foreach ($allProjects as $p): ?>
+                        <?php foreach ($allProjects as $p) : ?>
                             <option value="<?= $p->id ?>"><?= Html::encode($p->name) ?></option>
                         <?php endforeach; ?>
                     </select>

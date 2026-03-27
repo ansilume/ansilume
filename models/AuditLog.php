@@ -24,20 +24,20 @@ use yii\db\ActiveRecord;
 class AuditLog extends ActiveRecord
 {
     // -- User actions ----------------------------------------------------------
-    public const ACTION_USER_LOGIN          = 'user.login';
-    public const ACTION_USER_LOGOUT         = 'user.logout';
-    public const ACTION_USER_LOGIN_FAILED   = 'user.login.failed';
-    public const ACTION_USER_CREATED        = 'user.created';
-    public const ACTION_USER_UPDATED        = 'user.updated';
-    public const ACTION_USER_DELETED        = 'user.deleted';
+    public const ACTION_USER_LOGIN = 'user.login';
+    public const ACTION_USER_LOGOUT = 'user.logout';
+    public const ACTION_USER_LOGIN_FAILED = 'user.login.failed';
+    public const ACTION_USER_CREATED = 'user.created';
+    public const ACTION_USER_UPDATED = 'user.updated';
+    public const ACTION_USER_DELETED = 'user.deleted';
     public const ACTION_USER_STATUS_CHANGED = 'user.status_changed';
 
     // -- Project actions -------------------------------------------------------
     public const ACTION_PROJECT_CREATED = 'project.created';
     public const ACTION_PROJECT_UPDATED = 'project.updated';
     public const ACTION_PROJECT_DELETED = 'project.deleted';
-    public const ACTION_PROJECT_SYNCED  = 'project.synced';
-    public const ACTION_PROJECT_LINTED  = 'project.linted';
+    public const ACTION_PROJECT_SYNCED = 'project.synced';
+    public const ACTION_PROJECT_LINTED = 'project.linted';
 
     // -- Inventory actions -----------------------------------------------------
     public const ACTION_INVENTORY_CREATED = 'inventory.created';
@@ -50,25 +50,25 @@ class AuditLog extends ActiveRecord
     public const ACTION_CREDENTIAL_DELETED = 'credential.deleted';
 
     // -- Job template actions --------------------------------------------------
-    public const ACTION_TEMPLATE_CREATED              = 'job-template.created';
-    public const ACTION_TEMPLATE_UPDATED              = 'job-template.updated';
-    public const ACTION_TEMPLATE_DELETED              = 'job-template.deleted';
+    public const ACTION_TEMPLATE_CREATED = 'job-template.created';
+    public const ACTION_TEMPLATE_UPDATED = 'job-template.updated';
+    public const ACTION_TEMPLATE_DELETED = 'job-template.deleted';
     public const ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED = 'job-template.trigger-token.generated';
-    public const ACTION_TEMPLATE_TRIGGER_TOKEN_REVOKED   = 'job-template.trigger-token.revoked';
+    public const ACTION_TEMPLATE_TRIGGER_TOKEN_REVOKED = 'job-template.trigger-token.revoked';
 
     // -- Job actions -----------------------------------------------------------
-    public const ACTION_JOB_LAUNCHED  = 'job.launched';
-    public const ACTION_JOB_CANCELED  = 'job.canceled';
-    public const ACTION_JOB_STARTED   = 'job.started';
-    public const ACTION_JOB_FINISHED  = 'job.finished';
+    public const ACTION_JOB_LAUNCHED = 'job.launched';
+    public const ACTION_JOB_CANCELED = 'job.canceled';
+    public const ACTION_JOB_STARTED = 'job.started';
+    public const ACTION_JOB_FINISHED = 'job.finished';
 
     // -- Team actions ----------------------------------------------------------
-    public const ACTION_TEAM_CREATED        = 'team.created';
-    public const ACTION_TEAM_UPDATED        = 'team.updated';
-    public const ACTION_TEAM_DELETED        = 'team.deleted';
-    public const ACTION_TEAM_MEMBER_ADDED   = 'team.member.added';
+    public const ACTION_TEAM_CREATED = 'team.created';
+    public const ACTION_TEAM_UPDATED = 'team.updated';
+    public const ACTION_TEAM_DELETED = 'team.deleted';
+    public const ACTION_TEAM_MEMBER_ADDED = 'team.member.added';
     public const ACTION_TEAM_MEMBER_REMOVED = 'team.member.removed';
-    public const ACTION_TEAM_PROJECT_ADDED   = 'team.project.added';
+    public const ACTION_TEAM_PROJECT_ADDED = 'team.project.added';
     public const ACTION_TEAM_PROJECT_REMOVED = 'team.project.removed';
 
     // -- Schedule actions ------------------------------------------------------
@@ -83,8 +83,8 @@ class AuditLog extends ActiveRecord
     public const ACTION_RUNNER_GROUP_DELETED = 'runner-group.deleted';
 
     // -- Runner actions --------------------------------------------------------
-    public const ACTION_RUNNER_CREATED           = 'runner.created';
-    public const ACTION_RUNNER_DELETED           = 'runner.deleted';
+    public const ACTION_RUNNER_CREATED = 'runner.created';
+    public const ACTION_RUNNER_DELETED = 'runner.deleted';
     public const ACTION_RUNNER_TOKEN_REGENERATED = 'runner.token.regenerated';
 
     // -- Webhook actions -------------------------------------------------------
@@ -101,7 +101,7 @@ class AuditLog extends ActiveRecord
     public const ACTION_PASSWORD_RESET_COMPLETED = 'password-reset.completed';
 
     // -- MFA actions -----------------------------------------------------------
-    public const ACTION_MFA_ENABLED  = 'mfa.enabled';
+    public const ACTION_MFA_ENABLED = 'mfa.enabled';
     public const ACTION_MFA_DISABLED = 'mfa.disabled';
 
     public static function tableName(): string

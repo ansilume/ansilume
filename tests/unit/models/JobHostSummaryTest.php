@@ -55,8 +55,8 @@ class JobHostSummaryTest extends TestCase
             $this->makeSummary(ok: 10, changed: 2),
         ]);
         $this->assertSame(10, $result['ok']);
-        $this->assertSame(2,  $result['changed']);
-        $this->assertSame(1,  $result['hosts']);
+        $this->assertSame(2, $result['changed']);
+        $this->assertSame(1, $result['hosts']);
     }
 
     public function testAggregateReturnsAllExpectedKeys(): void

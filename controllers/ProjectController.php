@@ -19,10 +19,10 @@ class ProjectController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],   'allow' => true, 'roles' => ['project.view']],
-            ['actions' => ['create'],           'allow' => true, 'roles' => ['project.create']],
+            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['project.view']],
+            ['actions' => ['create'], 'allow' => true, 'roles' => ['project.create']],
             ['actions' => ['update', 'sync', 'lint'], 'allow' => true, 'roles' => ['project.update']],
-            ['actions' => ['delete'],           'allow' => true, 'roles' => ['project.delete']],
+            ['actions' => ['delete'], 'allow' => true, 'roles' => ['project.delete']],
         ];
     }
 
@@ -35,7 +35,7 @@ class ProjectController extends BaseController
     {
         /** @var ProjectAccessChecker $checker */
         $checker = \Yii::$app->get('projectAccessChecker');
-        $query   = Project::find()->with('creator')->orderBy(['id' => SORT_DESC]);
+        $query = Project::find()->with('creator')->orderBy(['id' => SORT_DESC]);
 
         $filter = $checker->buildProjectFilter(\Yii::$app->user->isGuest ? null : (int)\Yii::$app->user->id);
         if ($filter !== null) {
@@ -43,7 +43,7 @@ class ProjectController extends BaseController
         }
 
         $dataProvider = new ActiveDataProvider([
-            'query'      => $query,
+            'query' => $query,
             'pagination' => ['pageSize' => 20],
         ]);
         return $this->render('index', ['dataProvider' => $dataProvider]);
@@ -58,11 +58,11 @@ class ProjectController extends BaseController
             throw new \yii\web\ForbiddenHttpException('You do not have access to this project.');
         }
         $playbooks = [];
-        $tree      = [];
+        $tree = [];
         $localPath = $this->resolveEffectivePath($model);
         if ($localPath !== null) {
             $playbooks = $this->detectPlaybooks($localPath);
-            $tree      = $this->buildTree($localPath, $localPath, 0, 5);
+            $tree = $this->buildTree($localPath, $localPath, 0, 5);
         }
         return $this->render('view', ['model' => $model, 'playbooks' => $playbooks, 'tree' => $tree]);
     }
@@ -80,7 +80,7 @@ class ProjectController extends BaseController
     {
         if ($model->scm_type === Project::SCM_TYPE_GIT) {
             /** @var ProjectService $svc */
-            $svc  = \Yii::$app->get('projectService');
+            $svc = \Yii::$app->get('projectService');
             $path = $svc->localPath($model);
             return is_dir($path) ? $path : null;
         }
@@ -141,7 +141,8 @@ class ProjectController extends BaseController
                 }
                 if ($this->looksLikePlaybook($file->getPathname())) {
                     $playbooks[] = 'playbooks/' . ltrim(
-                        substr($file->getPathname(), strlen($base . '/playbooks')), '/'
+                        substr($file->getPathname(), strlen($base . '/playbooks')),
+                        '/'
                     );
                 }
             }
@@ -162,8 +163,8 @@ class ProjectController extends BaseController
         // Known non-playbook YAML files — exclude by filename.
         $excluded = [
             'requirements.yml', 'requirements.yaml',
-            'galaxy.yml',        'galaxy.yaml',
-            'molecule.yml',      'molecule.yaml',
+            'galaxy.yml', 'galaxy.yaml',
+            'molecule.yml', 'molecule.yaml',
         ];
         if (in_array($name, $excluded, true)) {
             return false;
@@ -204,12 +205,12 @@ class ProjectController extends BaseController
                 continue;
             }
             $path = $dir . '/' . $item;
-            $rel  = ltrim(substr($path, strlen($base)), '/');
+            $rel = ltrim(substr($path, strlen($base)), '/');
             if (is_dir($path)) {
                 $nodes[] = [
-                    'name'     => $item,
-                    'rel'      => $rel,
-                    'type'     => 'dir',
+                    'name' => $item,
+                    'rel' => $rel,
+                    'type' => 'dir',
                     'children' => $this->buildTree($base, $path, $depth + 1, $maxDepth),
                 ];
             } else {
@@ -220,17 +221,16 @@ class ProjectController extends BaseController
         usort($nodes, fn($a, $b) =>
             ($a['type'] === $b['type'])
                 ? strcmp($a['name'], $b['name'])
-                : ($a['type'] === 'dir' ? -1 : 1)
-        );
+                : ($a['type'] === 'dir' ? -1 : 1));
         return $nodes;
     }
 
     public function actionCreate(): Response|string
     {
         $model = new Project();
-        $model->scm_type   = Project::SCM_TYPE_GIT;
+        $model->scm_type = Project::SCM_TYPE_GIT;
         $model->scm_branch = 'main';
-        $model->status     = Project::STATUS_NEW;
+        $model->status = Project::STATUS_NEW;
 
         if ($model->load((array)\Yii::$app->request->post())) {
             $model->created_by = (int)\Yii::$app->user->id;

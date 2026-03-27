@@ -49,11 +49,11 @@ class WebhookServiceTest extends TestCase
 
         $payload = $this->service->testBuildPayload(Webhook::EVENT_JOB_FAILURE, $job);
 
-        $this->assertSame(7,                     $payload['job']['id']);
-        $this->assertSame(Job::STATUS_FAILED,    $payload['job']['status']);
-        $this->assertSame(1,                     $payload['job']['exit_code']);
-        $this->assertSame(1710000000,            $payload['job']['started_at']);
-        $this->assertSame(1710000120,            $payload['job']['finished_at']);
+        $this->assertSame(7, $payload['job']['id']);
+        $this->assertSame(Job::STATUS_FAILED, $payload['job']['status']);
+        $this->assertSame(1, $payload['job']['exit_code']);
+        $this->assertSame(1710000000, $payload['job']['started_at']);
+        $this->assertSame(1710000120, $payload['job']['finished_at']);
     }
 
     public function testHmacSignatureIsCorrect(): void

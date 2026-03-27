@@ -25,7 +25,7 @@ abstract class BaseApiController extends Controller
     {
         return [
             'contentNegotiator' => [
-                'class'   => ContentNegotiator::class,
+                'class' => ContentNegotiator::class,
                 'formats' => ['application/json' => Response::FORMAT_JSON],
             ],
         ];
@@ -53,7 +53,7 @@ abstract class BaseApiController extends Controller
             throw new UnauthorizedHttpException('Bearer token required.');
         }
 
-        $raw   = substr($header, 7);
+        $raw = substr($header, 7);
         $token = ApiToken::findByRawToken($raw);
 
         if ($token === null) {
@@ -84,10 +84,10 @@ abstract class BaseApiController extends Controller
         return [
             'data' => $items,
             'meta' => [
-                'total'    => $total,
-                'page'     => $page,
+                'total' => $total,
+                'page' => $page,
                 'per_page' => $perPage,
-                'pages'    => (int)ceil($total / max($perPage, 1)),
+                'pages' => (int)ceil($total / max($perPage, 1)),
             ],
         ];
     }

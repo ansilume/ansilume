@@ -22,15 +22,16 @@ class JobClaimServiceTest extends TestCase
     /** Default no-DB service: returns a fixed project path and static localhost inventory */
     private function makeService(
         string $projectPath = '/var/projects/default',
-        ?array $inventory   = null
+        ?array $inventory = null
     ): JobClaimService {
         $inv = $inventory ?? ['type' => 'static', 'content' => "localhost\n", 'path' => null];
 
-        return new class($projectPath, $inv) extends JobClaimService {
+        return new class ($projectPath, $inv) extends JobClaimService {
             public function __construct(
                 private readonly string $projectPath,
-                private readonly array  $inv,
-            ) {}
+                private readonly array $inv,
+            ) {
+            }
 
             protected function resolveProjectPath(array $payload): string
             {
@@ -55,8 +56,8 @@ class JobClaimServiceTest extends TestCase
     {
         $job     = $this->makeJob(5, []);
         $payload = $this->makeService()->buildExecutionPayload($job);
-        $this->assertSame(0,      $payload['verbosity']);
-        $this->assertSame(5,      $payload['forks']);
+        $this->assertSame(0, $payload['verbosity']);
+        $this->assertSame(5, $payload['forks']);
         $this->assertFalse($payload['become']);
         $this->assertSame('sudo', $payload['become_method']);
         $this->assertSame('root', $payload['become_user']);
@@ -73,7 +74,7 @@ class JobClaimServiceTest extends TestCase
             'verbosity'    => 2,
             'forks'        => 10,
             'become'       => true,
-            'become_method'=> 'su',
+            'become_method' => 'su',
             'become_user'  => 'deploy',
             'limit'        => 'webservers',
             'tags'         => 'app',
@@ -83,14 +84,14 @@ class JobClaimServiceTest extends TestCase
         $job     = $this->makeJob(3, $raw);
         $payload = $this->makeService()->buildExecutionPayload($job);
 
-        $this->assertSame(2,        $payload['verbosity']);
-        $this->assertSame(10,       $payload['forks']);
+        $this->assertSame(2, $payload['verbosity']);
+        $this->assertSame(10, $payload['forks']);
         $this->assertTrue($payload['become']);
-        $this->assertSame('su',     $payload['become_method']);
+        $this->assertSame('su', $payload['become_method']);
         $this->assertSame('deploy', $payload['become_user']);
         $this->assertSame('webservers', $payload['limit']);
-        $this->assertSame('app',    $payload['tags']);
-        $this->assertSame('slow',   $payload['skip_tags']);
+        $this->assertSame('app', $payload['tags']);
+        $this->assertSame('slow', $payload['skip_tags']);
         $this->assertSame('{"env":"prod"}', $payload['extra_vars']);
     }
 
@@ -113,7 +114,7 @@ class JobClaimServiceTest extends TestCase
         );
 
         $payload = $service->buildExecutionPayload($job);
-        $this->assertSame('static',       $payload['inventory_type']);
+        $this->assertSame('static', $payload['inventory_type']);
         $this->assertSame("web1\nweb2\n", $payload['inventory_content']);
         $this->assertNull($payload['inventory_path']);
     }

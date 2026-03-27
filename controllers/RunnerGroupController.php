@@ -14,10 +14,10 @@ class RunnerGroupController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],            'allow' => true, 'roles' => ['runner-group.view']],
-            ['actions' => ['create'],                   'allow' => true, 'roles' => ['runner-group.create']],
-            ['actions' => ['update'],                   'allow' => true, 'roles' => ['runner-group.update']],
-            ['actions' => ['delete'],                   'allow' => true, 'roles' => ['runner-group.delete']],
+            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['runner-group.view']],
+            ['actions' => ['create'], 'allow' => true, 'roles' => ['runner-group.create']],
+            ['actions' => ['update'], 'allow' => true, 'roles' => ['runner-group.update']],
+            ['actions' => ['delete'], 'allow' => true, 'roles' => ['runner-group.delete']],
         ];
     }
 
@@ -31,7 +31,7 @@ class RunnerGroupController extends BaseController
         $groups = RunnerGroup::find()->orderBy('name')->all();
 
         // Attach counts without N+1
-        $ids   = array_column($groups, 'id');
+        $ids = array_column($groups, 'id');
         $total = [];
         $online = [];
 
@@ -41,13 +41,17 @@ class RunnerGroupController extends BaseController
             $rows = \Yii::$app->db->createCommand(
                 'SELECT runner_group_id, COUNT(*) AS cnt FROM {{%runner}} WHERE runner_group_id IN (' . implode(',', $ids) . ') GROUP BY runner_group_id'
             )->queryAll();
-            foreach ($rows as $r) { $total[(int)$r['runner_group_id']] = (int)$r['cnt']; }
+            foreach ($rows as $r) {
+                $total[(int)$r['runner_group_id']] = (int)$r['cnt'];
+            }
 
             $rows = \Yii::$app->db->createCommand(
                 'SELECT runner_group_id, COUNT(*) AS cnt FROM {{%runner}} WHERE runner_group_id IN (' . implode(',', $ids) . ') AND last_seen_at >= :cutoff GROUP BY runner_group_id',
                 [':cutoff' => $cutoff]
             )->queryAll();
-            foreach ($rows as $r) { $online[(int)$r['runner_group_id']] = (int)$r['cnt']; }
+            foreach ($rows as $r) {
+                $online[(int)$r['runner_group_id']] = (int)$r['cnt'];
+            }
         }
 
         // Template counts per runner group
@@ -56,7 +60,9 @@ class RunnerGroupController extends BaseController
             $rows = \Yii::$app->db->createCommand(
                 'SELECT runner_group_id, COUNT(*) AS cnt FROM {{%job_template}} WHERE runner_group_id IN (' . implode(',', $ids) . ') GROUP BY runner_group_id'
             )->queryAll();
-            foreach ($rows as $r) { $templateCounts[(int)$r['runner_group_id']] = (int)$r['cnt']; }
+            foreach ($rows as $r) {
+                $templateCounts[(int)$r['runner_group_id']] = (int)$r['cnt'];
+            }
         }
 
         return $this->render('index', compact('groups', 'total', 'online', 'templateCounts'));
@@ -64,7 +70,7 @@ class RunnerGroupController extends BaseController
 
     public function actionView(int $id): string
     {
-        $group   = $this->findModel($id);
+        $group = $this->findModel($id);
         $runners = $group->getRunners()->orderBy('name')->all();
         return $this->render('view', compact('group', 'runners'));
     }
@@ -99,7 +105,7 @@ class RunnerGroupController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $name  = $model->name;
+        $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_GROUP_DELETED, 'runner_group', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', 'Runner group deleted.');

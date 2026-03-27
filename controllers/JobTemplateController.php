@@ -21,23 +21,23 @@ class JobTemplateController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],   'allow' => true, 'roles' => ['job-template.view']],
-            ['actions' => ['create'],           'allow' => true, 'roles' => ['job-template.create']],
-            ['actions' => ['update'],           'allow' => true, 'roles' => ['job-template.update']],
-            ['actions' => ['delete'],           'allow' => true, 'roles' => ['job-template.delete']],
-            ['actions' => ['launch'],                  'allow' => true, 'roles' => ['job.launch']],
+            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['job-template.view']],
+            ['actions' => ['create'], 'allow' => true, 'roles' => ['job-template.create']],
+            ['actions' => ['update'], 'allow' => true, 'roles' => ['job-template.update']],
+            ['actions' => ['delete'], 'allow' => true, 'roles' => ['job-template.delete']],
+            ['actions' => ['launch'], 'allow' => true, 'roles' => ['job.launch']],
             ['actions' => ['generate-trigger-token',
-                           'revoke-trigger-token'],    'allow' => true, 'roles' => ['job-template.update']],
+                           'revoke-trigger-token'], 'allow' => true, 'roles' => ['job-template.update']],
         ];
     }
 
     protected function verbRules(): array
     {
         return [
-            'delete'                 => ['POST'],
-            'launch'                 => ['POST', 'GET'],
+            'delete' => ['POST'],
+            'launch' => ['POST', 'GET'],
             'generate-trigger-token' => ['POST'],
-            'revoke-trigger-token'   => ['POST'],
+            'revoke-trigger-token' => ['POST'],
         ];
     }
 
@@ -58,12 +58,12 @@ class JobTemplateController extends BaseController
     public function actionCreate(?int $project_id = null, ?string $playbook = null): Response|string
     {
         $model = new JobTemplate();
-        $model->verbosity        = 0;
-        $model->forks            = 5;
-        $model->timeout_minutes  = 120;
-        $model->become           = false;
-        $model->become_method    = 'sudo';
-        $model->become_user      = 'root';
+        $model->verbosity = 0;
+        $model->forks = 5;
+        $model->timeout_minutes = 120;
+        $model->become = false;
+        $model->become_method = 'sudo';
+        $model->become_user = 'root';
         if ($project_id !== null) {
             $model->project_id = $project_id;
         }
@@ -101,7 +101,7 @@ class JobTemplateController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $name  = $model->name;
+        $name = $model->name;
         $model->softDelete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_DELETED, 'job_template', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', "Template \"{$name}\" deleted.");
@@ -114,7 +114,7 @@ class JobTemplateController extends BaseController
         if ($id === 0) {
             $id = (int)\Yii::$app->request->post('id', 0);
         }
-        $template  = $this->findModel($id);
+        $template = $this->findModel($id);
         $overrides = \Yii::$app->request->post('overrides', []);
 
         if (\Yii::$app->request->isPost) {
@@ -136,7 +136,9 @@ class JobTemplateController extends BaseController
         $model = $this->findModel($id);
         $model->generateTriggerToken();
         \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED, 'job_template', $id,
+            AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED,
+            'job_template',
+            $id,
             \Yii::$app->user->id,
             ['name' => $model->name]
         );
@@ -151,7 +153,9 @@ class JobTemplateController extends BaseController
         $model = $this->findModel($id);
         $model->revokeTriggerToken();
         \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_REVOKED, 'job_template', $id,
+            AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_REVOKED,
+            'job_template',
+            $id,
             \Yii::$app->user->id,
             ['name' => $model->name]
         );
@@ -162,11 +166,11 @@ class JobTemplateController extends BaseController
     private function formData(JobTemplate $model): array
     {
         return [
-            'model'       => $model,
-            'projects'      => Project::find()->orderBy('name')->all(),
-            'inventories'   => Inventory::find()->orderBy('name')->all(),
-            'credentials'   => Credential::find()->orderBy('name')->all(),
-            'runnerGroups'  => RunnerGroup::find()->orderBy('name')->all(),
+            'model' => $model,
+            'projects' => Project::find()->orderBy('name')->all(),
+            'inventories' => Inventory::find()->orderBy('name')->all(),
+            'credentials' => Credential::find()->orderBy('name')->all(),
+            'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
         ];
     }
 

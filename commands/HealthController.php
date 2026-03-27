@@ -41,10 +41,10 @@ class HealthController extends Controller
 
         // Migrations
         try {
-            $path     = \Yii::getAlias('@app/migrations');
-            $files    = glob($path . '/m*.php');
+            $path = \Yii::getAlias('@app/migrations');
+            $files = glob($path . '/m*.php');
             $expected = $files !== false ? count($files) : 0;
-            $applied  = (int)\Yii::$app->db->createCommand(
+            $applied = (int)\Yii::$app->db->createCommand(
                 "SELECT COUNT(*) FROM {{%migration}} WHERE version != 'm000000_000000_base'"
             )->queryScalar();
 

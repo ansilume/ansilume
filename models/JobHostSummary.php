@@ -44,12 +44,12 @@ class JobHostSummary extends ActiveRecord
     {
         $totals = ['ok' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0, 'unreachable' => 0, 'rescued' => 0, 'hosts' => 0];
         foreach ($summaries as $s) {
-            $totals['ok']          += $s->ok;
-            $totals['changed']     += $s->changed;
-            $totals['failed']      += $s->failed;
-            $totals['skipped']     += $s->skipped;
+            $totals['ok'] += $s->ok;
+            $totals['changed'] += $s->changed;
+            $totals['failed'] += $s->failed;
+            $totals['skipped'] += $s->skipped;
             $totals['unreachable'] += $s->unreachable;
-            $totals['rescued']     += $s->rescued;
+            $totals['rescued'] += $s->rescued;
             $totals['hosts']++;
         }
         return $totals;

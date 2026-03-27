@@ -12,74 +12,74 @@ namespace app\components;
  */
 class SurveyField
 {
-    public const TYPE_TEXT     = 'text';
+    public const TYPE_TEXT = 'text';
     public const TYPE_TEXTAREA = 'textarea';
-    public const TYPE_INTEGER  = 'integer';
-    public const TYPE_BOOLEAN  = 'boolean';
-    public const TYPE_SELECT   = 'select';
+    public const TYPE_INTEGER = 'integer';
+    public const TYPE_BOOLEAN = 'boolean';
+    public const TYPE_SELECT = 'select';
     public const TYPE_PASSWORD = 'password';
 
     public string $name;
     public string $label;
     public string $type;
-    public bool   $required;
+    public bool $required;
     public string $default;
     /** @var string[] Options list for TYPE_SELECT */
-    public array  $options;
+    public array $options;
     public string $hint;
 
     public function __construct(
         string $name,
-        string $label     = '',
-        string $type      = self::TYPE_TEXT,
-        bool   $required  = false,
-        string $default   = '',
-        array  $options   = [],
-        string $hint      = ''
+        string $label = '',
+        string $type = self::TYPE_TEXT,
+        bool $required = false,
+        string $default = '',
+        array $options = [],
+        string $hint = ''
     ) {
-        $this->name     = $name;
-        $this->label    = $label ?: $name;
-        $this->type     = $type;
+        $this->name = $name;
+        $this->label = $label ?: $name;
+        $this->type = $type;
         $this->required = $required;
-        $this->default  = $default;
-        $this->options  = $options;
-        $this->hint     = $hint;
+        $this->default = $default;
+        $this->options = $options;
+        $this->hint = $hint;
     }
 
     public static function fromArray(array $data): self
     {
         return new self(
-            $data['name']     ?? '',
-            $data['label']    ?? '',
-            $data['type']     ?? self::TYPE_TEXT,
+            $data['name'] ?? '',
+            $data['label'] ?? '',
+            $data['type'] ?? self::TYPE_TEXT,
             (bool)($data['required'] ?? false),
-            $data['default']  ?? '',
-            $data['options']  ?? [],
-            $data['hint']     ?? ''
+            $data['default'] ?? '',
+            $data['options'] ?? [],
+            $data['hint'] ?? ''
         );
     }
 
     public function toArray(): array
     {
         return [
-            'name'     => $this->name,
-            'label'    => $this->label,
-            'type'     => $this->type,
+            'name' => $this->name,
+            'label' => $this->label,
+            'type' => $this->type,
             'required' => $this->required,
-            'default'  => $this->default,
-            'options'  => $this->options,
-            'hint'     => $this->hint,
+            'default' => $this->default,
+            'options' => $this->options,
+            'hint' => $this->hint,
         ];
     }
 
     public static function types(): array
     {
         return [
-            self::TYPE_TEXT     => 'Text',
+            self::TYPE_TEXT => 'Text',
             self::TYPE_TEXTAREA => 'Multi-line text',
-            self::TYPE_INTEGER  => 'Integer',
-            self::TYPE_BOOLEAN  => 'Boolean (checkbox)',
-            self::TYPE_SELECT   => 'Select (dropdown)',
+            self::TYPE_INTEGER => 'Integer',
+            self::TYPE_BOOLEAN => 'Boolean (checkbox)',
+            self::TYPE_SELECT => 'Select (dropdown)',
             self::TYPE_PASSWORD => 'Password (masked)',
         ];
     }

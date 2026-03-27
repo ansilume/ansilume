@@ -20,9 +20,9 @@ class TeamController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],         'allow' => true, 'roles' => ['admin']],
-            ['actions' => ['create', 'update'],       'allow' => true, 'roles' => ['admin']],
-            ['actions' => ['delete'],                 'allow' => true, 'roles' => ['admin']],
+            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['admin']],
+            ['actions' => ['create', 'update'], 'allow' => true, 'roles' => ['admin']],
+            ['actions' => ['delete'], 'allow' => true, 'roles' => ['admin']],
             ['actions' => ['add-member', 'remove-member',
                            'add-project', 'remove-project'], 'allow' => true, 'roles' => ['admin']],
         ];
@@ -31,10 +31,10 @@ class TeamController extends BaseController
     protected function verbRules(): array
     {
         return [
-            'delete'         => ['POST'],
-            'add-member'     => ['POST'],
-            'remove-member'  => ['POST'],
-            'add-project'    => ['POST'],
+            'delete' => ['POST'],
+            'add-member' => ['POST'],
+            'remove-member' => ['POST'],
+            'add-project' => ['POST'],
             'remove-project' => ['POST'],
         ];
     }
@@ -50,7 +50,7 @@ class TeamController extends BaseController
 
     public function actionView(int $id): string
     {
-        $team     = $this->findModel($id);
+        $team = $this->findModel($id);
         $allUsers = User::find()
             ->where(['status' => User::STATUS_ACTIVE])
             ->andWhere(['NOT IN', 'id', array_map(fn($m) => $m->user_id, $team->teamMembers)])
@@ -62,8 +62,8 @@ class TeamController extends BaseController
             ->all();
 
         return $this->render('view', [
-            'team'        => $team,
-            'allUsers'    => $allUsers,
+            'team' => $team,
+            'allUsers' => $allUsers,
             'allProjects' => $allProjects,
         ]);
     }
@@ -96,7 +96,7 @@ class TeamController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $name  = $model->name;
+        $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_DELETED, 'team', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', "Team \"{$name}\" deleted.");
@@ -105,12 +105,12 @@ class TeamController extends BaseController
 
     public function actionAddMember(int $id): Response
     {
-        $team   = $this->findModel($id);
+        $team = $this->findModel($id);
         $userId = (int)\Yii::$app->request->post('user_id');
         if (!$userId) {
             throw new BadRequestHttpException('user_id required.');
         }
-        $member          = new TeamMember();
+        $member = new TeamMember();
         $member->team_id = $team->id;
         $member->user_id = $userId;
         $member->created_at = time();
@@ -133,19 +133,19 @@ class TeamController extends BaseController
 
     public function actionAddProject(int $id): Response
     {
-        $team      = $this->findModel($id);
+        $team = $this->findModel($id);
         $projectId = (int)\Yii::$app->request->post('project_id');
-        $role      = \Yii::$app->request->post('role', TeamProject::ROLE_VIEWER);
+        $role = \Yii::$app->request->post('role', TeamProject::ROLE_VIEWER);
         if (!$projectId) {
             throw new BadRequestHttpException('project_id required.');
         }
         if (!in_array($role, [TeamProject::ROLE_VIEWER, TeamProject::ROLE_OPERATOR], true)) {
             $role = TeamProject::ROLE_VIEWER;
         }
-        $tp             = new TeamProject();
-        $tp->team_id    = $team->id;
+        $tp = new TeamProject();
+        $tp->team_id = $team->id;
         $tp->project_id = $projectId;
-        $tp->role       = $role;
+        $tp->role = $role;
         $tp->created_at = time();
         if (!$tp->save()) {
             $this->session()->setFlash('danger', 'Could not add project: ' . json_encode($tp->errors));

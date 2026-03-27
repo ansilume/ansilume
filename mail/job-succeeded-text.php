@@ -12,7 +12,7 @@ declare(strict_types=1);
 
 $template = $job->jobTemplate;
 $launcher = $job->launcher;
-$started  = $job->started_at  ? date('Y-m-d H:i:s T', $job->started_at)  : '—';
+$started = $job->started_at ? date('Y-m-d H:i:s T', $job->started_at) : '—';
 $finished = $job->finished_at ? date('Y-m-d H:i:s T', $job->finished_at) : '—';
 
 $duration = '—';

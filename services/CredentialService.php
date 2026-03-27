@@ -73,7 +73,7 @@ class CredentialService extends Component
             }
             return [
                 'private_key' => file_get_contents($tmp),
-                'public_key'  => trim(file_get_contents($tmp . '.pub')),
+                'public_key' => trim(file_get_contents($tmp . '.pub')),
             ];
         } finally {
             \app\helpers\FileHelper::safeUnlink($tmp);
@@ -107,20 +107,20 @@ class CredentialService extends Component
             $this->runCommand(['ssh-keygen', '-l', '-P', '', '-f', $tmp], $infoOut);
             $info = trim(implode('', $infoOut));
 
-            $bits      = 0;
+            $bits = 0;
             $algorithm = 'unknown';
             if (preg_match('/^(\d+)\s+\S+\s+.*\((\S+)\)\s*$/', $info, $m)) {
-                $bits      = (int)$m[1];
+                $bits = (int)$m[1];
                 $algorithm = strtolower($m[2]);
             }
 
             $secure = $this->isKeySecure($algorithm, $bits);
 
             return [
-                'public_key'    => $pubKey,
-                'algorithm'     => $algorithm,
-                'bits'          => $bits,
-                'key_secure'    => $secure,
+                'public_key' => $pubKey,
+                'algorithm' => $algorithm,
+                'bits' => $bits,
+                'key_secure' => $secure,
             ];
         } catch (\RuntimeException $e) {
             \Yii::warning('CredentialService: analyzePrivateKey failed: ' . $e->getMessage(), __CLASS__);
@@ -137,12 +137,12 @@ class CredentialService extends Component
     public function isKeySecure(string $algorithm, int $bits): ?bool
     {
         return match ($algorithm) {
-            'ed25519'  => true,
-            'ed448'    => true,
-            'ecdsa'    => $bits >= 384, // nistp256 = 256 bits → false, nistp384/521 → true
-            'rsa'      => $bits >= 4096,
-            'dsa'      => false,
-            default    => null,
+            'ed25519' => true,
+            'ed448' => true,
+            'ecdsa' => $bits >= 384, // nistp256 = 256 bits → false, nistp384/521 → true
+            'rsa' => $bits >= 4096,
+            'dsa' => false,
+            default => null,
         };
     }
 
@@ -170,8 +170,8 @@ class CredentialService extends Component
 
     private function encrypt(string $plaintext): string
     {
-        $key    = $this->deriveKey();
-        $iv     = random_bytes(16);
+        $key = $this->deriveKey();
+        $iv = random_bytes(16);
         $cipher = openssl_encrypt($plaintext, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
 
         if ($cipher === false) {
@@ -183,16 +183,16 @@ class CredentialService extends Component
 
     private function decrypt(string $ciphertext): string
     {
-        $key  = $this->deriveKey();
-        $raw  = base64_decode($ciphertext, true);
+        $key = $this->deriveKey();
+        $raw = base64_decode($ciphertext, true);
 
         if ($raw === false || strlen($raw) < 17) {
             throw new Exception('Credential decryption failed: invalid ciphertext.');
         }
 
-        $iv     = substr($raw, 0, 16);
+        $iv = substr($raw, 0, 16);
         $cipher = substr($raw, 16);
-        $plain  = openssl_decrypt($cipher, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+        $plain = openssl_decrypt($cipher, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
 
         if ($plain === false) {
             throw new Exception('Credential decryption failed.');

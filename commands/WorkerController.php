@@ -65,7 +65,7 @@ class WorkerController extends Controller
     public function actionStatus(): int
     {
         $workers = WorkerHeartbeat::all();
-        $now     = time();
+        $now = time();
 
         if (empty($workers)) {
             $this->stdout("No active workers found.\n");
@@ -77,7 +77,7 @@ class WorkerController extends Controller
                 $this->stdout(sprintf(
                     "%-30s %-8s %-20s %ds ago\n",
                     $w['worker_id'] ?? '?',
-                    $w['pid']       ?? '?',
+                    $w['pid'] ?? '?',
                     $w['started_at'] ? date('Y-m-d H:i:s', $w['started_at']) : '?',
                     $age
                 ));

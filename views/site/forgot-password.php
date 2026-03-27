@@ -20,11 +20,11 @@ $this->title = 'Forgot Password';
                 <?php $form = ActiveForm::begin(['id' => 'forgot-password-form']); ?>
 
                     <?= $form->field($model, 'email')->textInput([
-                        'autofocus'    => true,
+                        'autofocus' => true,
                         'autocomplete' => 'email',
-                        'type'         => 'email',
-                        'class'        => 'form-control',
-                        'placeholder'  => 'you@example.com',
+                        'type' => 'email',
+                        'class' => 'form-control',
+                        'placeholder' => 'you@example.com',
                     ]) ?>
 
                     <div class="d-grid mt-3">

@@ -13,22 +13,22 @@ $this->title = 'Credentials';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Credentials</h2>
-    <?php if (\Yii::$app->user->can('credential.create')): ?>
+    <?php if (\Yii::$app->user->can('credential.create')) : ?>
         <?= Html::a('New Credential', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
 
 <?php $models = $dataProvider->getModels(); ?>
-<?php if (empty($models)): ?>
+<?php if (empty($models)) : ?>
     <p class="text-muted">No credentials yet.</p>
-<?php else: ?>
+<?php else : ?>
     <div class="table-responsive">
         <table class="table table-hover">
             <thead class="table-light">
                 <tr><th>#</th><th>Name</th><th>Type</th><th>Username</th><th>Created by</th><th></th></tr>
             </thead>
             <tbody>
-            <?php foreach ($models as $model): ?>
+            <?php foreach ($models as $model) : ?>
                 <tr>
                     <td><?= $model->id ?></td>
                     <td><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></td>
@@ -37,7 +37,7 @@ $this->title = 'Credentials';
                     <td><?= Html::encode($model->creator->username ?? '—') ?></td>
                     <td class="text-end text-nowrap">
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                        <?php if (\Yii::$app->user->can('credential.update')): ?>
+                        <?php if (\Yii::$app->user->can('credential.update')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                         <?php endif; ?>
                     </td>

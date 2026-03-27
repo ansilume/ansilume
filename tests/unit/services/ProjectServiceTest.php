@@ -37,7 +37,7 @@ class ProjectServiceTest extends TestCase
         $service = new ProjectService();
         $service->workspacePath = '/workspace';
 
-        $this->assertSame('/workspace/1',   $service->localPath($this->makeProject(1)));
+        $this->assertSame('/workspace/1', $service->localPath($this->makeProject(1)));
         $this->assertSame('/workspace/100', $service->localPath($this->makeProject(100)));
     }
 

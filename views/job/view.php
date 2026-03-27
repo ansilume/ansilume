@@ -41,13 +41,13 @@ $isLive = !$job->isFinished();
         </div>
     </div>
     <div>
-        <?php if ($job->isCancelable() && \Yii::$app->user->can('job.cancel')): ?>
+        <?php if ($job->isCancelable() && \Yii::$app->user->can('job.cancel')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['cancel', 'id' => $job->id]) ?>" style="display:inline" onsubmit="return confirm('Cancel this job?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger">Cancel</button>
             </form>
         <?php endif; ?>
-        <?php if ($job->isFinished() && $job->jobTemplate && !$job->jobTemplate->isDeleted() && \Yii::$app->user->can('job.launch')): ?>
+        <?php if ($job->isFinished() && $job->jobTemplate && !$job->jobTemplate->isDeleted() && \Yii::$app->user->can('job.launch')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['relaunch', 'id' => $job->id]) ?>" style="display:inline" onsubmit="return confirm('Re-launch this job with the same parameters?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-success ms-1">Re-launch</button>
@@ -64,13 +64,13 @@ $isLive = !$job->isFinished();
                 <dl class="row mb-0 small">
                     <dt class="col-5">Template</dt>
                     <dd class="col-7">
-                        <?php if ($job->jobTemplate): ?>
-                            <?php if ($job->jobTemplate->isDeleted()): ?>
+                        <?php if ($job->jobTemplate) : ?>
+                            <?php if ($job->jobTemplate->isDeleted()) : ?>
                                 <?= Html::encode($job->jobTemplate->name) ?> <span class="text-muted">(deleted)</span>
-                            <?php else: ?>
+                            <?php else : ?>
                                 <?= Html::a(Html::encode($job->jobTemplate->name), ['/job-template/view', 'id' => $job->job_template_id]) ?>
                             <?php endif; ?>
-                        <?php else: ?>
+                        <?php else : ?>
                             —
                         <?php endif; ?>
                     </dd>
@@ -86,14 +86,14 @@ $isLive = !$job->isFinished();
                     <dd class="col-7" id="detail-exit-code"><?= $job->exit_code !== null ? $job->exit_code : '—' // xss-ok: integer or hardcoded string ?></dd>
                     <dt class="col-5">Runner</dt>
                     <dd class="col-7">
-                        <?php if ($job->runner): ?>
+                        <?php if ($job->runner) : ?>
                             <?= Html::a(Html::encode($job->runner->name), ['/runner-group/view', 'id' => $job->runner->runner_group_id]) ?>
                             <span class="text-muted small">(<?= Html::encode($job->runner->group->name ?? '') ?>)</span>
-                        <?php else: ?>
+                        <?php else : ?>
                             <code><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></code>
                         <?php endif; ?>
                     </dd>
-                    <?php if ($job->limit): ?>
+                    <?php if ($job->limit) : ?>
                         <dt class="col-5">Limit</dt>
                         <dd class="col-7"><code><?= Html::encode($job->limit) ?></code></dd>
                     <?php endif; ?>
@@ -102,7 +102,7 @@ $isLive = !$job->isFinished();
         </div>
     </div>
 
-    <?php if ($job->extra_vars): ?>
+    <?php if ($job->extra_vars) : ?>
     <div class="col-md-6">
         <div class="card">
             <div class="card-header">Extra Vars (launch-time)</div>
@@ -114,7 +114,7 @@ $isLive = !$job->isFinished();
     <?php endif; ?>
 </div>
 
-<?php if (!empty($hostSummaries)): ?>
+<?php if (!empty($hostSummaries)) : ?>
 <div class="card mb-3">
     <div class="card-header">PLAY RECAP</div>
     <div class="card-body p-0">
@@ -131,11 +131,14 @@ $isLive = !$job->isFinished();
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($hostSummaries as $hs): ?>
+            <?php foreach ($hostSummaries as $hs) : ?>
                 <?php
                 $rowClass = '';
-                if ($hs->unreachable > 0 || $hs->failed > 0) $rowClass = 'table-danger';
-                elseif ($hs->changed > 0) $rowClass = 'table-warning';
+                if ($hs->unreachable > 0 || $hs->failed > 0) {
+                    $rowClass = 'table-danger';
+                } elseif ($hs->changed > 0) {
+                    $rowClass = 'table-warning';
+                }
                 ?>
                 <tr class="<?= $rowClass // xss-ok: controller-computed CSS class ?>">
                     <td><?= Html::encode($hs->host) ?></td>
@@ -153,16 +156,21 @@ $isLive = !$job->isFinished();
 </div>
 <?php endif; ?>
 
-<?php if (!empty($tasks)): ?>
-<?php
-$counts = ['ok' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0, 'unreachable' => 0];
-foreach ($tasks as $t) { $counts[$t->status] = ($counts[$t->status] ?? 0) + 1; }
-?>
+<?php if (!empty($tasks)) : ?>
+    <?php
+    $counts = ['ok' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0, 'unreachable' => 0];
+    foreach ($tasks as $t) {
+        $counts[$t->status] = ($counts[$t->status] ?? 0) + 1;
+    }
+    ?>
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Tasks (<?= count($tasks) ?>)</span>
         <span class="d-flex gap-2">
-            <?php foreach ($counts as $s => $n): if ($n === 0) continue; ?>
+            <?php foreach ($counts as $s => $n) :
+                if ($n === 0) {
+                    continue;
+                } ?>
                 <span class="badge text-bg-<?= JobTask::statusCssClass($s) // xss-ok: hardcoded CSS class from enum ?>"><?= $n // xss-ok: integer ?> <?= Html::encode($s) ?></span>
             <?php endforeach; ?>
         </span>
@@ -180,7 +188,7 @@ foreach ($tasks as $t) { $counts[$t->status] = ($counts[$t->status] ?? 0) + 1; }
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($tasks as $t): ?>
+            <?php foreach ($tasks as $t) : ?>
                 <tr>
                     <td class="text-muted"><?= $t->sequence + 1 // xss-ok: integer ?></td>
                     <td><?= Html::encode($t->task_name) ?></td>
@@ -207,7 +215,7 @@ foreach ($tasks as $t) { $counts[$t->status] = ($counts[$t->status] ?? 0) + 1; }
 </div>
 <?php endif; ?>
 
-<?php if (!empty($artifacts)): ?>
+<?php if (!empty($artifacts)) : ?>
 <div class="card mb-3">
     <div class="card-header">Artifacts <span class="badge text-bg-secondary"><?= count($artifacts) ?></span></div>
     <div class="card-body p-0">
@@ -221,19 +229,19 @@ foreach ($tasks as $t) { $counts[$t->status] = ($counts[$t->status] ?? 0) + 1; }
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($artifacts as $artifact): ?>
+            <?php foreach ($artifacts as $artifact) : ?>
                 <tr>
                     <td><code><?= Html::encode($artifact->display_name) ?></code></td>
                     <td class="text-muted"><?= Html::encode($artifact->mime_type) ?></td>
                     <td class="text-end text-nowrap"><?php
-                        $bytes = $artifact->size_bytes;
-                        if ($bytes >= 1048576) {
-                            echo number_format($bytes / 1048576, 1) . ' MB';
-                        } elseif ($bytes >= 1024) {
-                            echo number_format($bytes / 1024, 1) . ' KB';
-                        } else {
-                            echo $bytes . ' B'; // xss-ok: integer
-                        }
+                    $bytes = $artifact->size_bytes;
+                    if ($bytes >= 1048576) {
+                        echo number_format($bytes / 1048576, 1) . ' MB';
+                    } elseif ($bytes >= 1024) {
+                        echo number_format($bytes / 1024, 1) . ' KB';
+                    } else {
+                        echo $bytes . ' B'; // xss-ok: integer
+                    }
                     ?></td>
                     <td class="text-end">
                         <?= Html::a('Download', ['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
@@ -249,7 +257,7 @@ foreach ($tasks as $t) { $counts[$t->status] = ($counts[$t->status] ?? 0) + 1; }
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Output</span>
-        <?php if ($isLive): ?>
+        <?php if ($isLive) : ?>
             <span class="badge text-bg-primary" id="live-indicator">Live</span>
         <?php endif; ?>
     </div>
@@ -276,7 +284,7 @@ function appendAnsi(text) {
     logEl.appendChild(span);
 }
 
-<?php foreach ($logs as $logEntry): ?>
+<?php foreach ($logs as $logEntry) : ?>
 appendAnsi(<?= json_encode($logEntry->content) ?>);
 <?php endforeach; ?>
 
@@ -285,7 +293,7 @@ if (logEl.scrollHeight > logEl.clientHeight) {
 }
 </script>
 
-<?php if ($isLive): ?>
+<?php if ($isLive) : ?>
 <script>
 (function () {
     var badgeEl   = document.getElementById('status-badge');

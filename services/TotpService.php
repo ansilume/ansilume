@@ -84,7 +84,7 @@ class TotpService extends Component
     public function encryptSecret(string $plainSecret): string
     {
         $key = $this->deriveKey();
-        $iv  = random_bytes(16);
+        $iv = random_bytes(16);
         $cipher = openssl_encrypt($plainSecret, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
 
         if ($cipher === false) {
@@ -106,9 +106,9 @@ class TotpService extends Component
             throw new Exception('TOTP secret decryption failed: invalid ciphertext.');
         }
 
-        $iv     = substr($raw, 0, 16);
+        $iv = substr($raw, 0, 16);
         $cipher = substr($raw, 16);
-        $plain  = openssl_decrypt($cipher, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
+        $plain = openssl_decrypt($cipher, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
 
         if ($plain === false) {
             throw new Exception('TOTP secret decryption failed.');
@@ -128,17 +128,17 @@ class TotpService extends Component
      */
     public function generateRecoveryCodes(): array
     {
-        $raw    = [];
+        $raw = [];
         $hashed = [];
         /** @var \yii\base\Security $security */
         $security = \Yii::$app->security;
         for ($i = 0; $i < $this->recoveryCodeCount; $i++) {
-            $code     = $this->generateSingleRecoveryCode();
-            $raw[]    = $code;
+            $code = $this->generateSingleRecoveryCode();
+            $raw[] = $code;
             // Hash the normalized form (no dashes, uppercase) so verification works
             // regardless of how the user types the code
             $normalized = strtoupper(str_replace('-', '', $code));
-            $hashed[]   = $security->generatePasswordHash($normalized);
+            $hashed[] = $security->generatePasswordHash($normalized);
         }
         return ['raw' => $raw, 'hashed' => $hashed];
     }
@@ -223,7 +223,7 @@ class TotpService extends Component
      */
     public function recordFailedAttempt(int $userId): int
     {
-        $key  = $this->rateLimitKey($userId);
+        $key = $this->rateLimitKey($userId);
         /** @var \yii\caching\CacheInterface $cache */
         $cache = \Yii::$app->cache;
         $data = $cache->get($key);
@@ -256,8 +256,8 @@ class TotpService extends Component
     {
         $recovery = $this->generateRecoveryCodes();
 
-        $user->totp_secret   = $this->encryptSecret($plainSecret);
-        $user->totp_enabled  = true;
+        $user->totp_secret = $this->encryptSecret($plainSecret);
+        $user->totp_enabled = true;
         $user->recovery_codes = json_encode($recovery['hashed']);
         $user->save(false, ['totp_secret', 'totp_enabled', 'recovery_codes']);
 
@@ -269,8 +269,8 @@ class TotpService extends Component
      */
     public function disable(User $user): void
     {
-        $user->totp_secret    = null;
-        $user->totp_enabled   = false;
+        $user->totp_secret = null;
+        $user->totp_enabled = false;
         $user->recovery_codes = null;
         $user->save(false, ['totp_secret', 'totp_enabled', 'recovery_codes']);
     }
@@ -301,7 +301,7 @@ class TotpService extends Component
     {
         // 8-character uppercase alphanumeric, e.g. "A3F7-K9X2"
         $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I/O/0/1 to avoid confusion
-        $code  = '';
+        $code = '';
         $bytes = random_bytes(8);
         for ($i = 0; $i < 8; $i++) {
             $code .= $chars[ord($bytes[$i]) % strlen($chars)];

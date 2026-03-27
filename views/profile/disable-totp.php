@@ -28,12 +28,12 @@ $this->title = 'Disable Two-Factor Authentication';
             <?php $form = ActiveForm::begin(['id' => 'totp-disable-form']); ?>
 
                 <?= $form->field($model, 'code')->textInput([
-                    'autofocus'    => true,
+                    'autofocus' => true,
                     'autocomplete' => 'one-time-code',
-                    'maxlength'    => 12,
-                    'class'        => 'form-control font-monospace',
-                    'placeholder'  => '000000 or XXXX-XXXX',
-                    'style'        => 'max-width:250px; font-size:1.1rem;',
+                    'maxlength' => 12,
+                    'class' => 'form-control font-monospace',
+                    'placeholder' => '000000 or XXXX-XXXX',
+                    'style' => 'max-width:250px; font-size:1.1rem;',
                 ]) ?>
 
                 <div class="mt-3">

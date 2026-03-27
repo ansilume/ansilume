@@ -39,7 +39,10 @@ class LoginFormTest extends TestCase
     public function testValidatePasswordFailsWhenUserNotFound(): void
     {
         $form = new class extends LoginForm {
-            protected function getUser(): ?User { return null; }
+            protected function getUser(): ?User
+            {
+                return null;
+            }
         };
         $form->username = 'no_such_user';
         $form->password = 'anything';

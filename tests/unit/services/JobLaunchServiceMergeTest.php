@@ -48,8 +48,8 @@ class JobLaunchServiceMergeTest extends TestCase
         $result   = $this->service->exposeMerge($template, [
             'survey' => ['env' => 'staging', 'app_version' => '1.2.3'],
         ]);
-        $this->assertSame('staging',  $result['env']);
-        $this->assertSame('1.2.3',    $result['app_version']);
+        $this->assertSame('staging', $result['env']);
+        $this->assertSame('1.2.3', $result['app_version']);
     }
 
     public function testExplicitExtraVarsWinOverSurveyAndDefaults(): void
@@ -69,7 +69,7 @@ class JobLaunchServiceMergeTest extends TestCase
             'extra_vars' => ['a' => 'override', 'b' => 'new'],
         ]);
         $this->assertSame('override', $result['a']);
-        $this->assertSame('new',      $result['b']);
+        $this->assertSame('new', $result['b']);
     }
 
     public function testInvalidJsonExtraVarsIgnored(): void

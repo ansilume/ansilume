@@ -44,7 +44,7 @@ class PasswordResetRequestForm extends Model
         }
 
         $expireMinutes = (int)ceil(User::PASSWORD_RESET_TOKEN_EXPIRE / 60);
-        $resetUrl      = $this->buildResetUrl($user->password_reset_token);
+        $resetUrl = $this->buildResetUrl($user->password_reset_token);
 
         try {
             /** @var \yii\mail\MailerInterface $mailer */
@@ -52,8 +52,8 @@ class PasswordResetRequestForm extends Model
             $sent = $mailer->compose(
                 ['html' => 'password-reset-html', 'text' => 'password-reset-text'],
                 [
-                    'user'          => $user,
-                    'resetUrl'      => $resetUrl,
+                    'user' => $user,
+                    'resetUrl' => $resetUrl,
                     'expireMinutes' => $expireMinutes,
                 ]
             )

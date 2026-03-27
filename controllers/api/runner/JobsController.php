@@ -30,13 +30,13 @@ class JobsController extends BaseRunnerApiController
     public function actionHeartbeat(): array
     {
         $runner = $this->currentRunner;
-        $group  = $runner->group;
+        $group = $runner->group;
 
         return $this->ok([
-            'runner_id'   => $runner->id,
+            'runner_id' => $runner->id,
             'runner_name' => $runner->name,
-            'group_id'    => $group->id,
-            'group_name'  => $group->name,
+            'group_id' => $group->id,
+            'group_name' => $group->name,
             'server_time' => time(),
         ]);
     }
@@ -49,7 +49,7 @@ class JobsController extends BaseRunnerApiController
     public function actionClaim(): array|Response
     {
         $runner = $this->currentRunner;
-        $group  = $runner->group;
+        $group = $runner->group;
 
         /** @var JobClaimService $svc */
         $svc = \Yii::$app->get('jobClaimService');
@@ -71,13 +71,13 @@ class JobsController extends BaseRunnerApiController
      */
     public function actionLogs(int $id): array
     {
-        $job  = $this->findOwnedJob($id);
+        $job = $this->findOwnedJob($id);
         $body = \Yii::$app->request->bodyParams;
 
-        $stream   = in_array($body['stream'] ?? '', ['stdout', 'stderr'], true)
+        $stream = in_array($body['stream'] ?? '', ['stdout', 'stderr'], true)
             ? $body['stream']
             : JobLog::STREAM_STDOUT;
-        $content  = (string)($body['content'] ?? '');
+        $content = (string)($body['content'] ?? '');
         $sequence = (int)($body['sequence'] ?? 0);
 
         if ($content === '') {
@@ -97,8 +97,8 @@ class JobsController extends BaseRunnerApiController
      */
     public function actionComplete(int $id): array
     {
-        $job      = $this->findOwnedJob($id);
-        $body     = \Yii::$app->request->bodyParams;
+        $job = $this->findOwnedJob($id);
+        $body = \Yii::$app->request->bodyParams;
         $exitCode = (int)($body['exit_code'] ?? 0);
         $hasChanges = !empty($body['has_changes']);
 
@@ -115,7 +115,7 @@ class JobsController extends BaseRunnerApiController
      */
     public function actionTasks(int $id): array
     {
-        $job   = $this->findOwnedJob($id);
+        $job = $this->findOwnedJob($id);
         $tasks = \Yii::$app->request->bodyParams['tasks'] ?? [];
 
         if (!is_array($tasks)) {

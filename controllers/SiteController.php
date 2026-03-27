@@ -37,12 +37,12 @@ class SiteController extends BaseController
     public function actionIndex(): string
     {
         $today = mktime(0, 0, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
-        $week  = strtotime('-6 days', $today);
+        $week = strtotime('-6 days', $today);
 
         $stats = [
-            'projects'   => Project::find()->count(),
-            'queued'     => Job::find()->where(['status' => Job::STATUS_QUEUED])->count(),
-            'running'    => Job::find()->where(['status' => Job::STATUS_RUNNING])->count(),
+            'projects' => Project::find()->count(),
+            'queued' => Job::find()->where(['status' => Job::STATUS_QUEUED])->count(),
+            'running' => Job::find()->where(['status' => Job::STATUS_RUNNING])->count(),
             'jobs_today' => Job::find()->where(['>=', 'created_at', $today])->count(),
         ];
 
@@ -72,18 +72,18 @@ class SiteController extends BaseController
             ->orderBy('name')
             ->all();
 
-        $cutoff       = time() - RunnerGroup::STALE_AFTER;
-        $totalRunners  = (int)Runner::find()->count();
+        $cutoff = time() - RunnerGroup::STALE_AFTER;
+        $totalRunners = (int)Runner::find()->count();
         $onlineRunners = (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count();
 
         return $this->render('index', [
-            'stats'         => $stats,
-            'statusCounts'  => $statusCounts,
-            'recentJobs'    => $recentJobs,
-            'runningJobs'   => $runningJobs,
-            'templates'     => $templates,
+            'stats' => $stats,
+            'statusCounts' => $statusCounts,
+            'recentJobs' => $recentJobs,
+            'runningJobs' => $runningJobs,
+            'templates' => $templates,
             'onlineRunners' => $onlineRunners,
-            'totalRunners'  => $totalRunners,
+            'totalRunners' => $totalRunners,
         ]);
     }
 
@@ -95,15 +95,15 @@ class SiteController extends BaseController
     {
         \Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $days  = max(7, min(365, $days));
+        $days = max(7, min(365, $days));
         $today = mktime(0, 0, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
 
-        $labels      = [];
-        $jobOk       = [];
-        $jobFailed   = [];
-        $taskOk      = [];
+        $labels = [];
+        $jobOk = [];
+        $jobFailed = [];
+        $taskOk = [];
         $taskChanged = [];
-        $taskFailed  = [];
+        $taskFailed = [];
         $taskUnreach = [];
         $taskSkipped = [];
 
@@ -111,12 +111,12 @@ class SiteController extends BaseController
 
         for ($i = $days - 1; $i >= 0; $i--) {
             $dayStart = strtotime("-{$i} days", $today);
-            $dayEnd   = $dayStart + 86399;
+            $dayEnd = $dayStart + 86399;
 
             $labels[] = date('d.m.', $dayStart);
 
             // Job outcomes
-            $jobOk[]     = (int)Job::find()->where(['status' => Job::STATUS_SUCCEEDED])->andWhere(['between', 'finished_at', $dayStart, $dayEnd])->count();
+            $jobOk[] = (int)Job::find()->where(['status' => Job::STATUS_SUCCEEDED])->andWhere(['between', 'finished_at', $dayStart, $dayEnd])->count();
             $jobFailed[] = (int)Job::find()->where(['status' => Job::STATUS_FAILED])->andWhere(['between', 'finished_at', $dayStart, $dayEnd])->count();
 
             // Host recap sums: join job_host_summary → job to get finished_at date
@@ -132,17 +132,17 @@ class SiteController extends BaseController
                 WHERE j.finished_at BETWEEN :ds AND :de
             ', [':ds' => $dayStart, ':de' => $dayEnd])->queryOne();
 
-            $taskOk[]      = (int)($row['ok']          ?? 0);
-            $taskChanged[] = (int)($row['changed']      ?? 0);
-            $taskFailed[]  = (int)($row['failed']       ?? 0);
-            $taskUnreach[] = (int)($row['unreachable']  ?? 0);
-            $taskSkipped[] = (int)($row['skipped']      ?? 0);
+            $taskOk[] = (int)($row['ok'] ?? 0);
+            $taskChanged[] = (int)($row['changed'] ?? 0);
+            $taskFailed[] = (int)($row['failed'] ?? 0);
+            $taskUnreach[] = (int)($row['unreachable'] ?? 0);
+            $taskSkipped[] = (int)($row['skipped'] ?? 0);
         }
 
         return $this->asJson([
-            'labels'      => $labels,
-            'jobs'        => ['ok' => $jobOk,    'failed' => $jobFailed],
-            'tasks'       => ['ok' => $taskOk,   'changed' => $taskChanged, 'failed' => $taskFailed, 'unreachable' => $taskUnreach, 'skipped' => $taskSkipped],
+            'labels' => $labels,
+            'jobs' => ['ok' => $jobOk, 'failed' => $jobFailed],
+            'tasks' => ['ok' => $taskOk, 'changed' => $taskChanged, 'failed' => $taskFailed, 'unreachable' => $taskUnreach, 'skipped' => $taskSkipped],
         ]);
     }
 
@@ -167,14 +167,22 @@ class SiteController extends BaseController
             // No TOTP — log in directly
             if ($model->login()) {
                 \Yii::$app->get('auditService')->log(
-                    AuditLog::ACTION_USER_LOGIN, null, null, null, ['username' => $model->username]
+                    AuditLog::ACTION_USER_LOGIN,
+                    null,
+                    null,
+                    null,
+                    ['username' => $model->username]
                 );
                 return $this->goBack();
             }
         }
         if ($model->hasErrors()) {
             \Yii::$app->get('auditService')->log(
-                AuditLog::ACTION_USER_LOGIN_FAILED, null, null, null, ['username' => $model->username]
+                AuditLog::ACTION_USER_LOGIN_FAILED,
+                null,
+                null,
+                null,
+                ['username' => $model->username]
             );
         }
         $model->password = '';
@@ -217,9 +225,13 @@ class SiteController extends BaseController
             $session->regenerateID(true);
 
             \Yii::$app->get('auditService')->log(
-                AuditLog::ACTION_USER_LOGIN, null, null, null, [
+                AuditLog::ACTION_USER_LOGIN,
+                null,
+                null,
+                null,
+                [
                     'username' => $user->username,
-                    'mfa'      => true,
+                    'mfa' => true,
                     'recovery_code' => $model->usedRecoveryCode(),
                 ]
             );
@@ -247,7 +259,11 @@ class SiteController extends BaseController
         if ($model->load(\Yii::$app->request->post()) && $model->validate()) {
             $model->sendResetEmail();
             \Yii::$app->get('auditService')->log(
-                AuditLog::ACTION_PASSWORD_RESET_REQUESTED, null, null, null, ['email' => $model->email]
+                AuditLog::ACTION_PASSWORD_RESET_REQUESTED,
+                null,
+                null,
+                null,
+                ['email' => $model->email]
             );
             $this->session()->setFlash('success', 'If an account with that email exists, a password reset link has been sent.');
             return $this->redirect(['login']);
@@ -275,7 +291,9 @@ class SiteController extends BaseController
 
         if ($model->load(\Yii::$app->request->post()) && $model->validate() && $model->resetPassword()) {
             \Yii::$app->get('auditService')->log(
-                AuditLog::ACTION_PASSWORD_RESET_COMPLETED, 'user', $model->getUser()->id
+                AuditLog::ACTION_PASSWORD_RESET_COMPLETED,
+                'user',
+                $model->getUser()->id
             );
             $this->session()->setFlash('success', 'Your password has been reset. You can now log in.');
             return $this->redirect(['login']);

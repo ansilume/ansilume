@@ -55,7 +55,7 @@ abstract class BaseController extends Controller
         $verbs = $this->verbRules();
         if ($verbs !== []) {
             $behaviors['verbs'] = [
-                'class'   => VerbFilter::class,
+                'class' => VerbFilter::class,
                 'actions' => $verbs,
             ];
         }

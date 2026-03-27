@@ -35,9 +35,9 @@ class UserFormTest extends TestCase
     {
         $options = UserForm::roleOptions();
         $this->assertCount(3, $options);
-        $this->assertArrayHasKey('viewer',   $options);
+        $this->assertArrayHasKey('viewer', $options);
         $this->assertArrayHasKey('operator', $options);
-        $this->assertArrayHasKey('admin',    $options);
+        $this->assertArrayHasKey('admin', $options);
     }
 
     public function testRoleOptionsValuesAreStrings(): void
@@ -122,7 +122,7 @@ class UserFormTest extends TestCase
         \Yii::$app->set('authManager', $auth);
 
         $form = UserForm::fromUser($user);
-        $this->assertSame('alice',             $form->username);
+        $this->assertSame('alice', $form->username);
         $this->assertSame('alice@example.com', $form->email);
         $this->assertSame(User::STATUS_ACTIVE, $form->status);
         $this->assertFalse($form->is_superadmin);

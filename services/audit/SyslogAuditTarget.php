@@ -21,7 +21,7 @@ class SyslogAuditTarget implements AuditTargetInterface
 
     public function __construct(string $ident = 'ansilume', string $facility = 'LOG_LOCAL0')
     {
-        $this->ident    = $ident;
+        $this->ident = $ident;
         $this->facility = defined($facility) ? constant($facility) : LOG_LOCAL0;
     }
 

@@ -72,7 +72,7 @@ class ProjectAccessChecker extends Component
         // If the project is not restricted to any team, fall back to RBAC-only.
         if (!$hasAnyTeamAccess) {
             return $auth->checkAccess($userId, 'project.view')
-                ? TeamProject::ROLE_OPERATOR   // RBAC operator-or-above can do everything
+                ? TeamProject::ROLE_OPERATOR // RBAC operator-or-above can do everything
                 : null;
         }
 
@@ -81,7 +81,7 @@ class ProjectAccessChecker extends Component
             ->innerJoinWith('team.teamMembers', false)
             ->where([
                 'team_project.project_id' => $projectId,
-                'team_member.user_id'     => $userId,
+                'team_member.user_id' => $userId,
             ])
             ->select(['team_project.role'])
             ->asArray()
@@ -152,7 +152,7 @@ class ProjectAccessChecker extends Component
 
         return ['or',
             ['not in', 'id', $allRestrictedIds],
-            ['in',     'id', $teamProjectIds],
+            ['in', 'id', $teamProjectIds],
         ];
     }
 }

@@ -42,7 +42,7 @@ class ProjectService extends Component
     {
         if ($project->scm_type !== Project::SCM_TYPE_GIT) {
             // Manual projects have no SCM — nothing to sync.
-            $project->status         = Project::STATUS_SYNCED;
+            $project->status = Project::STATUS_SYNCED;
             $project->last_synced_at = time();
             $project->save(false);
             return;
@@ -58,7 +58,7 @@ class ProjectService extends Component
 
         $keyFile = null;
         try {
-            $env    = $this->buildGitEnv($project, $keyFile);
+            $env = $this->buildGitEnv($project, $keyFile);
 
             if (is_dir($dest . '/.git')) {
                 $this->gitPull($dest, $project->scm_branch, $env);
@@ -66,11 +66,11 @@ class ProjectService extends Component
                 $this->gitClone($project->scm_url, $dest, $project->scm_branch, $env);
             }
 
-            $project->status          = Project::STATUS_SYNCED;
-            $project->last_synced_at  = time();
+            $project->status = Project::STATUS_SYNCED;
+            $project->last_synced_at = time();
             $project->last_sync_error = null;
         } catch (\RuntimeException $e) {
-            $project->status          = Project::STATUS_ERROR;
+            $project->status = Project::STATUS_ERROR;
             $project->last_sync_error = $e->getMessage();
             throw $e;
         } finally {
@@ -100,13 +100,13 @@ class ProjectService extends Component
     protected function buildGitEnv(Project $project, ?string &$keyFile): array
     {
         $env = [
-            'HOME'                => getenv('HOME') ?: '/root',
-            'GIT_TERMINAL_PROMPT' => '0',   // never block on interactive prompts
+            'HOME' => getenv('HOME') ?: '/root',
+            'GIT_TERMINAL_PROMPT' => '0', // never block on interactive prompts
             // Suppress "dubious ownership" errors that occur in Docker when the
             // directory was created by a different UID than the git process runs as.
-            'GIT_CONFIG_COUNT'    => '1',
-            'GIT_CONFIG_KEY_0'    => 'safe.directory',
-            'GIT_CONFIG_VALUE_0'  => '*',
+            'GIT_CONFIG_COUNT' => '1',
+            'GIT_CONFIG_KEY_0' => 'safe.directory',
+            'GIT_CONFIG_VALUE_0' => '*',
         ];
 
         if ($project->scm_credential_id === null) {
@@ -119,9 +119,9 @@ class ProjectService extends Component
         }
 
         /** @var CredentialService $cs */
-        $cs      = \Yii::$app->get('credentialService');
+        $cs = \Yii::$app->get('credentialService');
         $secrets = $cs->getSecrets($credential);
-        $key     = $secrets['private_key'] ?? '';
+        $key = $secrets['private_key'] ?? '';
 
         if ($key === '') {
             return $env;

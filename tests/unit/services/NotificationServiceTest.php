@@ -124,8 +124,10 @@ class NotificationServiceTest extends TestCase
     /** Service that captures sendJobMail calls for verification. */
     private function capturingService(array &$calls): NotificationService
     {
-        return new class($calls) extends NotificationService {
-            public function __construct(private array &$calls) {}
+        return new class ($calls) extends NotificationService {
+            public function __construct(private array &$calls)
+            {
+            }
 
             protected function sendJobMail(Job $job, array $recipients, string $subject, string $template): void
             {

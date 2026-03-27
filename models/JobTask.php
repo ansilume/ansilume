@@ -20,10 +20,10 @@ use yii\db\ActiveRecord;
  */
 class JobTask extends ActiveRecord
 {
-    public const STATUS_OK          = 'ok';
-    public const STATUS_CHANGED     = 'changed';
-    public const STATUS_FAILED      = 'failed';
-    public const STATUS_SKIPPED     = 'skipped';
+    public const STATUS_OK = 'ok';
+    public const STATUS_CHANGED = 'changed';
+    public const STATUS_FAILED = 'failed';
+    public const STATUS_SKIPPED = 'skipped';
     public const STATUS_UNREACHABLE = 'unreachable';
 
     public static function tableName(): string
@@ -34,12 +34,12 @@ class JobTask extends ActiveRecord
     public static function statusCssClass(string $status): string
     {
         return match ($status) {
-            self::STATUS_OK          => 'success',
-            self::STATUS_CHANGED     => 'warning',
-            self::STATUS_FAILED      => 'danger',
-            self::STATUS_SKIPPED     => 'secondary',
+            self::STATUS_OK => 'success',
+            self::STATUS_CHANGED => 'warning',
+            self::STATUS_FAILED => 'danger',
+            self::STATUS_SKIPPED => 'secondary',
             self::STATUS_UNREACHABLE => 'dark',
-            default                  => 'secondary',
+            default => 'secondary',
         };
     }
 }

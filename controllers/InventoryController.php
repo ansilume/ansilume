@@ -17,9 +17,9 @@ class InventoryController extends BaseController
     {
         return [
             ['actions' => ['index', 'view', 'parse-hosts'], 'allow' => true, 'roles' => ['inventory.view']],
-            ['actions' => ['create'],           'allow' => true, 'roles' => ['inventory.create']],
-            ['actions' => ['update'],           'allow' => true, 'roles' => ['inventory.update']],
-            ['actions' => ['delete'],           'allow' => true, 'roles' => ['inventory.delete']],
+            ['actions' => ['create'], 'allow' => true, 'roles' => ['inventory.create']],
+            ['actions' => ['update'], 'allow' => true, 'roles' => ['inventory.update']],
+            ['actions' => ['delete'], 'allow' => true, 'roles' => ['inventory.delete']],
         ];
     }
 
@@ -58,7 +58,7 @@ class InventoryController extends BaseController
             }
         }
         return $this->render('form', [
-            'model'    => $model,
+            'model' => $model,
             'projects' => Project::find()->orderBy('name')->all(),
         ]);
     }
@@ -72,7 +72,7 @@ class InventoryController extends BaseController
             return $this->redirect(['view', 'id' => $model->id]);
         }
         return $this->render('form', [
-            'model'    => $model,
+            'model' => $model,
             'projects' => Project::find()->orderBy('name')->all(),
         ]);
     }
@@ -80,7 +80,7 @@ class InventoryController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $name  = $model->name;
+        $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_DELETED, 'inventory', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', "Inventory \"{$name}\" deleted.");
@@ -95,7 +95,7 @@ class InventoryController extends BaseController
 
         /** @var \app\services\InventoryService $service */
         $service = \Yii::$app->get('inventoryService');
-        $result  = $service->resolveAndCache($model);
+        $result = $service->resolveAndCache($model);
 
         return $this->asJson($result);
     }

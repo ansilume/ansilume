@@ -20,7 +20,7 @@ class TotpSetupForm extends Model
 
     public function __construct(User $user, string $secret, array $config = [])
     {
-        $this->_user   = $user;
+        $this->_user = $user;
         $this->_secret = $secret;
         parent::__construct($config);
     }

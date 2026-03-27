@@ -13,7 +13,7 @@ $this->title = 'Webhooks';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Webhooks</h2>
-    <?php if (\Yii::$app->user->can('admin')): ?>
+    <?php if (\Yii::$app->user->can('admin')) : ?>
         <?= Html::a('New Webhook', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
@@ -21,9 +21,9 @@ $this->title = 'Webhooks';
 <p class="text-muted">Outbound webhooks are fired when job events occur. Payloads are signed with HMAC-SHA256 when a secret is set.</p>
 
 <?php $models = $dataProvider->getModels(); ?>
-<?php if (empty($models)): ?>
+<?php if (empty($models)) : ?>
     <p class="text-muted">No webhooks configured yet.</p>
-<?php else: ?>
+<?php else : ?>
     <div class="table-responsive">
         <table class="table table-hover">
             <thead class="table-light">
@@ -38,7 +38,7 @@ $this->title = 'Webhooks';
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($models as $model): ?>
+            <?php foreach ($models as $model) : ?>
                 <tr>
                     <td><?= $model->id ?></td>
                     <td><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></td>
@@ -46,7 +46,7 @@ $this->title = 'Webhooks';
                         <code title="<?= Html::encode($model->url) ?>"><?= Html::encode($model->url) ?></code>
                     </td>
                     <td>
-                        <?php foreach ($model->getEventList() as $event): ?>
+                        <?php foreach ($model->getEventList() as $event) : ?>
                             <span class="badge text-bg-secondary me-1"><?= Html::encode($event) ?></span>
                         <?php endforeach; ?>
                     </td>
@@ -58,7 +58,7 @@ $this->title = 'Webhooks';
                     </td>
                     <td class="text-end text-nowrap">
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                        <?php if (\Yii::$app->user->can('admin')): ?>
+                        <?php if (\Yii::$app->user->can('admin')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                         <?php endif; ?>
                     </td>

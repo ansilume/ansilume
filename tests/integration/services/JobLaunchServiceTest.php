@@ -49,7 +49,7 @@ class JobLaunchServiceTest extends DbTestCase
         $job = $this->service->launch($template, $user->id);
 
         $this->assertSame($template->id, $job->job_template_id);
-        $this->assertSame($user->id,     $job->launched_by);
+        $this->assertSame($user->id, $job->launched_by);
     }
 
     public function testLaunchSnapshotsRunnerPayloadAsJson(): void
@@ -61,9 +61,9 @@ class JobLaunchServiceTest extends DbTestCase
         $this->assertNotNull($job->runner_payload);
         $payload = json_decode($job->runner_payload, true);
         $this->assertIsArray($payload);
-        $this->assertSame($template->id,       $payload['template_id']);
+        $this->assertSame($template->id, $payload['template_id']);
         $this->assertSame($template->playbook, $payload['playbook']);
-        $this->assertSame(120,                 $payload['timeout_minutes']);
+        $this->assertSame(120, $payload['timeout_minutes']);
     }
 
     public function testLaunchCreatesAuditLogEntry(): void
@@ -105,7 +105,7 @@ class JobLaunchServiceTest extends DbTestCase
         $this->assertNotNull($job->extra_vars);
         $vars = json_decode($job->extra_vars, true);
         $this->assertSame('production', $vars['env']);
-        $this->assertSame('2.0',        $vars['version']);
+        $this->assertSame('2.0', $vars['version']);
     }
 
     public function testLaunchWithSurveyOverrideMergesIntoPayload(): void
@@ -118,7 +118,7 @@ class JobLaunchServiceTest extends DbTestCase
         ]);
 
         $vars = json_decode($job->extra_vars, true);
-        $this->assertSame('red',   $vars['color']);
+        $this->assertSame('red', $vars['color']);
         $this->assertSame('large', $vars['size']);
     }
 
@@ -143,7 +143,10 @@ class JobLaunchServiceTest extends DbTestCase
         $project      = $this->createProject($user->id);
         $inventory    = $this->createInventory($user->id);
         $template     = $this->createJobTemplate(
-            $project->id, $inventory->id, $runnerGroup->id, $user->id
+            $project->id,
+            $inventory->id,
+            $runnerGroup->id,
+            $user->id
         );
         return [$template, $user];
     }

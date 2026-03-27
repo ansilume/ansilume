@@ -16,18 +16,18 @@ namespace app\components;
  */
 class WorkerHeartbeat
 {
-    public const HEARTBEAT_INTERVAL = 30;  // seconds between refreshes
-    public const STALE_AFTER        = 120; // Redis TTL — worker considered dead after this
+    public const HEARTBEAT_INTERVAL = 30; // seconds between refreshes
+    public const STALE_AFTER = 120; // Redis TTL — worker considered dead after this
 
     private string $workerId;
-    private int    $startedAt;
+    private int $startedAt;
     private \Redis $redis;
 
     public function __construct()
     {
-        $this->workerId  = gethostname() . ':' . getmypid();
+        $this->workerId = gethostname() . ':' . getmypid();
         $this->startedAt = time();
-        $this->redis     = $this->connectRedis();
+        $this->redis = $this->connectRedis();
     }
 
     /**
@@ -66,13 +66,13 @@ class WorkerHeartbeat
     public static function all(): array
     {
         try {
-            $redis  = static::connectRedisStatic();
-            $keys   = $redis->keys('ansilume:worker:*');
+            $redis = static::connectRedisStatic();
+            $keys = $redis->keys('ansilume:worker:*');
             $cutoff = time() - 2 * self::HEARTBEAT_INTERVAL;
 
             $workers = [];
             foreach ($keys as $key) {
-                $raw  = $redis->get($key);
+                $raw = $redis->get($key);
                 $data = $raw !== false ? json_decode($raw, true) : null;
                 if ($data && ($data['seen_at'] ?? 0) >= $cutoff) {
                     $workers[] = $data;
@@ -87,11 +87,11 @@ class WorkerHeartbeat
     private function write(): void
     {
         $data = json_encode([
-            'worker_id'  => $this->workerId,
-            'pid'        => getmypid(),
-            'hostname'   => gethostname(),
+            'worker_id' => $this->workerId,
+            'pid' => getmypid(),
+            'hostname' => gethostname(),
             'started_at' => $this->startedAt,
-            'seen_at'    => time(),
+            'seen_at' => time(),
         ]);
 
         try {

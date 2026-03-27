@@ -93,8 +93,8 @@ class AnsibleInventoryRunner extends Component
      */
     protected function readProcessOutput(array $pipes, $process): array
     {
-        $stdout   = '';
-        $stderr   = '';
+        $stdout = '';
+        $stderr = '';
         $deadline = time() + $this->timeout;
 
         while (true) {

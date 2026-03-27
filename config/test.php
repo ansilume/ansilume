@@ -3,28 +3,28 @@
 declare(strict_types=1);
 
 $params = require __DIR__ . '/params.php';
-$db     = require __DIR__ . '/db-test.php';
+$db = require __DIR__ . '/db-test.php';
 
 return [
-    'id'       => 'ansilume-tests',
-    'basePath'  => dirname(__DIR__),
+    'id' => 'ansilume-tests',
+    'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
     'components' => [
         'log' => [
             'targets' => [
                 [
-                    'class'  => 'yii\log\FileTarget',
+                    'class' => 'yii\log\FileTarget',
                     'levels' => ['error', 'warning'],
                 ],
             ],
         ],
-        'db'    => $db,
+        'db' => $db,
         'cache' => ['class' => 'yii\caching\ArrayCache'],
         'authManager' => [
             'class' => 'yii\rbac\DbManager',
         ],
         'auditService' => [
-            'class'   => 'app\services\AuditService',
+            'class' => 'app\services\AuditService',
             'targets' => [new \app\services\audit\DatabaseAuditTarget()],
         ],
         'jobLaunchService' => [
@@ -64,11 +64,11 @@ return [
             'class' => 'app\services\InventoryService',
         ],
         'artifactService' => [
-            'class'       => 'app\services\ArtifactService',
+            'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/test-artifacts',
         ],
         'mailer' => [
-            'class'            => 'yii\swiftmailer\SwiftMailer',
+            'class' => 'yii\swiftmailer\SwiftMailer',
             'useFileTransport' => true,
         ],
     ],

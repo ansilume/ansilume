@@ -88,8 +88,11 @@ class CredentialKeyRotationTest extends TestCase
         $service->storeSecrets($cred1, $secrets);
         $service->storeSecrets($cred2, $secrets);
 
-        $this->assertNotSame($cred1->secret_data, $cred2->secret_data,
-            'Same plaintext must produce different ciphertexts due to random IVs.');
+        $this->assertNotSame(
+            $cred1->secret_data,
+            $cred2->secret_data,
+            'Same plaintext must produce different ciphertexts due to random IVs.'
+        );
     }
 
     // -------------------------------------------------------------------------

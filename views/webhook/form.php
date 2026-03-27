@@ -9,7 +9,7 @@ use app\models\Webhook;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
-$isNew       = $model->isNewRecord;
+$isNew = $model->isNewRecord;
 $this->title = $isNew ? 'New Webhook' : 'Edit: ' . Html::encode($model->name);
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">

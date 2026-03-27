@@ -17,10 +17,10 @@ class UserController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],             'allow' => true, 'roles' => ['user.view']],
-            ['actions' => ['create'],                    'allow' => true, 'roles' => ['user.create']],
-            ['actions' => ['update'],                    'allow' => true, 'roles' => ['user.update']],
-            ['actions' => ['delete', 'toggle-status'],   'allow' => true, 'roles' => ['user.delete']],
+            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['user.view']],
+            ['actions' => ['create'], 'allow' => true, 'roles' => ['user.create']],
+            ['actions' => ['update'], 'allow' => true, 'roles' => ['user.update']],
+            ['actions' => ['delete', 'toggle-status'], 'allow' => true, 'roles' => ['user.delete']],
         ];
     }
 
@@ -40,7 +40,7 @@ class UserController extends BaseController
 
     public function actionView(int $id): string
     {
-        $user  = $this->findModel($id);
+        $user = $this->findModel($id);
         /** @var \yii\rbac\ManagerInterface $auth */
         $auth = \Yii::$app->authManager;
         $roles = $auth->getRolesByUser($id);

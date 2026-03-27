@@ -56,7 +56,7 @@ class InventoryServiceTest extends TestCase
      */
     private function makeStubRunner(bool $available = true, ?array $runResult = null): AnsibleInventoryRunner
     {
-        return new class($available, $runResult) extends AnsibleInventoryRunner {
+        return new class ($available, $runResult) extends AnsibleInventoryRunner {
             public ?string $lastInventoryPath = null;
             public ?string $lastCwd = null;
 
@@ -96,7 +96,7 @@ class InventoryServiceTest extends TestCase
         $runner = $this->makeStubRunner($available, $runResult);
         $stubProjectPath = $projectPath;
 
-        $service = new class($stubProjectPath) extends InventoryService {
+        $service = new class ($stubProjectPath) extends InventoryService {
             public function __construct(
                 private readonly ?string $stubProjectPath,
             ) {
@@ -122,7 +122,7 @@ class InventoryServiceTest extends TestCase
     ): InventoryService {
         $runner = $this->makeStubRunner(true, $runResult);
 
-        $service = new class($projectPath) extends InventoryService {
+        $service = new class ($projectPath) extends InventoryService {
             public function __construct(
                 private readonly string $stubProjectPath,
             ) {
@@ -149,7 +149,7 @@ class InventoryServiceTest extends TestCase
 
     private function makeInventory(string $type = Inventory::TYPE_STATIC, ?string $content = null, ?string $sourcePath = null): Inventory
     {
-        $inv = new class() extends Inventory {
+        $inv = new class () extends Inventory {
             private ?Project $_stubProject = null;
 
             public function init(): void
@@ -182,7 +182,7 @@ class InventoryServiceTest extends TestCase
 
     private function makeProject(): Project
     {
-        $p = new class() extends Project {
+        $p = new class () extends Project {
             public function init(): void
             {
             }

@@ -25,15 +25,16 @@ class HealthControllerTest extends TestCase
         bool $redisOk = true,
         bool $migrationsOk = true,
     ): HealthController {
-        return new class('health', \Yii::$app, $runnerCounts, $scheduleCounts, $dbOk, $redisOk, $migrationsOk) extends HealthController {
-            public int    $capturedStatus = 0;
+        return new class ('health', \Yii::$app, $runnerCounts, $scheduleCounts, $dbOk, $redisOk, $migrationsOk) extends HealthController {
+            public int $capturedStatus = 0;
             private array $fakeRunnerCounts;
             private array $fakeScheduleCounts;
-            private bool  $fakeDbOk;
-            private bool  $fakeRedisOk;
-            private bool  $fakeMigrationsOk;
+            private bool $fakeDbOk;
+            private bool $fakeRedisOk;
+            private bool $fakeMigrationsOk;
 
-            public function __construct($id, $module, array $rc, array $sc, bool $dbOk, bool $redisOk, bool $migrationsOk) {
+            public function __construct($id, $module, array $rc, array $sc, bool $dbOk, bool $redisOk, bool $migrationsOk)
+            {
                 parent::__construct($id, $module);
                 $this->fakeRunnerCounts   = $rc;
                 $this->fakeScheduleCounts = $sc;
@@ -42,15 +43,39 @@ class HealthControllerTest extends TestCase
                 $this->fakeMigrationsOk   = $migrationsOk;
             }
 
-            protected function getRunnerCounts(): array { return $this->fakeRunnerCounts; }
-            protected function getScheduleCounts(): array { return $this->fakeScheduleCounts; }
-            protected function setHttpStatus(int $code): void { $this->capturedStatus = $code; }
-            protected function checkDatabase(): array { return $this->fakeDbOk ? ['ok' => true, 'latency_ms' => null] : ['ok' => false, 'error' => 'DB unreachable']; }
-            protected function checkRedis(): array { return $this->fakeRedisOk ? ['ok' => true] : ['ok' => false, 'error' => 'Redis unreachable']; }
-            protected function checkMigrations(): array { return $this->fakeMigrationsOk ? ['ok' => true, 'applied' => 36, 'expected' => 36] : ['ok' => false, 'error' => '3 pending migration(s)', 'applied' => 33, 'expected' => 36]; }
+            protected function getRunnerCounts(): array
+            {
+                return $this->fakeRunnerCounts;
+            }
+            protected function getScheduleCounts(): array
+            {
+                return $this->fakeScheduleCounts;
+            }
+            protected function setHttpStatus(int $code): void
+            {
+                $this->capturedStatus = $code;
+            }
+            protected function checkDatabase(): array
+            {
+                return $this->fakeDbOk ? ['ok' => true, 'latency_ms' => null] : ['ok' => false, 'error' => 'DB unreachable'];
+            }
+            protected function checkRedis(): array
+            {
+                return $this->fakeRedisOk ? ['ok' => true] : ['ok' => false, 'error' => 'Redis unreachable'];
+            }
+            protected function checkMigrations(): array
+            {
+                return $this->fakeMigrationsOk ? ['ok' => true, 'applied' => 36, 'expected' => 36] : ['ok' => false, 'error' => '3 pending migration(s)', 'applied' => 33, 'expected' => 36];
+            }
 
-            public function testCheckRunners(): array { return $this->checkRunners(); }
-            public function testCheckScheduler(): array { return $this->checkScheduler(); }
+            public function testCheckRunners(): array
+            {
+                return $this->checkRunners();
+            }
+            public function testCheckScheduler(): array
+            {
+                return $this->checkScheduler();
+            }
         };
     }
 

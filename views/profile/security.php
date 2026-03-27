@@ -26,20 +26,20 @@ $this->title = 'Security';
                         like Google Authenticator, Authy, or 1Password.
                     </p>
                 </div>
-                <?php if ($totpEnabled): ?>
+                <?php if ($totpEnabled) : ?>
                     <span class="badge text-bg-success">Enabled</span>
-                <?php else: ?>
+                <?php else : ?>
                     <span class="badge text-bg-secondary">Disabled</span>
                 <?php endif; ?>
             </div>
 
-            <?php if ($totpEnabled): ?>
+            <?php if ($totpEnabled) : ?>
                 <div class="alert alert-success mb-3" role="alert">
                     Two-factor authentication is <strong>active</strong> on your account.
                     You have <strong><?= Html::encode((string)$remainingCodes) ?></strong> recovery codes remaining.
                 </div>
 
-                <?php if ($remainingCodes <= 2): ?>
+                <?php if ($remainingCodes <= 2) : ?>
                     <div class="alert alert-warning mb-3" role="alert">
                         You are running low on recovery codes. Consider disabling and re-enabling 2FA to generate new ones.
                     </div>
@@ -48,7 +48,7 @@ $this->title = 'Security';
                 <?= Html::a('Disable Two-Factor Authentication', ['disable-totp'], [
                     'class' => 'btn btn-outline-danger',
                 ]) ?>
-            <?php else: ?>
+            <?php else : ?>
                 <?= Html::a('Enable Two-Factor Authentication', ['setup-totp'], [
                     'class' => 'btn btn-primary',
                 ]) ?>

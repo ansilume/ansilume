@@ -28,11 +28,11 @@ $this->title = 'Audit Entry #' . $entry->id;
                     <dd class="col-8"><code><?= Html::encode($entry->action) ?></code></dd>
                     <dt class="col-4">User</dt>
                     <dd class="col-8">
-                        <?php if ($entry->user): ?>
+                        <?php if ($entry->user) : ?>
                             <?= Html::a(Html::encode($entry->user->username), ['/user/view', 'id' => $entry->user_id]) ?>
-                        <?php elseif ($entry->user_id): ?>
+                        <?php elseif ($entry->user_id) : ?>
                             #<?= $entry->user_id ?> (deleted)
-                        <?php else: ?>
+                        <?php else : ?>
                             <span class="text-muted">system</span>
                         <?php endif; ?>
                     </dd>
@@ -53,17 +53,17 @@ $this->title = 'Audit Entry #' . $entry->id;
         </div>
     </div>
 
-    <?php if ($entry->metadata): ?>
+    <?php if ($entry->metadata) : ?>
     <div class="col-md-6">
         <div class="card">
             <div class="card-header">Context</div>
             <div class="card-body p-0">
                 <pre class="job-log m-0" style="max-height:300px;overflow-y:auto;"><?php
-                    $decoded = json_decode($entry->metadata, true);
+                $decoded = json_decode($entry->metadata, true);
                     echo Html::encode($decoded
                         ? json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
                         : $entry->metadata);
-                ?></pre>
+                                                                                    ?></pre>
             </div>
         </div>
     </div>

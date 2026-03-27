@@ -26,14 +26,14 @@ use yii\console\ExitCode;
  */
 class RunnerController extends Controller
 {
-    private const POLL_INTERVAL      = 5;   // seconds between claim attempts
-    private const HEARTBEAT_INTERVAL = 30;  // seconds between heartbeats
-    private const LOG_CHUNK_BYTES    = 8192;
+    private const POLL_INTERVAL = 5; // seconds between claim attempts
+    private const HEARTBEAT_INTERVAL = 30; // seconds between heartbeats
+    private const LOG_CHUNK_BYTES = 8192;
 
-    protected string $token         = '';
-    protected string $apiUrl        = '';
-    protected bool   $running       = true;
-    protected int    $lastHttpStatus = 0;
+    protected string $token = '';
+    protected string $apiUrl = '';
+    protected bool $running = true;
+    protected int $lastHttpStatus = 0;
 
     public function actionStart(): int
     {
@@ -60,7 +60,7 @@ class RunnerController extends Controller
         }
 
         $runnerName = $info['data']['runner_name'] ?? 'unknown';
-        $groupName  = $info['data']['group_name']  ?? 'unknown';
+        $groupName = $info['data']['group_name'] ?? 'unknown';
         $this->stdout("Runner '{$runnerName}' started. Group: '{$groupName}'. Polling {$this->apiUrl}\n");
 
         $this->registerSignalHandlers();
@@ -82,7 +82,7 @@ class RunnerController extends Controller
         $info = $this->apiPost('/api/runner/v1/heartbeat', []);
 
         if ($this->lastHttpStatus === 401) {
-            $name      = $_ENV['RUNNER_NAME'] ?? '';
+            $name = $_ENV['RUNNER_NAME'] ?? '';
             $cacheFile = $name !== '' ? $this->tokenCacheFile($name) : '';
             if ($cacheFile !== '' && file_exists($cacheFile)) {
                 $this->stdout("Cached token rejected (401) — clearing cache and re-registering...\n");
@@ -100,8 +100,12 @@ class RunnerController extends Controller
     protected function registerSignalHandlers(): void
     {
         if (function_exists('pcntl_signal')) {
-            pcntl_signal(SIGTERM, function (): void { $this->running = false; });
-            pcntl_signal(SIGINT,  function (): void { $this->running = false; });
+            pcntl_signal(SIGTERM, function (): void {
+                $this->running = false;
+            });
+            pcntl_signal(SIGINT, function (): void {
+                $this->running = false;
+            });
         }
     }
 
@@ -146,7 +150,7 @@ class RunnerController extends Controller
             return $explicit;
         }
 
-        $name            = $_ENV['RUNNER_NAME'] ?? '';
+        $name = $_ENV['RUNNER_NAME'] ?? '';
         $bootstrapSecret = $_ENV['RUNNER_BOOTSTRAP_SECRET'] ?? '';
 
         if ($name === '' || $bootstrapSecret === '') {
@@ -177,20 +181,20 @@ class RunnerController extends Controller
     {
         $this->stdout("No token found — registering as '{$name}' with the server...\n");
 
-        $url     = $this->apiUrl . '/api/runner/v1/register';
+        $url = $this->apiUrl . '/api/runner/v1/register';
         $payload = json_encode(['name' => $name, 'bootstrap_secret' => $bootstrapSecret]);
 
         $context = stream_context_create([
             'http' => [
-                'method'        => 'POST',
-                'header'        => implode("\r\n", [
+                'method' => 'POST',
+                'header' => implode("\r\n", [
                     'Content-Type: application/json',
                     'Accept: application/json',
                     'Content-Length: ' . strlen($payload),
                 ]),
-                'content'       => $payload,
+                'content' => $payload,
                 'ignore_errors' => true,
-                'timeout'       => 30,
+                'timeout' => 30,
             ],
         ]);
 
@@ -214,7 +218,7 @@ class RunnerController extends Controller
             return '';
         }
 
-        $token     = $response['data']['token'];
+        $token = $response['data']['token'];
         $cacheFile = $this->tokenCacheFile($name);
 
         \app\helpers\FileHelper::safeFilePutContents($cacheFile, $token);
@@ -258,14 +262,14 @@ class RunnerController extends Controller
         }
 
         [$pipes, $proc] = $process;
-        $timeoutMinutes  = (int)($payload['timeout_minutes'] ?? 120);
+        $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
 
         [$exitCode, $sequence] = $this->streamProcessOutput($jobId, $proc, $pipes, $timeoutMinutes);
 
         $this->collectAndSendTasks($jobId, $callbackFile);
 
         $this->apiPost("/api/runner/v1/jobs/{$jobId}/complete", [
-            'exit_code'   => $exitCode,
+            'exit_code' => $exitCode,
             'has_changes' => false,
         ]);
 
@@ -281,12 +285,12 @@ class RunnerController extends Controller
         $pluginDir = dirname(__DIR__) . '/ansible/callback_plugins';
 
         return array_merge(getenv() ?: [], [
-            'ANSIBLE_CALLBACK_PLUGINS'   => $pluginDir,
-            'ANSIBLE_CALLBACKS_ENABLED'  => 'ansilume_callback',
+            'ANSIBLE_CALLBACK_PLUGINS' => $pluginDir,
+            'ANSIBLE_CALLBACKS_ENABLED' => 'ansilume_callback',
             'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
-            'ANSILUME_CALLBACK_FILE'     => $callbackFile,
-            'ANSIBLE_FORCE_COLOR'        => '1',
-            'PYTHONUNBUFFERED'           => '1',
+            'ANSILUME_CALLBACK_FILE' => $callbackFile,
+            'ANSIBLE_FORCE_COLOR' => '1',
+            'PYTHONUNBUFFERED' => '1',
         ]);
     }
 
@@ -302,13 +306,13 @@ class RunnerController extends Controller
         ];
 
         $projectCwd = $payload['project_path'] ?? null;
-        $cwd        = ($projectCwd && is_dir($projectCwd)) ? $projectCwd : null;
-        $process    = proc_open($cmd, $descriptorspec, $pipes, $cwd, $env);
+        $cwd = ($projectCwd && is_dir($projectCwd)) ? $projectCwd : null;
+        $process = proc_open($cmd, $descriptorspec, $pipes, $cwd, $env);
 
         if (!is_resource($process)) {
             $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                'stream'   => 'stderr',
-                'content'  => "proc_open failed — cannot execute ansible-playbook\n",
+                'stream' => 'stderr',
+                'content' => "proc_open failed — cannot execute ansible-playbook\n",
                 'sequence' => 0,
             ]);
             $this->apiPost("/api/runner/v1/jobs/{$jobId}/complete", ['exit_code' => -1]);
@@ -344,9 +348,9 @@ class RunnerController extends Controller
                 break;
             }
 
-            $read    = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
-            $write   = null;
-            $except  = null;
+            $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+            $write = null;
+            $except = null;
             // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
             $changed = @stream_select($read, $write, $except, min($remaining, 5)); // @phpcs:ignore
 
@@ -359,8 +363,8 @@ class RunnerController extends Controller
                 if ($chunk !== false && $chunk !== '') {
                     $streamName = ($stream === $pipes[1]) ? 'stdout' : 'stderr';
                     $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                        'stream'   => $streamName,
-                        'content'  => $chunk,
+                        'stream' => $streamName,
+                        'content' => $chunk,
                         'sequence' => $sequence++,
                     ]);
                 }
@@ -374,8 +378,8 @@ class RunnerController extends Controller
 
         if ($timedOut) {
             $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                'stream'   => 'stderr',
-                'content'  => "\n[ansilume] Job killed: exceeded timeout of {$timeoutMinutes} minutes.\n",
+                'stream' => 'stderr',
+                'content' => "\n[ansilume] Job killed: exceeded timeout of {$timeoutMinutes} minutes.\n",
                 'sequence' => $sequence++,
             ]);
             $exitCode = -1;
@@ -490,21 +494,21 @@ class RunnerController extends Controller
      */
     protected function apiPost(string $path, array $body): ?array
     {
-        $url     = $this->apiUrl . $path;
+        $url = $this->apiUrl . $path;
         $payload = json_encode($body);
 
         $context = stream_context_create([
             'http' => [
-                'method'  => 'POST',
-                'header'  => implode("\r\n", [
+                'method' => 'POST',
+                'header' => implode("\r\n", [
                     'Content-Type: application/json',
                     'Authorization: Bearer ' . $this->token,
                     'Accept: application/json',
                     'Content-Length: ' . strlen($payload),
                 ]),
-                'content'         => $payload,
-                'ignore_errors'   => true,
-                'timeout'         => 30,
+                'content' => $payload,
+                'ignore_errors' => true,
+                'timeout' => 30,
             ],
             'ssl' => [
                 'verify_peer' => true,

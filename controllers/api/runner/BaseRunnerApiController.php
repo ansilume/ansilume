@@ -26,7 +26,7 @@ abstract class BaseRunnerApiController extends Controller
     {
         return [
             'contentNegotiator' => [
-                'class'   => ContentNegotiator::class,
+                'class' => ContentNegotiator::class,
                 'formats' => ['application/json' => Response::FORMAT_JSON],
             ],
         ];
@@ -48,7 +48,7 @@ abstract class BaseRunnerApiController extends Controller
             throw new UnauthorizedHttpException('Runner token required.');
         }
 
-        $raw    = substr($header, 7);
+        $raw = substr($header, 7);
         $runner = Runner::findByToken($raw);
 
         if ($runner === null) {

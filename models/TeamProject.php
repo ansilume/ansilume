@@ -18,7 +18,7 @@ use yii\db\ActiveRecord;
  */
 class TeamProject extends ActiveRecord
 {
-    public const ROLE_VIEWER   = 'viewer';
+    public const ROLE_VIEWER = 'viewer';
     public const ROLE_OPERATOR = 'operator';
 
     public static function tableName(): string

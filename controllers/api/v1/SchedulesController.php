@@ -20,7 +20,7 @@ class SchedulesController extends BaseApiController
 {
     public function actionIndex(): array
     {
-        $dp   = new ActiveDataProvider([
+        $dp = new ActiveDataProvider([
             'query' => Schedule::find()->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
@@ -54,16 +54,16 @@ class SchedulesController extends BaseApiController
     private function serialize(Schedule $s): array
     {
         return [
-            'id'              => $s->id,
-            'name'            => $s->name,
+            'id' => $s->id,
+            'name' => $s->name,
             'job_template_id' => $s->job_template_id,
             'cron_expression' => $s->cron_expression,
-            'timezone'        => $s->timezone,
-            'enabled'         => (bool)$s->enabled,
-            'last_run_at'     => $s->last_run_at,
-            'next_run_at'     => $s->next_run_at,
-            'created_at'      => $s->created_at,
-            'updated_at'      => $s->updated_at,
+            'timezone' => $s->timezone,
+            'enabled' => (bool)$s->enabled,
+            'last_run_at' => $s->last_run_at,
+            'next_run_at' => $s->next_run_at,
+            'created_at' => $s->created_at,
+            'updated_at' => $s->updated_at,
         ];
     }
 

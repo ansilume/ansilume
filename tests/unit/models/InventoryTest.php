@@ -16,16 +16,16 @@ class InventoryTest extends TestCase
 
     public function testTypeConstants(): void
     {
-        $this->assertSame('static',  Inventory::TYPE_STATIC);
+        $this->assertSame('static', Inventory::TYPE_STATIC);
         $this->assertSame('dynamic', Inventory::TYPE_DYNAMIC);
-        $this->assertSame('file',    Inventory::TYPE_FILE);
+        $this->assertSame('file', Inventory::TYPE_FILE);
     }
 
     public function testRulesRequireNameAndType(): void
     {
         $inv = new Inventory();
         $inv->validate();
-        $this->assertArrayHasKey('name',           $inv->errors);
+        $this->assertArrayHasKey('name', $inv->errors);
         $this->assertArrayHasKey('inventory_type', $inv->errors);
     }
 
@@ -77,7 +77,7 @@ class InventoryTest extends TestCase
         $inv->project_id     = null;
         $inv->validate(['source_path', 'project_id']);
         $this->assertArrayHasKey('source_path', $inv->errors);
-        $this->assertArrayHasKey('project_id',  $inv->errors);
+        $this->assertArrayHasKey('project_id', $inv->errors);
     }
 
     public function testSourcePathMaxLength512(): void

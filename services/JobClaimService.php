@@ -29,10 +29,10 @@ class JobClaimService extends Component
             $job = Job::find()
                 ->innerJoin('{{%job_template}}', '{{%job_template}}.id = {{%job}}.job_template_id')
                 ->where([
-                    '{{%job}}.status'                   => Job::STATUS_QUEUED,
+                    '{{%job}}.status' => Job::STATUS_QUEUED,
                     '{{%job_template}}.runner_group_id' => $group->id,
-                    '{{%job_template}}.deleted_at'      => null,
-                    '{{%job}}.runner_id'                => null,
+                    '{{%job_template}}.deleted_at' => null,
+                    '{{%job}}.runner_id' => null,
                 ])
                 ->orderBy(['{{%job}}.id' => SORT_ASC])
                 ->limit(1)
@@ -47,9 +47,9 @@ class JobClaimService extends Component
             $affected = $db->createCommand()->update(
                 '{{%job}}',
                 [
-                    'runner_id'  => $runner->id,
-                    'worker_id'  => $runner->name,
-                    'status'     => Job::STATUS_RUNNING,
+                    'runner_id' => $runner->id,
+                    'worker_id' => $runner->name,
+                    'status' => Job::STATUS_RUNNING,
                     'started_at' => time(),
                     'updated_at' => time(),
                 ],
@@ -91,22 +91,22 @@ class JobClaimService extends Component
         $inventory = $this->resolveInventory($raw);
 
         return [
-            'job_id'           => $job->id,
-            'project_path'     => $projectPath,
-            'playbook_path'    => $playbookPath,
-            'inventory_type'   => $inventory['type'],
-            'inventory_content'=> $inventory['content'],   // for static
-            'inventory_path'   => $inventory['path'],      // for file-based
-            'extra_vars'       => $raw['extra_vars'] ?? null,
-            'limit'            => $raw['limit'] ?? null,
-            'verbosity'        => (int)($raw['verbosity'] ?? 0),
-            'forks'            => (int)($raw['forks'] ?? 5),
-            'become'           => !empty($raw['become']),
-            'become_method'    => $raw['become_method'] ?? 'sudo',
-            'become_user'      => $raw['become_user'] ?? 'root',
-            'tags'             => $raw['tags'] ?? null,
-            'skip_tags'        => $raw['skip_tags'] ?? null,
-            'timeout_minutes'  => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
+            'job_id' => $job->id,
+            'project_path' => $projectPath,
+            'playbook_path' => $playbookPath,
+            'inventory_type' => $inventory['type'],
+            'inventory_content' => $inventory['content'], // for static
+            'inventory_path' => $inventory['path'], // for file-based
+            'extra_vars' => $raw['extra_vars'] ?? null,
+            'limit' => $raw['limit'] ?? null,
+            'verbosity' => (int)($raw['verbosity'] ?? 0),
+            'forks' => (int)($raw['forks'] ?? 5),
+            'become' => !empty($raw['become']),
+            'become_method' => $raw['become_method'] ?? 'sudo',
+            'become_user' => $raw['become_user'] ?? 'root',
+            'tags' => $raw['tags'] ?? null,
+            'skip_tags' => $raw['skip_tags'] ?? null,
+            'timeout_minutes' => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
         ];
     }
 

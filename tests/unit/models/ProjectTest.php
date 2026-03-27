@@ -18,10 +18,10 @@ class ProjectTest extends TestCase
 
     public function testStatusLabelKnownStatuses(): void
     {
-        $this->assertSame('New',     Project::statusLabel(Project::STATUS_NEW));
+        $this->assertSame('New', Project::statusLabel(Project::STATUS_NEW));
         $this->assertSame('Syncing', Project::statusLabel(Project::STATUS_SYNCING));
-        $this->assertSame('Synced',  Project::statusLabel(Project::STATUS_SYNCED));
-        $this->assertSame('Error',   Project::statusLabel(Project::STATUS_ERROR));
+        $this->assertSame('Synced', Project::statusLabel(Project::STATUS_SYNCED));
+        $this->assertSame('Error', Project::statusLabel(Project::STATUS_ERROR));
     }
 
     public function testStatusLabelUnknownReturnsRaw(): void
@@ -80,7 +80,7 @@ class ProjectTest extends TestCase
 
     public function testScmTypeConstants(): void
     {
-        $this->assertSame('git',    Project::SCM_TYPE_GIT);
+        $this->assertSame('git', Project::SCM_TYPE_GIT);
         $this->assertSame('manual', Project::SCM_TYPE_MANUAL);
     }
 

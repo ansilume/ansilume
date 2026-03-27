@@ -24,7 +24,7 @@ class ScheduleController extends Controller
     public function actionRun(): int
     {
         /** @var ScheduleService $service */
-        $service  = \Yii::$app->get('scheduleService');
+        $service = \Yii::$app->get('scheduleService');
         $launched = $service->runDue();
 
         if ($launched > 0) {

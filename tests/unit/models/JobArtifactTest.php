@@ -16,7 +16,7 @@ class JobArtifactTest extends TestCase
 
     public function testRulesReturnArray(): void
     {
-        $model = new class() extends JobArtifact {
+        $model = new class () extends JobArtifact {
             public function init(): void
             {
             }

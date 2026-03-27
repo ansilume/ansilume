@@ -37,7 +37,9 @@ class ProjectSyncTest extends TestCase
             return;
         }
         foreach (scandir($dir) ?: [] as $entry) {
-            if ($entry === '.' || $entry === '..') continue;
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
             $path = $dir . '/' . $entry;
             is_dir($path) ? $this->rmDir($path) : \app\helpers\FileHelper::safeUnlink($path);
         }
@@ -87,12 +89,12 @@ class ProjectSyncTest extends TestCase
     {
         $tmpDir = $this->tmpDir;
 
-        $svc = new class($tmpDir, $simulateExistingClone, $failGit) extends ProjectService {
-            public array  $cloneCalls = [];
-            public array  $pullCalls  = [];
+        $svc = new class ($tmpDir, $simulateExistingClone, $failGit) extends ProjectService {
+            public array $cloneCalls = [];
+            public array $pullCalls  = [];
             private string $tmpDir;
-            private bool   $simulateExistingClone;
-            private bool   $failGit;
+            private bool $simulateExistingClone;
+            private bool $failGit;
 
             public function __construct(string $tmpDir, bool $simulateExistingClone, bool $failGit)
             {

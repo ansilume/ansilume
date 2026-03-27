@@ -29,7 +29,7 @@ $this->title = 'Jobs';
                 <label class="form-label small mb-1">Status</label>
                 <select name="status" class="form-select form-select-sm">
                     <option value="">— Any —</option>
-                    <?php foreach ($statusOptions as $val => $label): ?>
+                    <?php foreach ($statusOptions as $val => $label) : ?>
                         <option value="<?= Html::encode($val) ?>" <?= $searchForm->status === $val ? 'selected' : '' ?>>
                             <?= Html::encode($label) ?>
                         </option>
@@ -40,7 +40,7 @@ $this->title = 'Jobs';
                 <label class="form-label small mb-1">Template</label>
                 <select name="template_id" class="form-select form-select-sm">
                     <option value="">— Any —</option>
-                    <?php foreach ($templates as $tpl): ?>
+                    <?php foreach ($templates as $tpl) : ?>
                         <option value="<?= $tpl->id ?>" <?= $searchForm->template_id == $tpl->id ? 'selected' : '' ?>>
                             <?= Html::encode($tpl->name) ?>
                         </option>
@@ -51,7 +51,7 @@ $this->title = 'Jobs';
                 <label class="form-label small mb-1">Launched by</label>
                 <select name="launched_by" class="form-select form-select-sm">
                     <option value="">— Any —</option>
-                    <?php foreach ($users as $u): ?>
+                    <?php foreach ($users as $u) : ?>
                         <option value="<?= $u->id ?>" <?= $searchForm->launched_by == $u->id ? 'selected' : '' ?>>
                             <?= Html::encode($u->username) ?>
                         </option>
@@ -62,7 +62,7 @@ $this->title = 'Jobs';
                 <label class="form-label small mb-1">Runner</label>
                 <select name="runner_group_id" class="form-select form-select-sm">
                     <option value="">— Any —</option>
-                    <?php foreach ($runnerGroups as $rg): ?>
+                    <?php foreach ($runnerGroups as $rg) : ?>
                         <option value="<?= $rg->id ?>" <?= $searchForm->runner_group_id == $rg->id ? 'selected' : '' ?>>
                             <?= Html::encode($rg->name) ?>
                         </option>
@@ -83,7 +83,7 @@ $this->title = 'Jobs';
                 <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
             </div>
         </div>
-        <?php if ($searchForm->status || $searchForm->template_id || $searchForm->launched_by || $searchForm->runner_group_id || $searchForm->date_from || $searchForm->date_to): ?>
+        <?php if ($searchForm->status || $searchForm->template_id || $searchForm->launched_by || $searchForm->runner_group_id || $searchForm->date_from || $searchForm->date_to) : ?>
             <div class="mt-1">
                 <?= Html::a('Clear filters', ['index'], ['class' => 'small text-muted']) ?>
             </div>
@@ -92,9 +92,9 @@ $this->title = 'Jobs';
 </form>
 
 <?php $models = $dataProvider->getModels(); ?>
-<?php if (empty($models)): ?>
+<?php if (empty($models)) : ?>
     <p class="text-muted">No jobs match the current filters.</p>
-<?php else: ?>
+<?php else : ?>
     <div class="table-responsive">
         <table class="table table-hover">
             <thead class="table-light">
@@ -105,7 +105,7 @@ $this->title = 'Jobs';
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($models as $job): ?>
+            <?php foreach ($models as $job) : ?>
                 <tr>
                     <td><?= Html::a('#' . $job->id, ['view', 'id' => $job->id]) ?></td>
                     <td>
@@ -117,7 +117,7 @@ $this->title = 'Jobs';
                     </td>
                     <td>
                         <?= Html::encode($job->jobTemplate->name ?? '—') ?>
-                        <?php if ($job->jobTemplate && $job->jobTemplate->isDeleted()): ?>
+                        <?php if ($job->jobTemplate && $job->jobTemplate->isDeleted()) : ?>
                             <span class="text-muted">(deleted)</span>
                         <?php endif; ?>
                     </td>
@@ -126,31 +126,31 @@ $this->title = 'Jobs';
                         <?= $recap['hosts'] > 0 ? $recap['hosts'] : '<span class="text-muted">—</span>' // xss-ok: integer or hardcoded HTML ?>
                     </td>
                     <td>
-                        <?php if ($recap['hosts'] > 0): ?>
+                        <?php if ($recap['hosts'] > 0) : ?>
                         <span class="d-flex gap-1 flex-wrap" style="font-size:.7rem; line-height:1.6;">
-                            <?php if ($recap['ok'] > 0): ?>
+                            <?php if ($recap['ok'] > 0) : ?>
                                 <span class="badge text-bg-success"><?= $recap['ok'] // xss-ok: integer ?> ok</span>
                             <?php endif; ?>
-                            <?php if ($recap['changed'] > 0): ?>
+                            <?php if ($recap['changed'] > 0) : ?>
                                 <span class="badge text-bg-warning"><?= $recap['changed'] // xss-ok: integer ?> changed</span>
                             <?php endif; ?>
-                            <?php if ($recap['failed'] > 0): ?>
+                            <?php if ($recap['failed'] > 0) : ?>
                                 <span class="badge text-bg-danger"><?= $recap['failed'] // xss-ok: integer ?> failed</span>
                             <?php endif; ?>
-                            <?php if ($recap['unreachable'] > 0): ?>
+                            <?php if ($recap['unreachable'] > 0) : ?>
                                 <span class="badge text-bg-dark"><?= $recap['unreachable'] // xss-ok: integer ?> unreach</span>
                             <?php endif; ?>
-                            <?php if ($recap['skipped'] > 0): ?>
+                            <?php if ($recap['skipped'] > 0) : ?>
                                 <span class="badge text-bg-secondary"><?= $recap['skipped'] // xss-ok: integer ?> skip</span>
                             <?php endif; ?>
                         </span>
-                        <?php else: ?>
+                        <?php else : ?>
                             <span class="text-muted">—</span>
                         <?php endif; ?>
                     </td>
                     <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                     <td><?= Html::encode($job->jobTemplate->runnerGroup->name ?? '—') ?></td>
-                    <td><?= $job->started_at  ? date('Y-m-d H:i', $job->started_at)  : '—' ?></td>
+                    <td><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
                     <td>
                         <?php
                         if ($job->started_at && $job->finished_at) {

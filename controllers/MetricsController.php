@@ -31,10 +31,10 @@ class MetricsController extends Controller
     public function actionIndex(?string $format = null): Response
     {
         $metrics = $this->collect();
-        $fmt     = $format ?? $this->getRequestedFormat();
+        $fmt = $format ?? $this->getRequestedFormat();
 
         return match ($fmt) {
-            'json'  => $this->formatJson($metrics),
+            'json' => $this->formatJson($metrics),
             default => $this->formatPrometheus($metrics),
         };
     }
@@ -53,25 +53,25 @@ class MetricsController extends Controller
     public function collect(): array
     {
         return [
-            'health'  => $this->collectHealth(),
-            'jobs'    => $this->collectJobs(),
-            'tasks'   => $this->collectTasks(),
-            'hosts'   => $this->collectHosts(),
-            'runners'   => $this->collectRunners(),
+            'health' => $this->collectHealth(),
+            'jobs' => $this->collectJobs(),
+            'tasks' => $this->collectTasks(),
+            'hosts' => $this->collectHosts(),
+            'runners' => $this->collectRunners(),
             'schedules' => $this->collectSchedules(),
-            'queue'     => $this->collectQueue(),
+            'queue' => $this->collectQueue(),
         ];
     }
 
     private function collectHealth(): array
     {
-        $db    = $this->probeDatabase();
+        $db = $this->probeDatabase();
         $redis = $this->probeRedis();
 
         return [
-            'database_up'  => $db['up'],
+            'database_up' => $db['up'],
             'database_latency_ms' => $db['latency_ms'],
-            'redis_up'     => $redis['up'],
+            'redis_up' => $redis['up'],
             'redis_latency_ms' => $redis['latency_ms'],
         ];
     }
@@ -131,8 +131,8 @@ class MetricsController extends Controller
                 ->average('finished_at - started_at');
 
             return [
-                'total'               => $total,
-                'by_status'           => $counts,
+                'total' => $total,
+                'by_status' => $counts,
                 'avg_duration_1h_sec' => $avgDuration !== null ? round((float)$avgDuration, 1) : null,
             ];
         } catch (\Throwable) {
@@ -149,7 +149,7 @@ class MetricsController extends Controller
             JobTask::STATUS_SKIPPED,
             JobTask::STATUS_UNREACHABLE,
         ];
-        $counts       = array_fill_keys($taskStatuses, 0);
+        $counts = array_fill_keys($taskStatuses, 0);
         $recentCounts = array_fill_keys($taskStatuses, 0);
 
         try {
@@ -169,9 +169,9 @@ class MetricsController extends Controller
             }
 
             return [
-                'total'     => $total,
+                'total' => $total,
                 'by_status' => $counts,
-                'last_1h'   => $recentCounts,
+                'last_1h' => $recentCounts,
             ];
         } catch (\Throwable) {
             return ['total' => 0, 'by_status' => $counts, 'last_1h' => $recentCounts];
@@ -183,12 +183,12 @@ class MetricsController extends Controller
         try {
             // Aggregate all-time host summary totals
             $totals = [
-                'ok'          => (int)JobHostSummary::find()->sum('ok'),
-                'changed'     => (int)JobHostSummary::find()->sum('changed'),
-                'failed'      => (int)JobHostSummary::find()->sum('failed'),
-                'skipped'     => (int)JobHostSummary::find()->sum('skipped'),
+                'ok' => (int)JobHostSummary::find()->sum('ok'),
+                'changed' => (int)JobHostSummary::find()->sum('changed'),
+                'failed' => (int)JobHostSummary::find()->sum('failed'),
+                'skipped' => (int)JobHostSummary::find()->sum('skipped'),
                 'unreachable' => (int)JobHostSummary::find()->sum('unreachable'),
-                'rescued'     => (int)JobHostSummary::find()->sum('rescued'),
+                'rescued' => (int)JobHostSummary::find()->sum('rescued'),
             ];
 
             // Unique hosts seen
@@ -217,19 +217,19 @@ class MetricsController extends Controller
                 ->count();
 
             return [
-                'totals'              => $totals,
-                'unique_hosts'        => $uniqueHosts,
-                'hosts_with_changes'  => $hostsWithChanges,
+                'totals' => $totals,
+                'unique_hosts' => $uniqueHosts,
+                'hosts_with_changes' => $hostsWithChanges,
                 'hosts_with_failures' => $hostsWithFailures,
-                'jobs_with_changes'   => $jobsWithChanges,
+                'jobs_with_changes' => $jobsWithChanges,
             ];
         } catch (\Throwable) {
             return [
-                'totals'              => ['ok' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0, 'unreachable' => 0, 'rescued' => 0],
-                'unique_hosts'        => 0,
-                'hosts_with_changes'  => 0,
+                'totals' => ['ok' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0, 'unreachable' => 0, 'rescued' => 0],
+                'unique_hosts' => 0,
+                'hosts_with_changes' => 0,
                 'hosts_with_failures' => 0,
-                'jobs_with_changes'   => 0,
+                'jobs_with_changes' => 0,
             ];
         }
     }
@@ -238,12 +238,12 @@ class MetricsController extends Controller
     {
         try {
             $cutoff = time() - RunnerGroup::STALE_AFTER;
-            $total  = (int)Runner::find()->count();
+            $total = (int)Runner::find()->count();
             $online = (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count();
 
             return [
-                'total'   => $total,
-                'online'  => $online,
+                'total' => $total,
+                'online' => $online,
                 'offline' => $total - $online,
             ];
         } catch (\Throwable) {
@@ -254,7 +254,7 @@ class MetricsController extends Controller
     private function collectSchedules(): array
     {
         try {
-            $total   = (int)Schedule::find()->count();
+            $total = (int)Schedule::find()->count();
             $enabled = (int)Schedule::find()->where(['enabled' => 1])->count();
             $overdue = (int)Schedule::find()
                 ->where(['enabled' => 1])
@@ -263,7 +263,7 @@ class MetricsController extends Controller
                 ->count();
 
             return [
-                'total'   => $total,
+                'total' => $total,
                 'enabled' => $enabled,
                 'overdue' => $overdue,
             ];

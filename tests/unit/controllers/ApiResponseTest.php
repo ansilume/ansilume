@@ -17,11 +17,14 @@ class ApiResponseTest extends TestCase
 {
     private function makeController(): BaseApiController
     {
-        return new class('api-test', \Yii::$app) extends BaseApiController {
+        return new class ('api-test', \Yii::$app) extends BaseApiController {
             public int $capturedStatus = 200;
 
             // Skip auth for unit tests
-            public function beforeAction($action): bool { return true; }
+            public function beforeAction($action): bool
+            {
+                return true;
+            }
 
             public function testSuccess(mixed $data, int $status = 200): array
             {

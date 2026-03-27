@@ -49,7 +49,7 @@ class ApiToken extends ActiveRecord
      */
     public static function findByRawToken(string $raw): ?self
     {
-        $hash  = hash('sha256', $raw);
+        $hash = hash('sha256', $raw);
         $token = static::findOne(['token_hash' => $hash]);
         if ($token === null || $token->isExpired()) {
             return null;
@@ -63,12 +63,12 @@ class ApiToken extends ActiveRecord
      */
     public static function generate(int $userId, string $name, ?int $expiresAt = null): array
     {
-        $raw  = bin2hex(random_bytes(32)); // 64-char hex = 256 bits of entropy
+        $raw = bin2hex(random_bytes(32)); // 64-char hex = 256 bits of entropy
         $hash = hash('sha256', $raw);
 
-        $token             = new self();
-        $token->user_id    = $userId;
-        $token->name       = $name;
+        $token = new self();
+        $token->user_id = $userId;
+        $token->name = $name;
         $token->token_hash = $hash;
         $token->expires_at = $expiresAt;
         $token->created_at = time();

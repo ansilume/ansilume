@@ -21,9 +21,9 @@ $this->title = 'Teams';
 </p>
 
 <?php $models = $dataProvider->getModels(); ?>
-<?php if (empty($models)): ?>
+<?php if (empty($models)) : ?>
     <p class="text-muted">No teams yet.</p>
-<?php else: ?>
+<?php else : ?>
     <div class="table-responsive">
         <table class="table table-hover">
             <thead class="table-light">
@@ -32,7 +32,7 @@ $this->title = 'Teams';
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($models as $team): ?>
+            <?php foreach ($models as $team) : ?>
                 <tr>
                     <td><?= $team->id ?></td>
                     <td><?= Html::a(Html::encode($team->name), ['view', 'id' => $team->id]) ?></td>

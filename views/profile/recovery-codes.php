@@ -23,8 +23,8 @@ $this->title = 'Recovery Codes';
         <div class="card-body">
             <h5 class="card-title mb-3">Recovery Codes</h5>
             <div class="row">
-                <?php foreach ($recoveryCodes as $i => $code): ?>
-                    <?php if ($i > 0 && $i % 5 === 0): ?>
+                <?php foreach ($recoveryCodes as $i => $code) : ?>
+                    <?php if ($i > 0 && $i % 5 === 0) : ?>
                         </div><div class="row">
                     <?php endif; ?>
                     <div class="col-6 mb-2">

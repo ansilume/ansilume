@@ -22,12 +22,12 @@ $this->title = 'Two-Factor Authentication';
                 <?php $form = ActiveForm::begin(['id' => 'totp-verify-form']); ?>
 
                     <?= $form->field($model, 'code')->textInput([
-                        'autofocus'    => true,
+                        'autofocus' => true,
                         'autocomplete' => 'one-time-code',
-                        'maxlength'    => 12,
-                        'class'        => 'form-control font-monospace',
-                        'placeholder'  => '000000',
-                        'style'        => 'font-size:1.25rem; letter-spacing:0.15em; text-align:center;',
+                        'maxlength' => 12,
+                        'class' => 'form-control font-monospace',
+                        'placeholder' => '000000',
+                        'style' => 'font-size:1.25rem; letter-spacing:0.15em; text-align:center;',
                     ])->label('Authentication Code') ?>
 
                     <div class="d-grid mt-3">

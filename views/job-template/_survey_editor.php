@@ -16,7 +16,7 @@ use yii\helpers\Html;
 use yii\helpers\Json;
 
 $existing = $model->getSurveyFields();
-$types    = SurveyField::types();
+$types = SurveyField::types();
 ?>
 <div id="survey-editor">
     <div id="survey-rows">
@@ -43,7 +43,7 @@ $types    = SurveyField::types();
             <div class="col-md-2">
                 <label class="form-label small">Type</label>
                 <select class="form-select form-select-sm sf-type">
-                    <?php foreach ($types as $val => $label): ?>
+                    <?php foreach ($types as $val => $label) : ?>
                         <option value="<?= Html::encode($val) ?>"><?= Html::encode($label) ?></option>
                     <?php endforeach; ?>
                 </select>

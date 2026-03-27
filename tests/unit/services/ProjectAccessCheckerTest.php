@@ -158,13 +158,13 @@ class ProjectAccessCheckerTest extends TestCase
     // -------------------------------------------------------------------------
 
     private function makeChecker(
-        bool  $isSuperadmin,
-        bool  $isAdmin,
+        bool $isSuperadmin,
+        bool $isAdmin,
         array $teamRows,
-        bool  $hasAnyTeamAccess,
-        bool  $hasRbacProjectView = false,
+        bool $hasAnyTeamAccess,
+        bool $hasRbacProjectView = false,
     ): ProjectAccessChecker {
-        return new class(
+        return new class (
             $isSuperadmin,
             $isAdmin,
             $teamRows,
@@ -172,11 +172,11 @@ class ProjectAccessCheckerTest extends TestCase
             $hasRbacProjectView
         ) extends ProjectAccessChecker {
             public function __construct(
-                private bool  $isSuperadminFlag,
-                private bool  $isAdminFlag,
+                private bool $isSuperadminFlag,
+                private bool $isAdminFlag,
                 private array $teamRowsData,
-                private bool  $hasAnyTeamAccessFlag,
-                private bool  $hasRbacFlag,
+                private bool $hasAnyTeamAccessFlag,
+                private bool $hasRbacFlag,
             ) {
                 // Skip parent constructor (Yii Component)
             }

@@ -21,10 +21,10 @@ use yii\db\ActiveRecord;
  */
 class Credential extends ActiveRecord
 {
-    public const TYPE_SSH_KEY           = 'ssh_key';
+    public const TYPE_SSH_KEY = 'ssh_key';
     public const TYPE_USERNAME_PASSWORD = 'username_password';
-    public const TYPE_VAULT             = 'vault';
-    public const TYPE_TOKEN             = 'token';
+    public const TYPE_VAULT = 'vault';
+    public const TYPE_TOKEN = 'token';
 
     public static function tableName(): string
     {
@@ -61,11 +61,11 @@ class Credential extends ActiveRecord
     public static function typeLabel(string $type): string
     {
         return match ($type) {
-            self::TYPE_SSH_KEY           => 'SSH Key',
+            self::TYPE_SSH_KEY => 'SSH Key',
             self::TYPE_USERNAME_PASSWORD => 'Username / Password',
-            self::TYPE_VAULT             => 'Vault Secret',
-            self::TYPE_TOKEN             => 'Token',
-            default                      => $type,
+            self::TYPE_VAULT => 'Vault Secret',
+            self::TYPE_TOKEN => 'Token',
+            default => $type,
         };
     }
 

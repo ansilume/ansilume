@@ -29,7 +29,7 @@ $this->title = 'Audit Log';
     <div class="col-md-3">
         <select name="user_id" class="form-select form-select-sm">
             <option value="">— Any user —</option>
-            <?php foreach ($users as $u): ?>
+            <?php foreach ($users as $u) : ?>
                 <option value="<?= $u->id ?>" <?= $filterUser == $u->id ? 'selected' : '' ?>><?= Html::encode($u->username) ?></option>
             <?php endforeach; ?>
         </select>
@@ -53,24 +53,26 @@ $this->title = 'Audit Log';
             <tr><th>ID</th><th>When</th><th>User</th><th>Action</th><th>Object</th><th>IP</th></tr>
         </thead>
         <tbody>
-        <?php foreach ($dataProvider->getModels() as $entry): ?>
+        <?php foreach ($dataProvider->getModels() as $entry) : ?>
             <tr>
                 <td><?= Html::a($entry->id, ['view', 'id' => $entry->id]) ?></td>
                 <td><?= date('Y-m-d H:i:s', $entry->created_at) ?></td>
                 <td><?= Html::encode($entry->user->username ?? ($entry->user_id ? "#{$entry->user_id}" : 'system')) ?></td>
                 <td><?= Html::encode($entry->action) ?></td>
                 <td>
-                    <?php if ($entry->object_type): ?>
+                    <?php if ($entry->object_type) : ?>
                         <span class="text-muted"><?= Html::encode($entry->object_type) ?></span>
-                        <?php if ($entry->object_id): ?>#<?= $entry->object_id ?><?php endif; ?>
-                    <?php else: ?>
+                        <?php if ($entry->object_id) :
+                            ?>#<?= $entry->object_id ?><?php
+                        endif; ?>
+                    <?php else : ?>
                         —
                     <?php endif; ?>
                 </td>
                 <td><?= Html::encode($entry->ip_address ?? '—') ?></td>
             </tr>
         <?php endforeach; ?>
-        <?php if (empty($dataProvider->getModels())): ?>
+        <?php if (empty($dataProvider->getModels())) : ?>
             <tr><td colspan="6" class="text-muted text-center py-3">No entries found.</td></tr>
         <?php endif; ?>
         </tbody>

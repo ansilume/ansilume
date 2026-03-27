@@ -20,14 +20,14 @@ $this->title = 'Set New Password';
                 <?php $form = ActiveForm::begin(['id' => 'reset-password-form']); ?>
 
                     <?= $form->field($model, 'password')->passwordInput([
-                        'autofocus'    => true,
+                        'autofocus' => true,
                         'autocomplete' => 'new-password',
-                        'class'        => 'form-control',
+                        'class' => 'form-control',
                     ]) ?>
 
                     <?= $form->field($model, 'password_confirm')->passwordInput([
                         'autocomplete' => 'new-password',
-                        'class'        => 'form-control',
+                        'class' => 'form-control',
                     ]) ?>
 
                     <div class="d-grid mt-3">

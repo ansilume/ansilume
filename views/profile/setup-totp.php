@@ -46,19 +46,19 @@ $this->title = 'Set Up Two-Factor Authentication';
             </p>
 
             <?php $form = ActiveForm::begin([
-                'id'     => 'totp-setup-form',
+                'id' => 'totp-setup-form',
                 'action' => ['enable-totp'],
             ]); ?>
 
                 <?= $form->field($model, 'code')->textInput([
-                    'autofocus'    => true,
+                    'autofocus' => true,
                     'autocomplete' => 'one-time-code',
-                    'inputmode'    => 'numeric',
-                    'pattern'      => '[0-9]{6}',
-                    'maxlength'    => 6,
-                    'class'        => 'form-control font-monospace',
-                    'placeholder'  => '000000',
-                    'style'        => 'max-width:200px; font-size:1.25rem; letter-spacing:0.2em;',
+                    'inputmode' => 'numeric',
+                    'pattern' => '[0-9]{6}',
+                    'maxlength' => 6,
+                    'class' => 'form-control font-monospace',
+                    'placeholder' => '000000',
+                    'style' => 'max-width:200px; font-size:1.25rem; letter-spacing:0.2em;',
                 ]) ?>
 
                 <div class="mt-3">

@@ -60,10 +60,10 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     private function transitionToRunning(Job $job): void
     {
-        $job->status     = Job::STATUS_RUNNING;
+        $job->status = Job::STATUS_RUNNING;
         $job->started_at = time();
-        $job->pid        = null;
-        $job->worker_id  = gethostname() . ':' . getmypid();
+        $job->pid = null;
+        $job->worker_id = gethostname() . ':' . getmypid();
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(
@@ -79,9 +79,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     private function transitionToFinished(Job $job, int $exitCode): void
     {
-        $job->exit_code   = $exitCode;
+        $job->exit_code = $exitCode;
         $job->finished_at = time();
-        $job->status      = $exitCode === 0 ? Job::STATUS_SUCCEEDED : Job::STATUS_FAILED;
+        $job->status = $exitCode === 0 ? Job::STATUS_SUCCEEDED : Job::STATUS_FAILED;
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(
@@ -93,7 +93,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         );
 
         /** @var WebhookService $ws */
-        $ws    = \Yii::$app->get('webhookService');
+        $ws = \Yii::$app->get('webhookService');
         $event = $job->status === Job::STATUS_SUCCEEDED
             ? Webhook::EVENT_JOB_SUCCESS
             : Webhook::EVENT_JOB_FAILURE;
@@ -115,9 +115,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     private function transitionToTimedOut(Job $job): void
     {
-        $job->exit_code   = -1;
+        $job->exit_code = -1;
         $job->finished_at = time();
-        $job->status      = Job::STATUS_TIMED_OUT;
+        $job->status = Job::STATUS_TIMED_OUT;
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(
@@ -143,8 +143,8 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      */
     private function runPlaybook(Job $job): int
     {
-        $payload      = json_decode($job->runner_payload ?? '{}', true);
-        $cmd          = $this->buildCommand($job, $payload);
+        $payload = json_decode($job->runner_payload ?? '{}', true);
+        $cmd = $this->buildCommand($job, $payload);
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $job->id . '_' . uniqid('', true) . '.ndjson';
 
         \Yii::info("RunAnsibleJob: starting job #{$job->id}: " . implode(' ', $cmd), __CLASS__);
@@ -152,12 +152,12 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         $artifactDir = sys_get_temp_dir() . '/ansilume_artifacts_' . $job->id . '_' . uniqid('', true);
         mkdir($artifactDir, 0750, true);
 
-        $env     = $this->buildProcessEnv($callbackFile, $artifactDir);
+        $env = $this->buildProcessEnv($callbackFile, $artifactDir);
         $process = $this->startProcess($cmd, $payload, $env);
-        $pipes   = $process['pipes'];
+        $pipes = $process['pipes'];
 
         $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
-        $timedOut       = $this->streamProcessOutput($job, $pipes, $timeoutMinutes, $process['resource']);
+        $timedOut = $this->streamProcessOutput($job, $pipes, $timeoutMinutes, $process['resource']);
 
         fclose($pipes[1]);
         fclose($pipes[2]);
@@ -182,13 +182,13 @@ class RunAnsibleJob extends BaseObject implements JobInterface
     protected function buildProcessEnv(string $callbackFile, string $artifactDir): array
     {
         return array_merge(getenv() ?: [], [
-            'ANSIBLE_CALLBACK_PLUGINS'  => dirname(__DIR__) . '/ansible/callback_plugins',
+            'ANSIBLE_CALLBACK_PLUGINS' => dirname(__DIR__) . '/ansible/callback_plugins',
             'ANSIBLE_CALLBACKS_ENABLED' => 'ansilume_callback',
             'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
-            'ANSILUME_CALLBACK_FILE'    => $callbackFile,
-            'ANSILUME_ARTIFACT_DIR'     => $artifactDir,
-            'ANSIBLE_FORCE_COLOR'       => '1',
-            'PYTHONUNBUFFERED'          => '1',
+            'ANSILUME_CALLBACK_FILE' => $callbackFile,
+            'ANSILUME_ARTIFACT_DIR' => $artifactDir,
+            'ANSIBLE_FORCE_COLOR' => '1',
+            'PYTHONUNBUFFERED' => '1',
         ]);
     }
 
@@ -206,7 +206,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         ];
 
         $projectCwd = $this->resolveProjectPath($payload);
-        $process    = proc_open($cmd, $descriptorspec, $pipes, is_dir($projectCwd) ? $projectCwd : null, $env);
+        $process = proc_open($cmd, $descriptorspec, $pipes, is_dir($projectCwd) ? $projectCwd : null, $env);
 
         if (!is_resource($process)) {
             throw new \RuntimeException('proc_open failed');
@@ -237,9 +237,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
                 return true;
             }
 
-            $read    = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
-            $write   = null;
-            $except  = null;
+            $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+            $write = null;
+            $except = null;
             $changed = stream_select($read, $write, $except, min($remaining, 5));
 
             if ($changed === false || $changed === 0) {
@@ -269,7 +269,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         }
 
         try {
-            $lines      = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $lines = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
             $hasChanges = $this->persistTaskLines($job, $lines ?: []);
         } finally {
             \app\helpers\FileHelper::safeUnlink($callbackFile);
@@ -295,16 +295,16 @@ class RunAnsibleJob extends BaseObject implements JobInterface
                 continue;
             }
 
-            $task              = new JobTask();
-            $task->job_id      = $job->id;
-            $task->sequence    = (int)($data['seq'] ?? 0);
-            $task->task_name   = (string)($data['name'] ?? '');
+            $task = new JobTask();
+            $task->job_id = $job->id;
+            $task->sequence = (int)($data['seq'] ?? 0);
+            $task->task_name = (string)($data['name'] ?? '');
             $task->task_action = (string)($data['action'] ?? '');
-            $task->host        = (string)($data['host'] ?? '');
-            $task->status      = (string)($data['status'] ?? 'ok');
-            $task->changed     = (int)(bool)($data['changed'] ?? false);
+            $task->host = (string)($data['host'] ?? '');
+            $task->status = (string)($data['status'] ?? 'ok');
+            $task->changed = (int)(bool)($data['changed'] ?? false);
             $task->duration_ms = (int)($data['duration_ms'] ?? 0);
-            $task->created_at  = time();
+            $task->created_at = time();
             $task->save(false);
 
             if ($task->changed) {
@@ -402,7 +402,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      */
     protected function wrapInDocker(array $ansibleCmd, array $payload): array
     {
-        $image       = $_ENV['RUNNER_DOCKER_IMAGE'] ?? 'cytopia/ansible:latest';
+        $image = $_ENV['RUNNER_DOCKER_IMAGE'] ?? 'cytopia/ansible:latest';
         $projectPath = $this->resolveProjectPath($payload);
 
         $dockerCmd = [
@@ -546,10 +546,10 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     private function appendLog(Job $job, string $stream, string $content, int $sequence = 0): void
     {
-        $log           = new JobLog();
-        $log->job_id   = $job->id;
-        $log->stream   = $stream;
-        $log->content  = $content;
+        $log = new JobLog();
+        $log->job_id = $job->id;
+        $log->stream = $stream;
+        $log->content = $content;
         $log->sequence = $sequence;
         $log->created_at = time();
         if (!$log->save()) {

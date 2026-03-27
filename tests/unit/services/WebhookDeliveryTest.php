@@ -73,7 +73,7 @@ class WebhookDeliveryTest extends TestCase
      */
     private function makeService(bool $failDelivery = false): WebhookService
     {
-        return new class($failDelivery) extends WebhookService {
+        return new class ($failDelivery) extends WebhookService {
             public array $deliveries = [];
             private bool $failDelivery;
 
@@ -191,7 +191,9 @@ class WebhookDeliveryTest extends TestCase
             public function dispatch(string $event, Job $job): void
             {
                 foreach ($this->webhooksOverride as $wh) {
-                    if (!$wh->listensTo($event)) continue;
+                    if (!$wh->listensTo($event)) {
+                        continue;
+                    }
                     try {
                         $this->deliver($wh, $event, $job);
                     } catch (\Throwable $e) {

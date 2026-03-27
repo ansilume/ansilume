@@ -8,9 +8,9 @@ declare(strict_types=1);
 use app\components\SurveyField;
 use yii\helpers\Html;
 
-$this->title   = 'Launch: ' . $template->name;
-$surveyFields  = $template->getSurveyFields();
-$hasSurvey     = !empty($surveyFields);
+$this->title = 'Launch: ' . $template->name;
+$surveyFields = $template->getSurveyFields();
+$hasSurvey = !empty($surveyFields);
 ?>
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
@@ -27,7 +27,7 @@ $hasSurvey     = !empty($surveyFields);
     <div class="card-header">Template Summary</div>
     <div class="card-body">
         <dl class="row mb-0 small">
-            <dt class="col-4">Project</dt>    <dd class="col-8"><?= Html::encode($template->project->name   ?? '—') ?></dd>
+            <dt class="col-4">Project</dt>    <dd class="col-8"><?= Html::encode($template->project->name ?? '—') ?></dd>
             <dt class="col-4">Playbook</dt>   <dd class="col-8"><code><?= Html::encode($template->playbook) ?></code></dd>
             <dt class="col-4">Inventory</dt>  <dd class="col-8"><?= Html::encode($template->inventory->name ?? '—') ?></dd>
             <dt class="col-4">Credential</dt> <dd class="col-8"><?= Html::encode($template->credential->name ?? 'None') ?></dd>
@@ -36,30 +36,32 @@ $hasSurvey     = !empty($surveyFields);
 </div>
 
 <?php $form = \yii\widgets\ActiveForm::begin([
-    'id'     => 'launch-form',
+    'id' => 'launch-form',
     'action' => ['launch', 'id' => $template->id],
     'method' => 'post',
 ]); ?>
 
-<?php if ($hasSurvey): ?>
+<?php if ($hasSurvey) : ?>
 <div class="card mb-3">
     <div class="card-header">Survey</div>
     <div class="card-body">
-        <?php foreach ($surveyFields as $field): ?>
+        <?php foreach ($surveyFields as $field) : ?>
         <div class="mb-3">
             <label class="form-label">
                 <?= Html::encode($field->label) ?>
-                <?php if ($field->required): ?><span class="text-danger">*</span><?php endif; ?>
+                <?php if ($field->required) :
+                    ?><span class="text-danger">*</span><?php
+                endif; ?>
             </label>
             <?php $inputName = 'survey[' . $field->name . ']'; ?>
-            <?php $inputId   = 'survey-' . preg_replace('/[^a-z0-9_-]/i', '-', $field->name); ?>
+            <?php $inputId = 'survey-' . preg_replace('/[^a-z0-9_-]/i', '-', $field->name); ?>
 
-            <?php if ($field->type === SurveyField::TYPE_TEXTAREA): ?>
+            <?php if ($field->type === SurveyField::TYPE_TEXTAREA) : ?>
                 <textarea name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                           class="form-control font-monospace" rows="4"
                           <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>><?= Html::encode($field->default) ?></textarea>
 
-            <?php elseif ($field->type === SurveyField::TYPE_BOOLEAN): ?>
+            <?php elseif ($field->type === SurveyField::TYPE_BOOLEAN) : ?>
                 <div class="form-check">
                     <input type="hidden" name="<?= Html::encode($inputName) ?>" value="false">
                     <input type="checkbox" name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
@@ -68,13 +70,13 @@ $hasSurvey     = !empty($surveyFields);
                     <label class="form-check-label" for="<?= Html::encode($inputId) ?>">Yes</label>
                 </div>
 
-            <?php elseif ($field->type === SurveyField::TYPE_SELECT): ?>
+            <?php elseif ($field->type === SurveyField::TYPE_SELECT) : ?>
                 <select name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                         class="form-select" <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>>
-                    <?php if (!$field->required): ?>
+                    <?php if (!$field->required) : ?>
                         <option value="">— Select —</option>
                     <?php endif; ?>
-                    <?php foreach ($field->options as $opt): ?>
+                    <?php foreach ($field->options as $opt) : ?>
                         <option value="<?= Html::encode($opt) ?>"
                                 <?= $field->default === $opt ? 'selected' : '' // xss-ok: hardcoded attribute ?>>
                             <?= Html::encode($opt) ?>
@@ -82,19 +84,19 @@ $hasSurvey     = !empty($surveyFields);
                     <?php endforeach; ?>
                 </select>
 
-            <?php elseif ($field->type === SurveyField::TYPE_PASSWORD): ?>
+            <?php elseif ($field->type === SurveyField::TYPE_PASSWORD) : ?>
                 <input type="password" name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                        class="form-control" autocomplete="off"
                        <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>>
 
-            <?php else: /* text | integer */ ?>
+            <?php else : /* text | integer */ ?>
                 <input type="<?= $field->type === SurveyField::TYPE_INTEGER ? 'number' : 'text' // xss-ok: hardcoded strings ?>"
                        name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                        class="form-control" value="<?= Html::encode($field->default) ?>"
                        <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>>
             <?php endif; ?>
 
-            <?php if ($field->hint): ?>
+            <?php if ($field->hint) : ?>
                 <div class="form-text"><?= Html::encode($field->hint) ?></div>
             <?php endif; ?>
         </div>
@@ -126,7 +128,7 @@ $hasSurvey     = !empty($surveyFields);
             <div class="mb-3">
                 <label class="form-label">Verbosity</label>
                 <select name="overrides[verbosity]" class="form-select" style="max-width:200px">
-                    <?php foreach ([0 => 'Default', 1 => '-v', 2 => '-vv', 3 => '-vvv', 4 => '-vvvv', 5 => '-vvvvv'] as $v => $label): ?>
+                    <?php foreach ([0 => 'Default', 1 => '-v', 2 => '-vv', 3 => '-vvv', 4 => '-vvvv', 5 => '-vvvvv'] as $v => $label) : ?>
                         <option value="<?= $v ?>" <?= $v == $template->verbosity ? 'selected' : '' ?>><?= $label ?></option>
                     <?php endforeach; ?>
                 </select>

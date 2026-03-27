@@ -28,7 +28,7 @@ class AuditLogController extends BaseController
             ->orderBy(['id' => SORT_DESC]);
 
         $filterAction = $request->get('action');
-        $filterUser   = $request->get('user_id');
+        $filterUser = $request->get('user_id');
         $filterObject = $request->get('object_type');
 
         if ($filterAction) {
@@ -42,18 +42,18 @@ class AuditLogController extends BaseController
         }
 
         $dataProvider = new ActiveDataProvider([
-            'query'      => $query,
+            'query' => $query,
             'pagination' => ['pageSize' => 50],
         ]);
 
         $users = User::find()->orderBy('username')->all();
 
         return $this->render('index', [
-            'dataProvider'  => $dataProvider,
-            'filterAction'  => $filterAction,
-            'filterUser'    => $filterUser,
-            'filterObject'  => $filterObject,
-            'users'         => $users,
+            'dataProvider' => $dataProvider,
+            'filterAction' => $filterAction,
+            'filterUser' => $filterUser,
+            'filterObject' => $filterObject,
+            'users' => $users,
         ]);
     }
 

@@ -104,9 +104,9 @@ class UserFormIntegrationTest extends DbTestCase
     {
         $options = UserForm::roleOptions();
 
-        $this->assertArrayHasKey('viewer',   $options);
+        $this->assertArrayHasKey('viewer', $options);
         $this->assertArrayHasKey('operator', $options);
-        $this->assertArrayHasKey('admin',    $options);
+        $this->assertArrayHasKey('admin', $options);
     }
 
     public function testGetUserReturnsNullBeforeSave(): void

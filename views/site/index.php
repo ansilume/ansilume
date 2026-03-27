@@ -91,15 +91,15 @@ $this->title = 'Dashboard';
         <div class="card">
             <div class="card-header">Quick Launch</div>
             <div class="card-body">
-                <?php if (empty($templates)): ?>
+                <?php if (empty($templates)) : ?>
                     <p class="text-muted mb-0 small">No templates yet.</p>
-                <?php else: ?>
+                <?php else : ?>
                     <form action="<?= Url::to(['/job-template/launch']) ?>" method="post">
                         <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                         <div class="d-flex gap-2">
                             <select name="id" class="form-select form-select-sm" required>
                                 <option value="">— Select template —</option>
-                                <?php foreach ($templates as $t): ?>
+                                <?php foreach ($templates as $t) : ?>
                                     <option value="<?= $t->id ?>"><?= Html::encode($t->name) ?></option>
                                 <?php endforeach; ?>
                             </select>
@@ -116,14 +116,16 @@ $this->title = 'Dashboard';
             <div class="card-body p-0">
                 <table class="table table-sm mb-0">
                     <tbody>
-                    <?php foreach ($statusCounts as $status => $count): ?>
-                        <?php if ($count === 0) continue; ?>
+                    <?php foreach ($statusCounts as $status => $count) : ?>
+                        <?php if ($count === 0) {
+                            continue;
+                        } ?>
                         <tr>
                             <td><span class="badge text-bg-<?= Job::statusCssClass($status) ?>"><?= Html::encode(Job::statusLabel($status)) ?></span></td>
                             <td class="text-end fw-bold"><?= $count // xss-ok: integer ?></td>
                         </tr>
                     <?php endforeach; ?>
-                    <?php if (array_sum($statusCounts) === 0): ?>
+                    <?php if (array_sum($statusCounts) === 0) : ?>
                         <tr><td colspan="2" class="text-muted small p-3">No jobs in the last 7 days.</td></tr>
                     <?php endif; ?>
                     </tbody>
@@ -134,7 +136,7 @@ $this->title = 'Dashboard';
 </div>
 
 <!-- Running jobs -->
-<?php if (!empty($runningJobs)): ?>
+<?php if (!empty($runningJobs)) : ?>
 <div class="card mb-3 border-primary">
     <div class="card-header text-bg-primary d-flex justify-content-between align-items-center">
         <strong>Currently Running (<?= count($runningJobs) ?>)</strong>
@@ -146,7 +148,7 @@ $this->title = 'Dashboard';
                 <tr><th>#</th><th>Template</th><th>Launched by</th><th>Runner</th><th>Started</th><th>Running for</th></tr>
             </thead>
             <tbody>
-            <?php foreach ($runningJobs as $job): ?>
+            <?php foreach ($runningJobs as $job) : ?>
                 <tr>
                     <td><?= Html::a('#' . $job->id, Url::to(['/job/view', 'id' => $job->id])) ?></td>
                     <td><?= Html::encode($job->jobTemplate->name ?? '—') ?></td>
@@ -169,15 +171,15 @@ $this->title = 'Dashboard';
         <?= Html::a('All Jobs', Url::to(['/job/index']), ['class' => 'btn btn-sm btn-outline-secondary']) ?>
     </div>
     <div class="card-body p-0">
-        <?php if (empty($recentJobs)): ?>
+        <?php if (empty($recentJobs)) : ?>
             <p class="text-muted p-3 mb-0">No jobs yet. <a href="<?= Url::to(['/job-template/index']) ?>">Create a template</a> to get started.</p>
-        <?php else: ?>
+        <?php else : ?>
             <table class="table table-sm table-hover mb-0">
                 <thead class="table-light">
                     <tr><th>#</th><th>Template</th><th>Status</th><th>Launched by</th><th>Runner</th><th>Started</th><th>Duration</th></tr>
                 </thead>
                 <tbody>
-                <?php foreach ($recentJobs as $job): ?>
+                <?php foreach ($recentJobs as $job) : ?>
                     <tr>
                         <td><?= Html::a('#' . $job->id, Url::to(['/job/view', 'id' => $job->id])) ?></td>
                         <td><?= Html::encode($job->jobTemplate->name ?? '—') ?></td>
@@ -185,7 +187,7 @@ $this->title = 'Dashboard';
                             <span class="badge text-bg-<?= Job::statusCssClass($job->status) ?>">
                                 <?= Html::encode(Job::statusLabel($job->status)) ?>
                             </span>
-                            <?php if ($job->has_changes): ?>
+                            <?php if ($job->has_changes) : ?>
                                 <span class="badge text-bg-warning ms-1">changed</span>
                             <?php endif; ?>
                         </td>

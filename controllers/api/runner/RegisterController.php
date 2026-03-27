@@ -32,7 +32,7 @@ class RegisterController extends Controller
     {
         return [
             'contentNegotiator' => [
-                'class'   => ContentNegotiator::class,
+                'class' => ContentNegotiator::class,
                 'formats' => ['application/json' => Response::FORMAT_JSON],
             ],
         ];
@@ -50,8 +50,8 @@ class RegisterController extends Controller
             return ['ok' => false, 'error' => 'Runner self-registration is not enabled (RUNNER_BOOTSTRAP_SECRET not set).'];
         }
 
-        $body   = \Yii::$app->request->bodyParams;
-        $name   = trim((string)($body['name'] ?? ''));
+        $body = \Yii::$app->request->bodyParams;
+        $name = trim((string)($body['name'] ?? ''));
         $secret = (string)($body['bootstrap_secret'] ?? '');
 
         if (!hash_equals($bootstrapSecret, $secret)) {
@@ -74,13 +74,13 @@ class RegisterController extends Controller
         [$runner, $rawToken] = $this->upsertRunner($group->id, $name, $systemUserId);
 
         return [
-            'ok'   => true,
+            'ok' => true,
             'data' => [
-                'runner_id'   => $runner->id,
+                'runner_id' => $runner->id,
                 'runner_name' => $runner->name,
-                'group_id'    => $group->id,
-                'group_name'  => $group->name,
-                'token'       => $rawToken,
+                'group_id' => $group->id,
+                'group_name' => $group->name,
+                'token' => $rawToken,
             ],
         ];
     }
@@ -106,10 +106,10 @@ class RegisterController extends Controller
             return $group;
         }
 
-        $group              = new RunnerGroup();
-        $group->name        = 'default';
+        $group = new RunnerGroup();
+        $group->name = 'default';
         $group->description = 'Default runner group (auto-created)';
-        $group->created_by  = $createdBy;
+        $group->created_by = $createdBy;
         if (!$group->save()) {
             throw new \RuntimeException('Failed to create default runner group: ' . json_encode($group->errors));
         }
@@ -129,7 +129,7 @@ class RegisterController extends Controller
     private function assignGroupToUnassignedSeededTemplates(int $groupId): void
     {
         $prefixes = ['Selftest', 'Demo —'];
-        $db       = \Yii::$app->db;
+        $db = \Yii::$app->db;
 
         $conditions = array_map(
             fn($p) => 'name LIKE ' . $db->quoteValue($p . '%'),
@@ -155,10 +155,10 @@ class RegisterController extends Controller
 
         $runner = Runner::findOne(['runner_group_id' => $groupId, 'name' => $name]);
         if ($runner === null) {
-            $runner                  = new Runner();
+            $runner = new Runner();
             $runner->runner_group_id = $groupId;
-            $runner->name            = $name;
-            $runner->created_by      = $createdBy;
+            $runner->name = $name;
+            $runner->created_by = $createdBy;
         }
 
         $runner->token_hash = $token['hash'];

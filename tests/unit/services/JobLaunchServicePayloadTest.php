@@ -70,9 +70,9 @@ class JobLaunchServicePayloadTest extends TestCase
 
         $payload = $this->service->exposePayload($template, $job);
 
-        $this->assertSame(7,        $payload['template_id']);
+        $this->assertSame(7, $payload['template_id']);
         $this->assertSame('Deploy', $payload['template_name']);
-        $this->assertSame(3,        $payload['project_id']);
+        $this->assertSame(3, $payload['project_id']);
         $this->assertSame('deploy.yml', $payload['playbook']);
     }
 
@@ -158,11 +158,11 @@ class JobLaunchServicePayloadTest extends TestCase
 
         $payload = $this->service->exposePayload($template, $job);
 
-        $this->assertSame(10,       $payload['forks']);
+        $this->assertSame(10, $payload['forks']);
         $this->assertTrue($payload['become']);
-        $this->assertSame('doas',   $payload['become_method']);
+        $this->assertSame('doas', $payload['become_method']);
         $this->assertSame('deploy', $payload['become_user']);
-        $this->assertSame('tag1',   $payload['tags']);
-        $this->assertSame('slow',   $payload['skip_tags']);
+        $this->assertSame('tag1', $payload['tags']);
+        $this->assertSame('slow', $payload['skip_tags']);
     }
 }

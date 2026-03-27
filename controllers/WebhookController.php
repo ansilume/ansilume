@@ -15,9 +15,9 @@ class WebhookController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],   'allow' => true, 'roles' => ['admin']],
+            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['admin']],
             ['actions' => ['create', 'update'], 'allow' => true, 'roles' => ['admin']],
-            ['actions' => ['delete'],           'allow' => true, 'roles' => ['admin']],
+            ['actions' => ['delete'], 'allow' => true, 'roles' => ['admin']],
         ];
     }
 
@@ -48,7 +48,9 @@ class WebhookController extends BaseController
             $model->created_by = \Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
-                    AuditLog::ACTION_WEBHOOK_CREATED, 'webhook', $model->id,
+                    AuditLog::ACTION_WEBHOOK_CREATED,
+                    'webhook',
+                    $model->id,
                     null,
                     ['name' => $model->name, 'url' => $model->url]
                 );
@@ -67,7 +69,9 @@ class WebhookController extends BaseController
         if ($model->load(\Yii::$app->request->post())) {
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
-                    AuditLog::ACTION_WEBHOOK_UPDATED, 'webhook', $model->id,
+                    AuditLog::ACTION_WEBHOOK_UPDATED,
+                    'webhook',
+                    $model->id,
                     null,
                     ['name' => $model->name]
                 );
@@ -82,10 +86,12 @@ class WebhookController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $name  = $model->name;
+        $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_WEBHOOK_DELETED, 'webhook', $id,
+            AuditLog::ACTION_WEBHOOK_DELETED,
+            'webhook',
+            $id,
             null,
             ['name' => $name]
         );

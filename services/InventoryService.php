@@ -35,12 +35,15 @@ class InventoryService extends Component
      */
     protected function runner(): AnsibleInventoryRunner
     {
-        if ($this->_runner === null) {
-            $runner = new AnsibleInventoryRunner();
-            $runner->timeout = $this->timeout;
-            $this->_runner = $runner;
+        if ($this->_runner !== null) {
+            return $this->_runner;
         }
-        return $this->_runner;
+
+        $runner = new AnsibleInventoryRunner();
+        $runner->timeout = $this->timeout;
+        $this->_runner = $runner;
+
+        return $runner;
     }
 
     /**
@@ -57,10 +60,10 @@ class InventoryService extends Component
         }
 
         return match ($inventory->inventory_type) {
-            Inventory::TYPE_STATIC  => $this->resolveStatic($inventory),
-            Inventory::TYPE_FILE    => $this->resolveFile($inventory),
+            Inventory::TYPE_STATIC => $this->resolveStatic($inventory),
+            Inventory::TYPE_FILE => $this->resolveFile($inventory),
             Inventory::TYPE_DYNAMIC => $this->resolveFile($inventory),
-            default                 => array_merge($empty, ['error' => "Unknown inventory type: {$inventory->inventory_type}"]),
+            default => array_merge($empty, ['error' => "Unknown inventory type: {$inventory->inventory_type}"]),
         };
     }
 
@@ -77,7 +80,7 @@ class InventoryService extends Component
             ? json_encode(['groups' => $result['groups'], 'hosts' => $result['hosts']], JSON_UNESCAPED_SLASHES)
             : null;
         $inventory->parsed_error = $result['error'];
-        $inventory->parsed_at    = time();
+        $inventory->parsed_at = time();
         $inventory->save(false, ['parsed_hosts', 'parsed_error', 'parsed_at']);
 
         return $result;
@@ -101,8 +104,8 @@ class InventoryService extends Component
         $data = json_decode($inventory->parsed_hosts ?? '{}', true) ?: [];
         return [
             'groups' => $data['groups'] ?? [],
-            'hosts'  => $data['hosts'] ?? [],
-            'error'  => null,
+            'hosts' => $data['hosts'] ?? [],
+            'error' => null,
         ];
     }
 
@@ -159,7 +162,7 @@ class InventoryService extends Component
     {
         $inventoryPath = $projectPath . '/' . ltrim($sourcePath, '/');
         $realInventory = realpath($inventoryPath);
-        $realProject   = realpath($projectPath);
+        $realProject = realpath($projectPath);
 
         if ($realInventory === false || $realProject === false || !str_starts_with($realInventory, $realProject)) {
             return null;
@@ -197,7 +200,7 @@ class InventoryService extends Component
         }
 
         $groups = $this->extractGroups($data);
-        $hosts  = $this->extractHosts($data, $groups);
+        $hosts = $this->extractHosts($data, $groups);
 
         ksort($groups);
         ksort($hosts);
@@ -216,9 +219,9 @@ class InventoryService extends Component
                 continue;
             }
             $groups[$groupName] = [
-                'hosts'    => $groupData['hosts'] ?? [],
+                'hosts' => $groupData['hosts'] ?? [],
                 'children' => $groupData['children'] ?? [],
-                'vars'     => $groupData['vars'] ?? [],
+                'vars' => $groupData['vars'] ?? [],
             ];
         }
         return $groups;

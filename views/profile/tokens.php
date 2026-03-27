@@ -16,7 +16,7 @@ $this->title = 'API Tokens';
 <h2>API Tokens</h2>
 <p class="text-muted">Use Bearer tokens to authenticate API requests: <code>Authorization: Bearer &lt;token&gt;</code></p>
 
-<?php if ($newToken): ?>
+<?php if ($newToken) : ?>
 <div class="alert alert-success">
     <strong>New token created.</strong> Copy it now — it will not be shown again.<br>
     <code class="user-select-all fs-6"><?= Html::encode($newToken) ?></code>
@@ -39,27 +39,27 @@ $this->title = 'API Tokens';
     </div>
 </div>
 
-<?php if (empty($tokens)): ?>
+<?php if (empty($tokens)) : ?>
     <p class="text-muted">No tokens yet.</p>
-<?php else: ?>
+<?php else : ?>
     <table class="table table-hover">
         <thead class="table-light">
             <tr><th>Name</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr>
         </thead>
         <tbody>
-        <?php foreach ($tokens as $token): ?>
+        <?php foreach ($tokens as $token) : ?>
             <tr>
                 <td><?= Html::encode($token->name) ?></td>
                 <td><?= date('Y-m-d', $token->created_at) ?></td>
                 <td><?= $token->last_used_at ? date('Y-m-d H:i', $token->last_used_at) : '<span class="text-muted">Never</span>' ?></td>
                 <td>
-                    <?php if ($token->expires_at): ?>
-                        <?php if ($token->isExpired()): ?>
+                    <?php if ($token->expires_at) : ?>
+                        <?php if ($token->isExpired()) : ?>
                             <span class="badge text-bg-danger">Expired</span>
-                        <?php else: ?>
+                        <?php else : ?>
                             <?= date('Y-m-d', $token->expires_at) ?>
                         <?php endif; ?>
-                    <?php else: ?>
+                    <?php else : ?>
                         <span class="text-muted">Never</span>
                     <?php endif; ?>
                 </td>

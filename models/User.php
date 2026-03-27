@@ -25,7 +25,7 @@ use yii\web\IdentityInterface;
 class User extends ActiveRecord implements IdentityInterface
 {
     public const STATUS_INACTIVE = 0;
-    public const STATUS_ACTIVE   = 10;
+    public const STATUS_ACTIVE = 10;
 
     public static function tableName(): string
     {
@@ -48,13 +48,13 @@ class User extends ActiveRecord implements IdentityInterface
     public function attributeLabels(): array
     {
         return [
-            'id'           => 'ID',
-            'username'     => 'Username',
-            'email'        => 'Email',
-            'status'       => 'Status',
+            'id' => 'ID',
+            'username' => 'Username',
+            'email' => 'Email',
+            'status' => 'Status',
             'is_superadmin' => 'Superadmin',
-            'created_at'   => 'Created',
-            'updated_at'   => 'Updated',
+            'created_at' => 'Created',
+            'updated_at' => 'Updated',
         ];
     }
 
@@ -158,7 +158,7 @@ class User extends ActiveRecord implements IdentityInterface
         }
 
         $timestamp = (int)substr($token, strrpos($token, '_') + 1);
-        $expire    = self::PASSWORD_RESET_TOKEN_EXPIRE;
+        $expire = self::PASSWORD_RESET_TOKEN_EXPIRE;
         if ($timestamp + $expire < time()) {
             return null;
         }
@@ -166,7 +166,7 @@ class User extends ActiveRecord implements IdentityInterface
         /** @var self|null */
         return static::findOne([
             'password_reset_token' => $token,
-            'status'               => self::STATUS_ACTIVE,
+            'status' => self::STATUS_ACTIVE,
         ]);
     }
 

@@ -59,11 +59,11 @@ class RunnerControllerTest extends TestCase
     private function makeController(
         array $apiSequence,
         array $tokenSequence = ['some-token'],
-        bool  $hasCacheFile  = false,
+        bool $hasCacheFile = false,
     ): RunnerController {
         $tmpDir = $this->tmpDir;
 
-        return new class(
+        return new class (
             'runner',
             \Yii::$app,
             $apiSequence,
@@ -71,11 +71,11 @@ class RunnerControllerTest extends TestCase
             $hasCacheFile,
             $tmpDir,
         ) extends RunnerController {
-            private array  $seq;
-            private int    $seqIdx        = 0;
-            private array  $tokenSequence;
-            private int    $tokenIdx      = 0;
-            private bool   $hasCacheFile;
+            private array $seq;
+            private int $seqIdx        = 0;
+            private array $tokenSequence;
+            private int $tokenIdx      = 0;
+            private bool $hasCacheFile;
             private string $tmpDir;
 
             public function __construct(
@@ -83,7 +83,7 @@ class RunnerControllerTest extends TestCase
                 $module,
                 array $seq,
                 array $tokenSequence,
-                bool  $hasCacheFile,
+                bool $hasCacheFile,
                 string $tmpDir,
             ) {
                 parent::__construct($id, $module);
@@ -132,8 +132,14 @@ class RunnerControllerTest extends TestCase
             }
 
             // Suppress output during tests.
-            public function stdout($string): int { return 0; }
-            public function stderr($string): int { return 0; }
+            public function stdout($string): int
+            {
+                return 0;
+            }
+            public function stderr($string): int
+            {
+                return 0;
+            }
         };
     }
 
@@ -257,12 +263,13 @@ class RunnerControllerTest extends TestCase
         // We need the real tokenCacheFile path for this assertion,
         // so build the controller slightly differently.
         $tmpDir = $this->tmpDir;
-        $ctrl = new class('runner', \Yii::$app, $tmpDir) extends RunnerController {
-            private array  $seq    = [];
-            private int    $seqIdx = 0;
+        $ctrl = new class ('runner', \Yii::$app, $tmpDir) extends RunnerController {
+            private array $seq    = [];
+            private int $seqIdx = 0;
             private string $tmpDir;
 
-            public function __construct($id, $module, string $tmpDir) {
+            public function __construct($id, $module, string $tmpDir)
+            {
                 parent::__construct($id, $module);
                 $this->tmpDir = $tmpDir;
                 $this->seq = [
@@ -271,22 +278,38 @@ class RunnerControllerTest extends TestCase
                 ];
             }
 
-            protected function apiPost(string $path, array $body): ?array {
-                if ($this->seqIdx >= count($this->seq)) { $this->running = false; return null; }
+            protected function apiPost(string $path, array $body): ?array
+            {
+                if ($this->seqIdx >= count($this->seq)) {
+                    $this->running = false;
+                    return null;
+                }
                 [$status, $result] = $this->seq[$this->seqIdx++];
                 $this->lastHttpStatus = $status;
-                if ($this->seqIdx >= count($this->seq)) { $this->running = false; }
+                if ($this->seqIdx >= count($this->seq)) {
+                    $this->running = false;
+                }
                 return $result;
             }
 
-            protected function resolveToken(): string { return 'fresh-token'; }
+            protected function resolveToken(): string
+            {
+                return 'fresh-token';
+            }
 
-            protected function tokenCacheFile(string $name): string {
+            protected function tokenCacheFile(string $name): string
+            {
                 return $this->tmpDir . '/runner-' . $name . '.token';
             }
 
-            public function stdout($string): int { return 0; }
-            public function stderr($string): int { return 0; }
+            public function stdout($string): int
+            {
+                return 0;
+            }
+            public function stderr($string): int
+            {
+                return 0;
+            }
         };
 
         $ctrl->actionStart();

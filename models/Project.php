@@ -32,12 +32,12 @@ use yii\db\ActiveRecord;
  */
 class Project extends ActiveRecord
 {
-    public const STATUS_NEW      = 'new';
-    public const STATUS_SYNCING  = 'syncing';
-    public const STATUS_SYNCED   = 'synced';
-    public const STATUS_ERROR    = 'error';
+    public const STATUS_NEW = 'new';
+    public const STATUS_SYNCING = 'syncing';
+    public const STATUS_SYNCED = 'synced';
+    public const STATUS_ERROR = 'error';
 
-    public const SCM_TYPE_GIT    = 'git';
+    public const SCM_TYPE_GIT = 'git';
     public const SCM_TYPE_MANUAL = 'manual';
 
     public static function tableName(): string
@@ -109,11 +109,11 @@ class Project extends ActiveRecord
     public static function statusLabel(string $status): string
     {
         return match ($status) {
-            self::STATUS_NEW     => 'New',
+            self::STATUS_NEW => 'New',
             self::STATUS_SYNCING => 'Syncing',
-            self::STATUS_SYNCED  => 'Synced',
-            self::STATUS_ERROR   => 'Error',
-            default              => $status,
+            self::STATUS_SYNCED => 'Synced',
+            self::STATUS_ERROR => 'Error',
+            default => $status,
         };
     }
 }

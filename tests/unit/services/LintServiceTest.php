@@ -25,15 +25,16 @@ class LintServiceTest extends TestCase
 
     private function makeService(bool $available = true, string $execOutput = 'ok', int $execExit = 0): LintService
     {
-        return new class($available, $execOutput, $execExit) extends LintService {
+        return new class ($available, $execOutput, $execExit) extends LintService {
             public array $stored         = [];
             public array $storedProjects = [];
 
             public function __construct(
-                private readonly bool   $available,
+                private readonly bool $available,
                 private readonly string $execOutput,
-                private readonly int    $execExit,
-            ) {}
+                private readonly int $execExit,
+            ) {
+            }
 
             protected function isAvailable(): bool
             {
@@ -188,7 +189,7 @@ class LintServiceTest extends TestCase
             $svc->runForTemplate($template);
 
             $this->assertCount(1, $svc->stored);
-            $this->assertSame(0,          $svc->stored[0]['exitCode']);
+            $this->assertSame(0, $svc->stored[0]['exitCode']);
             $this->assertSame('Passed: 5', $svc->stored[0]['output']);
         } finally {
             unlink($dir . '/site.yml');
@@ -283,8 +284,8 @@ class LintServiceTest extends TestCase
             $svc->runForProject($project);
 
             $this->assertCount(1, $svc->storedProjects);
-            $this->assertSame(0,          $svc->storedProjects[0]['exitCode']);
-            $this->assertSame('All good',  $svc->storedProjects[0]['output']);
+            $this->assertSame(0, $svc->storedProjects[0]['exitCode']);
+            $this->assertSame('All good', $svc->storedProjects[0]['output']);
         } finally {
             rmdir($dir);
         }

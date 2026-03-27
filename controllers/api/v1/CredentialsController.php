@@ -18,7 +18,7 @@ class CredentialsController extends BaseApiController
 {
     public function actionIndex(): array
     {
-        $dp   = new ActiveDataProvider([
+        $dp = new ActiveDataProvider([
             'query' => Credential::find()->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
@@ -46,13 +46,13 @@ class CredentialsController extends BaseApiController
         // secret_data is NEVER included — not even a redacted placeholder.
         // The API caller only needs to know the credential exists and its type.
         return [
-            'id'              => $c->id,
-            'name'            => $c->name,
-            'description'     => $c->description,
+            'id' => $c->id,
+            'name' => $c->name,
+            'description' => $c->description,
             'credential_type' => $c->credential_type,
-            'username'        => $c->username,
-            'created_at'      => $c->created_at,
-            'updated_at'      => $c->updated_at,
+            'username' => $c->username,
+            'created_at' => $c->created_at,
+            'updated_at' => $c->updated_at,
         ];
     }
 }

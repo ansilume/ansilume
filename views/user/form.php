@@ -19,7 +19,7 @@ $this->title = $isNew ? 'New User' : 'Edit: ' . $user->username;
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
         <li class="breadcrumb-item"><?= Html::a('Users', ['index']) ?></li>
-        <?php if (!$isNew): ?>
+        <?php if (!$isNew) : ?>
             <li class="breadcrumb-item"><?= Html::a(Html::encode($user->username), ['view', 'id' => $user->id]) ?></li>
         <?php endif; ?>
         <li class="breadcrumb-item active"><?= $isNew ? 'New' : 'Edit' ?></li>
@@ -38,11 +38,11 @@ $this->title = $isNew ? 'New User' : 'Edit: ' . $user->username;
     <?= $f->field($form, 'role')->dropDownList(UserForm::roleOptions()) ?>
 
     <?= $f->field($form, 'status')->dropDownList([
-        User::STATUS_ACTIVE   => 'Active',
+        User::STATUS_ACTIVE => 'Active',
         User::STATUS_INACTIVE => 'Inactive',
     ]) ?>
 
-    <?php if (\Yii::$app->user->identity->is_superadmin): ?>
+    <?php if (\Yii::$app->user->identity->is_superadmin) : ?>
         <?= $f->field($form, 'is_superadmin')->checkbox()->hint('Superadmins bypass all RBAC checks.') ?>
     <?php endif; ?>
 

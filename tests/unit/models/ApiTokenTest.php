@@ -58,7 +58,7 @@ class ApiTokenTest extends TestCase
         $token = new ApiToken();
         $token->validate();
         $this->assertArrayHasKey('user_id', $token->errors);
-        $this->assertArrayHasKey('name',    $token->errors);
+        $this->assertArrayHasKey('name', $token->errors);
     }
 
     public function testNameMaxLength128(): void

@@ -22,8 +22,8 @@ class RunnerController extends BaseController
     protected function verbRules(): array
     {
         return [
-            'create'           => ['POST'],
-            'delete'           => ['POST'],
+            'create' => ['POST'],
+            'delete' => ['POST'],
             'regenerate-token' => ['POST'],
         ];
     }
@@ -31,7 +31,7 @@ class RunnerController extends BaseController
     public function actionCreate(): Response
     {
         $groupId = (int)\Yii::$app->request->post('group_id');
-        $group   = RunnerGroup::findOne($groupId);
+        $group = RunnerGroup::findOne($groupId);
 
         if ($group === null) {
             $this->session()->setFlash('danger', 'Runner group not found.');
@@ -40,11 +40,11 @@ class RunnerController extends BaseController
 
         $model = new Runner();
         $model->runner_group_id = $group->id;
-        $model->name            = (string)\Yii::$app->request->post('name', '');
-        $model->description     = (string)\Yii::$app->request->post('description', '') ?: null;
-        $model->created_by      = (int)\Yii::$app->user->id;
+        $model->name = (string)\Yii::$app->request->post('name', '');
+        $model->description = (string)\Yii::$app->request->post('description', '') ?: null;
+        $model->created_by = (int)\Yii::$app->user->id;
 
-        $token            = Runner::generateToken();
+        $token = Runner::generateToken();
         $model->token_hash = $token['hash'];
 
         if (!$model->validate() || !$model->save()) {
@@ -54,9 +54,9 @@ class RunnerController extends BaseController
 
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_CREATED, 'runner', $model->id, null, ['name' => $model->name, 'group_id' => $group->id]);
         $this->session()->setFlash('runner_token', [
-            'runner_id'   => $model->id,
+            'runner_id' => $model->id,
             'runner_name' => $model->name,
-            'raw_token'   => $token['raw'],
+            'raw_token' => $token['raw'],
         ]);
 
         return $this->redirect(['/runner-group/view', 'id' => $group->id]);
@@ -64,9 +64,9 @@ class RunnerController extends BaseController
 
     public function actionDelete(int $id): Response
     {
-        $runner  = $this->findModel($id);
+        $runner = $this->findModel($id);
         $groupId = $runner->runner_group_id;
-        $name    = $runner->name;
+        $name = $runner->name;
         $runner->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_DELETED, 'runner', $id, null, ['name' => $name, 'group_id' => $groupId]);
 
@@ -76,17 +76,17 @@ class RunnerController extends BaseController
 
     public function actionRegenerateToken(int $id): Response
     {
-        $runner  = $this->findModel($id);
-        $token   = Runner::generateToken();
+        $runner = $this->findModel($id);
+        $token = Runner::generateToken();
 
         $runner->token_hash = $token['hash'];
         $runner->save(false);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_TOKEN_REGENERATED, 'runner', $runner->id, null, ['name' => $runner->name]);
 
         $this->session()->setFlash('runner_token', [
-            'runner_id'   => $runner->id,
+            'runner_id' => $runner->id,
             'runner_name' => $runner->name,
-            'raw_token'   => $token['raw'],
+            'raw_token' => $token['raw'],
         ]);
 
         return $this->redirect(['/runner-group/view', 'id' => $runner->runner_group_id]);

@@ -36,7 +36,7 @@ class ArtifactServiceTest extends TestCase
 
     private function makeService(?string $storagePath = null): ArtifactService
     {
-        $service = new class() extends ArtifactService {
+        $service = new class () extends ArtifactService {
             /** @var JobArtifact[] Artifacts "saved" during collection */
             public array $savedArtifacts = [];
 
@@ -58,7 +58,7 @@ class ArtifactServiceTest extends TestCase
                 string $destPath,
             ): ?JobArtifact {
                 // Use a mock to avoid ActiveRecord table schema lookup
-                $artifact = new class() extends JobArtifact {
+                $artifact = new class () extends JobArtifact {
                     private array $_data = [];
 
                     public function init(): void
@@ -103,7 +103,7 @@ class ArtifactServiceTest extends TestCase
 
     private function makeJob(int $id = 1): Job
     {
-        $job = new class() extends Job {
+        $job = new class () extends Job {
             private int $_stubId = 0;
 
             public function init(): void

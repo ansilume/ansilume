@@ -21,10 +21,10 @@ $this->title = $model->name;
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('credential.update')): ?>
+        <?php if (\Yii::$app->user->can('credential.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('credential.delete')): ?>
+        <?php if (\Yii::$app->user->can('credential.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this credential?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
@@ -41,22 +41,22 @@ $this->title = $model->name;
                 <dl class="row mb-0">
                     <dt class="col-5">Type</dt>
                     <dd class="col-7"><span class="badge text-bg-secondary"><?= Html::encode(Credential::typeLabel($model->credential_type)) ?></span></dd>
-                    <?php if ($model->credential_type === Credential::TYPE_SSH_KEY && $sshInfo): ?>
+                    <?php if ($model->credential_type === Credential::TYPE_SSH_KEY && $sshInfo) : ?>
                         <dt class="col-5">Algorithm</dt>
                         <dd class="col-7">
-                            <?php if ($sshInfo['algorithm'] && $sshInfo['algorithm'] !== 'unknown'): ?>
+                            <?php if ($sshInfo['algorithm'] && $sshInfo['algorithm'] !== 'unknown') : ?>
                                 <code><?= Html::encode(strtoupper($sshInfo['algorithm'])) ?><?= $sshInfo['bits'] ? '-' . $sshInfo['bits'] : '' ?></code>
-                                <?php if ($sshInfo['key_secure'] === false): ?>
+                                <?php if ($sshInfo['key_secure'] === false) : ?>
                                     <span class="badge text-bg-danger ms-1">Insecure</span>
-                                <?php elseif ($sshInfo['key_secure'] === null): ?>
+                                <?php elseif ($sshInfo['key_secure'] === null) : ?>
                                     <span class="badge text-bg-secondary ms-1">Unknown</span>
                                 <?php endif; ?>
-                            <?php else: ?>
+                            <?php else : ?>
                                 <span class="text-muted">—</span>
                             <?php endif; ?>
                         </dd>
                     <?php endif; ?>
-                    <?php if ($model->username): ?>
+                    <?php if ($model->username) : ?>
                     <dt class="col-5">Username</dt>
                     <dd class="col-7"><?= Html::encode($model->username) ?></dd>
                     <?php endif; ?>
@@ -71,7 +71,7 @@ $this->title = $model->name;
                 </dl>
             </div>
         </div>
-        <?php if ($model->description): ?>
+        <?php if ($model->description) : ?>
         <div class="card mt-3">
             <div class="card-header">Description</div>
             <div class="card-body"><?= nl2br(Html::encode($model->description)) ?></div>
@@ -79,12 +79,12 @@ $this->title = $model->name;
         <?php endif; ?>
     </div>
 
-    <?php if ($model->credential_type === Credential::TYPE_SSH_KEY): ?>
+    <?php if ($model->credential_type === Credential::TYPE_SSH_KEY) : ?>
     <div class="col-md-7">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Public Key</span>
-                <?php if ($sshInfo && $sshInfo['public_key']): ?>
+                <?php if ($sshInfo && $sshInfo['public_key']) : ?>
                     <button type="button" id="btn-copy-pubkey" class="btn btn-sm btn-outline-secondary"
                             onclick="navigator.clipboard.writeText(document.getElementById('pubkey-display').value).then(function(){
                                 var btn = document.getElementById('btn-copy-pubkey');
@@ -94,7 +94,7 @@ $this->title = $model->name;
                             })">Copy</button>
                 <?php endif; ?>
             </div>
-            <?php if ($sshInfo && $sshInfo['public_key']): ?>
+            <?php if ($sshInfo && $sshInfo['public_key']) : ?>
                 <div class="card-body p-0">
                     <textarea id="pubkey-display" class="form-control font-monospace border-0 rounded-0"
                               rows="3" readonly style="background:transparent;resize:none;"><?= Html::encode($sshInfo['public_key']) ?></textarea>
@@ -102,7 +102,7 @@ $this->title = $model->name;
                 <div class="card-footer text-muted small">
                     Add this public key as a Deploy Key on GitHub / GitLab, or to <code>~/.ssh/authorized_keys</code> on the target host.
                 </div>
-            <?php else: ?>
+            <?php else : ?>
                 <div class="card-body text-muted small">
                     Public key not available. Re-save this credential to derive and store the public key automatically.
                 </div>

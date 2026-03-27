@@ -53,8 +53,8 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     </div>
 
     <?= $form->field($model, 'extra_vars')->textarea([
-        'rows'        => 4,
-        'class'       => 'form-control font-monospace',
+        'rows' => 4,
+        'class' => 'form-control font-monospace',
         'placeholder' => '{"env": "production", "version": "1.2.3"}',
     ])->hint('JSON object. Overridable at launch time.') ?>
 
@@ -127,7 +127,7 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
         <div class="col-md-6">
             <?= $form->field($model, 'notify_emails')->textInput([
                 'placeholder' => '["ops@example.com","alert@example.com"]',
-                'class'       => 'form-control font-monospace',
+                'class' => 'form-control font-monospace',
             ])->hint('JSON array of email addresses') ?>
         </div>
     </div>

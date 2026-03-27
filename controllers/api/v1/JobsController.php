@@ -26,12 +26,12 @@ class JobsController extends BaseApiController
     public function actionIndex(): array
     {
         $search = new JobSearchForm();
-        $dp     = $search->search(\Yii::$app->request->queryParams);
+        $dp = $search->search(\Yii::$app->request->queryParams);
 
-        $jobs  = $dp->getModels();
+        $jobs = $dp->getModels();
         $total = $dp->totalCount;
-        $page  = (int)(\Yii::$app->request->get('page', 1));
-        $per   = 25;
+        $page = (int)(\Yii::$app->request->get('page', 1));
+        $per = 25;
 
         return $this->paginated(
             array_map(fn($j) => $this->serializeJob($j), $jobs),
@@ -51,7 +51,7 @@ class JobsController extends BaseApiController
         $body = \Yii::$app->request->bodyParams;
 
         $templateId = (int)($body['template_id'] ?? 0);
-        $template   = JobTemplate::findOne($templateId);
+        $template = JobTemplate::findOne($templateId);
 
         if ($template === null) {
             return $this->error("Job template #{$templateId} not found.", 404);
@@ -96,7 +96,7 @@ class JobsController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
 
-        $job->status      = Job::STATUS_CANCELED;
+        $job->status = Job::STATUS_CANCELED;
         $job->finished_at = time();
         $job->save(false);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_JOB_CANCELED, 'job', $job->id);
@@ -116,19 +116,19 @@ class JobsController extends BaseApiController
     private function serializeJob(Job $job): array
     {
         return [
-            'id'              => $job->id,
-            'status'          => $job->status,
+            'id' => $job->id,
+            'status' => $job->status,
             'job_template_id' => $job->job_template_id,
-            'template_name'   => $job->jobTemplate->name ?? null,
-            'launched_by'     => $job->launcher->username ?? null,
-            'extra_vars'      => $job->extra_vars ? json_decode($job->extra_vars, true) : null,
-            'limit'           => $job->limit,
-            'verbosity'       => $job->verbosity,
-            'exit_code'       => $job->exit_code,
-            'queued_at'       => $job->queued_at,
-            'started_at'      => $job->started_at,
-            'finished_at'     => $job->finished_at,
-            'created_at'      => $job->created_at,
+            'template_name' => $job->jobTemplate->name ?? null,
+            'launched_by' => $job->launcher->username ?? null,
+            'extra_vars' => $job->extra_vars ? json_decode($job->extra_vars, true) : null,
+            'limit' => $job->limit,
+            'verbosity' => $job->verbosity,
+            'exit_code' => $job->exit_code,
+            'queued_at' => $job->queued_at,
+            'started_at' => $job->started_at,
+            'finished_at' => $job->finished_at,
+            'created_at' => $job->created_at,
         ];
     }
 }

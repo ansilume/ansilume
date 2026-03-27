@@ -12,22 +12,22 @@ use yii\base\Model;
  */
 class UserForm extends Model
 {
-    public string $username    = '';
-    public string $email       = '';
-    public string $password    = '';
-    public string $role        = 'viewer';
-    public int    $status      = User::STATUS_ACTIVE;
-    public bool   $is_superadmin = false;
+    public string $username = '';
+    public string $email = '';
+    public string $password = '';
+    public string $role = 'viewer';
+    public int $status = User::STATUS_ACTIVE;
+    public bool $is_superadmin = false;
 
     private ?User $_user = null;
 
     public static function fromUser(User $user): self
     {
         $form = new self();
-        $form->_user        = $user;
-        $form->username     = $user->username;
-        $form->email        = $user->email;
-        $form->status       = $user->status;
+        $form->_user = $user;
+        $form->username = $user->username;
+        $form->email = $user->email;
+        $form->status = $user->status;
         $form->is_superadmin = (bool)$user->is_superadmin;
 
         /** @var \yii\rbac\ManagerInterface $auth */
@@ -56,12 +56,12 @@ class UserForm extends Model
             // Password required for new users
             $rules[] = [['password'], 'required'];
             $rules[] = [['username'], 'unique', 'targetClass' => User::class];
-            $rules[] = [['email'],    'unique', 'targetClass' => User::class];
+            $rules[] = [['email'], 'unique', 'targetClass' => User::class];
         } else {
             // Unique check must exclude the current user
             $rules[] = [['username'], 'unique', 'targetClass' => User::class,
                 'filter' => ['!=', 'id', $this->_user->id]];
-            $rules[] = [['email'],    'unique', 'targetClass' => User::class,
+            $rules[] = [['email'], 'unique', 'targetClass' => User::class,
                 'filter' => ['!=', 'id', $this->_user->id]];
         }
 
@@ -71,11 +71,11 @@ class UserForm extends Model
     public function attributeLabels(): array
     {
         return [
-            'username'     => 'Username',
-            'email'        => 'Email',
-            'password'     => 'Password',
-            'role'         => 'Role',
-            'status'       => 'Status',
+            'username' => 'Username',
+            'email' => 'Email',
+            'password' => 'Password',
+            'role' => 'Role',
+            'status' => 'Status',
             'is_superadmin' => 'Superadmin',
         ];
     }
@@ -83,9 +83,9 @@ class UserForm extends Model
     public static function roleOptions(): array
     {
         return [
-            'viewer'   => 'Viewer (read-only)',
+            'viewer' => 'Viewer (read-only)',
             'operator' => 'Operator (launch + manage)',
-            'admin'    => 'Admin (full access)',
+            'admin' => 'Admin (full access)',
         ];
     }
 
@@ -99,11 +99,11 @@ class UserForm extends Model
         }
 
         $isNew = ($this->_user === null);
-        $user  = $this->_user ?? new User();
+        $user = $this->_user ?? new User();
 
-        $user->username     = $this->username;
-        $user->email        = $this->email;
-        $user->status       = $this->status;
+        $user->username = $this->username;
+        $user->email = $this->email;
+        $user->status = $this->status;
         $user->is_superadmin = $this->is_superadmin;
 
         if ($this->password !== '') {

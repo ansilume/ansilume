@@ -33,7 +33,7 @@ class ProfileController extends BaseController
         return [
             'create-token' => ['POST'],
             'delete-token' => ['POST'],
-            'enable-totp'  => ['POST'],
+            'enable-totp' => ['POST'],
         ];
     }
 
@@ -95,8 +95,8 @@ class ProfileController extends BaseController
         $remainingCodes = $totp->remainingRecoveryCodeCount($user);
 
         return $this->render('security', [
-            'user'           => $user,
-            'totpEnabled'    => (bool)$user->totp_enabled,
+            'user' => $user,
+            'totpEnabled' => (bool)$user->totp_enabled,
             'remainingCodes' => $remainingCodes,
         ]);
     }
@@ -127,13 +127,13 @@ class ProfileController extends BaseController
         }
 
         $provisioningUri = $totp->buildProvisioningUri($secret, $user);
-        $qrDataUri       = $totp->generateQrDataUri($provisioningUri);
+        $qrDataUri = $totp->generateQrDataUri($provisioningUri);
 
         $model = new TotpSetupForm($user, $secret);
 
         return $this->render('setup-totp', [
-            'model'     => $model,
-            'secret'    => $secret,
+            'model' => $model,
+            'secret' => $secret,
             'qrDataUri' => $qrDataUri,
         ]);
     }
@@ -162,7 +162,9 @@ class ProfileController extends BaseController
             $session->remove('totp_setup_secret');
 
             \Yii::$app->get('auditService')->log(
-                AuditLog::ACTION_MFA_ENABLED, 'user', $user->id
+                AuditLog::ACTION_MFA_ENABLED,
+                'user',
+                $user->id
             );
 
             // Show recovery codes once
@@ -173,13 +175,13 @@ class ProfileController extends BaseController
 
         // Re-render setup form with errors
         /** @var TotpService $totp */
-        $totp            = \Yii::$app->get('totpService');
+        $totp = \Yii::$app->get('totpService');
         $provisioningUri = $totp->buildProvisioningUri($secret, $user);
-        $qrDataUri       = $totp->generateQrDataUri($provisioningUri);
+        $qrDataUri = $totp->generateQrDataUri($provisioningUri);
 
         return $this->render('setup-totp', [
-            'model'     => $model,
-            'secret'    => $secret,
+            'model' => $model,
+            'secret' => $secret,
             'qrDataUri' => $qrDataUri,
         ]);
     }
@@ -202,7 +204,9 @@ class ProfileController extends BaseController
             $model->disable();
 
             \Yii::$app->get('auditService')->log(
-                AuditLog::ACTION_MFA_DISABLED, 'user', $user->id
+                AuditLog::ACTION_MFA_DISABLED,
+                'user',
+                $user->id
             );
 
             $this->session()->setFlash('success', 'Two-factor authentication has been disabled.');

@@ -22,10 +22,10 @@ $isSelf = ($user->id === (int)\Yii::$app->user->id);
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($user->username) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('user.update')): ?>
+        <?php if (\Yii::$app->user->can('user.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $user->id], ['class' => 'btn btn-outline-secondary']) ?>
         <?php endif; ?>
-        <?php if (!$isSelf && \Yii::$app->user->can('user.delete')): ?>
+        <?php if (!$isSelf && \Yii::$app->user->can('user.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['toggle-status', 'id' => $user->id]) ?>" style="display:inline" onsubmit="return confirm('Change status?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-warning ms-1"><?= $user->status === User::STATUS_ACTIVE ? 'Deactivate' : 'Activate' // xss-ok: hardcoded strings ?></button>
@@ -48,9 +48,9 @@ $isSelf = ($user->id === (int)\Yii::$app->user->id);
                     <dd class="col-7"><?= Html::encode($user->email) ?></dd>
                     <dt class="col-5">Status</dt>
                     <dd class="col-7">
-                        <?php if ($user->status === User::STATUS_ACTIVE): ?>
+                        <?php if ($user->status === User::STATUS_ACTIVE) : ?>
                             <span class="badge text-bg-success">Active</span>
-                        <?php else: ?>
+                        <?php else : ?>
                             <span class="badge text-bg-secondary">Inactive</span>
                         <?php endif; ?>
                     </dd>
@@ -58,10 +58,12 @@ $isSelf = ($user->id === (int)\Yii::$app->user->id);
                     <dd class="col-7"><?= $user->is_superadmin ? '<span class="badge text-bg-warning">Yes</span>' : 'No' // xss-ok: hardcoded strings ?></dd>
                     <dt class="col-5">Roles</dt>
                     <dd class="col-7">
-                        <?php foreach ($roles as $role): ?>
+                        <?php foreach ($roles as $role) : ?>
                             <span class="badge text-bg-primary"><?= Html::encode($role->name) ?></span>
                         <?php endforeach; ?>
-                        <?php if (empty($roles)): ?><span class="text-muted">None</span><?php endif; ?>
+                        <?php if (empty($roles)) :
+                            ?><span class="text-muted">None</span><?php
+                        endif; ?>
                     </dd>
                     <dt class="col-5">Created</dt>
                     <dd class="col-7"><?= date('Y-m-d H:i', $user->created_at) ?></dd>

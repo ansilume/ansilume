@@ -19,10 +19,10 @@ $this->title = $model->name;
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('inventory.update')): ?>
+        <?php if (\Yii::$app->user->can('inventory.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('inventory.delete')): ?>
+        <?php if (\Yii::$app->user->can('inventory.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this inventory?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
@@ -39,11 +39,11 @@ $this->title = $model->name;
                 <dl class="row mb-0">
                     <dt class="col-5">Type</dt>
                     <dd class="col-7"><span class="badge text-bg-secondary"><?= Html::encode(strtoupper($model->inventory_type)) ?></span></dd>
-                    <?php if ($model->project): ?>
+                    <?php if ($model->project) : ?>
                         <dt class="col-5">Project</dt>
                         <dd class="col-7"><?= Html::a(Html::encode($model->project->name), ['/project/view', 'id' => $model->project_id]) ?></dd>
                     <?php endif; ?>
-                    <?php if ($model->source_path): ?>
+                    <?php if ($model->source_path) : ?>
                         <dt class="col-5">Path</dt>
                         <dd class="col-7"><code><?= Html::encode($model->source_path) ?></code></dd>
                     <?php endif; ?>
@@ -56,7 +56,7 @@ $this->title = $model->name;
         </div>
     </div>
 
-    <?php if ($model->content): ?>
+    <?php if ($model->content) : ?>
     <div class="col-md-8">
         <div class="card">
             <div class="card-header">Content</div>
@@ -79,7 +79,7 @@ $cachedJson = $cached !== null ? json_encode($cached) : 'null';
         <div class="card-header d-flex justify-content-between align-items-center">
             <span>Resolved Hosts &amp; Groups</span>
             <div>
-                <?php if ($model->parsed_at): ?>
+                <?php if ($model->parsed_at) : ?>
                     <small class="text-muted me-2" id="parsed-at-label">Parsed <?= date('Y-m-d H:i', $model->parsed_at) ?></small>
                 <?php endif; ?>
                 <button type="button" class="btn btn-sm btn-outline-primary" id="btn-parse-inventory">
@@ -88,7 +88,7 @@ $cachedJson = $cached !== null ? json_encode($cached) : 'null';
             </div>
         </div>
         <div class="card-body" id="inventory-result">
-            <?php if ($cached === null): ?>
+            <?php if ($cached === null) : ?>
                 <p class="text-muted mb-0">Click "Parse Inventory" to resolve hosts and groups via <code>ansible-inventory</code>.</p>
             <?php endif; ?>
         </div>

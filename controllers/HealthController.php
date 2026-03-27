@@ -31,7 +31,7 @@ class HealthController extends Controller
     {
         return [
             'contentNegotiator' => [
-                'class'   => ContentNegotiator::class,
+                'class' => ContentNegotiator::class,
                 'formats' => ['application/json' => Response::FORMAT_JSON],
             ],
         ];
@@ -39,28 +39,28 @@ class HealthController extends Controller
 
     public function actionIndex(): array
     {
-        $checks  = $this->runChecks();
+        $checks = $this->runChecks();
         $healthy = !in_array(false, array_column($checks, 'ok'), true);
 
         $this->setHttpStatus($healthy ? 200 : 503);
 
         return [
-            'status'    => $healthy ? 'ok' : 'degraded',
-            'checks'    => $checks,
-            'runners'   => $this->runnerSummary(),
+            'status' => $healthy ? 'ok' : 'degraded',
+            'checks' => $checks,
+            'runners' => $this->runnerSummary(),
             'schedules' => $this->scheduleSummary(),
-            'queue'     => $this->queueSummary(),
+            'queue' => $this->queueSummary(),
         ];
     }
 
     protected function runChecks(): array
     {
         return [
-            'database'   => $this->checkDatabase(),
-            'redis'      => $this->checkRedis(),
+            'database' => $this->checkDatabase(),
+            'redis' => $this->checkRedis(),
             'migrations' => $this->checkMigrations(),
-            'runners'    => $this->checkRunners(),
-            'scheduler'  => $this->checkScheduler(),
+            'runners' => $this->checkRunners(),
+            'scheduler' => $this->checkScheduler(),
         ];
     }
 
@@ -90,13 +90,13 @@ class HealthController extends Controller
     {
         try {
             $expected = $this->countMigrationFiles();
-            $applied  = $this->countAppliedMigrations();
+            $applied = $this->countAppliedMigrations();
 
             if ($applied < $expected) {
                 return [
-                    'ok'       => false,
-                    'error'    => ($expected - $applied) . ' pending migration(s)',
-                    'applied'  => $applied,
+                    'ok' => false,
+                    'error' => ($expected - $applied) . ' pending migration(s)',
+                    'applied' => $applied,
                     'expected' => $expected,
                 ];
             }
@@ -109,7 +109,7 @@ class HealthController extends Controller
 
     protected function countMigrationFiles(): int
     {
-        $path  = \Yii::getAlias('@app/migrations');
+        $path = \Yii::getAlias('@app/migrations');
         $files = glob($path . '/m*.php');
         return $files !== false ? count($files) : 0;
     }
@@ -141,9 +141,9 @@ class HealthController extends Controller
             }
 
             return [
-                'ok'     => true,
+                'ok' => true,
                 'online' => $counts['online'],
-                'total'  => $counts['total'],
+                'total' => $counts['total'],
             ];
         } catch (\Throwable) {
             return ['ok' => false, 'error' => 'Runner check failed'];
@@ -161,8 +161,8 @@ class HealthController extends Controller
 
             if ($counts['overdue'] > 0) {
                 return [
-                    'ok'      => false,
-                    'error'   => $counts['overdue'] . ' overdue schedule(s)',
+                    'ok' => false,
+                    'error' => $counts['overdue'] . ' overdue schedule(s)',
                     'enabled' => $counts['enabled'],
                     'overdue' => $counts['overdue'],
                 ];
@@ -196,12 +196,12 @@ class HealthController extends Controller
     {
         try {
             $cutoff = time() - RunnerGroup::STALE_AFTER;
-            $total  = (int)Runner::find()->count();
+            $total = (int)Runner::find()->count();
             $online = (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count();
 
             return [
-                'total'   => $total,
-                'online'  => $online,
+                'total' => $total,
+                'online' => $online,
                 'offline' => $total - $online,
             ];
         } catch (\Throwable) {
@@ -212,7 +212,7 @@ class HealthController extends Controller
     private function scheduleSummary(): array
     {
         try {
-            $total   = (int)Schedule::find()->count();
+            $total = (int)Schedule::find()->count();
             $enabled = (int)Schedule::find()->where(['enabled' => 1])->count();
             return ['total' => $total, 'enabled' => $enabled];
         } catch (\Throwable) {

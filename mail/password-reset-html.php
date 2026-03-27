@@ -12,7 +12,7 @@ declare(strict_types=1);
  */
 
 $username = htmlspecialchars($user->username, ENT_QUOTES, 'UTF-8');
-$safeUrl  = htmlspecialchars($resetUrl, ENT_QUOTES, 'UTF-8');
+$safeUrl = htmlspecialchars($resetUrl, ENT_QUOTES, 'UTF-8');
 
 $this->params['previewText'] = 'Reset your Ansilume password';
 ?>

@@ -16,7 +16,7 @@ class ScheduleController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'],   'allow' => true, 'roles' => ['job.launch']],
+            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['job.launch']],
             ['actions' => ['create', 'update'], 'allow' => true, 'roles' => ['job.launch']],
             ['actions' => ['delete', 'toggle'], 'allow' => true, 'roles' => ['job.launch']],
         ];
@@ -48,14 +48,16 @@ class ScheduleController extends BaseController
     {
         $model = new Schedule();
         $model->timezone = 'UTC';
-        $model->enabled  = true;
+        $model->enabled = true;
 
         if ($model->load(\Yii::$app->request->post())) {
             $model->created_by = \Yii::$app->user->id;
             $model->computeNextRunAt();
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
-                    AuditLog::ACTION_SCHEDULE_CREATED, 'schedule', $model->id,
+                    AuditLog::ACTION_SCHEDULE_CREATED,
+                    'schedule',
+                    $model->id,
                     null,
                     ['name' => $model->name, 'cron' => $model->cron_expression]
                 );
@@ -65,7 +67,7 @@ class ScheduleController extends BaseController
         }
 
         return $this->render('form', [
-            'model'     => $model,
+            'model' => $model,
             'templates' => $this->getTemplateList(),
         ]);
     }
@@ -78,7 +80,9 @@ class ScheduleController extends BaseController
             $model->computeNextRunAt();
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
-                    AuditLog::ACTION_SCHEDULE_UPDATED, 'schedule', $model->id,
+                    AuditLog::ACTION_SCHEDULE_UPDATED,
+                    'schedule',
+                    $model->id,
                     null,
                     ['name' => $model->name]
                 );
@@ -88,7 +92,7 @@ class ScheduleController extends BaseController
         }
 
         return $this->render('form', [
-            'model'     => $model,
+            'model' => $model,
             'templates' => $this->getTemplateList(),
         ]);
     }
@@ -96,10 +100,12 @@ class ScheduleController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $name  = $model->name;
+        $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_SCHEDULE_DELETED, 'schedule', $id,
+            AuditLog::ACTION_SCHEDULE_DELETED,
+            'schedule',
+            $id,
             null,
             ['name' => $name]
         );

@@ -15,18 +15,18 @@ $this->title = 'Runner Groups';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Runner Groups</h2>
-    <?php if (\Yii::$app->user->can('runner-group.create')): ?>
+    <?php if (\Yii::$app->user->can('runner-group.create')) : ?>
         <?= Html::a('New Group', ['create'], ['class' => 'btn btn-success']) ?>
     <?php endif; ?>
 </div>
 
-<?php if (empty($groups)): ?>
+<?php if (empty($groups)) : ?>
     <div class="card">
         <div class="card-body text-muted">
             No runner groups yet. <a href="<?= Url::to(['create']) ?>">Create one</a> to get started.
         </div>
     </div>
-<?php else: ?>
+<?php else : ?>
     <div class="table-responsive">
         <table class="table table-hover align-middle">
             <thead class="table-dark">
@@ -39,12 +39,12 @@ $this->title = 'Runner Groups';
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($groups as $group): ?>
+            <?php foreach ($groups as $group) : ?>
                 <?php
-                $cnt    = $total[$group->id]  ?? 0;
-                $on     = $online[$group->id] ?? 0;
+                $cnt = $total[$group->id] ?? 0;
+                $on = $online[$group->id] ?? 0;
                 $allOff = $cnt > 0 && $on === 0;
-                $badge  = $allOff ? 'danger' : ($on > 0 ? 'success' : 'secondary');
+                $badge = $allOff ? 'danger' : ($on > 0 ? 'success' : 'secondary');
                 ?>
                 <tr>
                     <td><?= Html::a(Html::encode($group->name), ['view', 'id' => $group->id]) ?></td>
@@ -54,10 +54,10 @@ $this->title = 'Runner Groups';
                         <span class="badge text-bg-<?= $badge ?>"><?= $on ?>/<?= $cnt ?> online</span>
                     </td>
                     <td class="text-end">
-                        <?php if (\Yii::$app->user->can('runner-group.update')): ?>
+                        <?php if (\Yii::$app->user->can('runner-group.update')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $group->id], ['class' => 'btn btn-sm btn-outline-secondary me-1']) ?>
                         <?php endif; ?>
-                        <?php if (\Yii::$app->user->can('runner-group.delete')): ?>
+                        <?php if (\Yii::$app->user->can('runner-group.delete')) : ?>
                             <form method="post" action="<?= Url::to(['delete', 'id' => $group->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this runner group and all its runners?')">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>

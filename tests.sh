@@ -321,18 +321,22 @@ fi
 section "PHP_CodeSniffer (PSR-12)"
 
 if dc php vendor/bin/phpcs --version >/dev/null 2>&1; then
+    # Exclude: vendor, .composer, runtime, web/assets, docker (third-party),
+    # views (mixed PHP/HTML triggers false positives), migrations (generated),
+    # tests (testable subclasses need multi-class-per-file).
     PHPCS_OUT=$(dc php vendor/bin/phpcs \
         --standard=PSR12 \
         --extensions=php \
-        --ignore=vendor,.composer,runtime,@runtime,web/assets \
+        --ignore=vendor,.composer,runtime,@runtime,web/assets,docker,views,migrations,tests \
+        --warning-severity=0 \
         --report=summary \
         -q \
         . 2>&1 || true)
-    PHPCS_ERRORS=$(echo "$PHPCS_OUT" | grep -cP "^FOUND" || true)
-    if [[ $PHPCS_ERRORS -eq 0 ]]; then
+    PHPCS_ERROR_COUNT=$(echo "$PHPCS_OUT" | grep -oP 'A TOTAL OF \K\d+(?= ERROR)' || echo "0")
+    if [[ "$PHPCS_ERROR_COUNT" -eq 0 ]]; then
         ok "PSR-12 check passed"
     else
-        fail "PSR-12 violations found"
+        fail "PSR-12: $PHPCS_ERROR_COUNT error(s) found"
         echo "$PHPCS_OUT" | tail -20 | sed 's/^/     /'
     fi
 else

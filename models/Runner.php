@@ -71,7 +71,7 @@ class Runner extends ActiveRecord
      */
     public static function generateToken(): array
     {
-        $raw  = bin2hex(random_bytes(32)); // 64-char hex string
+        $raw = bin2hex(random_bytes(32)); // 64-char hex string
         $hash = hash('sha256', $raw);
         return ['raw' => $raw, 'hash' => $hash];
     }

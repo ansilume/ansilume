@@ -23,7 +23,7 @@ $this->title = $model->isNewRecord ? 'New Project' : 'Edit: ' . $model->name;
     <?= $form->field($model, 'description')->textarea(['rows' => 3]) ?>
 
     <?= $form->field($model, 'scm_type')->dropDownList([
-        Project::SCM_TYPE_GIT    => 'Git',
+        Project::SCM_TYPE_GIT => 'Git',
         Project::SCM_TYPE_MANUAL => 'Manual (no SCM)',
     ]) ?>
 
@@ -33,7 +33,9 @@ $this->title = $model->isNewRecord ? 'New Project' : 'Edit: ' . $model->name;
         <?= $form->field($model, 'scm_branch')->textInput(['maxlength' => 128]) ?>
         <?= $form->field($model, 'scm_credential_id')->dropDownList(
             ['' => '— None (public repo) —'] + array_column(
-                array_map(fn($c) => ['id' => $c->id, 'name' => $c->name], $sshCredentials), 'name', 'id'
+                array_map(fn($c) => ['id' => $c->id, 'name' => $c->name], $sshCredentials),
+                'name',
+                'id'
             )
         )->hint('Select an SSH Key credential to authenticate with a private repository. The public key must be added as a Deploy Key on GitHub/GitLab.') ?>
     </div>
@@ -41,7 +43,7 @@ $this->title = $model->isNewRecord ? 'New Project' : 'Edit: ' . $model->name;
     <div id="manual-fields" <?= $model->scm_type !== Project::SCM_TYPE_MANUAL ? 'style="display:none"' : '' // xss-ok: hardcoded attribute ?>>
 
         <?= $form->field($model, 'local_path')->textInput([
-            'maxlength'   => 512,
+            'maxlength' => 512,
             'placeholder' => '/opt/playbooks/myproject',
         ])->hint('Absolute path on the host where playbooks and roles are located. The worker must have read access to this directory.') ?>
     </div>

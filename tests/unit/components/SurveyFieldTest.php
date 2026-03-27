@@ -17,11 +17,11 @@ class SurveyFieldTest extends TestCase
     public function testConstructorSetsAllFields(): void
     {
         $f = new SurveyField('env', 'Environment', SurveyField::TYPE_SELECT, true, 'prod', ['prod', 'staging'], 'Choose env');
-        $this->assertSame('env',    $f->name);
+        $this->assertSame('env', $f->name);
         $this->assertSame('Environment', $f->label);
         $this->assertSame(SurveyField::TYPE_SELECT, $f->type);
         $this->assertTrue($f->required);
-        $this->assertSame('prod',   $f->default);
+        $this->assertSame('prod', $f->default);
         $this->assertSame(['prod', 'staging'], $f->options);
         $this->assertSame('Choose env', $f->hint);
     }
@@ -62,8 +62,8 @@ class SurveyFieldTest extends TestCase
     public function testFromArrayUsesDefaults(): void
     {
         $f = SurveyField::fromArray(['name' => 'x']);
-        $this->assertSame('x',    $f->name);
-        $this->assertSame('x',    $f->label);   // label defaults to name
+        $this->assertSame('x', $f->name);
+        $this->assertSame('x', $f->label);   // label defaults to name
         $this->assertSame(SurveyField::TYPE_TEXT, $f->type);
         $this->assertFalse($f->required);
         $this->assertSame('', $f->default);
@@ -99,8 +99,8 @@ class SurveyFieldTest extends TestCase
         $fields = SurveyField::parseJson($json);
         $this->assertCount(2, $fields);
         $this->assertInstanceOf(SurveyField::class, $fields[0]);
-        $this->assertSame('env',  $fields[0]->name);
-        $this->assertSame('ver',  $fields[1]->name);
+        $this->assertSame('env', $fields[0]->name);
+        $this->assertSame('ver', $fields[1]->name);
         $this->assertSame(['prod', 'dev'], $fields[0]->options);
     }
 
@@ -141,14 +141,16 @@ class SurveyFieldTest extends TestCase
     {
         $types = SurveyField::types();
         $this->assertCount(6, $types);
-        foreach ([
+        foreach (
+            [
             SurveyField::TYPE_TEXT,
             SurveyField::TYPE_TEXTAREA,
             SurveyField::TYPE_INTEGER,
             SurveyField::TYPE_BOOLEAN,
             SurveyField::TYPE_SELECT,
             SurveyField::TYPE_PASSWORD,
-        ] as $type) {
+            ] as $type
+        ) {
             $this->assertArrayHasKey($type, $types);
             $this->assertIsString($types[$type]);
             $this->assertNotEmpty($types[$type]);

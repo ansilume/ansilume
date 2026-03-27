@@ -13,15 +13,15 @@ $this->title = 'Inventories';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Inventories</h2>
-    <?php if (\Yii::$app->user->can('inventory.create')): ?>
+    <?php if (\Yii::$app->user->can('inventory.create')) : ?>
         <?= Html::a('New Inventory', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
 
 <?php $models = $dataProvider->getModels(); ?>
-<?php if (empty($models)): ?>
+<?php if (empty($models)) : ?>
     <p class="text-muted">No inventories yet.</p>
-<?php else: ?>
+<?php else : ?>
     <div class="table-responsive">
         <table class="table table-hover">
             <thead class="table-light">
@@ -30,7 +30,7 @@ $this->title = 'Inventories';
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($dataProvider->getModels() as $model): ?>
+            <?php foreach ($dataProvider->getModels() as $model) : ?>
                 <tr>
                     <td><?= $model->id ?></td>
                     <td><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></td>
@@ -39,7 +39,7 @@ $this->title = 'Inventories';
                     <td><?= Html::encode($model->creator->username ?? '—') ?></td>
                     <td class="text-end text-nowrap">
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                        <?php if (\Yii::$app->user->can('inventory.update')): ?>
+                        <?php if (\Yii::$app->user->can('inventory.update')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                         <?php endif; ?>
                     </td>

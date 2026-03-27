@@ -26,9 +26,9 @@ use yii\db\ActiveRecord;
  */
 class Inventory extends ActiveRecord
 {
-    public const TYPE_STATIC  = 'static';
+    public const TYPE_STATIC = 'static';
     public const TYPE_DYNAMIC = 'dynamic';
-    public const TYPE_FILE    = 'file';
+    public const TYPE_FILE = 'file';
 
     public static function tableName(): string
     {
@@ -49,11 +49,11 @@ class Inventory extends ActiveRecord
             [['inventory_type'], 'in', 'range' => [self::TYPE_STATIC, self::TYPE_DYNAMIC, self::TYPE_FILE]],
             [['source_path'], 'string', 'max' => 512],
             [['content'], 'required',
-                'when'       => fn($m) => $m->inventory_type === self::TYPE_STATIC,
+                'when' => fn($m) => $m->inventory_type === self::TYPE_STATIC,
                 'whenClient' => "function(attr, val) { return $('#inventory-type').val() === 'static'; }",
             ],
             [['source_path', 'project_id'], 'required',
-                'when'       => fn($m) => $m->inventory_type === self::TYPE_FILE,
+                'when' => fn($m) => $m->inventory_type === self::TYPE_FILE,
                 'whenClient' => "function(attr, val) { return $('#inventory-type').val() === 'file'; }",
             ],
             [['project_id', 'created_by'], 'integer'],

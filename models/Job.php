@@ -36,13 +36,13 @@ use yii\db\ActiveRecord;
  */
 class Job extends ActiveRecord
 {
-    public const STATUS_PENDING    = 'pending';
-    public const STATUS_QUEUED     = 'queued';
-    public const STATUS_RUNNING    = 'running';
-    public const STATUS_SUCCEEDED  = 'succeeded';
-    public const STATUS_FAILED     = 'failed';
-    public const STATUS_CANCELED   = 'canceled';
-    public const STATUS_TIMED_OUT  = 'timed_out';
+    public const STATUS_PENDING = 'pending';
+    public const STATUS_QUEUED = 'queued';
+    public const STATUS_RUNNING = 'running';
+    public const STATUS_SUCCEEDED = 'succeeded';
+    public const STATUS_FAILED = 'failed';
+    public const STATUS_CANCELED = 'canceled';
+    public const STATUS_TIMED_OUT = 'timed_out';
 
     public static function tableName(): string
     {
@@ -117,14 +117,14 @@ class Job extends ActiveRecord
     public static function statusLabel(string $status): string
     {
         return match ($status) {
-            self::STATUS_PENDING   => 'Pending',
-            self::STATUS_QUEUED    => 'Queued',
-            self::STATUS_RUNNING   => 'Running',
+            self::STATUS_PENDING => 'Pending',
+            self::STATUS_QUEUED => 'Queued',
+            self::STATUS_RUNNING => 'Running',
             self::STATUS_SUCCEEDED => 'Succeeded',
-            self::STATUS_FAILED    => 'Failed',
-            self::STATUS_CANCELED  => 'Canceled',
+            self::STATUS_FAILED => 'Failed',
+            self::STATUS_CANCELED => 'Canceled',
             self::STATUS_TIMED_OUT => 'Timed Out',
-            default                => $status,
+            default => $status,
         };
     }
 
@@ -132,12 +132,12 @@ class Job extends ActiveRecord
     {
         return match ($status) {
             self::STATUS_PENDING, self::STATUS_QUEUED => 'secondary',
-            self::STATUS_RUNNING                      => 'primary',
-            self::STATUS_SUCCEEDED                    => 'success',
-            self::STATUS_FAILED                       => 'danger',
-            self::STATUS_CANCELED                     => 'warning',
-            self::STATUS_TIMED_OUT                    => 'danger',
-            default                                   => 'secondary',
+            self::STATUS_RUNNING => 'primary',
+            self::STATUS_SUCCEEDED => 'success',
+            self::STATUS_FAILED => 'danger',
+            self::STATUS_CANCELED => 'warning',
+            self::STATUS_TIMED_OUT => 'danger',
+            default => 'secondary',
         };
     }
 
@@ -145,7 +145,7 @@ class Job extends ActiveRecord
     {
         // Include soft-deleted templates so job history remains intact.
         return $this->hasOne(JobTemplate::class, ['id' => 'job_template_id'])
-            ->where([]);  // clear the default soft-delete scope
+            ->where([]); // clear the default soft-delete scope
     }
 
     public function getLauncher(): \yii\db\ActiveQuery

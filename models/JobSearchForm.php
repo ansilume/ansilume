@@ -12,17 +12,17 @@ use yii\data\ActiveDataProvider;
  */
 class JobSearchForm extends Model
 {
-    public ?string $status       = null;
-    public ?string $template_id  = null;
-    public ?string $launched_by  = null;
+    public ?string $status = null;
+    public ?string $template_id = null;
+    public ?string $launched_by = null;
     public ?string $runner_group_id = null;
-    public ?string $date_from    = null;
-    public ?string $date_to      = null;
+    public ?string $date_from = null;
+    public ?string $date_to = null;
 
     public function rules(): array
     {
         return [
-            [['status'],      'in', 'range' => array_merge([''], Job::statuses())],
+            [['status'], 'in', 'range' => array_merge([''], Job::statuses())],
             [['template_id', 'launched_by', 'runner_group_id'], 'integer'],
             [['date_from', 'date_to'], 'date', 'format' => 'php:Y-m-d'],
         ];
@@ -67,7 +67,7 @@ class JobSearchForm extends Model
         }
 
         return new ActiveDataProvider([
-            'query'      => $query,
+            'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
     }

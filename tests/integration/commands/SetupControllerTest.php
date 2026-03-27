@@ -33,8 +33,14 @@ class SetupControllerTest extends DbTestCase
 
         // Suppress console output so test output stays clean.
         $this->ctrl = new class ('setup', \Yii::$app) extends SetupController {
-            public function stdout($string): int { return 0; }
-            public function stderr($string): int { return 0; }
+            public function stdout($string): int
+            {
+                return 0;
+            }
+            public function stderr($string): int
+            {
+                return 0;
+            }
         };
     }
 
@@ -67,8 +73,11 @@ class SetupControllerTest extends DbTestCase
 
         $meta = json_decode((string)$entry->metadata, true);
         $this->assertSame($username, $meta['username']);
-        $this->assertSame('console:setup/admin', $meta['source'],
-            'Audit metadata must identify this as a console-originated action');
+        $this->assertSame(
+            'console:setup/admin',
+            $meta['source'],
+            'Audit metadata must identify this as a console-originated action'
+        );
     }
 
     public function testAuditMetadataContainsEmail(): void
