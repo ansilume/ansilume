@@ -53,8 +53,34 @@ class RunnerController extends Controller
             return ExitCode::CONFIG;
         }
 
-        // Verify token on startup
+        $info = $this->verifyTokenWithRetry();
+        if ($info === null || empty($info['ok'])) {
+            $this->stderr("ERROR: Failed to authenticate with the server. Check RUNNER_TOKEN and API_URL.\n");
+            return ExitCode::UNSPECIFIED_ERROR;
+        }
+
+        $runnerName = $info['data']['runner_name'] ?? 'unknown';
+        $groupName  = $info['data']['group_name']  ?? 'unknown';
+        $this->stdout("Runner '{$runnerName}' started. Group: '{$groupName}'. Polling {$this->apiUrl}\n");
+
+        $this->registerSignalHandlers();
+        $this->pollLoop();
+
+        $this->stdout("Runner shutting down.\n");
+        return ExitCode::OK;
+    }
+
+    // -------------------------------------------------------------------------
+    // Start-up helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Verify the token via heartbeat, retrying with re-registration on 401.
+     */
+    protected function verifyTokenWithRetry(): ?array
+    {
         $info = $this->apiPost('/api/runner/v1/heartbeat', []);
+
         if ($this->lastHttpStatus === 401) {
             $name      = $_ENV['RUNNER_NAME'] ?? '';
             $cacheFile = $name !== '' ? $this->tokenCacheFile($name) : '';
@@ -67,21 +93,20 @@ class RunnerController extends Controller
                 }
             }
         }
-        if ($info === null || empty($info['ok'])) {
-            $this->stderr("ERROR: Failed to authenticate with the server. Check RUNNER_TOKEN and API_URL.\n");
-            return ExitCode::UNSPECIFIED_ERROR;
-        }
 
-        $runnerName = $info['data']['runner_name'] ?? 'unknown';
-        $groupName  = $info['data']['group_name']  ?? 'unknown';
-        $this->stdout("Runner '{$runnerName}' started. Group: '{$groupName}'. Polling {$this->apiUrl}\n");
+        return $info;
+    }
 
-        // Graceful shutdown on SIGTERM/SIGINT
+    protected function registerSignalHandlers(): void
+    {
         if (function_exists('pcntl_signal')) {
             pcntl_signal(SIGTERM, function (): void { $this->running = false; });
             pcntl_signal(SIGINT,  function (): void { $this->running = false; });
         }
+    }
 
+    protected function pollLoop(): void
+    {
         $lastHeartbeat = time();
 
         while ($this->running) {
@@ -89,7 +114,6 @@ class RunnerController extends Controller
                 pcntl_signal_dispatch();
             }
 
-            // Periodic heartbeat independent of job polling
             if (time() - $lastHeartbeat >= self::HEARTBEAT_INTERVAL) {
                 $this->apiPost('/api/runner/v1/heartbeat', []);
                 $lastHeartbeat = time();
@@ -107,23 +131,14 @@ class RunnerController extends Controller
 
             $this->executeJob($jobId, $payload);
 
-            $lastHeartbeat = time(); // we just posted, reset timer
+            $lastHeartbeat = time();
         }
-
-        $this->stdout("Runner shutting down.\n");
-        return ExitCode::OK;
     }
 
     // -------------------------------------------------------------------------
     // Token resolution — static env var or self-registration
     // -------------------------------------------------------------------------
 
-    /**
-     * Return the runner token to use, in order of preference:
-     *   1. RUNNER_TOKEN env var (explicit)
-     *   2. Cached token file (from a previous self-registration)
-     *   3. Self-registration via RUNNER_BOOTSTRAP_SECRET
-     */
     protected function resolveToken(): string
     {
         $explicit = $_ENV['RUNNER_TOKEN'] ?? '';
@@ -138,7 +153,16 @@ class RunnerController extends Controller
             return '';
         }
 
-        // Check for a cached token from a previous registration
+        $cached = $this->readCachedToken($name);
+        if ($cached !== '') {
+            return $cached;
+        }
+
+        return $this->selfRegister($name, $bootstrapSecret);
+    }
+
+    protected function readCachedToken(string $name): string
+    {
         $cacheFile = $this->tokenCacheFile($name);
         if (file_exists($cacheFile)) {
             $cached = trim((string)file_get_contents($cacheFile));
@@ -146,8 +170,11 @@ class RunnerController extends Controller
                 return $cached;
             }
         }
+        return '';
+    }
 
-        // Self-register with the server
+    protected function selfRegister(string $name, string $bootstrapSecret): string
+    {
         $this->stdout("No token found — registering as '{$name}' with the server...\n");
 
         $url     = $this->apiUrl . '/api/runner/v1/register';
@@ -187,9 +214,9 @@ class RunnerController extends Controller
             return '';
         }
 
-        $token = $response['data']['token'];
+        $token     = $response['data']['token'];
+        $cacheFile = $this->tokenCacheFile($name);
 
-        // Cache the token so we don't re-register on every restart
         \app\helpers\FileHelper::safeFilePutContents($cacheFile, $token);
         \app\helpers\FileHelper::safeChmod($cacheFile, 0600);
 
@@ -205,7 +232,7 @@ class RunnerController extends Controller
     {
         $result = $this->apiPost('/api/runner/v1/jobs/claim', []);
         if ($result === null || !isset($result['data'])) {
-            return null; // 204 or error
+            return null;
         }
         return $result['data'];
     }
@@ -213,11 +240,47 @@ class RunnerController extends Controller
     private function executeJob(int $jobId, array $payload): void
     {
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $jobId . '_' . uniqid('', true) . '.ndjson';
-        $pluginDir    = dirname(__DIR__) . '/ansible/callback_plugins';
-
         $cmd = $this->buildCommand($payload, $callbackFile);
+        $env = $this->buildProcessEnv($callbackFile);
 
-        $env = array_merge(getenv() ?: [], [
+        $inventoryTmpFile = null;
+        if ($payload['inventory_type'] === 'static') {
+            $inventoryTmpFile = $this->writeInventoryTempFile($payload['inventory_content'] ?? "localhost\n");
+            $cmd = array_map(
+                fn($part) => $part === '__INVENTORY_TMP__' ? $inventoryTmpFile : $part,
+                $cmd
+            );
+        }
+
+        $process = $this->startProcess($jobId, $cmd, $payload, $env);
+        if ($process === null) {
+            return;
+        }
+
+        [$pipes, $proc] = $process;
+        $timeoutMinutes  = (int)($payload['timeout_minutes'] ?? 120);
+
+        [$exitCode, $sequence] = $this->streamProcessOutput($jobId, $proc, $pipes, $timeoutMinutes);
+
+        $this->collectAndSendTasks($jobId, $callbackFile);
+
+        $this->apiPost("/api/runner/v1/jobs/{$jobId}/complete", [
+            'exit_code'   => $exitCode,
+            'has_changes' => false,
+        ]);
+
+        if ($inventoryTmpFile) {
+            \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
+        }
+
+        $this->stdout("Job #{$jobId} finished with exit code {$exitCode}.\n");
+    }
+
+    private function buildProcessEnv(string $callbackFile): array
+    {
+        $pluginDir = dirname(__DIR__) . '/ansible/callback_plugins';
+
+        return array_merge(getenv() ?: [], [
             'ANSIBLE_CALLBACK_PLUGINS'   => $pluginDir,
             'ANSIBLE_CALLBACKS_ENABLED'  => 'ansilume_callback',
             'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
@@ -225,27 +288,22 @@ class RunnerController extends Controller
             'ANSIBLE_FORCE_COLOR'        => '1',
             'PYTHONUNBUFFERED'           => '1',
         ]);
+    }
 
-        $inventoryTmpFile = null;
-        if ($payload['inventory_type'] === 'static') {
-            $inventoryTmpFile = $this->writeInventoryTempFile($payload['inventory_content'] ?? "localhost\n");
-            // Replace the placeholder path in cmd
-            $cmd = array_map(
-                fn($part) => $part === '__INVENTORY_TMP__' ? $inventoryTmpFile : $part,
-                $cmd
-            );
-        }
-
+    /**
+     * @return array{array, resource}|null  [pipes, process] or null on failure
+     */
+    private function startProcess(int $jobId, array $cmd, array $payload, array $env): ?array
+    {
         $descriptorspec = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
 
-        // Run from the project root so Ansible finds ansible.cfg there,
-        // which resolves roles_path, collections_path, etc. correctly.
         $projectCwd = $payload['project_path'] ?? null;
-        $process    = proc_open($cmd, $descriptorspec, $pipes, ($projectCwd && is_dir($projectCwd)) ? $projectCwd : null, $env);
+        $cwd        = ($projectCwd && is_dir($projectCwd)) ? $projectCwd : null;
+        $process    = proc_open($cmd, $descriptorspec, $pipes, $cwd, $env);
 
         if (!is_resource($process)) {
             $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
@@ -254,26 +312,34 @@ class RunnerController extends Controller
                 'sequence' => 0,
             ]);
             $this->apiPost("/api/runner/v1/jobs/{$jobId}/complete", ['exit_code' => -1]);
-            return;
+            return null;
         }
 
         fclose($pipes[0]);
-
         stream_set_blocking($pipes[1], false);
         stream_set_blocking($pipes[2], false);
 
-        $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
-        $deadline       = time() + ($timeoutMinutes * 60);
-        $sequence       = 0;
-        $timedOut       = false;
+        return [$pipes, $process];
+    }
+
+    /**
+     * Read stdout/stderr from the process and stream to the server.
+     *
+     * @return array{int, int}  [exit code, final sequence number]
+     */
+    private function streamProcessOutput(int $jobId, $process, array $pipes, int $timeoutMinutes): array
+    {
+        $deadline = time() + ($timeoutMinutes * 60);
+        $sequence = 0;
+        $timedOut = false;
 
         while (!feof($pipes[1]) || !feof($pipes[2])) {
             $remaining = $deadline - time();
             if ($remaining <= 0) {
                 $this->stdout("Job #{$jobId} exceeded timeout of {$timeoutMinutes}m — killing process.\n");
-                proc_terminate($process, 15); // SIGTERM
+                proc_terminate($process, 15);
                 sleep(3);
-                proc_terminate($process, 9);  // SIGKILL
+                proc_terminate($process, 9);
                 $timedOut = true;
                 break;
             }
@@ -315,67 +381,66 @@ class RunnerController extends Controller
             $exitCode = -1;
         }
 
-        // Send task results
-        if (file_exists($callbackFile)) {
-            $tasks = [];
-            $lines = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
-            foreach ($lines as $line) {
-                $data = json_decode($line, true);
-                if (is_array($data)) {
-                    $tasks[] = $data;
-                }
-            }
-            \app\helpers\FileHelper::safeUnlink($callbackFile);
+        return [$exitCode, $sequence];
+    }
 
-            if (!empty($tasks)) {
-                $this->apiPost("/api/runner/v1/jobs/{$jobId}/tasks", ['tasks' => $tasks]);
-            }
+    private function collectAndSendTasks(int $jobId, string $callbackFile): void
+    {
+        if (!file_exists($callbackFile)) {
+            return;
         }
 
-        $hasChanges = false;
-        // has_changes is determined server-side from task data
-
-        $this->apiPost("/api/runner/v1/jobs/{$jobId}/complete", [
-            'exit_code'   => $exitCode,
-            'has_changes' => $hasChanges,
-        ]);
-
-        if ($inventoryTmpFile) {
-            \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
+        $tasks = [];
+        $lines = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+        foreach ($lines as $line) {
+            $data = json_decode($line, true);
+            if (is_array($data)) {
+                $tasks[] = $data;
+            }
         }
+        \app\helpers\FileHelper::safeUnlink($callbackFile);
 
-        $this->stdout("Job #{$jobId} finished with exit code {$exitCode}.\n");
+        if (!empty($tasks)) {
+            $this->apiPost("/api/runner/v1/jobs/{$jobId}/tasks", ['tasks' => $tasks]);
+        }
     }
 
     private function buildCommand(array $payload, string $callbackFile): array
     {
         $cmd = ['ansible-playbook'];
 
-        // Inventory
+        $this->addInventoryArgs($cmd, $payload);
+
+        $cmd[] = $payload['playbook_path'];
+
+        $this->addPlaybookOptions($cmd, $payload);
+
+        return $cmd;
+    }
+
+    private function addInventoryArgs(array &$cmd, array $payload): void
+    {
         if ($payload['inventory_type'] === 'static') {
             $cmd[] = '-i';
-            $cmd[] = '__INVENTORY_TMP__'; // replaced after temp file is written
+            $cmd[] = '__INVENTORY_TMP__';
         } elseif (!empty($payload['inventory_path'])) {
             $cmd[] = '-i';
             $cmd[] = $payload['inventory_path'];
         }
+    }
 
-        // Playbook
-        $cmd[] = $payload['playbook_path'];
-
-        // Verbosity
+    private function addPlaybookOptions(array &$cmd, array $payload): void
+    {
         $verbosity = (int)($payload['verbosity'] ?? 0);
         if ($verbosity > 0) {
             $cmd[] = '-' . str_repeat('v', min($verbosity, 5));
         }
 
-        // Forks
         if (!empty($payload['forks'])) {
             $cmd[] = '--forks';
             $cmd[] = (string)(int)$payload['forks'];
         }
 
-        // Become
         if (!empty($payload['become'])) {
             $cmd[] = '--become';
             $cmd[] = '--become-method';
@@ -384,13 +449,11 @@ class RunnerController extends Controller
             $cmd[] = $payload['become_user'] ?? 'root';
         }
 
-        // Limit
         if (!empty($payload['limit'])) {
             $cmd[] = '--limit';
             $cmd[] = $payload['limit'];
         }
 
-        // Tags
         if (!empty($payload['tags'])) {
             $cmd[] = '--tags';
             $cmd[] = $payload['tags'];
@@ -400,13 +463,10 @@ class RunnerController extends Controller
             $cmd[] = $payload['skip_tags'];
         }
 
-        // Extra vars
         if (!empty($payload['extra_vars'])) {
             $cmd[] = '--extra-vars';
             $cmd[] = $payload['extra_vars'];
         }
-
-        return $cmd;
     }
 
     protected function tokenCacheFile(string $name): string
