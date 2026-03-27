@@ -1,6 +1,9 @@
 build:
   environment:
-    php: "8.2"
+    php:
+      version: "8.2"
+      pecl_extensions:
+        - pcov
   services:
     mysql: 5.7
     redis: 7
@@ -17,7 +20,7 @@ build:
     override:
       - php-scrutinizer-run
       -
-        command: vendor/bin/phpunit --testsuite=Unit --colors=never
+        command: vendor/bin/phpunit --testsuite=Unit --colors=never --coverage-clover clover.xml
         coverage:
           file: clover.xml
           format: php-clover
