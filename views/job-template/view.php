@@ -118,13 +118,13 @@ $this->title = $model->name;
                         $curlExample = 'curl -X POST ' . $triggerUrl;
                     ?>
                     <div class="input-group">
-                        <code id="trigger-curl-example" class="form-control bg-light font-monospace small text-break" style="white-space:pre-wrap;"><?= Html::encode($curlExample) ?></code>
+                        <code id="trigger-curl-example" class="form-control bg-body-secondary font-monospace small text-break" style="white-space:pre-wrap;"><?= Html::encode($curlExample) ?></code>
                         <button class="btn btn-outline-secondary btn-sm"
                                 onclick="navigator.clipboard.writeText('<?= Html::encode($curlExample) ?>')">Copy</button>
                     </div>
                     <p class="mt-2 mb-0 small text-muted">
                         Pass optional overrides via JSON body:
-                        <code>curl -X POST -H 'Content-Type: application/json' -d '{"extra_vars":{"env":"prod"},"limit":"host1"}' <?= Html::encode($triggerUrl) ?></code>
+                        <code class="bg-body-secondary px-1 rounded">curl -X POST -H 'Content-Type: application/json' -d '{"extra_vars":{"env":"prod"},"limit":"host1"}' <?= Html::encode($triggerUrl) ?></code>
                     </p>
                 <?php elseif ($model->trigger_token): ?>
                     <p class="mb-1 text-muted">A trigger token is active. The trigger URL is:</p>
