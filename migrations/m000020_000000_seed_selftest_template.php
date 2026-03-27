@@ -8,8 +8,8 @@ use yii\db\Migration;
  * Seeds a self-test project, inventory, and job template so the installation
  * has something ready to run out of the box.
  *
- * The selftest playbook lives at selftest/selftest.yaml inside the repo and
- * targets localhost only — no SSH keys or remote hosts required.
+ * The selftest playbook lives at ansible/selftest/selftest.yaml inside the
+ * repo and targets localhost only — no SSH keys or remote hosts required.
  */
 class m000020_000000_seed_selftest_template extends Migration
 {
@@ -44,8 +44,8 @@ class m000020_000000_seed_selftest_template extends Migration
         $runnerGroupId  = $this->defaultRunnerGroupId();
 
         // ------------------------------------------------------------------
-        // Project — manual type, local path points to the bundled selftest/
-        // directory that is mounted at /var/www inside the worker container.
+        // Project — manual type, local path points to the bundled
+        // ansible/selftest/ directory mounted at /var/www in the container.
         // ------------------------------------------------------------------
         $this->insert('{{%project}}', [
             'name'        => self::PROJECT_NAME,
@@ -53,7 +53,7 @@ class m000020_000000_seed_selftest_template extends Migration
             'scm_type'    => 'manual',
             'scm_url'     => null,
             'scm_branch'  => 'main',
-            'local_path'  => '/var/www/selftest',
+            'local_path'  => '/var/www/ansible/selftest',
             'status'      => 'synced',
             'last_synced_at' => $now,
             'created_by'  => $ownerId,
@@ -83,7 +83,7 @@ class m000020_000000_seed_selftest_template extends Migration
         // ------------------------------------------------------------------
         $this->insert('{{%job_template}}', [
             'name'            => self::TEMPLATE_NAME,
-            'description'     => 'Runs selftest/selftest.yaml against localhost to verify the Ansible runner is working correctly.',
+            'description'     => 'Runs ansible/selftest/selftest.yaml against localhost to verify the Ansible runner is working correctly.',
             'project_id'      => $projectId,
             'inventory_id'    => $inventoryId,
             'credential_id'   => null,

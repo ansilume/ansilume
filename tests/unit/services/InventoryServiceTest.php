@@ -6,6 +6,7 @@ namespace app\tests\unit\services;
 
 use app\models\Inventory;
 use app\models\Project;
+use app\services\AnsibleInventoryRunner;
 use app\services\InventoryService;
 use PHPUnit\Framework\TestCase;
 
@@ -13,8 +14,8 @@ use PHPUnit\Framework\TestCase;
  * Tests for InventoryService guard-clause paths, output parsing,
  * path traversal protection, and file-based inventory resolution.
  *
- * Uses anonymous subclasses to stub isAvailable(), runAnsibleInventory(),
- * and resolveProjectPath() so no real process is spawned and no DB is hit.
+ * Uses a stub runner injected via setRunner() so no real process is
+ * spawned and no DB is hit.
  */
 class InventoryServiceTest extends TestCase
 {
@@ -51,32 +52,26 @@ class InventoryServiceTest extends TestCase
     // -------------------------------------------------------------------------
 
     /**
-     * Create a service stub that doesn't call ansible-inventory.
+     * Create a stub runner that returns canned results without spawning processes.
      */
-    private function makeService(
-        bool $available = true,
-        ?array $runResult = null,
-        ?string $projectPath = null,
-    ): InventoryService {
-        $stubProjectPath = $projectPath;
-
-        return new class($available, $runResult, $stubProjectPath) extends InventoryService {
+    private function makeStubRunner(bool $available = true, ?array $runResult = null): AnsibleInventoryRunner
+    {
+        return new class($available, $runResult) extends AnsibleInventoryRunner {
             public ?string $lastInventoryPath = null;
             public ?string $lastCwd = null;
 
             public function __construct(
                 private readonly bool $stubAvailable,
                 private readonly ?array $stubRunResult,
-                private readonly ?string $stubProjectPath,
             ) {
             }
 
-            protected function isAvailable(): bool
+            public function isAvailable(): bool
             {
                 return $this->stubAvailable;
             }
 
-            protected function runAnsibleInventory(string $inventoryPath, ?string $cwd = null): array
+            public function run(string $inventoryPath, ?string $cwd = null): array
             {
                 $this->lastInventoryPath = $inventoryPath;
                 $this->lastCwd = $cwd;
@@ -85,7 +80,26 @@ class InventoryServiceTest extends TestCase
                     return $this->stubRunResult;
                 }
 
-                return ['groups' => [], 'hosts' => [], 'error' => null];
+                return ['stdout' => '{"_meta":{"hostvars":{}},"all":{"children":[]}}', 'error' => null];
+            }
+        };
+    }
+
+    /**
+     * Create a service stub with an injected runner and optional project path override.
+     */
+    private function makeService(
+        bool $available = true,
+        ?array $runResult = null,
+        ?string $projectPath = null,
+    ): InventoryService {
+        $runner = $this->makeStubRunner($available, $runResult);
+        $stubProjectPath = $projectPath;
+
+        $service = new class($stubProjectPath) extends InventoryService {
+            public function __construct(
+                private readonly ?string $stubProjectPath,
+            ) {
             }
 
             protected function resolveProjectPath(Project $project): ?string
@@ -93,6 +107,9 @@ class InventoryServiceTest extends TestCase
                 return $this->stubProjectPath;
             }
         };
+        $service->setRunner($runner);
+
+        return $service;
     }
 
     /**
@@ -103,31 +120,12 @@ class InventoryServiceTest extends TestCase
         string $projectPath,
         ?array $runResult = null,
     ): InventoryService {
-        return new class($projectPath, $runResult) extends InventoryService {
-            public ?string $lastInventoryPath = null;
-            public ?string $lastCwd = null;
+        $runner = $this->makeStubRunner(true, $runResult);
 
+        $service = new class($projectPath) extends InventoryService {
             public function __construct(
                 private readonly string $stubProjectPath,
-                private readonly ?array $stubRunResult,
             ) {
-            }
-
-            protected function isAvailable(): bool
-            {
-                return true;
-            }
-
-            protected function runAnsibleInventory(string $inventoryPath, ?string $cwd = null): array
-            {
-                $this->lastInventoryPath = $inventoryPath;
-                $this->lastCwd = $cwd;
-
-                if ($this->stubRunResult !== null) {
-                    return $this->stubRunResult;
-                }
-
-                return ['groups' => [], 'hosts' => [], 'error' => null];
             }
 
             protected function resolveProjectPath(Project $project): ?string
@@ -135,6 +133,18 @@ class InventoryServiceTest extends TestCase
                 return $this->stubProjectPath;
             }
         };
+        $service->setRunner($runner);
+
+        return $service;
+    }
+
+    /**
+     * Get the stub runner from a service to inspect captured calls.
+     */
+    private function getRunner(InventoryService $service): AnsibleInventoryRunner
+    {
+        $method = new \ReflectionMethod($service, 'runner');
+        return $method->invoke($service);
     }
 
     private function makeInventory(string $type = Inventory::TYPE_STATIC, ?string $content = null, ?string $sourcePath = null): Inventory
@@ -227,8 +237,9 @@ class InventoryServiceTest extends TestCase
         $result = $service->resolve($inv);
 
         $this->assertNull($result['error']);
-        $this->assertNotNull($service->lastInventoryPath);
-        $this->assertStringEndsWith('/hosts.py', $service->lastInventoryPath);
+        $runner = $this->getRunner($service);
+        $this->assertNotNull($runner->lastInventoryPath);
+        $this->assertStringEndsWith('/hosts.py', $runner->lastInventoryPath);
     }
 
     // =========================================================================
@@ -257,19 +268,23 @@ class InventoryServiceTest extends TestCase
 
     public function testResolveStaticDelegatesToRun(): void
     {
-        $expected = [
-            'groups' => ['web' => ['hosts' => ['host1'], 'children' => [], 'vars' => []]],
-            'hosts'  => ['host1' => ['ansible_host' => '10.0.0.1']],
-            'error'  => null,
-        ];
-        $service = $this->makeService(runResult: $expected);
+        $runnerResult = ['stdout' => json_encode([
+            '_meta' => ['hostvars' => ['host1' => ['ansible_host' => '10.0.0.1']]],
+            'web'   => ['hosts' => ['host1'], 'children' => [], 'vars' => []],
+        ]), 'error' => null];
+        $service = $this->makeService(runResult: $runnerResult);
         $inv = $this->makeInventory(content: "[web]\nhost1 ansible_host=10.0.0.1");
 
         $result = $service->resolve($inv);
 
-        $this->assertSame($expected, $result);
-        $this->assertNotNull($service->lastInventoryPath);
-        $this->assertNull($service->lastCwd);
+        $this->assertNull($result['error']);
+        $this->assertArrayHasKey('web', $result['groups']);
+        $this->assertSame(['host1'], $result['groups']['web']['hosts']);
+        $this->assertArrayHasKey('host1', $result['hosts']);
+        $this->assertSame('10.0.0.1', $result['hosts']['host1']['ansible_host']);
+        $runner = $this->getRunner($service);
+        $this->assertNotNull($runner->lastInventoryPath);
+        $this->assertNull($runner->lastCwd);
     }
 
     public function testResolveStaticTempFileIsCleanedUp(): void
@@ -279,10 +294,10 @@ class InventoryServiceTest extends TestCase
 
         $service->resolve($inv);
 
-        // The temp file should have been deleted (we can check that lastInventoryPath was set)
-        $this->assertNotNull($service->lastInventoryPath);
+        $runner = $this->getRunner($service);
+        $this->assertNotNull($runner->lastInventoryPath);
         // Temp file should no longer exist
-        $this->assertFileDoesNotExist($service->lastInventoryPath);
+        $this->assertFileDoesNotExist($runner->lastInventoryPath);
     }
 
     // =========================================================================
@@ -353,8 +368,9 @@ class InventoryServiceTest extends TestCase
         $result = $service->resolve($inv);
 
         $this->assertNull($result['error']);
-        $this->assertSame(realpath($projectDir . '/hosts.ini'), $service->lastInventoryPath);
-        $this->assertSame($projectDir, $service->lastCwd);
+        $runner = $this->getRunner($service);
+        $this->assertSame(realpath($projectDir . '/hosts.ini'), $runner->lastInventoryPath);
+        $this->assertSame($projectDir, $runner->lastCwd);
     }
 
     public function testResolveFileNestedPath(): void
@@ -371,7 +387,8 @@ class InventoryServiceTest extends TestCase
         $result = $service->resolve($inv);
 
         $this->assertNull($result['error']);
-        $this->assertStringEndsWith('/inventories/production/hosts', $service->lastInventoryPath);
+        $runner = $this->getRunner($service);
+        $this->assertStringEndsWith('/inventories/production/hosts', $runner->lastInventoryPath);
     }
 
     // =========================================================================
@@ -393,7 +410,8 @@ class InventoryServiceTest extends TestCase
         $result = $service->resolve($inv);
 
         $this->assertStringContainsString('Invalid inventory path', $result['error']);
-        $this->assertNull($service->lastInventoryPath);
+        $runner = $this->getRunner($service);
+        $this->assertNull($runner->lastInventoryPath);
     }
 
     public function testResolveFileBlocksAbsolutePath(): void
@@ -432,7 +450,8 @@ class InventoryServiceTest extends TestCase
 
         // realpath() resolves the symlink, which points outside the project
         $this->assertStringContainsString('Invalid inventory path', $result['error']);
-        $this->assertNull($service->lastInventoryPath);
+        $runner = $this->getRunner($service);
+        $this->assertNull($runner->lastInventoryPath);
     }
 
     public function testResolveFileBlocksDeepTraversal(): void
@@ -637,23 +656,21 @@ class InventoryServiceTest extends TestCase
     }
 
     // =========================================================================
-    // runAnsibleInventory() — process handling edge cases
+    // Runner integration
     // =========================================================================
 
-    public function testRunAnsibleInventoryReturnStructure(): void
+    public function testRunnerErrorPropagation(): void
     {
-        // Verify the method always returns the expected structure
-        $service = new InventoryService();
-        $method = new \ReflectionMethod($service, 'runAnsibleInventory');
+        $service = $this->makeService(runResult: [
+            'groups' => [],
+            'hosts' => [],
+            'error' => 'ansible-inventory failed (exit 1): some error',
+        ]);
+        $inv = $this->makeInventory(content: "[web]\nhost1");
 
-        $result = $method->invoke($service, '/nonexistent/inventory/file');
+        $result = $service->resolve($inv);
 
-        // Should have the correct keys regardless of outcome
-        $this->assertArrayHasKey('groups', $result);
-        $this->assertArrayHasKey('hosts', $result);
-        $this->assertArrayHasKey('error', $result);
-        $this->assertIsArray($result['groups']);
-        $this->assertIsArray($result['hosts']);
+        $this->assertStringContainsString('ansible-inventory failed', $result['error']);
     }
 
     public function testTimeoutPropertyIsConfigurable(): void
@@ -663,5 +680,30 @@ class InventoryServiceTest extends TestCase
 
         $service->timeout = 60;
         $this->assertSame(60, $service->timeout);
+    }
+
+    public function testTimeoutPassedToLazyRunner(): void
+    {
+        $service = new InventoryService();
+        $service->timeout = 45;
+
+        $method = new \ReflectionMethod($service, 'runner');
+        $runner = $method->invoke($service);
+
+        $this->assertSame(45, $runner->timeout);
+    }
+
+    public function testSetRunnerOverridesLazyCreation(): void
+    {
+        $service = new InventoryService();
+        $custom = new AnsibleInventoryRunner();
+        $custom->timeout = 99;
+        $service->setRunner($custom);
+
+        $method = new \ReflectionMethod($service, 'runner');
+        $runner = $method->invoke($service);
+
+        $this->assertSame($custom, $runner);
+        $this->assertSame(99, $runner->timeout);
     }
 }

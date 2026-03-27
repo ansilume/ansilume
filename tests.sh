@@ -57,6 +57,7 @@ done < <(find . \
     -not -path "./.composer/*" \
     -not -path "./runtime/*" \
     -not -path "./@runtime/*" \
+    -not -path "./docker/*" \
     -name "*.php" -print0)
 
 if [[ $SYNTAX_ERRORS -eq 0 ]]; then
@@ -75,7 +76,7 @@ while IFS= read -r -d '' file; do
     if ! grep -q "declare(strict_types=1)" "$file" 2>/dev/null; then
         MISSING_STRICT+=("$file")
     fi
-done < <(find controllers models services commands jobs components \
+done < <(find controllers models services commands jobs components helpers mail \
     -name "*.php" -print0 2>/dev/null)
 
 if [[ ${#MISSING_STRICT[@]} -eq 0 ]]; then
@@ -393,9 +394,9 @@ fi
 # =============================================================================
 section "Consistency checks"
 
-# Every controller should extend BaseController or yii Controller
-CTRL_ISSUES=$(grep -rLn "extends BaseController\|extends Controller\|extends \\\yii" controllers/ 2>/dev/null \
-    | grep -v "^Binary\|api/" || true)
+# Every controller should extend BaseController, a Base*Controller, or yii Controller
+CTRL_ISSUES=$(grep -rLn "extends BaseController\|extends Base.*Controller\|extends Controller\|extends \\\yii" controllers/ 2>/dev/null \
+    | grep -v "^Binary" || true)
 if [[ -z "$CTRL_ISSUES" ]]; then
     ok "All controllers extend a base controller"
 else

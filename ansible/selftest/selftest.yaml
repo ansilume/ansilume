@@ -1,0 +1,315 @@
+---
+- name: Ansilume Self-Test
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    selftest_message: "Hello from Ansilume!"
+
+    # Paths the runner needs to read/write
+    app_root: /var/www
+    runtime_dir: /var/www/runtime
+    projects_dir: /var/www/runtime/projects
+    artifacts_dir: /var/www/runtime/artifacts
+    callback_plugin_dir: /var/www/ansible/callback_plugins
+    selftest_dir: /var/www/ansible/selftest
+    tmp_dir: /tmp
+
+    # Internal service endpoints
+    app_health_url: "http://app:80/health"
+
+  tasks:
+    # ==================================================================
+    # Basic runner checks
+    # ==================================================================
+
+    - name: Print welcome message
+      ansible.builtin.debug:
+        msg: "{{ selftest_message }}"
+
+    - name: Check Python version
+      ansible.builtin.command: python3 --version
+      register: python_version
+      changed_when: false
+
+    - name: Show Python version
+      ansible.builtin.debug:
+        msg: "Python: {{ python_version.stdout }}"
+
+    - name: Check Ansible version
+      ansible.builtin.command: ansible --version
+      register: ansible_version_out
+      changed_when: false
+
+    - name: Show Ansible version
+      ansible.builtin.debug:
+        msg: "{{ ansible_version_out.stdout_lines[0] }}"
+
+    - name: Gather hostname
+      ansible.builtin.debug:
+        msg: "Running on host: {{ ansible_hostname }}"
+
+    # ==================================================================
+    # Path existence checks
+    # ==================================================================
+
+    - name: Check application root exists
+      ansible.builtin.stat:
+        path: "{{ app_root }}"
+      register: stat_app_root
+
+    - name: Assert application root exists and is a directory
+      ansible.builtin.assert:
+        that:
+          - stat_app_root.stat.exists
+          - stat_app_root.stat.isdir
+        fail_msg: "Application root {{ app_root }} does not exist or is not a directory"
+
+    - name: Check runtime directory exists
+      ansible.builtin.stat:
+        path: "{{ runtime_dir }}"
+      register: stat_runtime
+
+    - name: Assert runtime directory exists and is writable
+      ansible.builtin.assert:
+        that:
+          - stat_runtime.stat.exists
+          - stat_runtime.stat.isdir
+          - stat_runtime.stat.writeable
+        fail_msg: "Runtime directory {{ runtime_dir }} is missing or not writable"
+
+    - name: Check projects directory exists
+      ansible.builtin.stat:
+        path: "{{ projects_dir }}"
+      register: stat_projects
+
+    - name: Assert projects directory exists and is writable
+      ansible.builtin.assert:
+        that:
+          - stat_projects.stat.exists
+          - stat_projects.stat.isdir
+          - stat_projects.stat.writeable
+        fail_msg: "Projects directory {{ projects_dir }} is missing or not writable"
+
+    - name: Check artifacts directory exists
+      ansible.builtin.stat:
+        path: "{{ artifacts_dir }}"
+      register: stat_artifacts
+
+    - name: Assert artifacts directory exists and is writable
+      ansible.builtin.assert:
+        that:
+          - stat_artifacts.stat.exists
+          - stat_artifacts.stat.isdir
+          - stat_artifacts.stat.writeable
+        fail_msg: "Artifacts directory {{ artifacts_dir }} is missing or not writable"
+
+    - name: Check callback plugin directory exists
+      ansible.builtin.stat:
+        path: "{{ callback_plugin_dir }}"
+      register: stat_callback
+
+    - name: Assert callback plugin directory exists
+      ansible.builtin.assert:
+        that:
+          - stat_callback.stat.exists
+          - stat_callback.stat.isdir
+        fail_msg: "Callback plugin directory {{ callback_plugin_dir }} does not exist"
+
+    - name: Check callback plugin file exists
+      ansible.builtin.stat:
+        path: "{{ callback_plugin_dir }}/ansilume_callback.py"
+      register: stat_callback_py
+
+    - name: Assert callback plugin file is readable
+      ansible.builtin.assert:
+        that:
+          - stat_callback_py.stat.exists
+          - stat_callback_py.stat.readable
+        fail_msg: "Callback plugin ansilume_callback.py is missing or not readable"
+
+    - name: Check selftest directory exists
+      ansible.builtin.stat:
+        path: "{{ selftest_dir }}"
+      register: stat_selftest
+
+    - name: Assert selftest directory exists
+      ansible.builtin.assert:
+        that:
+          - stat_selftest.stat.exists
+          - stat_selftest.stat.isdir
+        fail_msg: "Selftest directory {{ selftest_dir }} does not exist"
+
+    - name: Check /tmp is writable
+      ansible.builtin.stat:
+        path: "{{ tmp_dir }}"
+      register: stat_tmp
+
+    - name: Assert /tmp is writable
+      ansible.builtin.assert:
+        that:
+          - stat_tmp.stat.exists
+          - stat_tmp.stat.writeable
+        fail_msg: "/tmp is not writable — runner cannot create temp files"
+
+    # ==================================================================
+    # File permission checks
+    # ==================================================================
+
+    - name: Check runtime directory permissions (should be owner-writable)
+      ansible.builtin.assert:
+        that:
+          - stat_runtime.stat.mode is match("^07[57]0$")
+        success_msg: "Runtime directory permissions OK: {{ stat_runtime.stat.mode }}"
+        fail_msg: >-
+          Runtime directory has unexpected permissions: {{ stat_runtime.stat.mode }}.
+          Expected 0750 or 0770.
+      register: runtime_perms
+      failed_when: false
+
+    - name: Warn about runtime directory permissions
+      ansible.builtin.debug:
+        msg: "WARNING: {{ runtime_perms.assertion }}"
+      when: runtime_perms is not succeeded
+
+    - name: Check artifacts directory permissions
+      ansible.builtin.assert:
+        that:
+          - stat_artifacts.stat.mode is match("^07[57]0$")
+        success_msg: "Artifacts directory permissions OK: {{ stat_artifacts.stat.mode }}"
+        fail_msg: >-
+          Artifacts directory has unexpected permissions: {{ stat_artifacts.stat.mode }}.
+          Expected 0750 or 0770.
+      register: artifacts_perms
+      failed_when: false
+
+    - name: Warn about artifacts directory permissions
+      ansible.builtin.debug:
+        msg: "WARNING: {{ artifacts_perms.assertion }}"
+      when: artifacts_perms is not succeeded
+
+    # ==================================================================
+    # Disk space checks
+    # ==================================================================
+
+    - name: Check disk space on /tmp
+      ansible.builtin.command: df -m /tmp
+      register: df_tmp
+      changed_when: false
+
+    - name: Parse /tmp free space
+      ansible.builtin.set_fact:
+        tmp_free_mb: "{{ df_tmp.stdout_lines[1].split()[3] | int }}"
+
+    - name: Assert /tmp has at least 100 MB free
+      ansible.builtin.assert:
+        that:
+          - tmp_free_mb | int >= 100
+        fail_msg: "/tmp has only {{ tmp_free_mb }} MB free — jobs may fail"
+
+    - name: Check disk space on runtime directory
+      ansible.builtin.command: "df -m {{ runtime_dir }}"
+      register: df_runtime
+      changed_when: false
+
+    - name: Parse runtime free space
+      ansible.builtin.set_fact:
+        runtime_free_mb: "{{ df_runtime.stdout_lines[1].split()[3] | int }}"
+
+    - name: Assert runtime has at least 100 MB free
+      ansible.builtin.assert:
+        that:
+          - runtime_free_mb | int >= 100
+        fail_msg: "Runtime directory has only {{ runtime_free_mb }} MB free — project syncs and artifacts may fail"
+
+    # ==================================================================
+    # Connectivity checks
+    # ==================================================================
+
+    - name: Check app health endpoint
+      ansible.builtin.uri:
+        url: "{{ app_health_url }}"
+        method: GET
+        return_content: true
+        status_code: [200, 503]
+        timeout: 10
+      register: health_response
+      failed_when: false
+
+    - name: Show health endpoint result
+      ansible.builtin.debug:
+        msg: >-
+          Health endpoint: {{ health_response.status | default('unreachable') }} —
+          {{ (health_response.json.status | default('unknown'))
+             if health_response.json is defined
+             else 'could not parse response' }}
+      when: health_response.status is defined
+
+    - name: Warn if health endpoint is unreachable
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Could not reach {{ app_health_url }}.
+          This is expected if running outside the Docker network.
+      when: health_response.status is not defined
+
+    - name: Check DNS resolution of database host
+      ansible.builtin.command: getent hosts db
+      register: dns_db
+      changed_when: false
+      failed_when: false
+
+    - name: Show database DNS result
+      ansible.builtin.debug:
+        msg: "{{ 'DB host resolved: ' ~ dns_db.stdout if dns_db.rc == 0 else 'WARNING: Cannot resolve db host (expected outside Docker network)' }}"
+
+    - name: Check DNS resolution of Redis host
+      ansible.builtin.command: getent hosts redis
+      register: dns_redis
+      changed_when: false
+      failed_when: false
+
+    - name: Show Redis DNS result
+      ansible.builtin.debug:
+        msg: "{{ 'Redis host resolved: ' ~ dns_redis.stdout if dns_redis.rc == 0 else 'WARNING: Cannot resolve redis host (expected outside Docker network)' }}"
+
+    # ==================================================================
+    # Write / read test (demonstrates a change)
+    # ==================================================================
+
+    - name: Write a temp file (demonstrates a change)
+      ansible.builtin.copy:
+        content: "selftest ran at {{ ansible_date_time.iso8601 }}\n"
+        dest: /tmp/ansilume_selftest.txt
+        mode: '0644'
+
+    - name: Read back the temp file
+      ansible.builtin.slurp:
+        src: /tmp/ansilume_selftest.txt
+      register: selftest_file
+
+    - name: Show file content
+      ansible.builtin.debug:
+        msg: "{{ selftest_file.content | b64decode | trim }}"
+
+    - name: Clean up temp file
+      ansible.builtin.file:
+        path: /tmp/ansilume_selftest.txt
+        state: absent
+
+    # ==================================================================
+    # Skipped task (tests task status handling in callback)
+    # ==================================================================
+
+    - name: Simulate a skipped task
+      ansible.builtin.debug:
+        msg: "This task is skipped intentionally"
+      when: false
+
+    # ==================================================================
+    # Summary
+    # ==================================================================
+
+    - name: All checks passed
+      ansible.builtin.debug:
+        msg: "Self-test complete. Ansilume runner is operational."
