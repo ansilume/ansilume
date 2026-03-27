@@ -252,23 +252,44 @@ class RunnerController extends Controller
 
         fclose($pipes[0]);
 
-        $sequence = 0;
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+
+        $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
+        $deadline       = time() + ($timeoutMinutes * 60);
+        $sequence       = 0;
+        $timedOut       = false;
+
         while (!feof($pipes[1]) || !feof($pipes[2])) {
-            $stdout = fread($pipes[1], self::LOG_CHUNK_BYTES);
-            if ($stdout !== false && $stdout !== '') {
-                $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                    'stream'   => 'stdout',
-                    'content'  => $stdout,
-                    'sequence' => $sequence++,
-                ]);
+            $remaining = $deadline - time();
+            if ($remaining <= 0) {
+                $this->stdout("Job #{$jobId} exceeded timeout of {$timeoutMinutes}m — killing process.\n");
+                proc_terminate($process, 15); // SIGTERM
+                sleep(3);
+                proc_terminate($process, 9);  // SIGKILL
+                $timedOut = true;
+                break;
             }
-            $stderr = fread($pipes[2], self::LOG_CHUNK_BYTES);
-            if ($stderr !== false && $stderr !== '') {
-                $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                    'stream'   => 'stderr',
-                    'content'  => $stderr,
-                    'sequence' => $sequence++,
-                ]);
+
+            $read    = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+            $write   = null;
+            $except  = null;
+            $changed = @stream_select($read, $write, $except, min($remaining, 5));
+
+            if ($changed === false || $changed === 0) {
+                continue;
+            }
+
+            foreach ($read as $stream) {
+                $chunk = fread($stream, self::LOG_CHUNK_BYTES);
+                if ($chunk !== false && $chunk !== '') {
+                    $streamName = ($stream === $pipes[1]) ? 'stdout' : 'stderr';
+                    $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
+                        'stream'   => $streamName,
+                        'content'  => $chunk,
+                        'sequence' => $sequence++,
+                    ]);
+                }
             }
         }
 
@@ -276,6 +297,15 @@ class RunnerController extends Controller
         fclose($pipes[2]);
 
         $exitCode = proc_close($process);
+
+        if ($timedOut) {
+            $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
+                'stream'   => 'stderr',
+                'content'  => "\n[ansilume] Job killed: exceeded timeout of {$timeoutMinutes} minutes.\n",
+                'sequence' => $sequence++,
+            ]);
+            $exitCode = -1;
+        }
 
         // Send task results
         if (file_exists($callbackFile)) {

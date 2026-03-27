@@ -106,6 +106,7 @@ class JobClaimService extends Component
             'become_user'      => $raw['become_user'] ?? 'root',
             'tags'             => $raw['tags'] ?? null,
             'skip_tags'        => $raw['skip_tags'] ?? null,
+            'timeout_minutes'  => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
         ];
     }
 
