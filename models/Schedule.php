@@ -90,7 +90,6 @@ class Schedule extends ActiveRecord
     public function computeNextRunAt(): void
     {
         try {
-            $tz   = new \DateTimeZone($this->timezone ?: 'UTC');
             $cron = new CronExpression($this->cron_expression);
             $next = $cron->getNextRunDate('now', 0, false, $this->timezone ?: 'UTC');
             $this->next_run_at = $next->getTimestamp();

@@ -30,8 +30,10 @@ class UserForm extends Model
         $form->status       = $user->status;
         $form->is_superadmin = (bool)$user->is_superadmin;
 
-        $roles = \Yii::$app->authManager->getRolesByUser($user->id);
-        if ($roles) {
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        $roles = $auth->getRolesByUser($user->id);
+        if (!empty($roles)) {
             $form->role = array_key_first($roles);
         }
 
@@ -132,6 +134,7 @@ class UserForm extends Model
 
     private function syncRole(User $user): void
     {
+        /** @var \yii\rbac\ManagerInterface $auth */
         $auth = \Yii::$app->authManager;
         $auth->revokeAll($user->id);
 

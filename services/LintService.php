@@ -112,7 +112,7 @@ class LintService extends Component
     }
 
     /**
-     * @return array{string, int}  [combined output, exit code]
+     * @return array{0: string, 1: int}  [combined output, exit code]
      */
     protected function execute(?string $playbook, string $cwd): array
     {

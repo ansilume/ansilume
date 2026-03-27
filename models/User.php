@@ -60,12 +60,12 @@ class User extends ActiveRecord implements IdentityInterface
 
     // --- IdentityInterface ---
 
-    public static function findIdentity($id): ?static
+    public static function findIdentity($id): ?self
     {
         return static::findOne(['id' => $id, 'status' => self::STATUS_ACTIVE]);
     }
 
-    public static function findIdentityByAccessToken($token, $type = null): ?static
+    public static function findIdentityByAccessToken($token, $type = null): ?self
     {
         $apiToken = \app\models\ApiToken::findByRawToken((string)$token);
         if ($apiToken === null) {
@@ -74,7 +74,7 @@ class User extends ActiveRecord implements IdentityInterface
         return static::findOne(['id' => $apiToken->user_id, 'status' => self::STATUS_ACTIVE]);
     }
 
-    public static function findByUsername(string $username): ?static
+    public static function findByUsername(string $username): ?self
     {
         return static::findOne(['username' => $username, 'status' => self::STATUS_ACTIVE]);
     }
@@ -140,7 +140,7 @@ class User extends ActiveRecord implements IdentityInterface
     /**
      * Find a user by a valid (non-expired) password reset token.
      */
-    public static function findByPasswordResetToken(string $token): ?static
+    public static function findByPasswordResetToken(string $token): ?self
     {
         if (empty($token)) {
             return null;

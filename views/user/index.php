@@ -25,7 +25,11 @@ $this->title = 'Users';
         </thead>
         <tbody>
         <?php foreach ($dataProvider->getModels() as $user): ?>
-            <?php $roles = \Yii::$app->authManager->getRolesByUser($user->id); ?>
+            <?php
+            /** @var \yii\rbac\ManagerInterface $auth */
+            $auth = \Yii::$app->authManager;
+            $roles = $auth->getRolesByUser($user->id);
+            ?>
             <tr>
                 <td><?= $user->id ?></td>
                 <td><?= Html::a(Html::encode($user->username), ['view', 'id' => $user->id]) ?></td>

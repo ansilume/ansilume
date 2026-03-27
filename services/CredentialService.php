@@ -50,7 +50,7 @@ class CredentialService extends Component
      */
     public function redact(array $secrets): array
     {
-        return array_map(fn($v) => '***REDACTED***', $secrets);
+        return array_fill_keys(array_keys($secrets), '***REDACTED***');
     }
 
     /**
@@ -99,7 +99,6 @@ class CredentialService extends Component
             // Extract public key; -P "" supplies empty passphrase so ssh-keygen
             // never prompts interactively (no TTY available in the web process).
             $pubOut  = [];
-            $pubKey  = '';
             $this->runCommand(['ssh-keygen', '-y', '-P', '', '-f', $tmp], $pubOut);
             $pubKey = trim(implode('', $pubOut));
 

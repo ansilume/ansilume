@@ -41,7 +41,9 @@ class UserController extends BaseController
     public function actionView(int $id): string
     {
         $user  = $this->findModel($id);
-        $roles = \Yii::$app->authManager->getRolesByUser($id);
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        $roles = $auth->getRolesByUser($id);
         return $this->render('view', ['user' => $user, 'roles' => $roles]);
     }
 

@@ -174,20 +174,23 @@ class ArtifactService extends Component
      */
     protected function resolveStoragePath(Job $job): string
     {
-        $base = \Yii::getAlias($this->storagePath);
+        $base = \Yii::getAlias($this->storagePath, false);
+        if ($base === false) {
+            throw new \RuntimeException("Invalid storage path alias: {$this->storagePath}");
+        }
         return $base . DIRECTORY_SEPARATOR . 'job_' . $job->id;
     }
 
     private function generateStoredName(string $originalName): string
     {
-        $ext = pathinfo($originalName, PATHINFO_EXTENSION);
+        $ext = (string)pathinfo($originalName, PATHINFO_EXTENSION);
         $name = bin2hex(random_bytes(16));
         return $ext !== '' ? $name . '.' . $ext : $name;
     }
 
     private function detectMimeType(string $path, string $displayName): string
     {
-        $ext = strtolower(pathinfo($displayName, PATHINFO_EXTENSION));
+        $ext = strtolower((string)pathinfo($displayName, PATHINFO_EXTENSION));
 
         $map = [
             'json' => 'application/json',

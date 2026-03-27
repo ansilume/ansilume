@@ -56,8 +56,11 @@ class ProjectAccessChecker extends Component
             return null;
         }
 
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+
         // Superadmins and RBAC admins get unrestricted operator access.
-        if ($user->is_superadmin || \Yii::$app->authManager->checkAccess($userId, 'admin')) {
+        if ($user->is_superadmin || $auth->checkAccess($userId, 'admin')) {
             return TeamProject::ROLE_OPERATOR;
         }
 
@@ -68,7 +71,7 @@ class ProjectAccessChecker extends Component
 
         // If the project is not restricted to any team, fall back to RBAC-only.
         if (!$hasAnyTeamAccess) {
-            return \Yii::$app->authManager->checkAccess($userId, 'project.view')
+            return $auth->checkAccess($userId, 'project.view')
                 ? TeamProject::ROLE_OPERATOR   // RBAC operator-or-above can do everything
                 : null;
         }
@@ -121,7 +124,9 @@ class ProjectAccessChecker extends Component
             return ['0=1']; // No access
         }
 
-        if ($user->is_superadmin || \Yii::$app->authManager->checkAccess($userId, 'admin')) {
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        if ($user->is_superadmin || $auth->checkAccess($userId, 'admin')) {
             return null; // No filter — see everything
         }
 
