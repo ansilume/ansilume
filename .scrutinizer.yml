@@ -1,9 +1,6 @@
 build:
   environment:
-    php:
-      version: "8.2"
-    postgresql: false
-    redis: false
+    php: "8.2"
   dependencies:
     override:
       - composer self-update --2
