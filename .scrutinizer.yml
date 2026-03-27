@@ -8,6 +8,14 @@ build:
     override:
       - composer self-update --2
       - composer install --no-interaction --prefer-dist
+  tests:
+    override:
+      - php-scrutinizer-run
+      -
+        command: vendor/bin/phpunit --testsuite=Unit --colors=never
+        coverage:
+          file: clover.xml
+          format: php-clover
 
 checks:
   php:
