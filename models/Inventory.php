@@ -14,6 +14,9 @@ use yii\db\ActiveRecord;
  * @property string|null $content
  * @property string|null $source_path
  * @property int|null    $project_id
+ * @property string|null $parsed_hosts  Cached JSON from ansible-inventory
+ * @property string|null $parsed_error  Error from last parse attempt
+ * @property int|null    $parsed_at     Unix timestamp of last parse
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at

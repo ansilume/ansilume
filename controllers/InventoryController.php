@@ -95,7 +95,7 @@ class InventoryController extends BaseController
 
         /** @var \app\services\InventoryService $service */
         $service = \Yii::$app->get('inventoryService');
-        $result  = $service->resolve($model);
+        $result  = $service->resolveAndCache($model);
 
         return $this->asJson($result);
     }

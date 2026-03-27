@@ -38,6 +38,48 @@ class InventoryService extends Component
         };
     }
 
+    /**
+     * Parse inventory and cache results in the database.
+     *
+     * @return array{groups: array, hosts: array, error: ?string}
+     */
+    public function resolveAndCache(Inventory $inventory): array
+    {
+        $result = $this->resolve($inventory);
+
+        $inventory->parsed_hosts = $result['error'] === null
+            ? json_encode(['groups' => $result['groups'], 'hosts' => $result['hosts']], JSON_UNESCAPED_SLASHES)
+            : null;
+        $inventory->parsed_error = $result['error'];
+        $inventory->parsed_at    = time();
+        $inventory->save(false, ['parsed_hosts', 'parsed_error', 'parsed_at']);
+
+        return $result;
+    }
+
+    /**
+     * Return cached parse results, or null if not yet parsed.
+     *
+     * @return array{groups: array, hosts: array, error: ?string}|null
+     */
+    public function getCached(Inventory $inventory): ?array
+    {
+        if ($inventory->parsed_at === null) {
+            return null;
+        }
+
+        if ($inventory->parsed_error !== null) {
+            return ['groups' => [], 'hosts' => [], 'error' => $inventory->parsed_error];
+        }
+
+        $data = json_decode($inventory->parsed_hosts ?? '{}', true) ?: [];
+        return [
+            'groups' => $data['groups'] ?? [],
+            'hosts'  => $data['hosts'] ?? [],
+            'error'  => null,
+        ];
+    }
+
     protected function resolveStatic(Inventory $inventory): array
     {
         $content = $inventory->content;
