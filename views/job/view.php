@@ -312,7 +312,8 @@ if (logEl.scrollHeight > logEl.clientHeight) {
                 badgeEl.className   = 'badge text-bg-' + (statusClasses[data.status] || 'secondary') + ' ms-2 fs-6';
 
                 if (data.finished) {
-                    if (liveEl) liveEl.remove();
+                    // Reload to show PLAY RECAP, tasks, and artifacts
+                    window.location.reload();
                     return;
                 }
                 setTimeout(poll, 2500);
