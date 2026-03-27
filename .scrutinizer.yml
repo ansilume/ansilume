@@ -1,11 +1,6 @@
 build:
   environment:
     php: "8.2"
-    variables:
-      DB_HOST: "127.0.0.1"
-      DB_USER: "ansilume"
-      DB_PASSWORD: "secret"
-      DB_NAME: "ansilume"
   services:
     mysql: 5.7
   dependencies:
@@ -14,8 +9,16 @@ build:
       - composer install --no-interaction --prefer-dist
   tests:
     before:
+      - echo "=== DEBUG ENV ===" && env | sort
+      - echo "=== DEBUG php ini variables_order ===" && php -r "echo ini_get('variables_order').PHP_EOL;"
+      - echo "=== DEBUG php ini auto_globals_jit ===" && php -r "echo ini_get('auto_globals_jit').PHP_EOL;"
       - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\n' > .env
+      - echo "=== DEBUG .env file ===" && cat .env
+      - echo "=== DEBUG mysql connectivity ===" && mysql -u root -h 127.0.0.1 -e "SELECT 1 AS mysql_works;" || echo "MYSQL CONNECTION FAILED"
       - mysql -u root -h 127.0.0.1 -e "CREATE DATABASE ansilume; CREATE USER 'ansilume'@'%' IDENTIFIED BY 'secret'; GRANT ALL ON ansilume.* TO 'ansilume'@'%'; FLUSH PRIVILEGES;"
+      - echo "=== DEBUG mysql user test ===" && mysql -u ansilume -psecret -h 127.0.0.1 -e "SHOW DATABASES;" || echo "ANSILUME USER LOGIN FAILED"
+      - echo "=== DEBUG phpdotenv loading ===" && php -r "require 'vendor/autoload.php'; \$d = \Dotenv\Dotenv::createUnsafeImmutable(__DIR__); \$d->safeLoad(); echo 'getenv DB_HOST=' . getenv('DB_HOST') . PHP_EOL; echo '\$_ENV DB_HOST=' . (\$_ENV['DB_HOST'] ?? 'NOT SET') . PHP_EOL; echo '\$_SERVER DB_HOST=' . (\$_SERVER['DB_HOST'] ?? 'NOT SET') . PHP_EOL;"
+      - echo "=== DEBUG db.php eval ===" && php -r "require 'vendor/autoload.php'; \$d = \Dotenv\Dotenv::createUnsafeImmutable(__DIR__); \$d->safeLoad(); \$db = require 'config/db.php'; echo 'DSN=' . \$db['dsn'] . PHP_EOL; echo 'USER=' . \$db['username'] . PHP_EOL;"
       - php yii migrate --interactive=0
     override:
       - php-scrutinizer-run
