@@ -1,15 +1,19 @@
 build:
   environment:
     php: "8.2"
+    mysql: 5.7
   dependencies:
     override:
       - composer self-update --2
       - composer install --no-interaction --prefer-dist
   tests:
+    before:
+      - mysql -u root -e "CREATE DATABASE ansilume; GRANT ALL ON ansilume.* TO 'ansilume'@'localhost' IDENTIFIED BY 'secret'; FLUSH PRIVILEGES;"
+      - DB_HOST=localhost DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume php yii migrate --interactive=0
     override:
       - php-scrutinizer-run
       -
-        command: vendor/bin/phpunit --testsuite=Unit --colors=never
+        command: DB_HOST=localhost DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume vendor/bin/phpunit --testsuite=Unit --colors=never
         coverage:
           file: clover.xml
           format: php-clover
