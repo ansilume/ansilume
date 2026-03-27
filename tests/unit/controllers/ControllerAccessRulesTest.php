@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\controllers;
 
+use app\controllers\AuditLogController;
 use app\controllers\CredentialController;
 use app\controllers\JobTemplateController;
 use app\controllers\ProjectController;
@@ -76,6 +77,28 @@ class ControllerAccessRulesTest extends TestCase
         $this->assertArrayHasKey($action, $verbRules, "Action '{$action}' must have a verb rule.");
         $this->assertContains('POST', $verbRules[$action], "Action '{$action}' must allow POST.");
         $this->assertNotContains('GET', $verbRules[$action], "Action '{$action}' must NOT allow GET.");
+    }
+
+    // -------------------------------------------------------------------------
+    // AuditLogController
+    // -------------------------------------------------------------------------
+
+    public function testAuditLogIndexRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(AuditLogController::class);
+        $this->assertActionRequiresRole($rules, 'index', 'user.view');
+    }
+
+    public function testAuditLogViewRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(AuditLogController::class);
+        $this->assertActionRequiresRole($rules, 'view', 'user.view');
+    }
+
+    public function testAuditLogHasNoVerbRules(): void
+    {
+        $verbs = $this->getVerbRules(AuditLogController::class);
+        $this->assertEmpty($verbs, 'AuditLogController should have no verb restrictions (read-only).');
     }
 
     // -------------------------------------------------------------------------

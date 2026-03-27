@@ -179,7 +179,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
     /**
      * Build the environment variables for the Ansible subprocess.
      */
-    private function buildProcessEnv(string $callbackFile, string $artifactDir): array
+    protected function buildProcessEnv(string $callbackFile, string $artifactDir): array
     {
         return array_merge(getenv() ?: [], [
             'ANSIBLE_CALLBACK_PLUGINS'  => dirname(__DIR__) . '/ansible/callback_plugins',
@@ -285,7 +285,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      * Parse NDJSON lines and persist each as a JobTask record.
      * Returns true if any task reported a change.
      */
-    private function persistTaskLines(Job $job, array $lines): bool
+    protected function persistTaskLines(Job $job, array $lines): bool
     {
         $hasChanges = false;
 
@@ -333,7 +333,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         return $ansibleCmd;
     }
 
-    private function buildAnsibleCommand(array $payload): array
+    protected function buildAnsibleCommand(array $payload): array
     {
         $cmd = ['ansible-playbook'];
 
@@ -353,7 +353,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
     /**
      * Append optional playbook flags (verbosity, forks, become, limit, tags, extra-vars).
      */
-    private function addPlaybookOptions(array &$cmd, array $payload): void
+    protected function addPlaybookOptions(array &$cmd, array $payload): void
     {
         $verbosity = (int)($payload['verbosity'] ?? 0);
         if ($verbosity > 0) {
@@ -400,7 +400,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      * The container is ephemeral (--rm) and runs as the current user to avoid
      * file ownership issues on mounted volumes.
      */
-    private function wrapInDocker(array $ansibleCmd, array $payload): array
+    protected function wrapInDocker(array $ansibleCmd, array $payload): array
     {
         $image       = $_ENV['RUNNER_DOCKER_IMAGE'] ?? 'cytopia/ansible:latest';
         $projectPath = $this->resolveProjectPath($payload);
@@ -496,7 +496,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      * a malicious playbook from tricking cleanup into deleting files
      * outside the artifact directory.
      */
-    private function cleanupDirectory(string $dir): void
+    protected function cleanupDirectory(string $dir): void
     {
         if (!is_dir($dir)) {
             return;
@@ -525,7 +525,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      * Symlinks are unlinked but never followed; real paths are verified
      * to be inside the parent directory (defense in depth).
      */
-    private function removeItem(\SplFileInfo $item, string $realDir): void
+    protected function removeItem(\SplFileInfo $item, string $realDir): void
     {
         $path = $item->getPathname();
 

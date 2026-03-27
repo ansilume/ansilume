@@ -113,12 +113,8 @@ class InventoryService extends Component
             return ['groups' => [], 'hosts' => [], 'error' => 'Project workspace not found — sync the project first.'];
         }
 
-        $inventoryPath = $projectPath . '/' . ltrim((string)$inventory->source_path, '/');
-        $realInventory = realpath($inventoryPath);
-        $realProject   = realpath($projectPath);
-
-        // Path traversal protection
-        if ($realInventory === false || $realProject === false || !str_starts_with($realInventory, $realProject)) {
+        $realInventory = $this->validateInventoryPath($projectPath, (string)$inventory->source_path);
+        if ($realInventory === null) {
             return ['groups' => [], 'hosts' => [], 'error' => 'Invalid inventory path.'];
         }
 
@@ -130,12 +126,59 @@ class InventoryService extends Component
     }
 
     /**
+     * Validate that the inventory path is inside the project directory (path traversal protection).
+     * Returns the resolved real path, or null if validation fails.
+     */
+    protected function validateInventoryPath(string $projectPath, string $sourcePath): ?string
+    {
+        $inventoryPath = $projectPath . '/' . ltrim($sourcePath, '/');
+        $realInventory = realpath($inventoryPath);
+        $realProject   = realpath($projectPath);
+
+        if ($realInventory === false || $realProject === false || !str_starts_with($realInventory, $realProject)) {
+            return null;
+        }
+
+        return $realInventory;
+    }
+
+    /**
      * @return array{groups: array, hosts: array, error: ?string}
      */
     protected function runAnsibleInventory(string $inventoryPath, ?string $cwd = null): array
     {
         $cmd = ['ansible-inventory', '--list', '-i', $inventoryPath];
 
+        $process = $this->openProcess($cmd, $pipes, $cwd);
+        if ($process === null) {
+            return ['groups' => [], 'hosts' => [], 'error' => 'Failed to start ansible-inventory process.'];
+        }
+
+        [$stdout, $stderr, $timedOut] = $this->readProcessOutput($pipes, $process);
+
+        if ($timedOut) {
+            return ['groups' => [], 'hosts' => [], 'error' => 'ansible-inventory timed out.'];
+        }
+
+        $exitCode = proc_close($process);
+
+        if ($exitCode !== 0) {
+            $errMsg = trim($stderr ?: $stdout);
+            return ['groups' => [], 'hosts' => [], 'error' => "ansible-inventory failed (exit {$exitCode}): {$errMsg}"];
+        }
+
+        return $this->parseOutput($stdout);
+    }
+
+    /**
+     * Open a subprocess and return the process resource + pipes.
+     * Returns null if proc_open fails.
+     *
+     * @param resource[] &$pipes
+     * @return resource|null
+     */
+    protected function openProcess(array $cmd, ?array &$pipes, ?string $cwd = null)
+    {
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
@@ -144,18 +187,28 @@ class InventoryService extends Component
 
         $process = proc_open($cmd, $descriptors, $pipes, $cwd);
         if (!is_resource($process)) {
-            return ['groups' => [], 'hosts' => [], 'error' => 'Failed to start ansible-inventory process.'];
+            return null;
         }
 
         fclose($pipes[0]);
-
-        // Read with timeout
-        $stdout = '';
-        $stderr = '';
-        $deadline = time() + $this->timeout;
-
         stream_set_blocking($pipes[1], false);
         stream_set_blocking($pipes[2], false);
+
+        return $process;
+    }
+
+    /**
+     * Read stdout/stderr from a subprocess with timeout handling.
+     *
+     * @param resource[] $pipes
+     * @param resource   $process
+     * @return array{0: string, 1: string, 2: bool} [stdout, stderr, timedOut]
+     */
+    protected function readProcessOutput(array $pipes, $process): array
+    {
+        $stdout   = '';
+        $stderr   = '';
+        $deadline = time() + $this->timeout;
 
         while (true) {
             $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p));
@@ -163,15 +216,19 @@ class InventoryService extends Component
                 break;
             }
 
-            $write = $except = [];
-            $remaining = max(1, $deadline - time());
             if (time() > $deadline) {
                 proc_terminate($process, 15);
-                fclose($pipes[1]);
-                fclose($pipes[2]);
+                foreach ($read as $p) {
+                    if (is_resource($p)) {
+                        fclose($p);
+                    }
+                }
                 proc_close($process);
-                return ['groups' => [], 'hosts' => [], 'error' => 'ansible-inventory timed out.'];
+                return [$stdout, $stderr, true];
             }
+
+            $write = $except = [];
+            $remaining = max(1, $deadline - time());
 
             // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
             $changed = @stream_select($read, $write, $except, $remaining); // @phpcs:ignore
@@ -195,7 +252,6 @@ class InventoryService extends Component
             }
         }
 
-        // Close any remaining open pipes
         if (is_resource($pipes[1])) {
             fclose($pipes[1]);
         }
@@ -203,14 +259,7 @@ class InventoryService extends Component
             fclose($pipes[2]);
         }
 
-        $exitCode = proc_close($process);
-
-        if ($exitCode !== 0) {
-            $errMsg = trim($stderr ?: $stdout);
-            return ['groups' => [], 'hosts' => [], 'error' => "ansible-inventory failed (exit {$exitCode}): {$errMsg}"];
-        }
-
-        return $this->parseOutput($stdout);
+        return [$stdout, $stderr, false];
     }
 
     /**
@@ -218,23 +267,30 @@ class InventoryService extends Component
      *
      * @return array{groups: array, hosts: array, error: ?string}
      */
-    private function parseOutput(string $json): array
+    protected function parseOutput(string $json): array
     {
         $data = json_decode($json, true);
         if (!is_array($data)) {
             return ['groups' => [], 'hosts' => [], 'error' => 'Failed to parse ansible-inventory output.'];
         }
 
-        // Extract host variables from _meta.hostvars
-        $hostvars = $data['_meta']['hostvars'] ?? [];
+        $groups = $this->extractGroups($data);
+        $hosts  = $this->extractHosts($data, $groups);
 
-        // Extract groups (everything except _meta)
+        ksort($groups);
+        ksort($hosts);
+
+        return ['groups' => $groups, 'hosts' => $hosts, 'error' => null];
+    }
+
+    /**
+     * Extract group definitions from ansible-inventory JSON (everything except _meta).
+     */
+    protected function extractGroups(array $data): array
+    {
         $groups = [];
         foreach ($data as $groupName => $groupData) {
-            if ($groupName === '_meta') {
-                continue;
-            }
-            if (!is_array($groupData)) {
+            if ($groupName === '_meta' || !is_array($groupData)) {
                 continue;
             }
             $groups[$groupName] = [
@@ -243,14 +299,20 @@ class InventoryService extends Component
                 'vars'     => $groupData['vars'] ?? [],
             ];
         }
+        return $groups;
+    }
 
-        // Build flat host list with variables
+    /**
+     * Build a flat host list from _meta.hostvars, filling in any hosts
+     * referenced by groups but missing from _meta.
+     */
+    protected function extractHosts(array $data, array $groups): array
+    {
         $hosts = [];
-        foreach ($hostvars as $hostname => $vars) {
+        foreach (($data['_meta']['hostvars'] ?? []) as $hostname => $vars) {
             $hosts[$hostname] = $vars;
         }
 
-        // Also pick up hosts not in _meta (shouldn't happen but be safe)
         foreach ($groups as $groupData) {
             foreach ($groupData['hosts'] as $host) {
                 if (!isset($hosts[$host])) {
@@ -259,10 +321,7 @@ class InventoryService extends Component
             }
         }
 
-        ksort($groups);
-        ksort($hosts);
-
-        return ['groups' => $groups, 'hosts' => $hosts, 'error' => null];
+        return $hosts;
     }
 
     protected function resolveProjectPath(Project $project): ?string
