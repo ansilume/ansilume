@@ -35,5 +35,6 @@ filter:
     - tests/*
     - runtime/*
     - web/assets/*
+    - web/js/cronstrue.min.js
     - docker/*
     - migrations/*
