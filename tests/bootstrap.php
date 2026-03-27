@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-$dotenv = \Dotenv\Dotenv::createImmutable(dirname(__DIR__));
+$dotenv = \Dotenv\Dotenv::createUnsafeImmutable(dirname(__DIR__));
 $dotenv->safeLoad();
 
 defined('YII_DEBUG') or define('YII_DEBUG', false);
