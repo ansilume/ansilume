@@ -3,6 +3,7 @@ build:
     php: "8.2"
   services:
     mysql: 5.7
+    redis: true
   dependencies:
     override:
       - composer self-update --2
@@ -12,8 +13,9 @@ build:
       - echo "=== DEBUG ENV ===" && env | sort
       - echo "=== DEBUG php ini variables_order ===" && php -r "echo ini_get('variables_order').PHP_EOL;"
       - echo "=== DEBUG php ini auto_globals_jit ===" && php -r "echo ini_get('auto_globals_jit').PHP_EOL;"
-      - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\n' > .env
+      - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\nREDIS_HOST=127.0.0.1\n' > .env
       - echo "=== DEBUG .env file ===" && cat .env
+      - echo "=== DEBUG redis connectivity ===" && redis-cli -h 127.0.0.1 ping || echo "REDIS CONNECTION FAILED"
       - echo "=== DEBUG mysql connectivity ===" && mysql -u root -h 127.0.0.1 -e "SELECT 1 AS mysql_works;" || echo "MYSQL CONNECTION FAILED"
       - mysql -u root -h 127.0.0.1 -e "CREATE DATABASE ansilume; CREATE USER 'ansilume'@'%' IDENTIFIED BY 'secret'; GRANT ALL ON ansilume.* TO 'ansilume'@'%'; FLUSH PRIVILEGES;"
       - echo "=== DEBUG mysql user test ===" && mysql -u ansilume -psecret -h 127.0.0.1 -e "SHOW DATABASES;" || echo "ANSILUME USER LOGIN FAILED"
