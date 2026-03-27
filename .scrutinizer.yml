@@ -1,6 +1,7 @@
 build:
   environment:
     php: "8.2"
+  services:
     mysql: 5.7
   dependencies:
     override:
@@ -8,12 +9,12 @@ build:
       - composer install --no-interaction --prefer-dist
   tests:
     before:
-      - mysql -u root -e "CREATE DATABASE ansilume; GRANT ALL ON ansilume.* TO 'ansilume'@'localhost' IDENTIFIED BY 'secret'; FLUSH PRIVILEGES;"
-      - DB_HOST=localhost DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume php yii migrate --interactive=0
+      - mysql -u root -h 127.0.0.1 -e "CREATE DATABASE ansilume; CREATE USER 'ansilume'@'%' IDENTIFIED BY 'secret'; GRANT ALL ON ansilume.* TO 'ansilume'@'%'; FLUSH PRIVILEGES;"
+      - DB_HOST=127.0.0.1 DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume php yii migrate --interactive=0
     override:
       - php-scrutinizer-run
       -
-        command: DB_HOST=localhost DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume vendor/bin/phpunit --testsuite=Unit --colors=never
+        command: DB_HOST=127.0.0.1 DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume vendor/bin/phpunit --testsuite=Unit --colors=never
         coverage:
           file: clover.xml
           format: php-clover
