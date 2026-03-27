@@ -146,21 +146,43 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         $payload      = json_decode($job->runner_payload ?? '{}', true);
         $cmd          = $this->buildCommand($job, $payload);
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $job->id . '_' . uniqid('', true) . '.ndjson';
-        $pluginDir    = dirname(__DIR__) . '/ansible/callback_plugins';
 
         \Yii::info("RunAnsibleJob: starting job #{$job->id}: " . implode(' ', $cmd), __CLASS__);
-
-        $descriptorspec = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
 
         $artifactDir = sys_get_temp_dir() . '/ansilume_artifacts_' . $job->id . '_' . uniqid('', true);
         mkdir($artifactDir, 0750, true);
 
-        $env = array_merge(getenv() ?: [], [
-            'ANSIBLE_CALLBACK_PLUGINS'  => $pluginDir,
+        $env     = $this->buildProcessEnv($callbackFile, $artifactDir);
+        $process = $this->startProcess($cmd, $payload, $env);
+        $pipes   = $process['pipes'];
+
+        $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
+        $timedOut       = $this->streamProcessOutput($job, $pipes, $timeoutMinutes, $process['resource']);
+
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+
+        $exitCode = proc_close($process['resource']);
+        $job->pid = null;
+        $job->save(false);
+
+        if ($timedOut) {
+            throw new JobTimeoutException($timeoutMinutes);
+        }
+
+        $this->saveTaskResults($job, $callbackFile);
+        $this->collectArtifacts($job, $env);
+
+        return $exitCode;
+    }
+
+    /**
+     * Build the environment variables for the Ansible subprocess.
+     */
+    private function buildProcessEnv(string $callbackFile, string $artifactDir): array
+    {
+        return array_merge(getenv() ?: [], [
+            'ANSIBLE_CALLBACK_PLUGINS'  => dirname(__DIR__) . '/ansible/callback_plugins',
             'ANSIBLE_CALLBACKS_ENABLED' => 'ansilume_callback',
             'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
             'ANSILUME_CALLBACK_FILE'    => $callbackFile,
@@ -168,25 +190,43 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             'ANSIBLE_FORCE_COLOR'       => '1',
             'PYTHONUNBUFFERED'          => '1',
         ]);
+    }
 
-        // Run from the project root so Ansible finds ansible.cfg there, which
-        // sets roles_path, collections_path, etc. relative to that directory.
+    /**
+     * Open the ansible-playbook subprocess.
+     *
+     * @return array{resource: resource, pipes: array}
+     */
+    private function startProcess(array $cmd, array $payload, array $env): array
+    {
+        $descriptorspec = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
         $projectCwd = $this->resolveProjectPath($payload);
         $process    = proc_open($cmd, $descriptorspec, $pipes, is_dir($projectCwd) ? $projectCwd : null, $env);
 
         if (!is_resource($process)) {
-            throw new \RuntimeException('proc_open failed for job #' . $job->id);
+            throw new \RuntimeException('proc_open failed');
         }
 
         fclose($pipes[0]);
-
         stream_set_blocking($pipes[1], false);
         stream_set_blocking($pipes[2], false);
 
-        $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
-        $deadline       = time() + ($timeoutMinutes * 60);
-        $sequence       = 0;
-        $timedOut       = false;
+        return ['resource' => $process, 'pipes' => $pipes];
+    }
+
+    /**
+     * Read stdout/stderr from the subprocess, writing log chunks.
+     * Returns true if the process was killed due to timeout.
+     */
+    private function streamProcessOutput(Job $job, array $pipes, int $timeoutMinutes, $process): bool
+    {
+        $deadline = time() + ($timeoutMinutes * 60);
+        $sequence = 0;
 
         while (!feof($pipes[1]) || !feof($pipes[2])) {
             $remaining = $deadline - time();
@@ -194,8 +234,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
                 proc_terminate($process, 15);
                 sleep(3);
                 proc_terminate($process, 9);
-                $timedOut = true;
-                break;
+                return true;
             }
 
             $read    = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
@@ -216,21 +255,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             }
         }
 
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-
-        $exitCode = proc_close($process);
-        $job->pid = null;
-        $job->save(false);
-
-        if ($timedOut) {
-            throw new JobTimeoutException($timeoutMinutes);
-        }
-
-        $this->saveTaskResults($job, $callbackFile);
-        $this->collectArtifacts($job, $env);
-
-        return $exitCode;
+        return false;
     }
 
     /**
@@ -243,32 +268,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             return;
         }
 
-        $hasChanges = false;
-
         try {
-            $lines = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            foreach ($lines as $line) {
-                $data = json_decode($line, true);
-                if (!is_array($data)) {
-                    continue;
-                }
-
-                $task              = new JobTask();
-                $task->job_id      = $job->id;
-                $task->sequence    = (int)($data['seq'] ?? 0);
-                $task->task_name   = (string)($data['name'] ?? '');
-                $task->task_action = (string)($data['action'] ?? '');
-                $task->host        = (string)($data['host'] ?? '');
-                $task->status      = (string)($data['status'] ?? 'ok');
-                $task->changed     = (int)(bool)($data['changed'] ?? false);
-                $task->duration_ms = (int)($data['duration_ms'] ?? 0);
-                $task->created_at  = time();
-                $task->save(false);
-
-                if ($task->changed) {
-                    $hasChanges = true;
-                }
-            }
+            $lines      = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+            $hasChanges = $this->persistTaskLines($job, $lines ?: []);
         } finally {
             \app\helpers\FileHelper::safeUnlink($callbackFile);
         }
@@ -277,6 +279,40 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             $job->has_changes = 1;
             $job->save(false);
         }
+    }
+
+    /**
+     * Parse NDJSON lines and persist each as a JobTask record.
+     * Returns true if any task reported a change.
+     */
+    private function persistTaskLines(Job $job, array $lines): bool
+    {
+        $hasChanges = false;
+
+        foreach ($lines as $line) {
+            $data = json_decode($line, true);
+            if (!is_array($data)) {
+                continue;
+            }
+
+            $task              = new JobTask();
+            $task->job_id      = $job->id;
+            $task->sequence    = (int)($data['seq'] ?? 0);
+            $task->task_name   = (string)($data['name'] ?? '');
+            $task->task_action = (string)($data['action'] ?? '');
+            $task->host        = (string)($data['host'] ?? '');
+            $task->status      = (string)($data['status'] ?? 'ok');
+            $task->changed     = (int)(bool)($data['changed'] ?? false);
+            $task->duration_ms = (int)($data['duration_ms'] ?? 0);
+            $task->created_at  = time();
+            $task->save(false);
+
+            if ($task->changed) {
+                $hasChanges = true;
+            }
+        }
+
+        return $hasChanges;
     }
 
     /**
@@ -301,29 +337,34 @@ class RunAnsibleJob extends BaseObject implements JobInterface
     {
         $cmd = ['ansible-playbook'];
 
-        // Inventory
         $inventoryArg = $this->resolveInventoryArg((int)($payload['inventory_id'] ?? 0));
         if ($inventoryArg !== null) {
             $cmd[] = '-i';
             $cmd[] = $inventoryArg;
         }
 
-        // Playbook
         $cmd[] = $this->resolvePlaybookPath($payload);
 
-        // Verbosity
+        $this->addPlaybookOptions($cmd, $payload);
+
+        return $cmd;
+    }
+
+    /**
+     * Append optional playbook flags (verbosity, forks, become, limit, tags, extra-vars).
+     */
+    private function addPlaybookOptions(array &$cmd, array $payload): void
+    {
         $verbosity = (int)($payload['verbosity'] ?? 0);
         if ($verbosity > 0) {
             $cmd[] = '-' . str_repeat('v', min($verbosity, 5));
         }
 
-        // Forks
         if (!empty($payload['forks'])) {
             $cmd[] = '--forks';
             $cmd[] = (string)(int)$payload['forks'];
         }
 
-        // Become
         if (!empty($payload['become'])) {
             $cmd[] = '--become';
             $cmd[] = '--become-method';
@@ -332,14 +373,11 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             $cmd[] = $payload['become_user'] ?? 'root';
         }
 
-        // Limit
-        $limit = $payload['limit'] ?? null;
-        if (!empty($limit)) {
+        if (!empty($payload['limit'])) {
             $cmd[] = '--limit';
-            $cmd[] = $limit;
+            $cmd[] = $payload['limit'];
         }
 
-        // Tags
         if (!empty($payload['tags'])) {
             $cmd[] = '--tags';
             $cmd[] = $payload['tags'];
@@ -349,14 +387,10 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             $cmd[] = $payload['skip_tags'];
         }
 
-        // Extra vars
-        $extraVars = $payload['extra_vars'] ?? null;
-        if (!empty($extraVars)) {
+        if (!empty($payload['extra_vars'])) {
             $cmd[] = '--extra-vars';
-            $cmd[] = $extraVars;
+            $cmd[] = $payload['extra_vars'];
         }
-
-        return $cmd;
     }
 
     /**
@@ -480,26 +514,34 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
         foreach ($iterator as $item) {
             /** @var \SplFileInfo $item */
-            $path = $item->getPathname();
-
-            // Remove symlinks themselves but don't follow them
-            if ($item->isLink()) {
-                \app\helpers\FileHelper::safeUnlink($path);
-                continue;
-            }
-
-            // Verify the real path is inside our directory (defense in depth)
-            $realPath = $item->getRealPath();
-            if ($realPath === false || !str_starts_with($realPath, $realDir)) {
-                continue;
-            }
-
-            $item->isDir()
-                ? \app\helpers\FileHelper::safeRmdir($path)
-                : \app\helpers\FileHelper::safeUnlink($path);
+            $this->removeItem($item, $realDir);
         }
 
         \app\helpers\FileHelper::safeRmdir($dir);
+    }
+
+    /**
+     * Remove a single filesystem item during cleanup.
+     * Symlinks are unlinked but never followed; real paths are verified
+     * to be inside the parent directory (defense in depth).
+     */
+    private function removeItem(\SplFileInfo $item, string $realDir): void
+    {
+        $path = $item->getPathname();
+
+        if ($item->isLink()) {
+            \app\helpers\FileHelper::safeUnlink($path);
+            return;
+        }
+
+        $realPath = $item->getRealPath();
+        if ($realPath === false || !str_starts_with($realPath, $realDir)) {
+            return;
+        }
+
+        $item->isDir()
+            ? \app\helpers\FileHelper::safeRmdir($path)
+            : \app\helpers\FileHelper::safeUnlink($path);
     }
 
     private function appendLog(Job $job, string $stream, string $content, int $sequence = 0): void
