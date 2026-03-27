@@ -1,6 +1,11 @@
 build:
   environment:
     php: "8.2"
+    variables:
+      DB_HOST: "127.0.0.1"
+      DB_USER: "ansilume"
+      DB_PASSWORD: "secret"
+      DB_NAME: "ansilume"
   services:
     mysql: 5.7
   dependencies:
@@ -10,11 +15,11 @@ build:
   tests:
     before:
       - mysql -u root -h 127.0.0.1 -e "CREATE DATABASE ansilume; CREATE USER 'ansilume'@'%' IDENTIFIED BY 'secret'; GRANT ALL ON ansilume.* TO 'ansilume'@'%'; FLUSH PRIVILEGES;"
-      - DB_HOST=127.0.0.1 DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume php yii migrate --interactive=0
+      - php yii migrate --interactive=0
     override:
       - php-scrutinizer-run
       -
-        command: DB_HOST=127.0.0.1 DB_USER=ansilume DB_PASSWORD=secret DB_NAME=ansilume vendor/bin/phpunit --testsuite=Unit --colors=never
+        command: vendor/bin/phpunit --testsuite=Unit --colors=never
         coverage:
           file: clover.xml
           format: php-clover
