@@ -85,7 +85,9 @@ class NotificationService extends Component
         $params = \Yii::$app->params;
         $jobUrl = $this->buildJobUrl($job);
 
-        $message = \Yii::$app->mailer->compose(
+        /** @var \yii\mail\MailerInterface $mailer */
+        $mailer = \Yii::$app->mailer;
+        $message = $mailer->compose(
             ['html' => $template . '-html', 'text' => $template . '-text'],
             ['job' => $job, 'jobUrl' => $jobUrl]
         )

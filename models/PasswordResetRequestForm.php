@@ -47,7 +47,9 @@ class PasswordResetRequestForm extends Model
         $resetUrl      = $this->buildResetUrl($user->password_reset_token);
 
         try {
-            $sent = \Yii::$app->mailer->compose(
+            /** @var \yii\mail\MailerInterface $mailer */
+            $mailer = \Yii::$app->mailer;
+            $sent = $mailer->compose(
                 ['html' => 'password-reset-html', 'text' => 'password-reset-text'],
                 [
                     'user'          => $user,

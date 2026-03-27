@@ -77,7 +77,9 @@ class HealthController extends Controller
     protected function checkRedis(): array
     {
         try {
-            \Yii::$app->cache->set('health_probe', 1, 5);
+            /** @var \yii\caching\CacheInterface $cache */
+            $cache = \Yii::$app->cache;
+            $cache->set('health_probe', 1, 5);
             return ['ok' => true];
         } catch (\Throwable $e) {
             return ['ok' => false, 'error' => 'Redis unreachable'];

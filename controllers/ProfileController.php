@@ -47,7 +47,9 @@ class ProfileController extends BaseController
             ->orderBy(['id' => SORT_DESC])
             ->all();
 
-        $newToken = \Yii::$app->session->getFlash('new_token');
+        /** @var \yii\web\Session $session */
+        $session = \Yii::$app->session;
+        $newToken = $session->getFlash('new_token');
         return $this->render('tokens', ['tokens' => $tokens, 'newToken' => $newToken]);
     }
 
@@ -116,10 +118,12 @@ class ProfileController extends BaseController
         $totp = \Yii::$app->get('totpService');
 
         // Store secret in session so it persists across the setup flow
-        $secret = \Yii::$app->session->get('totp_setup_secret');
+        /** @var \yii\web\Session $session */
+        $session = \Yii::$app->session;
+        $secret = $session->get('totp_setup_secret');
         if (empty($secret)) {
             $secret = $totp->generateSecret();
-            \Yii::$app->session->set('totp_setup_secret', $secret);
+            $session->set('totp_setup_secret', $secret);
         }
 
         $provisioningUri = $totp->buildProvisioningUri($secret, $user);
@@ -142,7 +146,9 @@ class ProfileController extends BaseController
         /** @var User $user */
         $user = \Yii::$app->user->identity;
 
-        $secret = \Yii::$app->session->get('totp_setup_secret');
+        /** @var \yii\web\Session $session */
+        $session = \Yii::$app->session;
+        $secret = $session->get('totp_setup_secret');
         if (empty($secret)) {
             $this->session()->setFlash('danger', 'TOTP setup session expired. Please start again.');
             return $this->redirect(['setup-totp']);
@@ -153,7 +159,7 @@ class ProfileController extends BaseController
             $recoveryCodes = $model->enable();
 
             // Clear the setup session
-            \Yii::$app->session->remove('totp_setup_secret');
+            $session->remove('totp_setup_secret');
 
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_MFA_ENABLED, 'user', $user->id

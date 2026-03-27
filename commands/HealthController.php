@@ -30,7 +30,9 @@ class HealthController extends Controller
 
         // Redis
         try {
-            \Yii::$app->cache->set('health_probe', 1, 5);
+            /** @var \yii\caching\CacheInterface $cache */
+            $cache = \Yii::$app->cache;
+            $cache->set('health_probe', 1, 5);
             $this->stdout("[health] redis: ok\n");
         } catch (\Throwable $e) {
             $this->stderr("[health] redis: error — " . $e->getMessage() . "\n");

@@ -101,17 +101,23 @@ class User extends ActiveRecord implements IdentityInterface
 
     public function validatePassword(string $password): bool
     {
-        return \Yii::$app->security->validatePassword($password, $this->password_hash);
+        /** @var \yii\base\Security $security */
+        $security = \Yii::$app->security;
+        return $security->validatePassword($password, $this->password_hash);
     }
 
     public function setPassword(string $password): void
     {
-        $this->password_hash = \Yii::$app->security->generatePasswordHash($password);
+        /** @var \yii\base\Security $security */
+        $security = \Yii::$app->security;
+        $this->password_hash = $security->generatePasswordHash($password);
     }
 
     public function generateAuthKey(): void
     {
-        $this->auth_key = \Yii::$app->security->generateRandomString();
+        /** @var \yii\base\Security $security */
+        $security = \Yii::$app->security;
+        $this->auth_key = $security->generateRandomString();
     }
 
     public function isActive(): bool
@@ -129,7 +135,9 @@ class User extends ActiveRecord implements IdentityInterface
      */
     public function generatePasswordResetToken(): void
     {
-        $this->password_reset_token = \Yii::$app->security->generateRandomString() . '_' . time();
+        /** @var \yii\base\Security $security */
+        $security = \Yii::$app->security;
+        $this->password_reset_token = $security->generateRandomString() . '_' . time();
     }
 
     /**

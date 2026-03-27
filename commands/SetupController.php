@@ -30,7 +30,9 @@ class SetupController extends Controller
         }
 
         if ($password === '') {
-            $password = \Yii::$app->security->generateRandomString(16);
+            /** @var \yii\base\Security $security */
+            $security = \Yii::$app->security;
+            $password = $security->generateRandomString(16);
             $this->stdout("No password supplied — generated: {$password}\n");
         }
 
@@ -48,6 +50,7 @@ class SetupController extends Controller
         }
 
         // Assign admin RBAC role
+        /** @var \yii\rbac\ManagerInterface $auth */
         $auth = \Yii::$app->authManager;
         $role = $auth->getRole('admin');
         if ($role !== null) {

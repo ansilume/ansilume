@@ -130,13 +130,15 @@ class TotpService extends Component
     {
         $raw    = [];
         $hashed = [];
+        /** @var \yii\base\Security $security */
+        $security = \Yii::$app->security;
         for ($i = 0; $i < $this->recoveryCodeCount; $i++) {
             $code     = $this->generateSingleRecoveryCode();
             $raw[]    = $code;
             // Hash the normalized form (no dashes, uppercase) so verification works
             // regardless of how the user types the code
             $normalized = strtoupper(str_replace('-', '', $code));
-            $hashed[]   = \Yii::$app->security->generatePasswordHash($normalized);
+            $hashed[]   = $security->generatePasswordHash($normalized);
         }
         return ['raw' => $raw, 'hashed' => $hashed];
     }
@@ -148,8 +150,10 @@ class TotpService extends Component
     public function verifyRecoveryCode(string $code, array $hashedCodes): int
     {
         $code = strtoupper(str_replace('-', '', trim($code)));
+        /** @var \yii\base\Security $security */
+        $security = \Yii::$app->security;
         foreach ($hashedCodes as $i => $hash) {
-            if (\Yii::$app->security->validatePassword($code, $hash)) {
+            if ($security->validatePassword($code, $hash)) {
                 return $i;
             }
         }
@@ -205,7 +209,9 @@ class TotpService extends Component
     public function isLockedOut(int $userId): bool
     {
         $key = $this->rateLimitKey($userId);
-        $data = \Yii::$app->cache->get($key);
+        /** @var \yii\caching\CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        $data = $cache->get($key);
         if ($data === false) {
             return false;
         }
@@ -218,12 +224,14 @@ class TotpService extends Component
     public function recordFailedAttempt(int $userId): int
     {
         $key  = $this->rateLimitKey($userId);
-        $data = \Yii::$app->cache->get($key);
+        /** @var \yii\caching\CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        $data = $cache->get($key);
         if ($data === false) {
             $data = ['attempts' => 0];
         }
         $data['attempts']++;
-        \Yii::$app->cache->set($key, $data, $this->lockoutDuration);
+        $cache->set($key, $data, $this->lockoutDuration);
         return max(0, $this->maxAttempts - $data['attempts']);
     }
 
@@ -232,7 +240,9 @@ class TotpService extends Component
      */
     public function clearRateLimit(int $userId): void
     {
-        \Yii::$app->cache->delete($this->rateLimitKey($userId));
+        /** @var \yii\caching\CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        $cache->delete($this->rateLimitKey($userId));
     }
 
     // ── Enable / Disable ─────────────────────────────────────────────────────

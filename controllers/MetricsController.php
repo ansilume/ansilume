@@ -92,7 +92,9 @@ class MetricsController extends Controller
     {
         try {
             $start = hrtime(true);
-            \Yii::$app->cache->set('metrics_probe', 1, 5);
+            /** @var \yii\caching\CacheInterface $cache */
+            $cache = \Yii::$app->cache;
+            $cache->set('metrics_probe', 1, 5);
             $ms = (hrtime(true) - $start) / 1_000_000;
             return ['up' => true, 'latency_ms' => round($ms, 2)];
         } catch (\Throwable) {

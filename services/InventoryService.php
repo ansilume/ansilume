@@ -217,13 +217,7 @@ class InventoryService extends Component
             }
 
             if (time() > $deadline) {
-                proc_terminate($process, 15);
-                foreach ($read as $p) {
-                    if (is_resource($p)) {
-                        fclose($p);
-                    }
-                }
-                proc_close($process);
+                $this->killProcess($process, $read);
                 return [$stdout, $stderr, true];
             }
 
@@ -236,28 +230,10 @@ class InventoryService extends Component
                 break;
             }
 
-            foreach ($read as $pipe) {
-                $chunk = fread($pipe, 65536);
-                if ($chunk === false || $chunk === '') {
-                    if (feof($pipe)) {
-                        fclose($pipe);
-                    }
-                    continue;
-                }
-                if ($pipe === $pipes[1]) {
-                    $stdout .= $chunk;
-                } else {
-                    $stderr .= $chunk;
-                }
-            }
+            $this->drainPipes($read, $pipes[1], $stdout, $stderr);
         }
 
-        if (is_resource($pipes[1])) {
-            fclose($pipes[1]);
-        }
-        if (is_resource($pipes[2])) {
-            fclose($pipes[2]);
-        }
+        $this->closePipes($pipes);
 
         return [$stdout, $stderr, false];
     }
@@ -267,6 +243,62 @@ class InventoryService extends Component
      *
      * @return array{groups: array, hosts: array, error: ?string}
      */
+    /**
+     * Terminate a timed-out process and close its pipes.
+     *
+     * @param resource   $process
+     * @param resource[] $openPipes
+     */
+    protected function killProcess($process, array $openPipes): void
+    {
+        proc_terminate($process, 15);
+        foreach ($openPipes as $p) {
+            if (is_resource($p)) {
+                fclose($p);
+            }
+        }
+        proc_close($process);
+    }
+
+    /**
+     * Read available data from ready pipes into stdout/stderr buffers.
+     *
+     * @param resource[] $readyPipes  Pipes returned by stream_select
+     * @param resource   $stdoutPipe  Reference pipe to distinguish stdout from stderr
+     */
+    protected function drainPipes(array $readyPipes, $stdoutPipe, string &$stdout, string &$stderr): void
+    {
+        foreach ($readyPipes as $pipe) {
+            $chunk = fread($pipe, 65536);
+            if ($chunk === false || $chunk === '') {
+                if (feof($pipe)) {
+                    fclose($pipe);
+                }
+                continue;
+            }
+            if ($pipe === $stdoutPipe) {
+                $stdout .= $chunk;
+            } else {
+                $stderr .= $chunk;
+            }
+        }
+    }
+
+    /**
+     * Close any pipes that are still open.
+     *
+     * @param resource[] $pipes
+     */
+    protected function closePipes(array $pipes): void
+    {
+        if (is_resource($pipes[1])) {
+            fclose($pipes[1]);
+        }
+        if (is_resource($pipes[2])) {
+            fclose($pipes[2]);
+        }
+    }
+
     protected function parseOutput(string $json): array
     {
         $data = json_decode($json, true);

@@ -157,8 +157,10 @@ class SiteController extends BaseController
             if ($model->requiresTotp()) {
                 // Store pending login in session, redirect to TOTP step
                 $user = $model->getUserModel();
-                \Yii::$app->session->set('totp_pending_user_id', $user->id);
-                \Yii::$app->session->set('totp_pending_remember', $model->rememberMe);
+                /** @var \yii\web\Session $session */
+                $session = \Yii::$app->session;
+                $session->set('totp_pending_user_id', $user->id);
+                $session->set('totp_pending_remember', $model->rememberMe);
                 return $this->redirect(['verify-totp']);
             }
 
@@ -185,31 +187,34 @@ class SiteController extends BaseController
             return $this->goHome();
         }
 
-        $userId = \Yii::$app->session->get('totp_pending_user_id');
+        /** @var \yii\web\Session $session */
+        $session = \Yii::$app->session;
+
+        $userId = $session->get('totp_pending_user_id');
         if (empty($userId)) {
             return $this->redirect(['login']);
         }
 
         $user = User::findIdentity($userId);
         if ($user === null || !$user->totp_enabled) {
-            \Yii::$app->session->remove('totp_pending_user_id');
-            \Yii::$app->session->remove('totp_pending_remember');
+            $session->remove('totp_pending_user_id');
+            $session->remove('totp_pending_remember');
             return $this->redirect(['login']);
         }
 
         $model = new TotpVerifyForm($user);
         if ($model->load(\Yii::$app->request->post()) && $model->validate()) {
-            $remember = (bool)\Yii::$app->session->get('totp_pending_remember', false);
+            $remember = (bool)$session->get('totp_pending_remember', false);
             $duration = $remember ? 3600 * 24 * 30 : 0;
 
             // Clear pending state before login
-            \Yii::$app->session->remove('totp_pending_user_id');
-            \Yii::$app->session->remove('totp_pending_remember');
+            $session->remove('totp_pending_user_id');
+            $session->remove('totp_pending_remember');
 
             \Yii::$app->user->login($user, $duration);
 
             // Regenerate session ID to prevent fixation
-            \Yii::$app->session->regenerateID(true);
+            $session->regenerateID(true);
 
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_USER_LOGIN, null, null, null, [
