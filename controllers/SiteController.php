@@ -223,7 +223,7 @@ class SiteController extends BaseController
                 /** @var \app\services\TotpService $totp */
                 $totp = \Yii::$app->get('totpService');
                 $remaining = $totp->remainingRecoveryCodeCount($user);
-                \Yii::$app->session->setFlash('warning', "You used a recovery code to log in. You have {$remaining} recovery codes remaining.");
+                $this->session()->setFlash('warning', "You used a recovery code to log in. You have {$remaining} recovery codes remaining.");
             }
 
             return $this->goBack();
@@ -244,7 +244,7 @@ class SiteController extends BaseController
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_PASSWORD_RESET_REQUESTED, null, null, null, ['email' => $model->email]
             );
-            \Yii::$app->session->setFlash('success', 'If an account with that email exists, a password reset link has been sent.');
+            $this->session()->setFlash('success', 'If an account with that email exists, a password reset link has been sent.');
             return $this->redirect(['login']);
         }
 
@@ -264,7 +264,7 @@ class SiteController extends BaseController
         try {
             $model = new PasswordResetForm($token);
         } catch (\yii\base\InvalidArgumentException) {
-            \Yii::$app->session->setFlash('danger', 'Invalid or expired password reset link. Please request a new one.');
+            $this->session()->setFlash('danger', 'Invalid or expired password reset link. Please request a new one.');
             return $this->redirect(['forgot-password']);
         }
 
@@ -272,7 +272,7 @@ class SiteController extends BaseController
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_PASSWORD_RESET_COMPLETED, 'user', $model->getUser()->id
             );
-            \Yii::$app->session->setFlash('success', 'Your password has been reset. You can now log in.');
+            $this->session()->setFlash('success', 'Your password has been reset. You can now log in.');
             return $this->redirect(['login']);
         }
 

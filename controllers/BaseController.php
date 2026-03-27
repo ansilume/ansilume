@@ -62,4 +62,13 @@ abstract class BaseController extends Controller
 
         return $behaviors;
     }
+
+    /**
+     * Type-safe accessor for the web session component.
+     */
+    protected function session(): \yii\web\Session
+    {
+        /** @var \yii\web\Session */
+        return \Yii::$app->session;
+    }
 }

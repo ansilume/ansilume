@@ -37,7 +37,7 @@ class ProjectController extends BaseController
         $checker = \Yii::$app->get('projectAccessChecker');
         $query   = Project::find()->with('creator')->orderBy(['id' => SORT_DESC]);
 
-        $filter = $checker->buildProjectFilter(\Yii::$app->user->id);
+        $filter = $checker->buildProjectFilter(\Yii::$app->user->isGuest ? null : (int)\Yii::$app->user->id);
         if ($filter !== null) {
             $query->andWhere($filter);
         }
@@ -54,7 +54,7 @@ class ProjectController extends BaseController
         $model = $this->findModel($id);
         /** @var ProjectAccessChecker $checker */
         $checker = \Yii::$app->get('projectAccessChecker');
-        if (!$checker->canView(\Yii::$app->user->id, $model->id)) {
+        if (!$checker->canView((int)\Yii::$app->user->id, $model->id)) {
             throw new \yii\web\ForbiddenHttpException('You do not have access to this project.');
         }
         $playbooks = [];
@@ -232,17 +232,17 @@ class ProjectController extends BaseController
         $model->scm_branch = 'main';
         $model->status     = Project::STATUS_NEW;
 
-        if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = \Yii::$app->user->id;
+        if ($model->load((array)\Yii::$app->request->post())) {
+            $model->created_by = (int)\Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_CREATED, 'project', $model->id, null, ['name' => $model->name]);
                 if ($model->scm_type === Project::SCM_TYPE_GIT && $model->scm_url) {
                     /** @var ProjectService $svc */
                     $svc = \Yii::$app->get('projectService');
                     $svc->queueSync($model);
-                    \Yii::$app->session->setFlash('success', "Project \"{$model->name}\" created. Sync queued.");
+                    $this->session()->setFlash('success', "Project \"{$model->name}\" created. Sync queued.");
                 } else {
-                    \Yii::$app->session->setFlash('success', "Project \"{$model->name}\" created.");
+                    $this->session()->setFlash('success', "Project \"{$model->name}\" created.");
                 }
                 return $this->redirect(['view', 'id' => $model->id]);
             }
@@ -254,15 +254,15 @@ class ProjectController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireAccess($model);
-        if ($model->load(\Yii::$app->request->post()) && $model->save()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_UPDATED, 'project', $model->id, null, ['name' => $model->name]);
             if ($model->scm_type === Project::SCM_TYPE_GIT && $model->scm_url) {
                 /** @var ProjectService $svc */
                 $svc = \Yii::$app->get('projectService');
                 $svc->queueSync($model);
-                \Yii::$app->session->setFlash('success', "Project \"{$model->name}\" updated. Sync queued.");
+                $this->session()->setFlash('success', "Project \"{$model->name}\" updated. Sync queued.");
             } else {
-                \Yii::$app->session->setFlash('success', "Project \"{$model->name}\" updated.");
+                $this->session()->setFlash('success', "Project \"{$model->name}\" updated.");
             }
             return $this->redirect(['view', 'id' => $model->id]);
         }
@@ -276,14 +276,14 @@ class ProjectController extends BaseController
 
         $templateCount = $model->getJobTemplates()->count();
         if ($templateCount > 0) {
-            \Yii::$app->session->setFlash('danger', "Cannot delete \"{$model->name}\": {$templateCount} job template(s) still reference this project. Remove or reassign them first.");
+            $this->session()->setFlash('danger', "Cannot delete \"{$model->name}\": {$templateCount} job template(s) still reference this project. Remove or reassign them first.");
             return $this->redirect(['view', 'id' => $id]);
         }
 
         $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_DELETED, 'project', $id, null, ['name' => $name]);
-        \Yii::$app->session->setFlash('success', "Project \"{$name}\" deleted.");
+        $this->session()->setFlash('success', "Project \"{$name}\" deleted.");
         return $this->redirect(['index']);
     }
 
@@ -295,7 +295,7 @@ class ProjectController extends BaseController
         $lintSvc = \Yii::$app->get('lintService');
         $lintSvc->runForProject($model);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_LINTED, 'project', $model->id, null, ['name' => $model->name]);
-        \Yii::$app->session->setFlash('success', "Lint completed for \"{$model->name}\".");
+        $this->session()->setFlash('success', "Lint completed for \"{$model->name}\".");
         return $this->redirect(['view', 'id' => $id]);
     }
 
@@ -304,14 +304,14 @@ class ProjectController extends BaseController
         $model = $this->findModel($id);
         $this->requireAccess($model);
         if ($model->scm_type !== Project::SCM_TYPE_GIT) {
-            \Yii::$app->session->setFlash('warning', 'This project has no SCM configured.');
+            $this->session()->setFlash('warning', 'This project has no SCM configured.');
             return $this->redirect(['view', 'id' => $id]);
         }
         /** @var ProjectService $svc */
         $svc = \Yii::$app->get('projectService');
         $svc->queueSync($model);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_SYNCED, 'project', $model->id, null, ['name' => $model->name]);
-        \Yii::$app->session->setFlash('success', "Sync queued for \"{$model->name}\".");
+        $this->session()->setFlash('success', "Sync queued for \"{$model->name}\".");
         return $this->redirect(['view', 'id' => $id]);
     }
 
@@ -336,7 +336,7 @@ class ProjectController extends BaseController
     {
         /** @var ProjectAccessChecker $checker */
         $checker = \Yii::$app->get('projectAccessChecker');
-        if (!$checker->canView(\Yii::$app->user->id, $model->id)) {
+        if (!$checker->canView((int)\Yii::$app->user->id, $model->id)) {
             throw new \yii\web\ForbiddenHttpException('You do not have access to this project.');
         }
     }

@@ -85,7 +85,7 @@ class CredentialController extends BaseController
                         'credential', $model->id, null,
                         ['name' => $model->name, 'type' => $model->credential_type]
                     );
-                    \Yii::$app->session->setFlash('success', "Credential \"{$model->name}\" created.");
+                    $this->session()->setFlash('success', "Credential \"{$model->name}\" created.");
                     return $this->redirect(['view', 'id' => $model->id]);
                 }
             }
@@ -110,7 +110,7 @@ class CredentialController extends BaseController
                     AuditLog::ACTION_CREDENTIAL_UPDATED,
                     'credential', $model->id, null, ['name' => $model->name]
                 );
-                \Yii::$app->session->setFlash('success', "Credential \"{$model->name}\" updated.");
+                $this->session()->setFlash('success', "Credential \"{$model->name}\" updated.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
@@ -143,7 +143,7 @@ class CredentialController extends BaseController
             AuditLog::ACTION_CREDENTIAL_DELETED, 'credential', $id, null, ['name' => $name]
         );
         $model->delete();
-        \Yii::$app->session->setFlash('success', "Credential \"{$name}\" deleted.");
+        $this->session()->setFlash('success', "Credential \"{$name}\" deleted.");
         return $this->redirect(['index']);
     }
 

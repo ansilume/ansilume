@@ -52,7 +52,7 @@ class WebhookController extends BaseController
                     null,
                     ['name' => $model->name, 'url' => $model->url]
                 );
-                \Yii::$app->session->setFlash('success', "Webhook \"{$model->name}\" created.");
+                $this->session()->setFlash('success', "Webhook \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
@@ -71,7 +71,7 @@ class WebhookController extends BaseController
                     null,
                     ['name' => $model->name]
                 );
-                \Yii::$app->session->setFlash('success', "Webhook \"{$model->name}\" updated.");
+                $this->session()->setFlash('success', "Webhook \"{$model->name}\" updated.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
@@ -89,7 +89,7 @@ class WebhookController extends BaseController
             null,
             ['name' => $name]
         );
-        \Yii::$app->session->setFlash('success', "Webhook \"{$name}\" deleted.");
+        $this->session()->setFlash('success', "Webhook \"{$name}\" deleted.");
         return $this->redirect(['index']);
     }
 

@@ -62,6 +62,7 @@ class User extends ActiveRecord implements IdentityInterface
 
     public static function findIdentity($id): ?self
     {
+        /** @var self|null */
         return static::findOne(['id' => $id, 'status' => self::STATUS_ACTIVE]);
     }
 
@@ -71,11 +72,13 @@ class User extends ActiveRecord implements IdentityInterface
         if ($apiToken === null) {
             return null;
         }
+        /** @var self|null */
         return static::findOne(['id' => $apiToken->user_id, 'status' => self::STATUS_ACTIVE]);
     }
 
     public static function findByUsername(string $username): ?self
     {
+        /** @var self|null */
         return static::findOne(['username' => $username, 'status' => self::STATUS_ACTIVE]);
     }
 
@@ -152,6 +155,7 @@ class User extends ActiveRecord implements IdentityInterface
             return null;
         }
 
+        /** @var self|null */
         return static::findOne([
             'password_reset_token' => $token,
             'status'               => self::STATUS_ACTIVE,

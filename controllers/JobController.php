@@ -88,7 +88,7 @@ class JobController extends BaseController
     {
         $job = $this->findModel($id);
         if (!$job->isCancelable()) {
-            \Yii::$app->session->setFlash('warning', "Job #{$job->id} cannot be canceled in status \"{$job->status}\".");
+            $this->session()->setFlash('warning', "Job #{$job->id} cannot be canceled in status \"{$job->status}\".");
             return $this->redirect(['view', 'id' => $id]);
         }
         $job->status      = Job::STATUS_CANCELED;
@@ -96,7 +96,7 @@ class JobController extends BaseController
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_JOB_CANCELED, 'job', $job->id);
-        \Yii::$app->session->setFlash('success', "Job #{$job->id} canceled.");
+        $this->session()->setFlash('success', "Job #{$job->id} canceled.");
         return $this->redirect(['view', 'id' => $id]);
     }
 
@@ -110,7 +110,7 @@ class JobController extends BaseController
         $template = $original->jobTemplate;
 
         if ($template === null) {
-            \Yii::$app->session->setFlash('danger', 'Original template no longer exists.');
+            $this->session()->setFlash('danger', 'Original template no longer exists.');
             return $this->redirect(['view', 'id' => $id]);
         }
 
@@ -129,10 +129,10 @@ class JobController extends BaseController
             /** @var JobLaunchService $svc */
             $svc = \Yii::$app->get('jobLaunchService');
             $job = $svc->launch($template, (int)\Yii::$app->user->id, $overrides);
-            \Yii::$app->session->setFlash('success', "Re-launched as Job #{$job->id}.");
+            $this->session()->setFlash('success', "Re-launched as Job #{$job->id}.");
             return $this->redirect(['view', 'id' => $job->id]);
         } catch (\RuntimeException $e) {
-            \Yii::$app->session->setFlash('danger', 'Re-launch failed: ' . $e->getMessage());
+            $this->session()->setFlash('danger', 'Re-launch failed: ' . $e->getMessage());
             return $this->redirect(['view', 'id' => $id]);
         }
     }

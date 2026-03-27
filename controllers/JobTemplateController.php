@@ -77,7 +77,7 @@ class JobTemplateController extends BaseController
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
                 $lintService->runForTemplate($model);
-                \Yii::$app->session->setFlash('success', "Template \"{$model->name}\" created.");
+                $this->session()->setFlash('success', "Template \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
@@ -92,7 +92,7 @@ class JobTemplateController extends BaseController
             /** @var \app\services\LintService $lintService */
             $lintService = \Yii::$app->get('lintService');
             $lintService->runForTemplate($model);
-            \Yii::$app->session->setFlash('success', "Template \"{$model->name}\" updated.");
+            $this->session()->setFlash('success', "Template \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
         return $this->render('form', $this->formData($model));
@@ -104,7 +104,7 @@ class JobTemplateController extends BaseController
         $name  = $model->name;
         $model->softDelete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_DELETED, 'job_template', $id, null, ['name' => $name]);
-        \Yii::$app->session->setFlash('success', "Template \"{$name}\" deleted.");
+        $this->session()->setFlash('success', "Template \"{$name}\" deleted.");
         return $this->redirect(['index']);
     }
 
@@ -122,10 +122,10 @@ class JobTemplateController extends BaseController
                 /** @var JobLaunchService $svc */
                 $svc = \Yii::$app->get('jobLaunchService');
                 $job = $svc->launch($template, (int)\Yii::$app->user->id, $overrides);
-                \Yii::$app->session->setFlash('success', "Job #{$job->id} queued.");
+                $this->session()->setFlash('success', "Job #{$job->id} queued.");
                 return $this->redirect(['/job/view', 'id' => $job->id]);
             } catch (\RuntimeException $e) {
-                \Yii::$app->session->setFlash('danger', 'Launch failed: ' . $e->getMessage());
+                $this->session()->setFlash('danger', 'Launch failed: ' . $e->getMessage());
             }
         }
         return $this->render('launch', ['template' => $template]);
@@ -140,9 +140,9 @@ class JobTemplateController extends BaseController
             \Yii::$app->user->id,
             ['name' => $model->name]
         );
-        \Yii::$app->session->setFlash('success', 'Trigger token generated. Copy it now — it will not be shown again.');
+        $this->session()->setFlash('success', 'Trigger token generated. Copy it now — it will not be shown again.');
         // Flash the raw token once so the view can display it
-        \Yii::$app->session->setFlash('trigger_token_raw', $model->trigger_token);
+        $this->session()->setFlash('trigger_token_raw', $model->trigger_token);
         return $this->redirect(['view', 'id' => $id]);
     }
 
@@ -155,7 +155,7 @@ class JobTemplateController extends BaseController
             \Yii::$app->user->id,
             ['name' => $model->name]
         );
-        \Yii::$app->session->setFlash('success', 'Trigger token revoked. The /trigger endpoint is now disabled for this template.');
+        $this->session()->setFlash('success', 'Trigger token revoked. The /trigger endpoint is now disabled for this template.');
         return $this->redirect(['view', 'id' => $id]);
     }
 

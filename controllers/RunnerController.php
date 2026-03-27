@@ -34,7 +34,7 @@ class RunnerController extends BaseController
         $group   = RunnerGroup::findOne($groupId);
 
         if ($group === null) {
-            \Yii::$app->session->setFlash('danger', 'Runner group not found.');
+            $this->session()->setFlash('danger', 'Runner group not found.');
             return $this->redirect(['/runner-group/index']);
         }
 
@@ -48,12 +48,12 @@ class RunnerController extends BaseController
         $model->token_hash = $token['hash'];
 
         if (!$model->validate() || !$model->save()) {
-            \Yii::$app->session->setFlash('danger', 'Failed to create runner: ' . json_encode($model->errors));
+            $this->session()->setFlash('danger', 'Failed to create runner: ' . json_encode($model->errors));
             return $this->redirect(['/runner-group/view', 'id' => $group->id]);
         }
 
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_CREATED, 'runner', $model->id, null, ['name' => $model->name, 'group_id' => $group->id]);
-        \Yii::$app->session->setFlash('runner_token', [
+        $this->session()->setFlash('runner_token', [
             'runner_id'   => $model->id,
             'runner_name' => $model->name,
             'raw_token'   => $token['raw'],
@@ -70,7 +70,7 @@ class RunnerController extends BaseController
         $runner->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_DELETED, 'runner', $id, null, ['name' => $name, 'group_id' => $groupId]);
 
-        \Yii::$app->session->setFlash('success', "Runner \"{$name}\" deleted.");
+        $this->session()->setFlash('success', "Runner \"{$name}\" deleted.");
         return $this->redirect(['/runner-group/view', 'id' => $groupId]);
     }
 
@@ -83,7 +83,7 @@ class RunnerController extends BaseController
         $runner->save(false);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_TOKEN_REGENERATED, 'runner', $runner->id, null, ['name' => $runner->name]);
 
-        \Yii::$app->session->setFlash('runner_token', [
+        $this->session()->setFlash('runner_token', [
             'runner_id'   => $runner->id,
             'runner_name' => $runner->name,
             'raw_token'   => $token['raw'],

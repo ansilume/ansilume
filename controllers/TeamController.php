@@ -75,7 +75,7 @@ class TeamController extends BaseController
             $model->created_by = \Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_CREATED, 'team', $model->id, null, ['name' => $model->name]);
-                \Yii::$app->session->setFlash('success', "Team \"{$model->name}\" created.");
+                $this->session()->setFlash('success', "Team \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
@@ -87,7 +87,7 @@ class TeamController extends BaseController
         $model = $this->findModel($id);
         if ($model->load(\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_UPDATED, 'team', $model->id, null, ['name' => $model->name]);
-            \Yii::$app->session->setFlash('success', "Team \"{$model->name}\" updated.");
+            $this->session()->setFlash('success', "Team \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
         return $this->render('form', ['model' => $model]);
@@ -99,7 +99,7 @@ class TeamController extends BaseController
         $name  = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_DELETED, 'team', $id, null, ['name' => $name]);
-        \Yii::$app->session->setFlash('success', "Team \"{$name}\" deleted.");
+        $this->session()->setFlash('success', "Team \"{$name}\" deleted.");
         return $this->redirect(['index']);
     }
 
@@ -115,10 +115,10 @@ class TeamController extends BaseController
         $member->user_id = $userId;
         $member->created_at = time();
         if (!$member->save()) {
-            \Yii::$app->session->setFlash('danger', 'Could not add member: ' . json_encode($member->errors));
+            $this->session()->setFlash('danger', 'Could not add member: ' . json_encode($member->errors));
         } else {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_MEMBER_ADDED, 'team', $team->id, null, ['user_id' => $userId]);
-            \Yii::$app->session->setFlash('success', 'Member added.');
+            $this->session()->setFlash('success', 'Member added.');
         }
         return $this->redirect(['view', 'id' => $id]);
     }
@@ -127,7 +127,7 @@ class TeamController extends BaseController
     {
         TeamMember::deleteAll(['team_id' => $id, 'user_id' => $userId]);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_MEMBER_REMOVED, 'team', $id, null, ['user_id' => $userId]);
-        \Yii::$app->session->setFlash('success', 'Member removed.');
+        $this->session()->setFlash('success', 'Member removed.');
         return $this->redirect(['view', 'id' => $id]);
     }
 
@@ -148,10 +148,10 @@ class TeamController extends BaseController
         $tp->role       = $role;
         $tp->created_at = time();
         if (!$tp->save()) {
-            \Yii::$app->session->setFlash('danger', 'Could not add project: ' . json_encode($tp->errors));
+            $this->session()->setFlash('danger', 'Could not add project: ' . json_encode($tp->errors));
         } else {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_PROJECT_ADDED, 'team', $team->id, null, ['project_id' => $projectId, 'role' => $role]);
-            \Yii::$app->session->setFlash('success', 'Project access granted.');
+            $this->session()->setFlash('success', 'Project access granted.');
         }
         return $this->redirect(['view', 'id' => $id]);
     }
@@ -160,7 +160,7 @@ class TeamController extends BaseController
     {
         TeamProject::deleteAll(['team_id' => $id, 'project_id' => $projectId]);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_PROJECT_REMOVED, 'team', $id, null, ['project_id' => $projectId]);
-        \Yii::$app->session->setFlash('success', 'Project access removed.');
+        $this->session()->setFlash('success', 'Project access removed.');
         return $this->redirect(['view', 'id' => $id]);
     }
 

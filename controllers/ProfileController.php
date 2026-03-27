@@ -55,15 +55,15 @@ class ProfileController extends BaseController
     {
         $name = trim((string)\Yii::$app->request->post('name', ''));
         if ($name === '') {
-            \Yii::$app->session->setFlash('danger', 'Token name is required.');
+            $this->session()->setFlash('danger', 'Token name is required.');
             return $this->redirect(['tokens']);
         }
 
         ['raw' => $raw, 'token' => $tokenModel] = ApiToken::generate((int)\Yii::$app->user->id, $name);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_API_TOKEN_CREATED, 'api_token', $tokenModel->id, null, ['name' => $name]);
 
-        \Yii::$app->session->setFlash('new_token', $raw);
-        \Yii::$app->session->setFlash('success', 'Token created. Copy it now — it will not be shown again.');
+        $this->session()->setFlash('new_token', $raw);
+        $this->session()->setFlash('success', 'Token created. Copy it now — it will not be shown again.');
         return $this->redirect(['tokens']);
     }
 
@@ -76,7 +76,7 @@ class ProfileController extends BaseController
         $tokenName = $token->name;
         $token->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_API_TOKEN_DELETED, 'api_token', $id, null, ['name' => $tokenName]);
-        \Yii::$app->session->setFlash('success', "Token \"{$tokenName}\" revoked.");
+        $this->session()->setFlash('success', "Token \"{$tokenName}\" revoked.");
         return $this->redirect(['tokens']);
     }
 
@@ -108,7 +108,7 @@ class ProfileController extends BaseController
         $user = \Yii::$app->user->identity;
 
         if ($user->totp_enabled) {
-            \Yii::$app->session->setFlash('info', 'Two-factor authentication is already enabled.');
+            $this->session()->setFlash('info', 'Two-factor authentication is already enabled.');
             return $this->redirect(['security']);
         }
 
@@ -144,7 +144,7 @@ class ProfileController extends BaseController
 
         $secret = \Yii::$app->session->get('totp_setup_secret');
         if (empty($secret)) {
-            \Yii::$app->session->setFlash('danger', 'TOTP setup session expired. Please start again.');
+            $this->session()->setFlash('danger', 'TOTP setup session expired. Please start again.');
             return $this->redirect(['setup-totp']);
         }
 
@@ -187,7 +187,7 @@ class ProfileController extends BaseController
         $user = \Yii::$app->user->identity;
 
         if (!$user->totp_enabled) {
-            \Yii::$app->session->setFlash('info', 'Two-factor authentication is not enabled.');
+            $this->session()->setFlash('info', 'Two-factor authentication is not enabled.');
             return $this->redirect(['security']);
         }
 
@@ -199,7 +199,7 @@ class ProfileController extends BaseController
                 AuditLog::ACTION_MFA_DISABLED, 'user', $user->id
             );
 
-            \Yii::$app->session->setFlash('success', 'Two-factor authentication has been disabled.');
+            $this->session()->setFlash('success', 'Two-factor authentication has been disabled.');
             return $this->redirect(['security']);
         }
 

@@ -54,7 +54,7 @@ class UserController extends BaseController
         if ($form->load(\Yii::$app->request->post()) && $form->save()) {
             $newUser = $form->getUser();
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_CREATED, 'user', $newUser->id, null, ['username' => $form->username]);
-            \Yii::$app->session->setFlash('success', "User \"{$form->username}\" created.");
+            $this->session()->setFlash('success', "User \"{$form->username}\" created.");
             return $this->redirect(['view', 'id' => $newUser->id]);
         }
 
@@ -71,7 +71,7 @@ class UserController extends BaseController
 
         if ($form->load(\Yii::$app->request->post()) && $form->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_UPDATED, 'user', $user->id, null, ['username' => $form->username]);
-            \Yii::$app->session->setFlash('success', "User \"{$form->username}\" updated.");
+            $this->session()->setFlash('success', "User \"{$form->username}\" updated.");
             return $this->redirect(['view', 'id' => $user->id]);
         }
 
@@ -88,7 +88,7 @@ class UserController extends BaseController
         $user->delete();
 
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_DELETED, 'user', $id, null, ['username' => $username]);
-        \Yii::$app->session->setFlash('success', "User \"{$username}\" deleted.");
+        $this->session()->setFlash('success', "User \"{$username}\" deleted.");
         return $this->redirect(['index']);
     }
 
@@ -104,7 +104,7 @@ class UserController extends BaseController
 
         $label = $user->status === User::STATUS_ACTIVE ? 'activated' : 'deactivated';
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_STATUS_CHANGED, 'user', $id, null, ['username' => $user->username, 'status' => $label]);
-        \Yii::$app->session->setFlash('success', "User \"{$user->username}\" {$label}.");
+        $this->session()->setFlash('success', "User \"{$user->username}\" {$label}.");
         return $this->redirect(['view', 'id' => $id]);
     }
 
@@ -128,6 +128,7 @@ class UserController extends BaseController
 
     private function findModel(int $id): User
     {
+        /** @var User|null $model */
         $model = User::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("User #{$id} not found.");

@@ -98,7 +98,7 @@ class CredentialService extends Component
         try {
             // Extract public key; -P "" supplies empty passphrase so ssh-keygen
             // never prompts interactively (no TTY available in the web process).
-            $pubOut  = [];
+            $pubOut = [];
             $this->runCommand(['ssh-keygen', '-y', '-P', '', '-f', $tmp], $pubOut);
             $pubKey = trim(implode('', $pubOut));
 
@@ -110,7 +110,7 @@ class CredentialService extends Component
             $bits      = 0;
             $algorithm = 'unknown';
             if (preg_match('/^(\d+)\s+\S+\s+.*\((\S+)\)\s*$/', $info, $m)) {
-                $bits      = (int) $m[1];
+                $bits      = (int)$m[1];
                 $algorithm = strtolower($m[2]);
             }
 
@@ -139,7 +139,7 @@ class CredentialService extends Component
         return match ($algorithm) {
             'ed25519'  => true,
             'ed448'    => true,
-            'ecdsa'    => $bits >= 384,   // nistp256 = 256 bits → false, nistp384/521 → true
+            'ecdsa'    => $bits >= 384, // nistp256 = 256 bits → false, nistp384/521 → true
             'rsa'      => $bits >= 4096,
             'dsa'      => false,
             default    => null,

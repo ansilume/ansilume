@@ -53,7 +53,7 @@ class InventoryController extends BaseController
             $model->created_by = \Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_CREATED, 'inventory', $model->id, null, ['name' => $model->name]);
-                \Yii::$app->session->setFlash('success', "Inventory \"{$model->name}\" created.");
+                $this->session()->setFlash('success', "Inventory \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
@@ -68,7 +68,7 @@ class InventoryController extends BaseController
         $model = $this->findModel($id);
         if ($model->load(\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_UPDATED, 'inventory', $model->id, null, ['name' => $model->name]);
-            \Yii::$app->session->setFlash('success', "Inventory \"{$model->name}\" updated.");
+            $this->session()->setFlash('success', "Inventory \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
         return $this->render('form', [
@@ -83,7 +83,7 @@ class InventoryController extends BaseController
         $name  = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_DELETED, 'inventory', $id, null, ['name' => $name]);
-        \Yii::$app->session->setFlash('success', "Inventory \"{$name}\" deleted.");
+        $this->session()->setFlash('success', "Inventory \"{$name}\" deleted.");
         return $this->redirect(['index']);
     }
 
