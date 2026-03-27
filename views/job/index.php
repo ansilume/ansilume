@@ -115,7 +115,12 @@ $this->title = 'Jobs';
                             ['class' => 'badge text-bg-' . Job::statusCssClass($job->status) . ' text-decoration-none']
                         ) ?>
                     </td>
-                    <td><?= Html::encode($job->jobTemplate->name ?? '—') ?></td>
+                    <td>
+                        <?= Html::encode($job->jobTemplate->name ?? '—') ?>
+                        <?php if ($job->jobTemplate && $job->jobTemplate->isDeleted()): ?>
+                            <span class="text-muted">(deleted)</span>
+                        <?php endif; ?>
+                    </td>
                     <?php $recap = JobHostSummary::aggregate($job->hostSummaries); ?>
                     <td class="text-center">
                         <?= $recap['hosts'] > 0 ? $recap['hosts'] : '<span class="text-muted">—</span>' // xss-ok: integer or hardcoded HTML ?>

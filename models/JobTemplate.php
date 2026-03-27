@@ -37,6 +37,7 @@ use yii\db\ActiveRecord;
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at
+ * @property int|null    $deleted_at    Unix timestamp when soft-deleted (null = active)
  *
  * @property Project     $project
  * @property Inventory   $inventory
@@ -50,6 +51,37 @@ class JobTemplate extends ActiveRecord
     public static function tableName(): string
     {
         return '{{%job_template}}';
+    }
+
+    /**
+     * Default scope: exclude soft-deleted templates from all queries.
+     * Use {@see findWithDeleted()} to include them.
+     */
+    public static function find(): \yii\db\ActiveQuery
+    {
+        return parent::find()->andWhere(['{{%job_template}}.deleted_at' => null]);
+    }
+
+    /**
+     * Query that includes soft-deleted templates (for admin / audit views).
+     */
+    public static function findWithDeleted(): \yii\db\ActiveQuery
+    {
+        return parent::find();
+    }
+
+    /**
+     * Soft-delete this template by setting deleted_at.
+     */
+    public function softDelete(): bool
+    {
+        $this->deleted_at = time();
+        return $this->save(false, ['deleted_at']);
+    }
+
+    public function isDeleted(): bool
+    {
+        return $this->deleted_at !== null;
     }
 
     public function behaviors(): array

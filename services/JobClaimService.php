@@ -31,6 +31,7 @@ class JobClaimService extends Component
                 ->where([
                     '{{%job}}.status'                   => Job::STATUS_QUEUED,
                     '{{%job_template}}.runner_group_id' => $group->id,
+                    '{{%job_template}}.deleted_at'      => null,
                     '{{%job}}.runner_id'                => null,
                 ])
                 ->orderBy(['{{%job}}.id' => SORT_ASC])

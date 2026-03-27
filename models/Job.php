@@ -143,7 +143,9 @@ class Job extends ActiveRecord
 
     public function getJobTemplate(): \yii\db\ActiveQuery
     {
-        return $this->hasOne(JobTemplate::class, ['id' => 'job_template_id']);
+        // Include soft-deleted templates so job history remains intact.
+        return $this->hasOne(JobTemplate::class, ['id' => 'job_template_id'])
+            ->where([]);  // clear the default soft-delete scope
     }
 
     public function getLauncher(): \yii\db\ActiveQuery

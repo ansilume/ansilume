@@ -102,7 +102,7 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $name  = $model->name;
-        $model->delete();
+        $model->softDelete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_DELETED, 'job_template', $id, null, ['name' => $name]);
         \Yii::$app->session->setFlash('success', "Template \"{$name}\" deleted.");
         return $this->redirect(['index']);
