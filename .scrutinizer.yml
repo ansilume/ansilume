@@ -15,7 +15,9 @@ build:
   tests:
     before:
       - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\n' > .env
+      - cat .env
       - mysql -u root -h 127.0.0.1 -e "CREATE DATABASE ansilume; CREATE USER 'ansilume'@'%' IDENTIFIED BY 'secret'; GRANT ALL ON ansilume.* TO 'ansilume'@'%'; FLUSH PRIVILEGES;"
+      - php -r "require 'vendor/autoload.php'; \$d = Dotenv\Dotenv::createImmutable(__DIR__); \$d->safeLoad(); echo 'DB_HOST=' . (\$_ENV['DB_HOST'] ?? 'NOT SET') . PHP_EOL;"
       - php yii migrate --interactive=0
     override:
       - php-scrutinizer-run
