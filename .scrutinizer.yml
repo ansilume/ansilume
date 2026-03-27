@@ -3,7 +3,7 @@ build:
     php: "8.2"
   services:
     mysql: 5.7
-    redis: true
+    redis: 7
   dependencies:
     override:
       - composer self-update --2
