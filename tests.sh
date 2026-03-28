@@ -24,13 +24,59 @@ ok()      { echo -e "  ${GREEN}✔${NC}  $1"; PASS=$((PASS+1)); }
 fail()    { echo -e "  ${RED}✘${NC}  $1"; FAIL=$((FAIL+1)); ERRORS+=("$1"); }
 skip()    { echo -e "  ${YELLOW}–${NC}  $1 (skipped)"; SKIP=$((SKIP+1)); }
 
-# Wrapper: run a command inside the Docker app container.
-# Falls back to running locally if Docker is not available.
+# =============================================================================
+# Prerequisites check
+# =============================================================================
+section "Prerequisites"
+
 DOCKER_AVAILABLE=0
-if docker compose ps app --quiet 2>/dev/null | grep -q .; then
+if command -v docker &>/dev/null && docker compose ps app --quiet 2>/dev/null | grep -q .; then
     DOCKER_AVAILABLE=1
+    ok "Docker app container is running"
+else
+    if command -v docker &>/dev/null; then
+        echo -e "  ${YELLOW}–${NC}  Docker available but app container is not running"
+    else
+        echo -e "  ${YELLOW}–${NC}  Docker not installed"
+    fi
+    echo -e "     Falling back to local tools..."
+
+    MISSING=()
+    command -v php      &>/dev/null || MISSING+=("php")
+    command -v composer &>/dev/null || MISSING+=("composer")
+    command -v find     &>/dev/null || MISSING+=("find")
+    command -v grep     &>/dev/null || MISSING+=("grep")
+
+    if [[ ${#MISSING[@]} -gt 0 ]]; then
+        fail "Missing required tools: ${MISSING[*]}"
+        echo ""
+        echo -e "  Install the missing tools or start the Docker environment:"
+        echo -e "    ${BOLD}docker compose up -d${NC}"
+        echo ""
+        echo -e "${BOLD}════════════════════════════════════════${NC}"
+        echo -e "${BOLD}Results: ${GREEN}${PASS} passed${NC}  ${RED}${FAIL} failed${NC}  ${YELLOW}${SKIP} skipped${NC}"
+        echo -e "\n${RED}Aborted: missing prerequisites.${NC}\n"
+        exit 1
+    fi
+
+    PHP_VERSION=$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;' 2>/dev/null || echo "unknown")
+    if [[ "$PHP_VERSION" == "unknown" ]]; then
+        fail "Could not determine PHP version"
+    elif [[ "$(printf '%s\n' "8.2" "$PHP_VERSION" | sort -V | head -1)" != "8.2" ]]; then
+        fail "PHP >= 8.2 required, found $PHP_VERSION"
+    else
+        ok "PHP $PHP_VERSION"
+    fi
+
+    if [[ -d vendor ]]; then
+        ok "vendor/ directory exists"
+    else
+        fail "vendor/ missing — run: composer install"
+    fi
 fi
 
+# Wrapper: run a command inside the Docker app container.
+# Falls back to running locally if Docker is not available.
 dc() {
     if [[ $DOCKER_AVAILABLE -eq 1 ]]; then
         docker compose exec -T app "$@"
