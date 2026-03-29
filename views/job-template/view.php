@@ -49,11 +49,11 @@ $this->title = $model->name;
                     <dt class="col-5">Credential</dt>
                     <dd class="col-7"><?= $model->credential ? Html::a(Html::encode($model->credential->name), ['/credential/view', 'id' => $model->credential_id]) : '<span class="text-muted">None</span>' ?></dd>
                     <dt class="col-5">Forks</dt>
-                    <dd class="col-7"><?= $model->forks // xss-ok: integer ?></dd>
+                    <dd class="col-7"><?= $model->forks // xss-ok: integer?></dd>
                     <dt class="col-5">Verbosity</dt>
-                    <dd class="col-7"><?= $model->verbosity // xss-ok: integer ?></dd>
+                    <dd class="col-7"><?= $model->verbosity // xss-ok: integer?></dd>
                     <dt class="col-5">Timeout</dt>
-                    <dd class="col-7"><?= $model->timeout_minutes // xss-ok: integer ?> min</dd>
+                    <dd class="col-7"><?= $model->timeout_minutes // xss-ok: integer?> min</dd>
                     <?php if ($model->limit) :
                         ?><dt class="col-5">Limit</dt><dd class="col-7"><code><?= Html::encode($model->limit) ?></code></dd><?php
                     endif; ?>
@@ -162,9 +162,9 @@ $this->title = $model->name;
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Ansible Lint <small class="text-muted fw-normal">(--profile production)</small></span>
                 <span>
-                    <?= $lintBadge // xss-ok: hardcoded badge HTML ?>
+                    <?= $lintBadge // xss-ok: hardcoded badge HTML?>
                     <?php if ($model->lint_at) : ?>
-                        <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output ?></small>
+                        <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output?></small>
                     <?php endif; ?>
                 </span>
             </div>

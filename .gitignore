@@ -10,6 +10,7 @@
 .ssh/
 /.composer/
 .phpunit.result.cache
+.php-cs-fixer.cache
 .composer.install.lock
 .migrate.lock
 __pycache__/

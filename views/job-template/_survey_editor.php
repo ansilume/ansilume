@@ -77,7 +77,7 @@ $types = SurveyField::types();
 
 <script>
 (function () {
-    var existing = <?= Json::encode(array_map(fn($f) => $f->toArray(), $existing)) ?>;
+    var existing = <?= Json::encode(array_map(fn ($f) => $f->toArray(), $existing)) ?>;
     var container = document.getElementById('survey-rows');
     var tpl       = document.getElementById('survey-row-tpl');
     var hidden    = document.getElementById('survey-fields-json');

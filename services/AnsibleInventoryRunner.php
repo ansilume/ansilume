@@ -98,7 +98,7 @@ class AnsibleInventoryRunner extends Component
         $deadline = time() + $this->timeout;
 
         while (true) {
-            $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p));
+            $read = array_filter([$pipes[1], $pipes[2]], fn ($p) => is_resource($p));
             if (empty($read)) {
                 break;
             }

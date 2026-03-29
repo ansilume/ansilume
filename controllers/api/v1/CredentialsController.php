@@ -25,7 +25,7 @@ class CredentialsController extends BaseApiController
         $page = (int)\Yii::$app->request->get('page', 1);
 
         return $this->paginated(
-            array_map(fn($c) => $this->serialize($c), $dp->getModels()),
+            array_map(fn ($c) => $this->serialize($c), $dp->getModels()),
             (int)$dp->totalCount,
             $page,
             25

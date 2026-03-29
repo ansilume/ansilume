@@ -64,7 +64,7 @@ $this->title = 'Projects';
                             <form method="post" action="<?= Url::to(['sync', 'id' => $model->id]) ?>" style="display:inline">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-primary"
-                                        <?= $model->status === Project::STATUS_SYNCING ? 'disabled' : '' // xss-ok: hardcoded attribute ?>>Sync</button>
+                                        <?= $model->status === Project::STATUS_SYNCING ? 'disabled' : '' // xss-ok: hardcoded attribute?>>Sync</button>
                             </form>
                         <?php endif; ?>
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>

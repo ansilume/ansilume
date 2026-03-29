@@ -25,7 +25,7 @@ class ProjectsController extends BaseApiController
         $page = (int)\Yii::$app->request->get('page', 1);
 
         return $this->paginated(
-            array_map(fn($p) => $this->serialize($p), $dp->getModels()),
+            array_map(fn ($p) => $this->serialize($p), $dp->getModels()),
             (int)$dp->totalCount,
             $page,
             25

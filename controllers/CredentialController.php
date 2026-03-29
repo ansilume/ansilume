@@ -48,7 +48,7 @@ class CredentialController extends BaseController
 
             $publicKey = $secrets['public_key'] ?? '';
             $algorithm = $secrets['algorithm'] ?? '';
-            $bits = (int) ($secrets['bits'] ?? 0);
+            $bits = (int)($secrets['bits'] ?? 0);
             $keySecure = $secrets['key_secure'] ?? null;
 
             // Derive public key on-the-fly if not yet stored (legacy credentials)

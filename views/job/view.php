@@ -83,7 +83,7 @@ $isLive = !$job->isFinished();
                     <dt class="col-5">Finished</dt>
                     <dd class="col-7" id="detail-finished"><?= $job->finished_at ? date('Y-m-d H:i:s', $job->finished_at) : '—' ?></dd>
                     <dt class="col-5">Exit code</dt>
-                    <dd class="col-7" id="detail-exit-code"><?= $job->exit_code !== null ? $job->exit_code : '—' // xss-ok: integer or hardcoded string ?></dd>
+                    <dd class="col-7" id="detail-exit-code"><?= $job->exit_code !== null ? $job->exit_code : '—' // xss-ok: integer or hardcoded string?></dd>
                     <dt class="col-5">Runner</dt>
                     <dd class="col-7">
                         <?php if ($job->runner) : ?>
@@ -140,14 +140,14 @@ $isLive = !$job->isFinished();
                     $rowClass = 'table-warning';
                 }
                 ?>
-                <tr class="<?= $rowClass // xss-ok: controller-computed CSS class ?>">
+                <tr class="<?= $rowClass // xss-ok: controller-computed CSS class?>">
                     <td><?= Html::encode($hs->host) ?></td>
-                    <td class="text-center"><?= $hs->ok // xss-ok: integer ?></td>
-                    <td class="text-center"><?= $hs->changed // xss-ok: integer ?></td>
-                    <td class="text-center"><?= $hs->failed // xss-ok: integer ?></td>
-                    <td class="text-center"><?= $hs->skipped // xss-ok: integer ?></td>
-                    <td class="text-center"><?= $hs->unreachable // xss-ok: integer ?></td>
-                    <td class="text-center"><?= $hs->rescued // xss-ok: integer ?></td>
+                    <td class="text-center"><?= $hs->ok // xss-ok: integer?></td>
+                    <td class="text-center"><?= $hs->changed // xss-ok: integer?></td>
+                    <td class="text-center"><?= $hs->failed // xss-ok: integer?></td>
+                    <td class="text-center"><?= $hs->skipped // xss-ok: integer?></td>
+                    <td class="text-center"><?= $hs->unreachable // xss-ok: integer?></td>
+                    <td class="text-center"><?= $hs->rescued // xss-ok: integer?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -171,7 +171,7 @@ $isLive = !$job->isFinished();
                 if ($n === 0) {
                     continue;
                 } ?>
-                <span class="badge text-bg-<?= JobTask::statusCssClass($s) // xss-ok: hardcoded CSS class from enum ?>"><?= $n // xss-ok: integer ?> <?= Html::encode($s) ?></span>
+                <span class="badge text-bg-<?= JobTask::statusCssClass($s) // xss-ok: hardcoded CSS class from enum?>"><?= $n // xss-ok: integer?> <?= Html::encode($s) ?></span>
             <?php endforeach; ?>
         </span>
     </div>
@@ -190,12 +190,12 @@ $isLive = !$job->isFinished();
             <tbody>
             <?php foreach ($tasks as $t) : ?>
                 <tr>
-                    <td class="text-muted"><?= $t->sequence + 1 // xss-ok: integer ?></td>
+                    <td class="text-muted"><?= $t->sequence + 1 // xss-ok: integer?></td>
                     <td><?= Html::encode($t->task_name) ?></td>
                     <td><code><?= Html::encode($t->task_action) ?></code></td>
                     <td><?= Html::encode($t->host) ?></td>
                     <td>
-                        <span class="badge text-bg-<?= JobTask::statusCssClass($t->status) // xss-ok: hardcoded CSS class from enum ?>">
+                        <span class="badge text-bg-<?= JobTask::statusCssClass($t->status) // xss-ok: hardcoded CSS class from enum?>">
                             <?= Html::encode($t->status) ?>
                         </span>
                     </td>

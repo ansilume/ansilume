@@ -27,16 +27,16 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
 <div class="d-flex justify-content-between align-items-start mb-3">
     <div>
         <h2 class="mb-0"><?= Html::encode($group->name) ?></h2>
-        <?php if ($group->description): ?>
+        <?php if ($group->description) : ?>
             <p class="text-muted mt-1 mb-0"><?= Html::encode($group->description) ?></p>
         <?php endif; ?>
     </div>
-    <?php if (\Yii::$app->user->can('runner-group.update')): ?>
+    <?php if (\Yii::$app->user->can('runner-group.update')) : ?>
         <?= Html::a('Edit Group', ['update', 'id' => $group->id], ['class' => 'btn btn-outline-secondary']) ?>
     <?php endif; ?>
 </div>
 
-<?php if ($tokenFlash): ?>
+<?php if ($tokenFlash) : ?>
 <div class="alert alert-warning border-warning" role="alert">
     <h5 class="alert-heading">Token for runner <strong><?= Html::encode($tokenFlash['runner_name']) ?></strong></h5>
     <p class="mb-2">This token is shown <strong>once only</strong>. Copy it now — it cannot be retrieved again.</p>
@@ -46,18 +46,19 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
         <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('token-display').value)">Copy</button>
     </div>
     <p class="mb-1"><strong>Docker one-liner:</strong></p>
-    <pre class="bg-dark text-light p-2 rounded small mb-0"><?= Html::encode(
-        "docker run --rm \\\n" .
+    <?php
+    $dockerSnippet = "docker run --rm \\\n" .
         "  -e RUNNER_TOKEN=" . $tokenFlash['raw_token'] . " \\\n" .
         "  -e API_URL=" . $apiUrl . " \\\n" .
         "  ghcr.io/ansilume/ansilume:latest \\\n" .
-        "  php yii runner/start"
-    ) ?></pre>
+        "  php yii runner/start";
+    ?>
+    <pre class="bg-dark text-light p-2 rounded small mb-0"><?= Html::encode($dockerSnippet) ?></pre>
 </div>
 <?php endif; ?>
 
 <!-- Add Runner form -->
-<?php if (\Yii::$app->user->can('runner-group.update')): ?>
+<?php if (\Yii::$app->user->can('runner-group.update')) : ?>
 <div class="card mb-4">
     <div class="card-header">Add Runner</div>
     <div class="card-body">
@@ -85,14 +86,14 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Runners (<?= count($runners) ?>)</span>
         <?php
-        $onlineCount = count(array_filter($runners, fn($r) => $r->isOnline()));
+        $onlineCount = count(array_filter($runners, fn ($r) => $r->isOnline()));
         $badge = count($runners) > 0 && $onlineCount === 0 ? 'danger' : ($onlineCount > 0 ? 'success' : 'secondary');
         ?>
         <span class="badge text-bg-<?= $badge ?>"><?= $onlineCount ?>/<?= count($runners) ?> online</span>
     </div>
-    <?php if (empty($runners)): ?>
+    <?php if (empty($runners)) : ?>
         <div class="card-body text-muted small">No runners yet. Add one above.</div>
-    <?php else: ?>
+    <?php else : ?>
     <div class="card-body p-0">
         <table class="table table-sm table-hover mb-0">
             <thead class="table-dark">
@@ -105,15 +106,15 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
                 </tr>
             </thead>
             <tbody>
-            <?php foreach ($runners as $runner): ?>
+            <?php foreach ($runners as $runner) : ?>
                 <tr>
                     <td class="fw-semibold"><?= Html::encode($runner->name) ?></td>
                     <td>
-                        <?php if ($runner->isOnline()): ?>
+                        <?php if ($runner->isOnline()) : ?>
                             <span class="badge text-bg-success">Online</span>
-                        <?php elseif ($runner->last_seen_at): ?>
+                        <?php elseif ($runner->last_seen_at) : ?>
                             <span class="badge text-bg-secondary">Offline</span>
-                        <?php else: ?>
+                        <?php else : ?>
                             <span class="badge text-bg-warning">Never seen</span>
                         <?php endif; ?>
                     </td>
@@ -122,7 +123,7 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
                     </td>
                     <td class="text-muted small"><?= Html::encode($runner->description ?? '') ?></td>
                     <td class="text-end">
-                        <?php if (\Yii::$app->user->can('runner-group.update')): ?>
+                        <?php if (\Yii::$app->user->can('runner-group.update')) : ?>
                             <form method="post" action="<?= Url::to(['/runner/regenerate-token', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="return confirm('Regenerate token for &quot;<?= addslashes($runner->name) ?>&quot;? The old token will stop working immediately.')">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-warning me-1">Regen Token</button>

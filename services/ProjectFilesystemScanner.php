@@ -65,7 +65,7 @@ class ProjectFilesystemScanner
 
         $nodes = $this->scanDirectoryEntries($base, $dir, $depth, $maxDepth);
 
-        usort($nodes, fn($a, $b) =>
+        usort($nodes, fn ($a, $b) =>
             ($a['type'] === $b['type'])
                 ? strcmp($a['name'], $b['name'])
                 : ($a['type'] === 'dir' ? -1 : 1));

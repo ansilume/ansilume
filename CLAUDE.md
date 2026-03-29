@@ -154,6 +154,16 @@ web/                  Web root (index.php, assets)
 - Favor explicit code over magic.
 - Do not introduce a new dependency unless it clearly pays for itself.
 
+### Scrutinizer-CI compliance
+All code must pass Scrutinizer-CI without issues. Proactively avoid common findings:
+- **Class complexity**: Keep classes focused. If a class grows beyond ~15 methods, extract a separate class. Never combine unrelated concerns (e.g. filesystem scanning + git operations).
+- **Method complexity**: Keep cyclomatic complexity per method low (target A rating). Extract helper methods for branches, loops, and early returns.
+- **Nullable types**: When a model property is nullable (e.g. `$model->scm_url`), cast explicitly before passing to methods that expect non-null (`(string)$model->scm_url`). Scrutinizer cannot see guards across method boundaries.
+- **Casts**: No space between cast and value: `(string)$var`, `(int)$var`, not `(string) $var`.
+- **PHPDoc array shapes**: Use explicit keys (`array{0: string, 1: int}`) not positional (`array{string, int}`).
+- **Return type analysis**: Avoid extracting methods where the return type depends on pass-by-reference semantics (e.g. `stream_select`) — Scrutinizer's static analysis cannot follow these correctly.
+- **Spacing**: No alignment spacing. Single space around `=` and `=>`.
+
 ### Formatting
 - **No alignment spacing.** Always use exactly one space around `=` and `=>`. Never pad with extra spaces to align columns. Scrutinizer and phpcs enforce this.
 - **No `@` error suppression operator.** Use explicit checks (`if (file_exists(...))`) instead.

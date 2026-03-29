@@ -28,7 +28,7 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
         Inventory::TYPE_DYNAMIC => 'Dynamic script',
     ], ['id' => 'inventory-type']) ?>
 
-    <div id="field-content" <?= $model->inventory_type !== Inventory::TYPE_STATIC ? 'style="display:none"' : '' // xss-ok: hardcoded attribute ?>>
+    <div id="field-content" <?= $model->inventory_type !== Inventory::TYPE_STATIC ? 'style="display:none"' : '' // xss-ok: hardcoded attribute?>>
 
         <?= $form->field($model, 'content')->textarea([
             'rows' => 12,
@@ -37,7 +37,7 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
         ])->label('Inventory Content (INI or YAML)') ?>
     </div>
 
-    <div id="field-project" <?= $model->inventory_type === Inventory::TYPE_STATIC ? 'style="display:none"' : '' // xss-ok: hardcoded attribute ?>>
+    <div id="field-project" <?= $model->inventory_type === Inventory::TYPE_STATIC ? 'style="display:none"' : '' // xss-ok: hardcoded attribute?>>
 
         <?= $form->field($model, 'project_id')->dropDownList(
             ArrayHelper::map($projects, 'id', 'name'),

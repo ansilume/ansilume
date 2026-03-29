@@ -260,7 +260,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      */
     private function drainAndAppendLogs(Job $job, array $pipes, int $sequence, int $remaining): int
     {
-        $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+        $read = array_filter([$pipes[1], $pipes[2]], fn ($p) => is_resource($p) && !feof($p));
         $write = null;
         $except = null;
         $changed = stream_select($read, $write, $except, min($remaining, 5));

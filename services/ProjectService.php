@@ -96,7 +96,7 @@ class ProjectService extends Component
         if (is_dir($dest . '/.git')) {
             $this->gitPull($dest, $project->scm_branch, $env);
         } else {
-            $this->gitClone((string) $project->scm_url, $dest, $project->scm_branch, $env);
+            $this->gitClone((string)$project->scm_url, $dest, $project->scm_branch, $env);
         }
     }
 

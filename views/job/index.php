@@ -123,25 +123,25 @@ $this->title = 'Jobs';
                     </td>
                     <?php $recap = JobHostSummary::aggregate($job->hostSummaries); ?>
                     <td class="text-center">
-                        <?= $recap['hosts'] > 0 ? $recap['hosts'] : '<span class="text-muted">—</span>' // xss-ok: integer or hardcoded HTML ?>
+                        <?= $recap['hosts'] > 0 ? $recap['hosts'] : '<span class="text-muted">—</span>' // xss-ok: integer or hardcoded HTML?>
                     </td>
                     <td>
                         <?php if ($recap['hosts'] > 0) : ?>
                         <span class="d-flex gap-1 flex-wrap" style="font-size:.7rem; line-height:1.6;">
                             <?php if ($recap['ok'] > 0) : ?>
-                                <span class="badge text-bg-success"><?= $recap['ok'] // xss-ok: integer ?> ok</span>
+                                <span class="badge text-bg-success"><?= $recap['ok'] // xss-ok: integer?> ok</span>
                             <?php endif; ?>
                             <?php if ($recap['changed'] > 0) : ?>
-                                <span class="badge text-bg-warning"><?= $recap['changed'] // xss-ok: integer ?> changed</span>
+                                <span class="badge text-bg-warning"><?= $recap['changed'] // xss-ok: integer?> changed</span>
                             <?php endif; ?>
                             <?php if ($recap['failed'] > 0) : ?>
-                                <span class="badge text-bg-danger"><?= $recap['failed'] // xss-ok: integer ?> failed</span>
+                                <span class="badge text-bg-danger"><?= $recap['failed'] // xss-ok: integer?> failed</span>
                             <?php endif; ?>
                             <?php if ($recap['unreachable'] > 0) : ?>
-                                <span class="badge text-bg-dark"><?= $recap['unreachable'] // xss-ok: integer ?> unreach</span>
+                                <span class="badge text-bg-dark"><?= $recap['unreachable'] // xss-ok: integer?> unreach</span>
                             <?php endif; ?>
                             <?php if ($recap['skipped'] > 0) : ?>
-                                <span class="badge text-bg-secondary"><?= $recap['skipped'] // xss-ok: integer ?> skip</span>
+                                <span class="badge text-bg-secondary"><?= $recap['skipped'] // xss-ok: integer?> skip</span>
                             <?php endif; ?>
                         </span>
                         <?php else : ?>

@@ -45,7 +45,7 @@ class JobController extends BaseController
             'users' => User::find()->orderBy('username')->all(),
             'statusOptions' => array_combine(
                 Job::statuses(),
-                array_map(fn($s) => Job::statusLabel($s), Job::statuses())
+                array_map(fn ($s) => Job::statusLabel($s), Job::statuses())
             ),
         ]);
     }
@@ -75,7 +75,7 @@ class JobController extends BaseController
 
         return $this->asJson([
             'status' => $job->status,
-            'chunks' => array_map(fn($l) => [
+            'chunks' => array_map(fn ($l) => [
                 'sequence' => $l->sequence,
                 'stream' => $l->stream,
                 'content' => $l->content,

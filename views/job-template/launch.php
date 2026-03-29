@@ -59,26 +59,26 @@ $hasSurvey = !empty($surveyFields);
             <?php if ($field->type === SurveyField::TYPE_TEXTAREA) : ?>
                 <textarea name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                           class="form-control font-monospace" rows="4"
-                          <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>><?= Html::encode($field->default) ?></textarea>
+                          <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute?>><?= Html::encode($field->default) ?></textarea>
 
             <?php elseif ($field->type === SurveyField::TYPE_BOOLEAN) : ?>
                 <div class="form-check">
                     <input type="hidden" name="<?= Html::encode($inputName) ?>" value="false">
                     <input type="checkbox" name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                            class="form-check-input" value="true"
-                           <?= $field->default === 'true' ? 'checked' : '' // xss-ok: hardcoded attribute ?>>
+                           <?= $field->default === 'true' ? 'checked' : '' // xss-ok: hardcoded attribute?>>
                     <label class="form-check-label" for="<?= Html::encode($inputId) ?>">Yes</label>
                 </div>
 
             <?php elseif ($field->type === SurveyField::TYPE_SELECT) : ?>
                 <select name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
-                        class="form-select" <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>>
+                        class="form-select" <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute?>>
                     <?php if (!$field->required) : ?>
                         <option value="">— Select —</option>
                     <?php endif; ?>
                     <?php foreach ($field->options as $opt) : ?>
                         <option value="<?= Html::encode($opt) ?>"
-                                <?= $field->default === $opt ? 'selected' : '' // xss-ok: hardcoded attribute ?>>
+                                <?= $field->default === $opt ? 'selected' : '' // xss-ok: hardcoded attribute?>>
                             <?= Html::encode($opt) ?>
                         </option>
                     <?php endforeach; ?>
@@ -87,13 +87,13 @@ $hasSurvey = !empty($surveyFields);
             <?php elseif ($field->type === SurveyField::TYPE_PASSWORD) : ?>
                 <input type="password" name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                        class="form-control" autocomplete="off"
-                       <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>>
+                       <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute?>>
 
             <?php else : /* text | integer */ ?>
-                <input type="<?= $field->type === SurveyField::TYPE_INTEGER ? 'number' : 'text' // xss-ok: hardcoded strings ?>"
+                <input type="<?= $field->type === SurveyField::TYPE_INTEGER ? 'number' : 'text' // xss-ok: hardcoded strings?>"
                        name="<?= Html::encode($inputName) ?>" id="<?= Html::encode($inputId) ?>"
                        class="form-control" value="<?= Html::encode($field->default) ?>"
-                       <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute ?>>
+                       <?= $field->required ? 'required' : '' // xss-ok: hardcoded attribute?>>
             <?php endif; ?>
 
             <?php if ($field->hint) : ?>
@@ -112,10 +112,10 @@ $hasSurvey = !empty($surveyFields);
             Toggle
         </button>
     </div>
-    <div id="advanced-overrides" class="collapse<?= $hasSurvey ? '' : ' show' // xss-ok: hardcoded CSS class ?>">
+    <div id="advanced-overrides" class="collapse<?= $hasSurvey ? '' : ' show' // xss-ok: hardcoded CSS class?>">
         <div class="card-body">
             <div class="mb-3">
-                <label class="form-label">Extra Vars <span class="text-muted small">(JSON, merged with template defaults<?= $hasSurvey ? ' and survey answers' : '' // xss-ok: hardcoded strings ?>)</span></label>
+                <label class="form-label">Extra Vars <span class="text-muted small">(JSON, merged with template defaults<?= $hasSurvey ? ' and survey answers' : '' // xss-ok: hardcoded strings?>)</span></label>
                 <textarea name="overrides[extra_vars]" class="form-control font-monospace" rows="4"
                           placeholder='{"env": "staging"}'><?= Html::encode(!$hasSurvey ? ($template->extra_vars ?? '') : '') ?></textarea>
             </div>

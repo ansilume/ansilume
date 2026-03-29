@@ -99,7 +99,7 @@ class SurveyField
             return [];
         }
         return array_values(array_filter(
-            array_map(fn($d) => is_array($d) ? self::fromArray($d) : null, $data)
+            array_map(fn ($d) => is_array($d) ? self::fromArray($d) : null, $data)
         ));
     }
 }

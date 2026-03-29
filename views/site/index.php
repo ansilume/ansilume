@@ -31,7 +31,7 @@ $this->title = 'Dashboard';
     <div class="col-sm-6 col-xl-3">
         <div class="card <?= $stats['queued'] > 0 ? 'text-bg-warning' : 'text-bg-secondary' ?> h-100">
             <div class="card-body">
-                <div class="fs-2 fw-bold"><?= $stats['queued'] // xss-ok: integer ?></div>
+                <div class="fs-2 fw-bold"><?= $stats['queued'] // xss-ok: integer?></div>
                 <div><?= Html::a('Queued', Url::to(['/job/index', 'status' => Job::STATUS_QUEUED]), ['class' => 'text-white text-decoration-none']) ?></div>
             </div>
         </div>
@@ -49,9 +49,9 @@ $this->title = 'Dashboard';
         $runnerBg = $totalRunners === 0 ? 'text-bg-secondary'
             : ($onlineRunners === 0 ? 'text-bg-danger' : 'text-bg-success');
         ?>
-        <div class="card h-100 <?= $runnerBg // xss-ok: controller-computed CSS class ?>">
+        <div class="card h-100 <?= $runnerBg // xss-ok: controller-computed CSS class?>">
             <div class="card-body">
-                <div class="fs-2 fw-bold"><?= $onlineRunners // xss-ok: integer ?>/<?= $totalRunners // xss-ok: integer ?></div>
+                <div class="fs-2 fw-bold"><?= $onlineRunners // xss-ok: integer?>/<?= $totalRunners // xss-ok: integer?></div>
                 <div><?= Html::a('Runners Online', Url::to(['/runner-group/index']), ['class' => 'text-white text-decoration-none']) ?></div>
             </div>
         </div>
@@ -122,7 +122,7 @@ $this->title = 'Dashboard';
                         } ?>
                         <tr>
                             <td><span class="badge text-bg-<?= Job::statusCssClass($status) ?>"><?= Html::encode(Job::statusLabel($status)) ?></span></td>
-                            <td class="text-end fw-bold"><?= $count // xss-ok: integer ?></td>
+                            <td class="text-end fw-bold"><?= $count // xss-ok: integer?></td>
                         </tr>
                     <?php endforeach; ?>
                     <?php if (array_sum($statusCounts) === 0) : ?>

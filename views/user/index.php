@@ -49,7 +49,7 @@ $this->title = 'Users';
                         <span class="badge text-bg-secondary">Inactive</span>
                     <?php endif; ?>
                 </td>
-                <td><?= $user->is_superadmin ? '<span class="badge text-bg-warning">Yes</span>' : '—' // xss-ok: hardcoded strings ?></td>
+                <td><?= $user->is_superadmin ? '<span class="badge text-bg-warning">Yes</span>' : '—' // xss-ok: hardcoded strings?></td>
                 <td><?= date('Y-m-d', $user->created_at) ?></td>
                 <td class="text-end text-nowrap">
                     <?= Html::a('View', ['view', 'id' => $user->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>

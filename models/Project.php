@@ -57,7 +57,7 @@ class Project extends ActiveRecord
             [['name'], 'string', 'max' => 128],
             [['description'], 'string'],
             [['scm_type'], 'in', 'range' => [self::SCM_TYPE_GIT, self::SCM_TYPE_MANUAL]],
-            [['scm_url'], 'validateScmUrl', 'when' => fn($m) => $m->scm_type === self::SCM_TYPE_GIT],
+            [['scm_url'], 'validateScmUrl', 'when' => fn ($m) => $m->scm_type === self::SCM_TYPE_GIT],
             [['scm_url', 'local_path'], 'string', 'max' => 512],
             [['scm_branch'], 'string', 'max' => 128],
             [['scm_credential_id'], 'integer'],

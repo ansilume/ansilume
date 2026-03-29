@@ -234,7 +234,7 @@ class RunnerController extends Controller
         if ($payload['inventory_type'] === 'static') {
             $inventoryTmpFile = $this->writeInventoryTempFile($payload['inventory_content'] ?? "localhost\n");
             $cmd = array_map(
-                fn($part) => $part === '__INVENTORY_TMP__' ? $inventoryTmpFile : $part,
+                fn ($part) => $part === '__INVENTORY_TMP__' ? $inventoryTmpFile : $part,
                 $cmd
             );
         }
@@ -363,7 +363,7 @@ class RunnerController extends Controller
      */
     private function drainAndStreamLogs(int $jobId, array $pipes, int $sequence, int $remaining): int
     {
-        $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+        $read = array_filter([$pipes[1], $pipes[2]], fn ($p) => is_resource($p) && !feof($p));
         $write = null;
         $except = null;
         // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable

@@ -53,11 +53,11 @@ class TeamController extends BaseController
         $team = $this->findModel($id);
         $allUsers = User::find()
             ->where(['status' => User::STATUS_ACTIVE])
-            ->andWhere(['NOT IN', 'id', array_map(fn($m) => $m->user_id, $team->teamMembers)])
+            ->andWhere(['NOT IN', 'id', array_map(fn ($m) => $m->user_id, $team->teamMembers)])
             ->orderBy('username')
             ->all();
         $allProjects = Project::find()
-            ->andWhere(['NOT IN', 'id', array_map(fn($tp) => $tp->project_id, $team->teamProjects)])
+            ->andWhere(['NOT IN', 'id', array_map(fn ($tp) => $tp->project_id, $team->teamProjects)])
             ->orderBy('name')
             ->all();
 

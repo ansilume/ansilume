@@ -146,9 +146,9 @@ $this->title = $model->name;
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Ansible Lint <small class="text-muted fw-normal">(--profile production, full project)</small></span>
                 <span>
-                    <?= $lintBadge // xss-ok: hardcoded badge HTML ?>
+                    <?= $lintBadge // xss-ok: hardcoded badge HTML?>
                     <?php if ($model->lint_at) : ?>
-                        <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output ?></small>
+                        <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output?></small>
                     <?php endif; ?>
                 </span>
             </div>

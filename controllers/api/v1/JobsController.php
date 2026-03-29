@@ -34,7 +34,7 @@ class JobsController extends BaseApiController
         $per = 25;
 
         return $this->paginated(
-            array_map(fn($j) => $this->serializeJob($j), $jobs),
+            array_map(fn ($j) => $this->serializeJob($j), $jobs),
             (int)$total,
             $page,
             $per

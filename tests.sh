@@ -322,12 +322,12 @@ section "PHP_CodeSniffer (PSR-12)"
 
 if dc php vendor/bin/phpcs --version >/dev/null 2>&1; then
     # Exclude: vendor, .composer, runtime, web/assets, docker (third-party),
-    # views (mixed PHP/HTML triggers false positives), migrations (generated),
-    # tests (testable subclasses need multi-class-per-file).
+    # migrations (generated), tests (testable subclasses need multi-class-per-file).
+    # Views are included (errors only, warnings suppressed).
     PHPCS_OUT=$(dc php vendor/bin/phpcs \
         --standard=PSR12 \
         --extensions=php \
-        --ignore=vendor,.composer,runtime,@runtime,web/assets,docker,views,migrations,tests \
+        --ignore=vendor,.composer,runtime,@runtime,web/assets,docker,migrations,tests \
         --warning-severity=0 \
         --report=summary \
         -q \
@@ -341,6 +341,28 @@ if dc php vendor/bin/phpcs --version >/dev/null 2>&1; then
     fi
 else
     skip "phpcs not available"
+fi
+
+# =============================================================================
+# 8b. PHP-CS-Fixer — code style (matches Scrutinizer-CI)
+# =============================================================================
+section "PHP-CS-Fixer (Scrutinizer style)"
+
+if dc php vendor/bin/php-cs-fixer --version >/dev/null 2>&1; then
+    CSFIXER_OUT=$(dc php vendor/bin/php-cs-fixer fix \
+        --dry-run \
+        --config=.php-cs-fixer.dist.php \
+        --using-cache=no \
+        2>&1 || true)
+    CSFIXER_COUNT=$(echo "$CSFIXER_OUT" | grep -oP 'Found \K\d+(?= of)' || echo "0")
+    if [[ "$CSFIXER_COUNT" -eq 0 ]]; then
+        ok "PHP-CS-Fixer passed (0 fixable issues)"
+    else
+        fail "PHP-CS-Fixer: $CSFIXER_COUNT file(s) need fixing — run: php vendor/bin/php-cs-fixer fix"
+        echo "$CSFIXER_OUT" | grep '^\s*[0-9]\+)' | head -20 | sed 's/^/     /'
+    fi
+else
+    skip "php-cs-fixer not available"
 fi
 
 # =============================================================================

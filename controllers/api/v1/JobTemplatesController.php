@@ -25,7 +25,7 @@ class JobTemplatesController extends BaseApiController
         $page = (int)\Yii::$app->request->get('page', 1);
 
         return $this->paginated(
-            array_map(fn($t) => $this->serialize($t), $dp->getModels()),
+            array_map(fn ($t) => $this->serialize($t), $dp->getModels()),
             (int)$dp->totalCount,
             $page,
             25

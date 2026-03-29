@@ -90,7 +90,7 @@ $this->title = Html::encode($team->name);
                             <tr>
                                 <td><?= $tp->project ? Html::a(Html::encode($tp->project->name), ['/project/view', 'id' => $tp->project_id]) : "#{$tp->project_id}" ?></td>
                                 <td>
-                                    <span class="badge text-bg-<?= $tp->role === TeamProject::ROLE_OPERATOR ? 'primary' : 'secondary' // xss-ok: hardcoded CSS classes ?>">
+                                    <span class="badge text-bg-<?= $tp->role === TeamProject::ROLE_OPERATOR ? 'primary' : 'secondary' // xss-ok: hardcoded CSS classes?>">
                                         <?= Html::encode($tp->role) ?>
                                     </span>
                                 </td>

@@ -92,7 +92,7 @@ class SetupController extends Controller
         // Only reset migrations that were previously skipped (i.e. exist in the
         // applied table but produced no data because no user existed at the time).
         foreach ($seedMigrations as $version) {
-            $applied = (int) $db->createCommand(
+            $applied = (int)$db->createCommand(
                 'SELECT COUNT(*) FROM {{%migration}} WHERE version = :v',
                 [':v' => $version]
             )->queryScalar();

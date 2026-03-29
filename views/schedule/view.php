@@ -13,7 +13,7 @@ $this->title = Html::encode($model->name);
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0"><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('job.launch')): ?>
+        <?php if (\Yii::$app->user->can('job.launch')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
             <form method="post" action="<?= Url::to(['toggle', 'id' => $model->id]) ?>" style="display:inline"
                   onsubmit="return confirm('<?= $model->enabled ? 'Disable this schedule?' : 'Enable this schedule?' ?>')">
@@ -93,14 +93,13 @@ $this->title = Html::encode($model->name);
     })();
     </script>
 
-    <?php if (!empty($model->extra_vars)): ?>
+    <?php if (!empty($model->extra_vars)) : ?>
     <div class="col-md-6">
         <div class="card">
             <div class="card-header">Extra vars override</div>
             <div class="card-body">
-                <pre class="mb-0"><code><?= Html::encode(
-                    json_encode(json_decode($model->extra_vars), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
-                ) ?></code></pre>
+                <?php $formatted = json_encode(json_decode($model->extra_vars), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE); ?>
+                <pre class="mb-0"><code><?= Html::encode($formatted) ?></code></pre>
             </div>
         </div>
     </div>

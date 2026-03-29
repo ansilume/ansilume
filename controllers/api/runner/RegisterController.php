@@ -132,7 +132,7 @@ class RegisterController extends Controller
         $db = \Yii::$app->db;
 
         $conditions = array_map(
-            fn($p) => 'name LIKE ' . $db->quoteValue($p . '%'),
+            fn ($p) => 'name LIKE ' . $db->quoteValue($p . '%'),
             $prefixes
         );
         $where = '(' . implode(' OR ', $conditions) . ')';
