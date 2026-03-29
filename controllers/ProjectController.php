@@ -61,8 +61,10 @@ class ProjectController extends BaseController
         $tree = [];
         $localPath = $this->resolveEffectivePath($model);
         if ($localPath !== null) {
-            $playbooks = $this->detectPlaybooks($localPath);
-            $tree = $this->buildTree($localPath, $localPath, 0, 5);
+            /** @var ProjectService $svc */
+            $svc = \Yii::$app->get('projectService');
+            $playbooks = $svc->detectPlaybooks($localPath);
+            $tree = $svc->buildTree($localPath, $localPath);
         }
         return $this->render('view', ['model' => $model, 'playbooks' => $playbooks, 'tree' => $tree]);
     }
@@ -109,120 +111,6 @@ class ProjectController extends BaseController
             return $fallback;
         }
         return null;
-    }
-
-    /**
-     * Return root-level YAML files that look like playbooks
-     * (contain a top-level list, i.e. start with "---" or "- ").
-     */
-    private function detectPlaybooks(string $base): array
-    {
-        $playbooks = [];
-
-        // Root-level YAML files
-        foreach (glob($base . '/*.{yml,yaml}', GLOB_BRACE) ?: [] as $file) {
-            if ($this->looksLikePlaybook($file)) {
-                $playbooks[] = basename($file);
-            }
-        }
-
-        // Recursively scan playbooks/ directory
-        if (is_dir($base . '/playbooks')) {
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($base . '/playbooks', \FilesystemIterator::SKIP_DOTS)
-            );
-            foreach ($iterator as $file) {
-                if (!$file->isFile()) {
-                    continue;
-                }
-                $ext = strtolower($file->getExtension());
-                if ($ext !== 'yml' && $ext !== 'yaml') {
-                    continue;
-                }
-                if ($this->looksLikePlaybook($file->getPathname())) {
-                    $playbooks[] = 'playbooks/' . ltrim(
-                        substr($file->getPathname(), strlen($base . '/playbooks')),
-                        '/'
-                    );
-                }
-            }
-        }
-
-        sort($playbooks);
-        return $playbooks;
-    }
-
-    private function looksLikePlaybook(string $path): bool
-    {
-        $name = strtolower(basename($path));
-
-        if (str_starts_with($name, '.')) {
-            return false;
-        }
-
-        // Known non-playbook YAML files — exclude by filename.
-        $excluded = [
-            'requirements.yml', 'requirements.yaml',
-            'galaxy.yml', 'galaxy.yaml',
-            'molecule.yml', 'molecule.yaml',
-        ];
-        if (in_array($name, $excluded, true)) {
-            return false;
-        }
-
-        $head = file_get_contents($path, false, null, 0, 512);
-        if ($head === false) {
-            return false;
-        }
-
-        // A playbook is a YAML list at the document root.
-        // Skip blank lines, the document-start marker (---), and comments.
-        // The first real content line must start with "- " (no indentation).
-        foreach (explode("\n", $head) as $line) {
-            $trimmed = rtrim($line);
-            if ($trimmed === '' || $trimmed === '---' || str_starts_with($trimmed, '#')) {
-                continue;
-            }
-            return str_starts_with($trimmed, '- ') || $trimmed === '-';
-        }
-
-        return false;
-    }
-
-    /**
-     * Recursively build a directory tree array, ignoring .git and hidden dirs.
-     * Each node: ['name' => string, 'type' => 'dir'|'file', 'children' => [...]]
-     */
-    private function buildTree(string $base, string $dir, int $depth, int $maxDepth): array
-    {
-        if ($depth >= $maxDepth) {
-            return [];
-        }
-        $nodes = [];
-        $items = scandir($dir) ?: [];
-        foreach ($items as $item) {
-            if ($item === '.' || $item === '..' || $item === '.git' || str_starts_with($item, '.')) {
-                continue;
-            }
-            $path = $dir . '/' . $item;
-            $rel = ltrim(substr($path, strlen($base)), '/');
-            if (is_dir($path)) {
-                $nodes[] = [
-                    'name' => $item,
-                    'rel' => $rel,
-                    'type' => 'dir',
-                    'children' => $this->buildTree($base, $path, $depth + 1, $maxDepth),
-                ];
-            } else {
-                $nodes[] = ['name' => $item, 'rel' => $rel, 'type' => 'file', 'children' => []];
-            }
-        }
-        // Dirs first, then files, both alphabetical
-        usort($nodes, fn($a, $b) =>
-            ($a['type'] === $b['type'])
-                ? strcmp($a['name'], $b['name'])
-                : ($a['type'] === 'dir' ? -1 : 1));
-        return $nodes;
     }
 
     public function actionCreate(): Response|string

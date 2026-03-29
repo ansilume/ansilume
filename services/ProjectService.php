@@ -150,6 +150,169 @@ class ProjectService extends Component
         $this->runGit(['git', '-C', $dest, 'reset', '--hard', 'FETCH_HEAD'], $env);
     }
 
+    // -------------------------------------------------------------------------
+    // Filesystem scanning — playbook detection and directory tree
+    // -------------------------------------------------------------------------
+
+    /**
+     * Detect playbook files in a project directory.
+     * Scans root-level YAML files and the playbooks/ subdirectory recursively.
+     *
+     * @return string[] Relative playbook paths, sorted alphabetically.
+     */
+    public function detectPlaybooks(string $base): array
+    {
+        $playbooks = $this->detectRootPlaybooks($base);
+        $playbooks = array_merge($playbooks, $this->detectPlaybooksInSubdir($base));
+
+        sort($playbooks);
+        return $playbooks;
+    }
+
+    private function detectRootPlaybooks(string $base): array
+    {
+        $playbooks = [];
+        foreach (glob($base . '/*.{yml,yaml}', GLOB_BRACE) ?: [] as $file) {
+            if ($this->looksLikePlaybook($file)) {
+                $playbooks[] = basename($file);
+            }
+        }
+        return $playbooks;
+    }
+
+    private function detectPlaybooksInSubdir(string $base): array
+    {
+        $dir = $base . '/playbooks';
+        if (!is_dir($dir)) {
+            return [];
+        }
+
+        $playbooks = [];
+        $iterator = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)
+        );
+
+        foreach ($iterator as $file) {
+            if (!$file->isFile() || !$this->isYamlFile($file)) {
+                continue;
+            }
+            if ($this->looksLikePlaybook($file->getPathname())) {
+                $playbooks[] = 'playbooks/' . ltrim(
+                    substr($file->getPathname(), strlen($dir)),
+                    '/'
+                );
+            }
+        }
+        return $playbooks;
+    }
+
+    private function isYamlFile(\SplFileInfo $file): bool
+    {
+        $ext = strtolower($file->getExtension());
+        return $ext === 'yml' || $ext === 'yaml';
+    }
+
+    /**
+     * Check whether a YAML file looks like an Ansible playbook.
+     * A playbook is a YAML list at the document root (first content line starts with "- ").
+     */
+    public function looksLikePlaybook(string $path): bool
+    {
+        if ($this->isExcludedFilename($path)) {
+            return false;
+        }
+
+        $head = file_get_contents($path, false, null, 0, 512);
+        if ($head === false) {
+            return false;
+        }
+
+        return $this->firstContentLineIsList($head);
+    }
+
+    private function isExcludedFilename(string $path): bool
+    {
+        $name = strtolower(basename($path));
+
+        if (str_starts_with($name, '.')) {
+            return true;
+        }
+
+        $excluded = [
+            'requirements.yml', 'requirements.yaml',
+            'galaxy.yml', 'galaxy.yaml',
+            'molecule.yml', 'molecule.yaml',
+        ];
+
+        return in_array($name, $excluded, true);
+    }
+
+    private function firstContentLineIsList(string $head): bool
+    {
+        foreach (explode("\n", $head) as $line) {
+            $trimmed = rtrim($line);
+            if ($trimmed === '' || $trimmed === '---' || str_starts_with($trimmed, '#')) {
+                continue;
+            }
+            return str_starts_with($trimmed, '- ') || $trimmed === '-';
+        }
+        return false;
+    }
+
+    /**
+     * Recursively build a directory tree array, ignoring .git and hidden dirs.
+     * Each node: ['name' => string, 'rel' => string, 'type' => 'dir'|'file', 'children' => [...]]
+     *
+     * @return array<array{name: string, rel: string, type: string, children: array}>
+     */
+    public function buildTree(string $base, string $dir, int $depth = 0, int $maxDepth = 5): array
+    {
+        if ($depth >= $maxDepth) {
+            return [];
+        }
+
+        $nodes = $this->scanDirectoryEntries($base, $dir, $depth, $maxDepth);
+
+        usort($nodes, fn($a, $b) =>
+            ($a['type'] === $b['type'])
+                ? strcmp($a['name'], $b['name'])
+                : ($a['type'] === 'dir' ? -1 : 1));
+
+        return $nodes;
+    }
+
+    private function scanDirectoryEntries(string $base, string $dir, int $depth, int $maxDepth): array
+    {
+        $nodes = [];
+        $items = scandir($dir) ?: [];
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..' || str_starts_with($item, '.')) {
+                continue;
+            }
+
+            $path = $dir . '/' . $item;
+            $rel = ltrim(substr($path, strlen($base)), '/');
+
+            if (is_dir($path)) {
+                $nodes[] = [
+                    'name' => $item,
+                    'rel' => $rel,
+                    'type' => 'dir',
+                    'children' => $this->buildTree($base, $path, $depth + 1, $maxDepth),
+                ];
+            } else {
+                $nodes[] = ['name' => $item, 'rel' => $rel, 'type' => 'file', 'children' => []];
+            }
+        }
+
+        return $nodes;
+    }
+
+    // -------------------------------------------------------------------------
+    // Git operations
+    // -------------------------------------------------------------------------
+
     /**
      * Execute a git command as a subprocess.
      * All arguments are passed as an array — never shell-interpolated.

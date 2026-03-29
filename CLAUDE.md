@@ -2,37 +2,47 @@
 
 ## Purpose
 
-This repository contains a web-based automation platform built with **PHP** and **Yii2**. The product goal is similar in spirit to tools like AWX, Tower, or Semaphore: users can manage inventories, credentials, projects, templates, and run **Ansible playbooks through a UI** with proper access control, execution history, logging, and auditability.
+Ansilume is a self-hostable automation platform built with **PHP 8.2+** and **Yii2**. It manages inventories, credentials, projects, and job templates, and runs **Ansible playbooks** through a web UI with RBAC, execution history, logging, and auditability. Comparable to AWX, Semaphore, or Rundeck.
 
 This file tells Claude how to work inside this repository.
 
 ---
 
-## Product Intent
+## Current State
 
-Build a production-grade, maintainable, self-hostable automation platform with these core capabilities:
+The core platform is functional. The following capabilities are implemented and working:
 
-- Manage users, teams, and permissions
-- Store inventories, credentials, projects, playbooks, and job templates
-- Launch Ansible jobs from the UI
-- Track job status, logs, artifacts, and history
-- Provide safe defaults, clear validations, and audit trails
-- Support future API-first and worker-based scaling
+- User authentication with optional TOTP 2FA
+- RBAC with roles, permissions, and team-based access
+- Projects (git-backed and manual) with sync
+- Inventories (static, file-based, dynamic) with `ansible-inventory` parsing
+- Credentials (SSH key, password, vault, token) with encrypted storage
+- Job templates with survey fields, extra vars, verbosity, become, forks, limits, tags
+- Job launch, execution, and real-time log streaming
+- Runner groups with token-based runner registration
+- Cron-based schedules for automated job execution
+- Email notifications on job success/failure
+- Webhooks for external triggering
+- REST API (v1) for projects, inventories, credentials, templates, jobs, schedules
+- Audit logging for security-relevant actions
+- Job artifacts and host summaries via Ansible callback plugin
+- Selftest playbook for runner health verification
+- Metrics endpoint for monitoring
+- Docker-based deployment
 
-The system should feel like an **operations product**, not a demo.
+Focus is now on **hardening, operational polish, and extending** the existing platform — not greenfield building.
 
 ---
 
 ## Primary Technology Stack
 
-- **PHP 8.2+**
-- **Yii2**
-- **MySQL or MariaDB**
-- **Redis** for queue / cache where appropriate
+- **PHP 8.2+** with strict typing
+- **Yii2** framework
+- **MySQL / MariaDB**
+- **Redis** for queue and cache
 - **Composer** for PHP dependencies
-- **Node.js / npm** only if frontend assets require it
-- **Docker / docker compose** for local development where available
-- **Ansible** executed by isolated runner processes, not from the web request lifecycle
+- **Docker / docker compose** for development and deployment
+- **Ansible** executed by isolated runner processes, never from web requests
 
 Prefer boring, stable, well-understood technologies over trendy ones.
 
@@ -40,41 +50,39 @@ Prefer boring, stable, well-understood technologies over trendy ones.
 
 ## Architecture Principles
 
-Claude must preserve these architectural rules:
-
 1. **Thin controllers, rich services**
-   - Controllers should orchestrate requests and responses only.
-   - Business logic belongs in service classes, domain helpers, or dedicated action classes.
+   - Controllers orchestrate requests and responses only.
+   - Business logic belongs in service classes under `services/`.
 
 2. **No Ansible execution in the request thread**
-   - Web requests create jobs.
-   - Jobs are executed asynchronously by workers.
+   - Web requests create job records.
+   - Jobs are executed asynchronously by runner workers.
    - Job state is persisted and visible in the UI.
 
 3. **Clear separation of concerns**
    - Models handle persistence and validation.
    - Services handle workflows.
    - Queue workers handle execution.
-   - Views should stay simple.
+   - Views stay simple.
 
 4. **Default to secure behavior**
    - Validate all input.
-   - Escape output.
+   - Escape all output (`Html::encode()`).
    - Restrict access by role.
    - Never expose secrets in logs or HTML.
 
 5. **Idempotent and recoverable jobs**
-   - Job records must survive worker restarts.
-   - State transitions must be explicit.
-   - Failures must be visible and debuggable.
+   - Job records survive worker restarts.
+   - State transitions are explicit.
+   - Failures are visible and debuggable.
 
-6. **Auditability matters**
-   - Important actions should be traceable.
-   - Changes to credentials, templates, launches, and permissions should be attributable to a user.
+6. **Auditability**
+   - Important actions are traceable via `AuditService`.
+   - Changes to credentials, templates, launches, and permissions are attributable to a user.
 
 ---
 
-## What Claude Should Optimize For
+## Optimization Priority
 
 When making implementation choices, optimize in this order:
 
@@ -90,43 +98,6 @@ Do not trade correctness or safety for speed.
 
 ---
 
-## What We Are Building First
-
-Prioritize the MVP in the following order:
-
-### Phase 1: Core platform
-- User authentication
-- RBAC / roles / permissions
-- Projects
-- Inventories
-- Credentials
-- Job templates
-- Job launch form
-- Job records with status
-- Worker execution pipeline
-- Log output in UI
-
-### Phase 2: Operational usability
-- Job history and filtering
-- Audit log
-- Basic notifications
-- Template variables / survey-like launch parameters
-- Retry / relaunch
-- Manual cancel
-
-### Phase 3: Scale and polish
-- API endpoints
-- Scheduling
-- Team/project scoping
-- Artifact handling
-- Webhooks
-- Runner isolation improvements
-- HA / multi-worker support
-
-If asked to add advanced features before the basics are solid, prefer strengthening the core first.
-
----
-
 ## Domain Language
 
 Use consistent naming in code and UI.
@@ -136,30 +107,41 @@ Use consistent naming in code and UI.
 - **Credential**: SSH key, username/password, vault secret, token, etc.
 - **Job Template**: reusable launch definition for a playbook execution
 - **Job**: one concrete execution of a template
-- **Runner**: background execution component
-- **Artifact**: output produced by a job
+- **Runner**: background process that claims and executes jobs
+- **Runner Group**: logical grouping of runners with shared token authentication
+- **Schedule**: cron-based automatic execution of a job template
+- **Webhook**: external trigger endpoint for launching jobs
+- **Artifact**: output produced by a job (host summaries, structured data)
 - **Audit Log**: immutable record of meaningful user/system actions
+- **Notification**: email alert triggered by job completion (success/failure)
+- **Survey Field**: configurable launch-time parameter on a job template
 
 Do not invent multiple names for the same concept.
 
 ---
 
-## Repository Expectations
+## Repository Structure
 
-Claude should keep the repository organized roughly like this unless the existing structure already defines a good equivalent:
-
-- `controllers/` for HTTP controllers
-- `models/` for ActiveRecord models and form models
-- `services/` for business logic
-- `jobs/` or `queue/` for async job handlers
-- `components/` for reusable framework integrations
-- `views/` for Yii view files
-- `migrations/` for schema changes
-- `tests/` for automated tests
-- `config/` for environment-aware configuration
-- `runtime/` and generated files ignored in VCS
-
-Respect the existing project structure if already present.
+```
+ansible/              Callback plugin, selftest playbook
+assets/               Yii2 asset bundles
+bin/                  Scripts (release)
+commands/             Yii2 console commands (runner, worker, schedule, setup, health)
+components/           Reusable framework components
+config/               Environment-aware configuration (web, console, test, common)
+controllers/          HTTP controllers (web UI + api/v1/ + api/runner/)
+deploy/               Deployment artifacts
+docker/               Dockerfiles, entrypoints, nginx config
+helpers/              Utility classes (FileHelper)
+jobs/                 Async job handlers (RunAnsibleJob, SyncProjectJob)
+mail/                 Email templates (job notifications, password reset)
+migrations/           Forward-only database migrations
+models/               ActiveRecord models and form models
+services/             Business logic (15+ service classes)
+tests/                Unit + integration tests, mirroring src structure
+views/                Yii2 view templates
+web/                  Web root (index.php, assets)
+```
 
 ---
 
@@ -172,12 +154,17 @@ Respect the existing project structure if already present.
 - Favor explicit code over magic.
 - Do not introduce a new dependency unless it clearly pays for itself.
 
+### Formatting
+- **No alignment spacing.** Always use exactly one space around `=` and `=>`. Never pad with extra spaces to align columns. Scrutinizer and phpcs enforce this.
+- **No `@` error suppression operator.** Use explicit checks (`if (file_exists(...))`) instead.
+- Follow PSR-12 strictly. The test suite enforces this via phpcs.
+
 ### PHP
-- Use strict typing where practical.
-- Add type hints for method arguments and return values whenever possible.
+- Use strict typing (`declare(strict_types=1)`) in every PHP file.
+- Add type hints for method arguments and return values.
 - Avoid static god-classes.
 - Prefer constructor injection or explicit dependency wiring over hidden globals.
-- Keep methods short enough to understand without scrolling excessively.
+- Keep methods short enough to understand without scrolling.
 
 ### Yii2
 - Use Yii2 conventions unless there is a strong reason not to.
@@ -195,7 +182,7 @@ Respect the existing project structure if already present.
 ### Frontend / Views
 - Keep UI utilitarian, clean, and operator-friendly.
 - Favor clarity over flashy design.
-- Job state, errors, and next actions must always be obvious.
+- Always escape output with `Html::encode()`, even for seemingly static strings.
 - Never leak sensitive values to the browser.
 
 ---
@@ -206,7 +193,7 @@ These are mandatory.
 
 1. Never commit secrets.
 2. Never log raw credentials, private keys, vault secrets, tokens, or decrypted secret material.
-3. Redact secrets in logs and UI.
+3. Redact secrets in logs and UI via `CredentialService`.
 4. Protect all state-changing actions with authorization checks.
 5. Use CSRF protection for browser forms.
 6. Validate and sanitize all user-controlled input.
@@ -221,73 +208,92 @@ If a proposed implementation is convenient but weakens security, reject it and c
 
 ## Ansible Execution Rules
 
-Claude must follow these rules for anything related to job execution:
-
-- Do not execute Ansible directly from a web controller.
+- Never execute Ansible directly from a web controller.
 - Use a persisted job record before execution starts.
 - Build a deterministic runner payload from project + inventory + credential + template + launch vars.
-- Store stdout/stderr incrementally or in chunks suitable for UI display.
+- Store stdout/stderr incrementally via the callback plugin.
 - Record start time, end time, exit code, final status, and launcher identity.
-- Support at least these statuses:
-  - pending
-  - queued
-  - running
-  - succeeded
-  - failed
-  - canceled
-- Keep runner implementation replaceable so local execution can later evolve into containerized or remote execution.
-
-For early versions, local worker execution is acceptable if properly isolated and auditable.
+- Job statuses: `pending`, `waiting`, `running`, `successful`, `failed`, `error`, `canceled`.
+- Keep runner implementation replaceable for future containerized or remote execution.
 
 ---
 
-## Data Modeling Guidance
+## Data Model
 
-Claude should prefer explicit tables/entities for:
+Core entities (all backed by ActiveRecord models and migrations):
 
-- users
-- roles / permissions
-- teams
-- projects
-- inventories
-- inventory_hosts / groups if needed
-- credentials
-- job_templates
-- jobs
-- job_logs
-- audit_logs
+- `user`, `auth_assignment`, `auth_item` — authentication and RBAC
+- `team`, `team_member`, `team_project` — team-based access
+- `project` — git or manual automation content source
+- `inventory` — static, file, or dynamic host definitions
+- `credential` — encrypted secrets (SSH, password, vault, token)
+- `job_template` — reusable playbook launch configuration
+- `job` — concrete execution instance
+- `job_log` — incremental execution output
+- `job_artifact`, `job_host_summary`, `job_task` — structured execution results
+- `runner_group`, `runner` — execution infrastructure
+- `schedule` — cron-based automation
+- `webhook` — external trigger endpoints
+- `audit_log` — immutable action trail
+- `api_token` — API authentication
 
-Avoid storing too much opaque JSON unless it is genuinely schema-flexible data such as launch-time extra vars or artifact metadata.
+Avoid opaque JSON unless it is genuinely schema-flexible (extra vars, artifact metadata).
 
 ---
 
-## Testing Expectations
+## Testing
 
-Claude should add or update tests for meaningful changes.
+`./tests.sh` is the single source of truth for the test suite. It runs inside Docker and includes:
 
-Priorities:
-- Unit tests for service logic
-- Integration tests for job-launch workflows
-- Validation tests for form models
-- Authorization tests for sensitive actions
-- Migration safety where practical
+- PHPUnit (unit + integration tests)
+- `declare(strict_types=1)` enforcement
+- PHP syntax check (excluding `vendor/`, `docker/`)
+- phpcs PSR-12 compliance (strict, no excuses)
+- XSS / output escaping audit
+- `@` error suppression detection
+- Controller consistency checks (RBAC, CSRF, base class)
 
-At minimum, important business logic must be testable outside the UI layer.
+Always run the full `./tests.sh` — never partial or `--fast`.
 
-If tests are missing, Claude should not ignore quality; instead, add targeted tests around the changed behavior.
+### Coverage requirement
+
+Every new feature or change must have **100% test coverage**. Every public method, every branch, every error path. No exceptions, no "I'll add tests later".
+
+### What makes a good test
+
+Tests must verify that **the application works and does not break**. Each test should answer: "What would go wrong if this code had a bug?"
+
+**Write tests that:**
+- Verify real behavior end-to-end (service creates a job, API returns correct response, permission is denied)
+- Cover the happy path AND the failure paths (invalid input, missing records, permission denied, network errors)
+- Catch regressions — if someone changes the code, a test must fail
+- Test authorization (correct role can access, wrong role is rejected)
+- Test validation (invalid input is rejected with the right error)
+- Test state transitions (job goes from pending to running to succeeded/failed)
+- Test every API endpoint (correct response codes, response structure, auth required, invalid input rejected)
+- Use realistic data, not trivial "assert 1 === 1" stubs
+
+**Do NOT write tests that:**
+- Only test that a method exists or returns a type
+- Assert trivial getters/setters with no logic
+- Duplicate what the framework already guarantees (e.g. testing that ActiveRecord saves a field)
+- Test implementation details instead of behavior (e.g. "method X was called 3 times")
+- Pass with any return value (e.g. `assertNotNull` when the real assertion should check the value)
 
 ---
 
 ## Definition of Done
 
-A task is not done unless most of the following are true:
+A task is not done unless:
 
 - The code works end-to-end for the intended use case
 - Authorization is correct
 - Validation is present
 - Errors are handled clearly
 - Migrations are included when needed
-- Tests are added or updated
+- **Tests with 100% coverage** are added — happy path, error paths, authorization, validation
+- **API endpoint** exists for the feature (no UI-only functionality)
+- **API endpoint is tested** — response codes, response structure, auth, validation, error cases
 - No secrets are exposed
 - Naming is consistent with the domain language
 - The code fits the existing structure and style
@@ -297,77 +303,89 @@ A task is not done unless most of the following are true:
 
 ## How Claude Should Work
 
-When given a feature request, Claude should usually follow this sequence:
+When given a feature request:
 
 1. Understand the user goal
 2. Inspect the current codebase structure
 3. Identify affected models, services, controllers, views, migrations, and tests
 4. Propose the simplest architecture-compatible implementation
 5. Implement in small, coherent steps
-6. Run relevant tests and static checks if available
-7. Summarize what changed, risks, and follow-up work
+6. Summarize what changed, risks, and follow-up work
 
-If the request is underspecified, make reasonable assumptions that fit this file and document them briefly.
+If the request is underspecified, make reasonable assumptions that fit this file and document them briefly. Do not get stuck asking unnecessary questions when a sensible default exists.
 
-Do not get stuck asking unnecessary questions when a sensible default exists.
+---
+
+## Push Workflow
+
+Do not run `./tests.sh` after every task — only when the user says **"PUSH IT"**.
+
+When the user says "PUSH IT", follow this exact sequence:
+
+1. **Run `./tests.sh`** — the full test suite, never partial or `--fast`.
+2. **All checks must pass.** Zero errors, zero warnings. If anything fails, fix it and re-run until clean.
+3. **Commit** all changes.
+4. **Ask the user**: plain commit (no release) or a release? If release, ask: `PATCH`, `MINOR`, or `MAJOR`?
+   - **Plain commit**: just `git push`.
+   - **Release**: run `./bin/release patch`, `./bin/release minor`, or `./bin/release major`, then `git push --follow-tags`.
+
+Never push without a green `./tests.sh`. Never skip asking about the release type.
 
 ---
 
 ## Preferred Implementation Style
 
 ### Prefer
-- service classes
-- action classes for discrete workflows
-- small helper objects for payload building and command composition
-- explicit DTO-like structures when passing execution data between layers
-- enums or constants for job states
-- policy checks in reusable places
+- Service classes for business logic
+- Action classes for discrete workflows
+- Small helper objects for payload building and command composition
+- Explicit DTO-like structures when passing execution data between layers
+- Constants for state values
+- Policy checks in reusable places
 
 ### Avoid
-- fat controllers
-- giant ActiveRecord models containing all business logic
-- duplicated authorization logic everywhere
-- hidden side effects in getters/setters
-- mixing HTML rendering, persistence, and process execution in one class
-- premature microservices
+- Fat controllers
+- Giant ActiveRecord models containing all business logic
+- Duplicated authorization logic
+- Hidden side effects in getters/setters
+- Mixing HTML rendering, persistence, and process execution in one class
+- Premature microservices
 
 ---
 
 ## Migration Strategy
 
-When adding features:
-
 - Create forward-only migrations
 - Backfill carefully when new non-nullable columns are introduced
-- Add indexes for common filters like status, template_id, project_id, created_at
+- Add indexes for common filters (status, template_id, project_id, created_at)
 - Avoid destructive changes unless clearly required
 - Prefer incremental schema evolution
+- Seed migrations should be idempotent (check before insert)
 
 ---
 
 ## Logging and Observability
 
-Claude should ensure the platform is debuggable.
-
-- Important lifecycle events should be logged
-- Job execution should be inspectable from the UI
-- Errors should include operator-usable context
-- Sensitive values must be redacted
-- Distinguish user-facing messages from internal debug details
+- Important lifecycle events are logged
+- Job execution is inspectable from the UI (logs, artifacts, host summaries)
+- Errors include operator-usable context
+- Sensitive values are redacted
+- Metrics endpoint available for monitoring
+- Selftest playbook verifies runner health
 
 ---
 
 ## API and Extensibility
 
-Even if the first version is UI-first, design core workflows so they can later be reused by:
+**Every feature must be available via the REST API.** The UI is one client — the API is the primary interface. When building a new feature, always implement the API endpoint alongside (or before) the UI. There must be no UI-only functionality.
 
-- REST endpoints
-- CLI commands
-- schedulers
-- webhooks
-- external integrations
+Business logic lives in services, not controllers, so workflows are reusable by:
 
-Business logic should not be trapped inside controllers.
+- REST API endpoints (`controllers/api/v1/`)
+- Runner API endpoints (`controllers/api/runner/`)
+- CLI commands (`commands/`)
+- Cron schedules (`ScheduleService`)
+- Webhooks (`WebhookService`)
 
 ---
 
@@ -379,7 +397,7 @@ Do not optimize prematurely. However:
 - Paginate large job history views
 - Stream or chunk logs sensibly
 - Keep queue workers resilient for long-running jobs
-- Cache only where it meaningfully reduces load and complexity remains acceptable
+- Cache only where it meaningfully reduces load
 
 ---
 
@@ -387,14 +405,13 @@ Do not optimize prematurely. However:
 
 The UI should feel like an operator console.
 
-Priorities:
-- clear navigation
-- predictable forms
-- obvious launch flow
-- visible job status and timestamps
-- readable logs
-- useful empty states
-- strong feedback on validation and failures
+- Clear navigation
+- Predictable forms
+- Obvious launch flow
+- Visible job status and timestamps
+- Readable logs with ANSI color support
+- Useful empty states
+- Strong feedback on validation and failures
 
 Prefer operational clarity over visual experimentation.
 
@@ -410,12 +427,14 @@ Prefer operational clarity over visual experimentation.
 - Do not store secrets in plain logs, HTML, JS, or fixtures
 - Do not collapse architecture into a single monolithic controller/model
 - Do not leave TODO-only implementations presented as complete
+- Do not use alignment spacing (extra spaces before `=` or `=>`)
+- Do not use `@` error suppression
 
 ---
 
 ## When Tradeoffs Are Needed
 
-If a tradeoff is unavoidable, prefer:
+Prefer:
 
 - boring over clever
 - explicit over magical
@@ -425,54 +444,46 @@ If a tradeoff is unavoidable, prefer:
 
 ---
 
-## Expected Local Commands
-
-Claude should inspect the repository and use the commands that actually exist. Typical examples may include:
+## Development Commands
 
 ```bash
-composer install
-php yii migrate
-php yii test
-phpunit
-vendor/bin/phpunit
-php yii serve
+docker compose up -d          # Start development environment
+./tests.sh                    # Full test suite (always run complete, never partial)
+./bin/release                 # Version bump + tag (run before push)
 ```
 
-If frontend assets exist:
+Inside the Docker container (via `docker compose exec php`):
 
 ```bash
-npm install
-npm run build
-npm run dev
+php yii migrate               # Run pending migrations
+php yii setup/init            # Initial setup (admin user, roles, demo data)
+php yii runner/start           # Start a runner worker
+php yii worker/listen          # Start queue worker
+php yii schedule/run           # Execute due schedules
+composer install               # Install PHP dependencies
 ```
-
-If Docker exists:
-
-```bash
-docker compose up -d
-```
-
-Do not assume all commands exist; verify first.
 
 ---
 
-## Good Feature Examples
+## Roadmap Focus
 
-Examples of good implementation directions:
+With the core platform functional, prioritize:
 
-- Add a `JobLaunchService` instead of embedding launch logic in a controller
-- Add a `JobRunnerPayloadBuilder` to create deterministic execution input
-- Add a `CredentialRedactor` or equivalent for safe logging/display
-- Add policy helpers for template launch permissions
-- Add tests around job state transitions
+1. **Hardening** — edge cases, error handling, input validation gaps
+2. **Operational polish** — better empty states, UX feedback, log rendering
+3. **Team scoping** — proper multi-tenant project/resource isolation
+4. **HA / scaling** — multi-worker, runner failover, queue reliability
+5. **Advanced features** — artifact management, launch surveys, relaunch/retry
+
+Strengthen the core before adding new surface area.
 
 ---
 
 ## North Star
 
-This project should become a dependable automation control plane for operators.
+Ansilume should be a dependable automation control plane for operators.
 
-Every change should move the repository toward:
+Every change should move toward:
 - clearer execution flows
 - safer credential handling
 - better auditability
@@ -480,4 +491,3 @@ Every change should move the repository toward:
 - more predictable operations
 
 When in doubt, build the thing an infrastructure team would trust to use.
-

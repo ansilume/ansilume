@@ -231,31 +231,53 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         while (!feof($pipes[1]) || !feof($pipes[2])) {
             $remaining = $deadline - time();
             if ($remaining <= 0) {
-                proc_terminate($process, 15);
-                sleep(3);
-                proc_terminate($process, 9);
+                $this->killTimedOutProcess($process);
                 return true;
             }
 
-            $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
-            $write = null;
-            $except = null;
-            $changed = stream_select($read, $write, $except, min($remaining, 5));
-
-            if ($changed === false || $changed === 0) {
-                continue;
-            }
-
-            foreach ($read as $stream) {
-                $chunk = fread($stream, 4096);
-                if ($chunk !== false && $chunk !== '') {
-                    $streamName = ($stream === $pipes[1]) ? JobLog::STREAM_STDOUT : JobLog::STREAM_STDERR;
-                    $this->appendLog($job, $streamName, $chunk, $sequence++);
-                }
-            }
+            $sequence = $this->drainAndAppendLogs($job, $pipes, $sequence, $remaining);
         }
 
         return false;
+    }
+
+    /**
+     * Kill a process that exceeded its timeout.
+     *
+     * @param resource $process
+     */
+    private function killTimedOutProcess($process): void
+    {
+        proc_terminate($process, 15);
+        sleep(3);
+        proc_terminate($process, 9);
+    }
+
+    /**
+     * Read available output from process pipes and append as log entries.
+     *
+     * @return int Updated sequence number.
+     */
+    private function drainAndAppendLogs(Job $job, array $pipes, int $sequence, int $remaining): int
+    {
+        $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+        $write = null;
+        $except = null;
+        $changed = stream_select($read, $write, $except, min($remaining, 5));
+
+        if ($changed === false || $changed === 0) {
+            return $sequence;
+        }
+
+        foreach ($read as $stream) {
+            $chunk = fread($stream, 4096);
+            if ($chunk !== false && $chunk !== '') {
+                $streamName = ($stream === $pipes[1]) ? JobLog::STREAM_STDOUT : JobLog::STREAM_STDERR;
+                $this->appendLog($job, $streamName, $chunk, $sequence++);
+            }
+        }
+
+        return $sequence;
     }
 
     /**
@@ -355,42 +377,43 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      */
     protected function addPlaybookOptions(array &$cmd, array $payload): void
     {
-        $verbosity = (int)($payload['verbosity'] ?? 0);
+        $this->addVerbosityFlag($cmd, (int)($payload['verbosity'] ?? 0));
+        $this->addBecomeFlags($cmd, $payload);
+
+        $optionMap = [
+            'forks' => '--forks',
+            'limit' => '--limit',
+            'tags' => '--tags',
+            'skip_tags' => '--skip-tags',
+            'extra_vars' => '--extra-vars',
+        ];
+
+        foreach ($optionMap as $key => $flag) {
+            if (!empty($payload[$key])) {
+                $cmd[] = $flag;
+                $cmd[] = $key === 'forks' ? (string)(int)$payload[$key] : $payload[$key];
+            }
+        }
+    }
+
+    private function addVerbosityFlag(array &$cmd, int $verbosity): void
+    {
         if ($verbosity > 0) {
             $cmd[] = '-' . str_repeat('v', min($verbosity, 5));
         }
+    }
 
-        if (!empty($payload['forks'])) {
-            $cmd[] = '--forks';
-            $cmd[] = (string)(int)$payload['forks'];
-        }
-
-        if (!empty($payload['become'])) {
-            $cmd[] = '--become';
-            $cmd[] = '--become-method';
-            $cmd[] = $payload['become_method'] ?? 'sudo';
-            $cmd[] = '--become-user';
-            $cmd[] = $payload['become_user'] ?? 'root';
+    private function addBecomeFlags(array &$cmd, array $payload): void
+    {
+        if (empty($payload['become'])) {
+            return;
         }
 
-        if (!empty($payload['limit'])) {
-            $cmd[] = '--limit';
-            $cmd[] = $payload['limit'];
-        }
-
-        if (!empty($payload['tags'])) {
-            $cmd[] = '--tags';
-            $cmd[] = $payload['tags'];
-        }
-        if (!empty($payload['skip_tags'])) {
-            $cmd[] = '--skip-tags';
-            $cmd[] = $payload['skip_tags'];
-        }
-
-        if (!empty($payload['extra_vars'])) {
-            $cmd[] = '--extra-vars';
-            $cmd[] = $payload['extra_vars'];
-        }
+        $cmd[] = '--become';
+        $cmd[] = '--become-method';
+        $cmd[] = $payload['become_method'] ?? 'sudo';
+        $cmd[] = '--become-user';
+        $cmd[] = $payload['become_user'] ?? 'root';
     }
 
     /**

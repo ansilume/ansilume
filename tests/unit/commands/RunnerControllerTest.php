@@ -29,7 +29,7 @@ class RunnerControllerTest extends TestCase
         $this->tmpDir = sys_get_temp_dir() . '/runner_test_' . uniqid('', true);
         mkdir($this->tmpDir, 0700, true);
 
-        $_ENV['API_URL']     = 'http://test-server';
+        $_ENV['API_URL'] = 'http://test-server';
         $_ENV['RUNNER_NAME'] = 'test-runner';
     }
 
@@ -72,9 +72,9 @@ class RunnerControllerTest extends TestCase
             $tmpDir,
         ) extends RunnerController {
             private array $seq;
-            private int $seqIdx        = 0;
+            private int $seqIdx = 0;
             private array $tokenSequence;
-            private int $tokenIdx      = 0;
+            private int $tokenIdx = 0;
             private bool $hasCacheFile;
             private string $tmpDir;
 
@@ -87,10 +87,10 @@ class RunnerControllerTest extends TestCase
                 string $tmpDir,
             ) {
                 parent::__construct($id, $module);
-                $this->seq           = $seq;
+                $this->seq = $seq;
                 $this->tokenSequence = $tokenSequence;
-                $this->hasCacheFile  = $hasCacheFile;
-                $this->tmpDir        = $tmpDir;
+                $this->hasCacheFile = $hasCacheFile;
+                $this->tmpDir = $tmpDir;
             }
 
             protected function apiPost(string $path, array $body): ?array
@@ -150,7 +150,7 @@ class RunnerControllerTest extends TestCase
     public function testTokenCacheFileUsesRuntimeDirectory(): void
     {
         $ctrl = new RunnerController('runner', \Yii::$app);
-        $ref  = new \ReflectionMethod($ctrl, 'tokenCacheFile');
+        $ref = new \ReflectionMethod($ctrl, 'tokenCacheFile');
         $ref->setAccessible(true);
 
         $path = $ref->invoke($ctrl, 'runner-1');
@@ -161,7 +161,7 @@ class RunnerControllerTest extends TestCase
     public function testTokenCacheFileSanitizesSpecialChars(): void
     {
         $ctrl = new RunnerController('runner', \Yii::$app);
-        $ref  = new \ReflectionMethod($ctrl, 'tokenCacheFile');
+        $ref = new \ReflectionMethod($ctrl, 'tokenCacheFile');
         $ref->setAccessible(true);
 
         $path = $ref->invoke($ctrl, 'runner/bad name!@#');
@@ -264,7 +264,7 @@ class RunnerControllerTest extends TestCase
         // so build the controller slightly differently.
         $tmpDir = $this->tmpDir;
         $ctrl = new class ('runner', \Yii::$app, $tmpDir) extends RunnerController {
-            private array $seq    = [];
+            private array $seq = [];
             private int $seqIdx = 0;
             private string $tmpDir;
 

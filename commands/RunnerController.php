@@ -181,37 +181,16 @@ class RunnerController extends Controller
     {
         $this->stdout("No token found — registering as '{$name}' with the server...\n");
 
-        $url = $this->apiUrl . '/api/runner/v1/register';
-        $payload = json_encode(['name' => $name, 'bootstrap_secret' => $bootstrapSecret]);
-
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => implode("\r\n", [
-                    'Content-Type: application/json',
-                    'Accept: application/json',
-                    'Content-Length: ' . strlen($payload),
-                ]),
-                'content' => $payload,
-                'ignore_errors' => true,
-                'timeout' => 30,
-            ],
+        $response = $this->apiPostUnauthenticated('/api/runner/v1/register', [
+            'name' => $name,
+            'bootstrap_secret' => $bootstrapSecret,
         ]);
 
-        $networkError = '';
-        set_error_handler(function (int $errno, string $errstr) use (&$networkError): bool {
-            $networkError = $errstr;
-            return true;
-        }, E_WARNING);
-        $raw = file_get_contents($url, false, $context);
-        restore_error_handler();
-        if ($raw === false || $raw === '') {
-            $detail = $networkError !== '' ? " ({$networkError})" : '';
-            $this->stderr("ERROR: Could not reach the server at {$this->apiUrl} for registration.{$detail}\n");
+        if ($response === null) {
+            $this->stderr("ERROR: Could not reach the server at {$this->apiUrl} for registration.\n");
             return '';
         }
 
-        $response = json_decode($raw, true);
         if (empty($response['ok']) || empty($response['data']['token'])) {
             $error = $response['error'] ?? 'unknown error';
             $this->stderr("ERROR: Registration failed: {$error}\n");
@@ -219,13 +198,17 @@ class RunnerController extends Controller
         }
 
         $token = $response['data']['token'];
-        $cacheFile = $this->tokenCacheFile($name);
-
-        \app\helpers\FileHelper::safeFilePutContents($cacheFile, $token);
-        \app\helpers\FileHelper::safeChmod($cacheFile, 0600);
+        $this->cacheToken($name, $token);
 
         $this->stdout("Registered successfully. Token cached.\n");
         return $token;
+    }
+
+    private function cacheToken(string $name, string $token): void
+    {
+        $cacheFile = $this->tokenCacheFile($name);
+        \app\helpers\FileHelper::safeFilePutContents($cacheFile, $token);
+        \app\helpers\FileHelper::safeChmod($cacheFile, 0600);
     }
 
     // -------------------------------------------------------------------------
@@ -340,52 +323,78 @@ class RunnerController extends Controller
         while (!feof($pipes[1]) || !feof($pipes[2])) {
             $remaining = $deadline - time();
             if ($remaining <= 0) {
-                $this->stdout("Job #{$jobId} exceeded timeout of {$timeoutMinutes}m — killing process.\n");
-                proc_terminate($process, 15);
-                sleep(3);
-                proc_terminate($process, 9);
+                $this->killTimedOutProcess($jobId, $process, $timeoutMinutes);
                 $timedOut = true;
                 break;
             }
 
-            $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
-            $write = null;
-            $except = null;
-            // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
-            $changed = @stream_select($read, $write, $except, min($remaining, 5)); // @phpcs:ignore
-
-            if ($changed === false || $changed === 0) {
-                continue;
-            }
-
-            foreach ($read as $stream) {
-                $chunk = fread($stream, self::LOG_CHUNK_BYTES);
-                if ($chunk !== false && $chunk !== '') {
-                    $streamName = ($stream === $pipes[1]) ? 'stdout' : 'stderr';
-                    $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                        'stream' => $streamName,
-                        'content' => $chunk,
-                        'sequence' => $sequence++,
-                    ]);
-                }
-            }
+            $sequence = $this->drainAndStreamLogs($jobId, $pipes, $sequence, $remaining);
         }
 
         fclose($pipes[1]);
         fclose($pipes[2]);
-
         $exitCode = proc_close($process);
 
         if ($timedOut) {
-            $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                'stream' => 'stderr',
-                'content' => "\n[ansilume] Job killed: exceeded timeout of {$timeoutMinutes} minutes.\n",
-                'sequence' => $sequence++,
-            ]);
+            $this->sendTimeoutLog($jobId, $sequence++, $timeoutMinutes);
             $exitCode = -1;
         }
 
         return [$exitCode, $sequence];
+    }
+
+    /**
+     * Kill a process that exceeded its timeout.
+     *
+     * @param resource $process
+     */
+    private function killTimedOutProcess(int $jobId, $process, int $timeoutMinutes): void
+    {
+        $this->stdout("Job #{$jobId} exceeded timeout of {$timeoutMinutes}m — killing process.\n");
+        proc_terminate($process, 15);
+        sleep(3);
+        proc_terminate($process, 9);
+    }
+
+    /**
+     * Read available output from process pipes and stream to the server.
+     *
+     * @return int Updated sequence number.
+     */
+    private function drainAndStreamLogs(int $jobId, array $pipes, int $sequence, int $remaining): int
+    {
+        $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+        $write = null;
+        $except = null;
+        // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
+        $changed = @stream_select($read, $write, $except, min($remaining, 5)); // @phpcs:ignore
+
+        if ($changed === false || $changed === 0) {
+            return $sequence;
+        }
+
+        foreach ($read as $stream) {
+            $chunk = fread($stream, self::LOG_CHUNK_BYTES);
+            if ($chunk !== false && $chunk !== '') {
+                $streamName = ($stream === $pipes[1]) ? 'stdout' : 'stderr';
+                $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
+                    'stream' => $streamName,
+                    'content' => $chunk,
+                    'sequence' => $sequence++,
+                ]);
+            }
+        }
+
+        return $sequence;
+    }
+
+    private function sendTimeoutLog(int $jobId, int $sequence, int $timeoutMinutes): void
+    {
+        $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
+            'stream' => 'stderr',
+            'content' => "\n[ansilume] Job killed: exceeded timeout of {$timeoutMinutes} minutes.\n",
+            'sequence' => $sequence,
+        ]);
     }
 
     private function collectAndSendTasks(int $jobId, string $callbackFile): void
@@ -435,42 +444,43 @@ class RunnerController extends Controller
 
     private function addPlaybookOptions(array &$cmd, array $payload): void
     {
-        $verbosity = (int)($payload['verbosity'] ?? 0);
+        $this->addVerbosityFlag($cmd, (int)($payload['verbosity'] ?? 0));
+        $this->addBecomeFlags($cmd, $payload);
+
+        $optionMap = [
+            'forks' => '--forks',
+            'limit' => '--limit',
+            'tags' => '--tags',
+            'skip_tags' => '--skip-tags',
+            'extra_vars' => '--extra-vars',
+        ];
+
+        foreach ($optionMap as $key => $flag) {
+            if (!empty($payload[$key])) {
+                $cmd[] = $flag;
+                $cmd[] = $key === 'forks' ? (string)(int)$payload[$key] : $payload[$key];
+            }
+        }
+    }
+
+    private function addVerbosityFlag(array &$cmd, int $verbosity): void
+    {
         if ($verbosity > 0) {
             $cmd[] = '-' . str_repeat('v', min($verbosity, 5));
         }
+    }
 
-        if (!empty($payload['forks'])) {
-            $cmd[] = '--forks';
-            $cmd[] = (string)(int)$payload['forks'];
-        }
-
-        if (!empty($payload['become'])) {
-            $cmd[] = '--become';
-            $cmd[] = '--become-method';
-            $cmd[] = $payload['become_method'] ?? 'sudo';
-            $cmd[] = '--become-user';
-            $cmd[] = $payload['become_user'] ?? 'root';
+    private function addBecomeFlags(array &$cmd, array $payload): void
+    {
+        if (empty($payload['become'])) {
+            return;
         }
 
-        if (!empty($payload['limit'])) {
-            $cmd[] = '--limit';
-            $cmd[] = $payload['limit'];
-        }
-
-        if (!empty($payload['tags'])) {
-            $cmd[] = '--tags';
-            $cmd[] = $payload['tags'];
-        }
-        if (!empty($payload['skip_tags'])) {
-            $cmd[] = '--skip-tags';
-            $cmd[] = $payload['skip_tags'];
-        }
-
-        if (!empty($payload['extra_vars'])) {
-            $cmd[] = '--extra-vars';
-            $cmd[] = $payload['extra_vars'];
-        }
+        $cmd[] = '--become';
+        $cmd[] = '--become-method';
+        $cmd[] = $payload['become_method'] ?? 'sudo';
+        $cmd[] = '--become-user';
+        $cmd[] = $payload['become_user'] ?? 'root';
     }
 
     protected function tokenCacheFile(string $name): string
@@ -490,22 +500,43 @@ class RunnerController extends Controller
     // -------------------------------------------------------------------------
 
     /**
-     * POST JSON to the ansilume API. Returns decoded response body or null on error / 204.
+     * POST JSON to the ansilume API with Bearer authentication.
      */
     protected function apiPost(string $path, array $body): ?array
+    {
+        return $this->httpPost($path, $body, [
+            'Authorization: Bearer ' . $this->token,
+        ]);
+    }
+
+    /**
+     * POST JSON to the ansilume API without authentication (for registration).
+     */
+    protected function apiPostUnauthenticated(string $path, array $body): ?array
+    {
+        return $this->httpPost($path, $body);
+    }
+
+    /**
+     * Low-level HTTP POST. Returns decoded JSON response or null on network error / empty body.
+     *
+     * @param string[] $extraHeaders Additional HTTP headers.
+     */
+    private function httpPost(string $path, array $body, array $extraHeaders = []): ?array
     {
         $url = $this->apiUrl . $path;
         $payload = json_encode($body);
 
+        $headers = array_merge([
+            'Content-Type: application/json',
+            'Accept: application/json',
+            'Content-Length: ' . strlen($payload),
+        ], $extraHeaders);
+
         $context = stream_context_create([
             'http' => [
                 'method' => 'POST',
-                'header' => implode("\r\n", [
-                    'Content-Type: application/json',
-                    'Authorization: Bearer ' . $this->token,
-                    'Accept: application/json',
-                    'Content-Length: ' . strlen($payload),
-                ]),
+                'header' => implode("\r\n", $headers),
                 'content' => $payload,
                 'ignore_errors' => true,
                 'timeout' => 30,
@@ -515,9 +546,24 @@ class RunnerController extends Controller
             ],
         ]);
 
-        $networkError = '';
-        set_error_handler(function (int $errno, string $errstr) use (&$networkError): bool {
-            $networkError = $errstr;
+        $raw = $this->fetchUrl($url, $context);
+
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+
+        return json_decode($raw, true) ?: null;
+    }
+
+    /**
+     * Execute file_get_contents with error handling and HTTP status extraction.
+     *
+     * @param resource $context
+     * @return string|false
+     */
+    private function fetchUrl(string $url, $context)
+    {
+        set_error_handler(function (): bool {
             return true;
         }, E_WARNING);
         $raw = file_get_contents($url, false, $context);
@@ -529,10 +575,6 @@ class RunnerController extends Controller
             $this->lastHttpStatus = (int)($m[1] ?? 0);
         }
 
-        if ($raw === false || $raw === '') {
-            return null;
-        }
-
-        return json_decode($raw, true) ?: null;
+        return $raw;
     }
 }

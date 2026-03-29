@@ -75,9 +75,9 @@ class RunAnsibleJobTest extends TestCase
     {
         $cmd = [];
         $this->job->addPlaybookOptions($cmd, [
-            'become'        => true,
+            'become' => true,
             'become_method' => 'su',
-            'become_user'   => 'deploy',
+            'become_user' => 'deploy',
         ]);
         $this->assertContains('su', $cmd);
         $this->assertContains('deploy', $cmd);
@@ -115,12 +115,12 @@ class RunAnsibleJobTest extends TestCase
     {
         $cmd = [];
         $this->job->addPlaybookOptions($cmd, [
-            'verbosity'  => 2,
-            'forks'      => 20,
-            'become'     => true,
-            'limit'      => 'db*',
-            'tags'       => 'schema',
-            'skip_tags'  => 'backup',
+            'verbosity' => 2,
+            'forks' => 20,
+            'become' => true,
+            'limit' => 'db*',
+            'tags' => 'schema',
+            'skip_tags' => 'backup',
             'extra_vars' => '{"x":1}',
         ]);
         $this->assertContains('-vv', $cmd);

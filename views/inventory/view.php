@@ -83,7 +83,7 @@ $cachedJson = $cached !== null ? json_encode($cached) : 'null';
                     <small class="text-muted me-2" id="parsed-at-label">Parsed <?= date('Y-m-d H:i', $model->parsed_at) ?></small>
                 <?php endif; ?>
                 <button type="button" class="btn btn-sm btn-outline-primary" id="btn-parse-inventory">
-                    <?= $cached !== null ? 'Refresh' : 'Parse Inventory' ?>
+                    <?= Html::encode($cached !== null ? 'Refresh' : 'Parse Inventory') ?>
                 </button>
             </div>
         </div>
