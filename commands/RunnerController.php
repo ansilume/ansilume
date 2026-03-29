@@ -363,6 +363,26 @@ class RunnerController extends Controller
      */
     private function drainAndStreamLogs(int $jobId, array $pipes, int $sequence, int $remaining): int
     {
+        $read = $this->selectReadablePipes($pipes, $remaining);
+        if ($read === null) {
+            return $sequence;
+        }
+
+        foreach ($read as $stream) {
+            $sequence = $this->readAndPostChunk($jobId, $stream, $pipes[1], $sequence);
+        }
+
+        return $sequence;
+    }
+
+    /**
+     * Wait for readable pipes via stream_select.
+     * Returns the readable pipes, or null if nothing is ready.
+     *
+     * @return resource[]|null
+     */
+    private function selectReadablePipes(array $pipes, int $remaining): ?array
+    {
         $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
         $write = null;
         $except = null;
@@ -370,22 +390,34 @@ class RunnerController extends Controller
         $changed = @stream_select($read, $write, $except, min($remaining, 5)); // @phpcs:ignore
 
         if ($changed === false || $changed === 0) {
+            return null;
+        }
+
+        return $read;
+    }
+
+    /**
+     * Read a chunk from a stream and POST it to the server.
+     *
+     * @param resource $stream     The pipe to read from.
+     * @param resource $stdoutPipe Reference pipe to distinguish stdout from stderr.
+     * @return int Updated sequence number.
+     */
+    private function readAndPostChunk(int $jobId, $stream, $stdoutPipe, int $sequence): int
+    {
+        $chunk = fread($stream, self::LOG_CHUNK_BYTES);
+        if ($chunk === false || $chunk === '') {
             return $sequence;
         }
 
-        foreach ($read as $stream) {
-            $chunk = fread($stream, self::LOG_CHUNK_BYTES);
-            if ($chunk !== false && $chunk !== '') {
-                $streamName = ($stream === $pipes[1]) ? 'stdout' : 'stderr';
-                $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
-                    'stream' => $streamName,
-                    'content' => $chunk,
-                    'sequence' => $sequence++,
-                ]);
-            }
-        }
+        $streamName = ($stream === $stdoutPipe) ? 'stdout' : 'stderr';
+        $this->apiPost("/api/runner/v1/jobs/{$jobId}/logs", [
+            'stream' => $streamName,
+            'content' => $chunk,
+            'sequence' => $sequence,
+        ]);
 
-        return $sequence;
+        return $sequence + 1;
     }
 
     private function sendTimeoutLog(int $jobId, int $sequence, int $timeoutMinutes): void

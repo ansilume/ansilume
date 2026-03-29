@@ -41,10 +41,7 @@ class ProjectService extends Component
     public function sync(Project $project): void
     {
         if ($project->scm_type !== Project::SCM_TYPE_GIT) {
-            // Manual projects have no SCM — nothing to sync.
-            $project->status = Project::STATUS_SYNCED;
-            $project->last_synced_at = time();
-            $project->save(false);
+            $this->markSynced($project);
             return;
         }
 
@@ -56,15 +53,30 @@ class ProjectService extends Component
         $project->local_path = $dest;
         $project->save(false);
 
+        $this->executeGitSync($project, $dest);
+    }
+
+    /**
+     * Mark a non-git project as synced (nothing to pull).
+     */
+    private function markSynced(Project $project): void
+    {
+        $project->status = Project::STATUS_SYNCED;
+        $project->last_synced_at = time();
+        $project->save(false);
+    }
+
+    /**
+     * Run git clone or pull with SSH key handling and error recovery.
+     *
+     * @throws \RuntimeException on failure.
+     */
+    private function executeGitSync(Project $project, string $dest): void
+    {
         $keyFile = null;
         try {
             $env = $this->buildGitEnv($project, $keyFile);
-
-            if (is_dir($dest . '/.git')) {
-                $this->gitPull($dest, $project->scm_branch, $env);
-            } else {
-                $this->gitClone($project->scm_url, $dest, $project->scm_branch, $env);
-            }
+            $this->cloneOrPull($project, $dest, $env);
 
             $project->status = Project::STATUS_SYNCED;
             $project->last_synced_at = time();
@@ -75,9 +87,23 @@ class ProjectService extends Component
             throw $e;
         } finally {
             $project->save(false);
-            if ($keyFile !== null) {
-                \app\helpers\FileHelper::safeUnlink($keyFile);
-            }
+            $this->cleanupKeyFile($keyFile);
+        }
+    }
+
+    private function cloneOrPull(Project $project, string $dest, array $env): void
+    {
+        if (is_dir($dest . '/.git')) {
+            $this->gitPull($dest, $project->scm_branch, $env);
+        } else {
+            $this->gitClone($project->scm_url, $dest, $project->scm_branch, $env);
+        }
+    }
+
+    private function cleanupKeyFile(?string $keyFile): void
+    {
+        if ($keyFile !== null) {
+            \app\helpers\FileHelper::safeUnlink($keyFile);
         }
     }
 
@@ -99,44 +125,58 @@ class ProjectService extends Component
      */
     protected function buildGitEnv(Project $project, ?string &$keyFile): array
     {
-        $env = [
+        $env = $this->baseGitEnv();
+
+        $sshKeyFile = $this->writeSshKeyFile($project);
+        if ($sshKeyFile !== null) {
+            $keyFile = $sshKeyFile;
+            $env['GIT_SSH_COMMAND'] = 'ssh -i ' . escapeshellarg($sshKeyFile)
+                . ' -o StrictHostKeyChecking=no'
+                . ' -o BatchMode=yes';
+        }
+
+        return $env;
+    }
+
+    private function baseGitEnv(): array
+    {
+        return [
             'HOME' => getenv('HOME') ?: '/root',
-            'GIT_TERMINAL_PROMPT' => '0', // never block on interactive prompts
-            // Suppress "dubious ownership" errors that occur in Docker when the
-            // directory was created by a different UID than the git process runs as.
+            'GIT_TERMINAL_PROMPT' => '0',
             'GIT_CONFIG_COUNT' => '1',
             'GIT_CONFIG_KEY_0' => 'safe.directory',
             'GIT_CONFIG_VALUE_0' => '*',
         ];
+    }
 
+    /**
+     * If the project has an SSH key credential, write it to a temp file.
+     * Returns the temp file path, or null if no key is available.
+     */
+    private function writeSshKeyFile(Project $project): ?string
+    {
         if ($project->scm_credential_id === null) {
-            return $env;
+            return null;
         }
 
         $credential = $project->scmCredential;
         if ($credential === null || $credential->credential_type !== Credential::TYPE_SSH_KEY) {
-            return $env;
+            return null;
         }
 
         /** @var CredentialService $cs */
         $cs = \Yii::$app->get('credentialService');
-        $secrets = $cs->getSecrets($credential);
-        $key = $secrets['private_key'] ?? '';
+        $key = $cs->getSecrets($credential)['private_key'] ?? '';
 
         if ($key === '') {
-            return $env;
+            return null;
         }
 
-        // Write key to a mode-600 temp file — git/SSH require strict permissions
         $keyFile = tempnam(sys_get_temp_dir(), 'ansilume_ssh_');
         file_put_contents($keyFile, $key);
         chmod($keyFile, 0600);
 
-        $env['GIT_SSH_COMMAND'] = 'ssh -i ' . escapeshellarg($keyFile)
-            . ' -o StrictHostKeyChecking=no'
-            . ' -o BatchMode=yes';
-
-        return $env;
+        return $keyFile;
     }
 
     protected function gitClone(string $url, string $dest, string $branch, array $env): void
@@ -284,29 +324,32 @@ class ProjectService extends Component
     private function scanDirectoryEntries(string $base, string $dir, int $depth, int $maxDepth): array
     {
         $nodes = [];
-        $items = scandir($dir) ?: [];
 
-        foreach ($items as $item) {
+        foreach (scandir($dir) ?: [] as $item) {
             if ($item === '.' || $item === '..' || str_starts_with($item, '.')) {
                 continue;
             }
 
-            $path = $dir . '/' . $item;
-            $rel = ltrim(substr($path, strlen($base)), '/');
-
-            if (is_dir($path)) {
-                $nodes[] = [
-                    'name' => $item,
-                    'rel' => $rel,
-                    'type' => 'dir',
-                    'children' => $this->buildTree($base, $path, $depth + 1, $maxDepth),
-                ];
-            } else {
-                $nodes[] = ['name' => $item, 'rel' => $rel, 'type' => 'file', 'children' => []];
-            }
+            $nodes[] = $this->buildNode($base, $dir . '/' . $item, $item, $depth, $maxDepth);
         }
 
         return $nodes;
+    }
+
+    private function buildNode(string $base, string $path, string $name, int $depth, int $maxDepth): array
+    {
+        $rel = ltrim(substr($path, strlen($base)), '/');
+
+        if (is_dir($path)) {
+            return [
+                'name' => $name,
+                'rel' => $rel,
+                'type' => 'dir',
+                'children' => $this->buildTree($base, $path, $depth + 1, $maxDepth),
+            ];
+        }
+
+        return ['name' => $name, 'rel' => $rel, 'type' => 'file', 'children' => []];
     }
 
     // -------------------------------------------------------------------------
@@ -323,6 +366,23 @@ class ProjectService extends Component
     {
         \Yii::info('ProjectService: ' . implode(' ', $cmd), __CLASS__);
 
+        [$stdout, $stderr, $exitCode] = $this->execProcess($cmd, $env);
+        $this->logProcessOutput($stdout, $stderr);
+
+        if ($exitCode !== 0) {
+            throw new \RuntimeException(
+                sprintf('git command failed (exit %d): %s', $exitCode, trim($stderr ?: $stdout ?: '(no output)'))
+            );
+        }
+    }
+
+    /**
+     * Run a command and return [stdout, stderr, exitCode].
+     *
+     * @return array{string, string, int}
+     */
+    private function execProcess(array $cmd, array $env): array
+    {
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
@@ -340,19 +400,16 @@ class ProjectService extends Component
         fclose($pipes[1]);
         fclose($pipes[2]);
 
-        $exitCode = proc_close($process);
+        return [$stdout ?: '', $stderr ?: '', proc_close($process)];
+    }
 
-        if ($stdout) {
+    private function logProcessOutput(string $stdout, string $stderr): void
+    {
+        if ($stdout !== '') {
             \Yii::info('ProjectService stdout: ' . $stdout, __CLASS__);
         }
-        if ($stderr) {
+        if ($stderr !== '') {
             \Yii::warning('ProjectService stderr: ' . $stderr, __CLASS__);
-        }
-
-        if ($exitCode !== 0) {
-            throw new \RuntimeException(
-                sprintf('git command failed (exit %d): %s', $exitCode, trim($stderr ?: $stdout ?: '(no output)'))
-            );
         }
     }
 }
