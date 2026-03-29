@@ -61,10 +61,9 @@ class ProjectController extends BaseController
         $tree = [];
         $localPath = $this->resolveEffectivePath($model);
         if ($localPath !== null) {
-            /** @var ProjectService $svc */
-            $svc = \Yii::$app->get('projectService');
-            $playbooks = $svc->detectPlaybooks($localPath);
-            $tree = $svc->buildTree($localPath, $localPath);
+            $scanner = new \app\services\ProjectFilesystemScanner();
+            $playbooks = $scanner->detectPlaybooks($localPath);
+            $tree = $scanner->buildTree($localPath, $localPath);
         }
         return $this->render('view', ['model' => $model, 'playbooks' => $playbooks, 'tree' => $tree]);
     }

@@ -363,8 +363,13 @@ class RunnerController extends Controller
      */
     private function drainAndStreamLogs(int $jobId, array $pipes, int $sequence, int $remaining): int
     {
-        $read = $this->selectReadablePipes($pipes, $remaining);
-        if ($read === null) {
+        $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
+        $write = null;
+        $except = null;
+        // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
+        $changed = @stream_select($read, $write, $except, min($remaining, 5)); // @phpcs:ignore
+
+        if ($changed === false || $changed === 0) {
             return $sequence;
         }
 
@@ -373,27 +378,6 @@ class RunnerController extends Controller
         }
 
         return $sequence;
-    }
-
-    /**
-     * Wait for readable pipes via stream_select.
-     * Returns the readable pipes, or null if nothing is ready.
-     *
-     * @return resource[]|null
-     */
-    private function selectReadablePipes(array $pipes, int $remaining): ?array
-    {
-        $read = array_filter([$pipes[1], $pipes[2]], fn($p) => is_resource($p) && !feof($p));
-        $write = null;
-        $except = null;
-        // stream_select emits E_WARNING on signal interruption (SIGCHLD) — not actionable
-        $changed = @stream_select($read, $write, $except, min($remaining, 5)); // @phpcs:ignore
-
-        if ($changed === false || $changed === 0) {
-            return null;
-        }
-
-        return $read;
     }
 
     /**
