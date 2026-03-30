@@ -23,6 +23,8 @@ return (new PhpCsFixer\Config())
     ->setRules([
         '@PSR12' => true,
         'cast_spaces' => ['space' => 'none'],
+        // PSR-12 requires spaces around '|' — do not override with no_space.
+        // Scrutinizer's spacing fix for '|' is suppressed via .scrutinizer.yml.
         // Disable statement_indentation in mixed PHP/HTML view files —
         // php-cs-fixer re-indents to PHP scope, but the code is inside HTML
         // context where the surrounding indentation is meaningful.

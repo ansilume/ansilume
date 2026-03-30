@@ -9,7 +9,7 @@ $dotenv = \Dotenv\Dotenv::createUnsafeImmutable(dirname(__DIR__));
 $dotenv->safeLoad();
 
 defined('YII_DEBUG') or define('YII_DEBUG', (bool)($_ENV['YII_DEBUG'] ?? false));
-defined('YII_ENV')   or define('YII_ENV', $_ENV['YII_ENV'] ?? 'prod');
+defined('YII_ENV') or define('YII_ENV', $_ENV['YII_ENV'] ?? 'prod');
 require dirname(__DIR__) . '/vendor/yiisoft/yii2/Yii.php';
 
 $config = require dirname(__DIR__) . '/config/web.php';
