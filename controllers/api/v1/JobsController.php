@@ -23,6 +23,9 @@ class JobsController extends BaseApiController
 {
     public $enableCsrfValidation = false;
 
+    /**
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     */
     public function actionIndex(): array
     {
         $search = new JobSearchForm();
@@ -41,14 +44,20 @@ class JobsController extends BaseApiController
         );
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     public function actionView(int $id): array
     {
         return $this->success($this->serializeJob($this->findJob($id)));
     }
 
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
     public function actionCreate(): array
     {
-        $body = \Yii::$app->request->bodyParams;
+        $body = (array)\Yii::$app->request->bodyParams;
 
         $templateId = (int)($body['template_id'] ?? 0);
         $template = JobTemplate::findOne($templateId);
@@ -84,6 +93,9 @@ class JobsController extends BaseApiController
         }
     }
 
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
     public function actionCancel(int $id): array
     {
         $job = $this->findJob($id);
@@ -113,6 +125,9 @@ class JobsController extends BaseApiController
         return $job;
     }
 
+    /**
+     * @return array{id: int, status: string, job_template_id: int, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, exit_code: int|null, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
+     */
     private function serializeJob(Job $job): array
     {
         return [

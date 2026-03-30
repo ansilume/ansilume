@@ -17,6 +17,9 @@ use yii\web\Response;
 
 class TeamController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -28,6 +31,9 @@ class TeamController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return [
@@ -72,7 +78,7 @@ class TeamController extends BaseController
     {
         $model = new Team();
         if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = \Yii::$app->user->id;
+            $model->created_by = (int)\Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_CREATED, 'team', $model->id, null, ['name' => $model->name]);
                 $this->session()->setFlash('success', "Team \"{$model->name}\" created.");

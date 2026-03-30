@@ -15,10 +15,15 @@ use yii\filters\AccessRule;
 class SuperadminAccessRule extends AccessRule
 {
     public $allow = true;
+    /** @var string[] */
     public $roles = ['@'];
 
     public function allows($action, $user, $request): ?bool
     {
+        if ($user === false) {
+            return null;
+        }
+
         if ($user->isGuest) {
             return null;
         }

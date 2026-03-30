@@ -18,6 +18,9 @@ use yii\web\NotFoundHttpException;
  */
 class SchedulesController extends BaseApiController
 {
+    /**
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     */
     public function actionIndex(): array
     {
         $dp = new ActiveDataProvider([
@@ -34,11 +37,17 @@ class SchedulesController extends BaseApiController
         );
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     public function actionView(int $id): array
     {
         return $this->success($this->serialize($this->findModel($id)));
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     public function actionToggle(int $id): array
     {
         $schedule = $this->findModel($id);
@@ -51,6 +60,9 @@ class SchedulesController extends BaseApiController
         return $this->success($this->serialize($schedule));
     }
 
+    /**
+     * @return array{id: int, name: string, job_template_id: int, cron_expression: string, timezone: string, enabled: bool, last_run_at: int|null, next_run_at: int|null, created_at: int, updated_at: int}
+     */
     private function serialize(Schedule $s): array
     {
         return [

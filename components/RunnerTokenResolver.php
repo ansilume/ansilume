@@ -12,8 +12,12 @@ use yii\console\Controller;
 class RunnerTokenResolver
 {
     private RunnerHttpClient $http;
+    /** @phpstan-ignore-next-line Yii2 Controller is generic but type param is irrelevant here */
     private Controller $controller;
 
+    /**
+     * @phpstan-ignore-next-line
+     */
     public function __construct(RunnerHttpClient $http, Controller $controller)
     {
         $this->http = $http;

@@ -88,6 +88,9 @@ class JobCompletionService extends Component
         }
     }
 
+    /**
+     * @param array<int, array<string, mixed>> $tasks
+     */
     public function saveTasks(Job $job, array $tasks): void
     {
         $hasChanges = false;
@@ -111,6 +114,9 @@ class JobCompletionService extends Component
         }
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     private function persistTask(Job $job, array $data): JobTask
     {
         $task = new JobTask();
@@ -128,6 +134,9 @@ class JobCompletionService extends Component
         return $task;
     }
 
+    /**
+     * @param array<string, array{ok: int, changed: int, failed: int, skipped: int, unreachable: int, rescued: int}> $hostBuckets
+     */
     private function accumulateHostBucket(array &$hostBuckets, JobTask $task): void
     {
         $host = $task->host;
@@ -146,6 +155,9 @@ class JobCompletionService extends Component
         }
     }
 
+    /**
+     * @param array<string, array{ok: int, changed: int, failed: int, skipped: int, unreachable: int, rescued: int}> $hostBuckets
+     */
     private function persistHostSummaries(Job $job, array $hostBuckets): void
     {
         $now = time();

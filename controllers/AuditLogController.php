@@ -11,6 +11,9 @@ use yii\web\NotFoundHttpException;
 
 class AuditLogController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         // Audit log is admin-only: only users with user.view (admin+) or superadmin

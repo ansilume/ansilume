@@ -16,6 +16,9 @@ use yii\web\NotFoundHttpException;
  */
 class ProjectsController extends BaseApiController
 {
+    /**
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     */
     public function actionIndex(): array
     {
         $dp = new ActiveDataProvider([
@@ -32,6 +35,9 @@ class ProjectsController extends BaseApiController
         );
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     public function actionView(int $id): array
     {
         $project = Project::findOne($id);
@@ -41,6 +47,9 @@ class ProjectsController extends BaseApiController
         return $this->success($this->serialize($project));
     }
 
+    /**
+     * @return array{id: int, name: string, description: string|null, scm_type: string, scm_url: string|null, scm_branch: string, status: string, last_synced_at: int|null, created_at: int}
+     */
     private function serialize(Project $p): array
     {
         return [

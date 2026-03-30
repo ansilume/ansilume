@@ -80,6 +80,8 @@ class JobClaimService extends Component
     /**
      * Build the resolved execution payload that the runner needs to run the job.
      * Resolves IDs to actual paths/content so the runner needs no DB access.
+     *
+     * @return array{job_id: int, project_path: string, playbook_path: string, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, timeout_minutes: int}
      */
     public function buildExecutionPayload(Job $job): array
     {
@@ -110,12 +112,19 @@ class JobClaimService extends Component
         ];
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     protected function resolveProjectPath(array $payload): string
     {
         $project = Project::findOne($payload['project_id'] ?? 0);
         return $project?->local_path ?? '/tmp/ansilume/projects';
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     * @return array{type: string, content: string|null, path: string|null}
+     */
     protected function resolveInventory(array $payload): array
     {
         $inventory = Inventory::findOne($payload['inventory_id'] ?? 0);

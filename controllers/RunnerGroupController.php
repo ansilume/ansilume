@@ -11,6 +11,9 @@ use yii\web\Response;
 
 class RunnerGroupController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -21,6 +24,9 @@ class RunnerGroupController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return ['delete' => ['POST']];

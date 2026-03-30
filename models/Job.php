@@ -77,6 +77,9 @@ class Job extends ActiveRecord
         }
     }
 
+    /**
+     * @return string[]
+     */
     public static function statuses(): array
     {
         return [

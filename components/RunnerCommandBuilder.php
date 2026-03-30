@@ -10,6 +10,7 @@ namespace app\components;
 class RunnerCommandBuilder
 {
     /**
+     * @param array<string, mixed> $payload
      * @return string[]
      */
     public function build(array $payload): array
@@ -25,6 +26,10 @@ class RunnerCommandBuilder
         return $cmd;
     }
 
+    /**
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     */
     private function addInventoryArgs(array &$cmd, array $payload): void
     {
         if ($payload['inventory_type'] === 'static') {
@@ -36,6 +41,10 @@ class RunnerCommandBuilder
         }
     }
 
+    /**
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     */
     private function addPlaybookOptions(array &$cmd, array $payload): void
     {
         $this->addVerbosityFlag($cmd, (int)($payload['verbosity'] ?? 0));
@@ -57,6 +66,9 @@ class RunnerCommandBuilder
         }
     }
 
+    /**
+     * @param string[] $cmd
+     */
     private function addVerbosityFlag(array &$cmd, int $verbosity): void
     {
         if ($verbosity > 0) {
@@ -64,6 +76,10 @@ class RunnerCommandBuilder
         }
     }
 
+    /**
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     */
     private function addBecomeFlags(array &$cmd, array $payload): void
     {
         if (empty($payload['become'])) {

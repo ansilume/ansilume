@@ -77,6 +77,11 @@ class RunnerController extends Controller
         return ExitCode::OK;
     }
 
+    /**
+     * Attempt heartbeat, retrying once with a fresh token on 401.
+     *
+     * @return array<string, mixed>|null
+     */
     protected function verifyTokenWithRetry(): ?array
     {
         $info = $this->http->post('/api/runner/v1/heartbeat', []);
@@ -134,6 +139,9 @@ class RunnerController extends Controller
         }
     }
 
+    /**
+     * @return array<string, mixed>|null Job payload or null if no job available.
+     */
     private function claimJob(): ?array
     {
         $result = $this->http->post('/api/runner/v1/jobs/claim', []);
@@ -143,6 +151,9 @@ class RunnerController extends Controller
         return $result['data'];
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     private function executeJob(int $jobId, array $payload): void
     {
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $jobId . '_' . uniqid('', true) . '.ndjson';
@@ -177,6 +188,9 @@ class RunnerController extends Controller
         $this->stdout("Job #{$jobId} finished with exit code {$exitCode}.\n");
     }
 
+    /**
+     * @return array<string, string>
+     */
     private function buildProcessEnv(string $callbackFile): array
     {
         $pluginDir = dirname(__DIR__) . '/ansible/callback_plugins';

@@ -13,6 +13,9 @@ use yii\web\Response;
 
 class CredentialController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -23,6 +26,9 @@ class CredentialController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return ['delete' => ['POST'], 'generate-ssh-key' => ['POST']];
@@ -74,7 +80,7 @@ class CredentialController extends BaseController
     {
         $model = new Credential();
         if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = \Yii::$app->user->id;
+            $model->created_by = (int)\Yii::$app->user->id;
             if ($model->validate()) {
                 /** @var CredentialService $cs */
                 $cs = \Yii::$app->get('credentialService');
@@ -156,6 +162,9 @@ class CredentialController extends BaseController
         return $this->redirect(['index']);
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     private function extractSecrets(string $type, CredentialService $cs): array
     {
         $post = \Yii::$app->request->post('secrets', []);
@@ -169,7 +178,7 @@ class CredentialController extends BaseController
         }
 
         // Normalise line endings — browsers submit \r\n from textareas
-        $privateKey = str_replace("\r\n", "\n", str_replace("\r", "\n", $post['private_key'] ?? ''));
+        $privateKey = str_replace("\r\n", "\n", str_replace("\r", "\n", (string)($post['private_key'] ?? '')));
         $secrets = ['private_key' => $privateKey];
 
         if ($privateKey !== '') {

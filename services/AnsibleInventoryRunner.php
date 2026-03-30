@@ -61,7 +61,8 @@ class AnsibleInventoryRunner extends Component
      * Open a subprocess and return the process resource + pipes.
      * Returns null if proc_open fails.
      *
-     * @param resource[] &$pipes
+     * @param string[] $cmd
+     * @param resource[]|null $pipes
      * @return resource|null
      */
     protected function openProcess(array $cmd, ?array &$pipes, ?string $cwd = null)

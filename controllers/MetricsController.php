@@ -49,6 +49,8 @@ class MetricsController extends Controller
     /**
      * Collect all metrics as a structured array.
      * Public for testability (console app cannot use web response).
+     *
+     * @return array<string, array<string, mixed>>
      */
     public function collect(): array
     {
@@ -63,6 +65,9 @@ class MetricsController extends Controller
         ];
     }
 
+    /**
+     * @return array{database_up: bool, database_latency_ms: float|null, redis_up: bool, redis_latency_ms: float|null}
+     */
     private function collectHealth(): array
     {
         $db = $this->probeDatabase();
@@ -76,6 +81,9 @@ class MetricsController extends Controller
         ];
     }
 
+    /**
+     * @return array{up: bool, latency_ms: float|null}
+     */
     private function probeDatabase(): array
     {
         try {
@@ -88,6 +96,9 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @return array{up: bool, latency_ms: float|null}
+     */
     private function probeRedis(): array
     {
         try {
@@ -102,6 +113,9 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @return array{total: int, by_status: array<string, int>, avg_duration_1h_sec: float|null}
+     */
     private function collectJobs(): array
     {
         $jobStatuses = [
@@ -140,6 +154,9 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @return array{total: int, by_status: array<string, int>, last_1h: array<string, int>}
+     */
     private function collectTasks(): array
     {
         $taskStatuses = [
@@ -178,6 +195,9 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @return array{totals: array<string, int>, unique_hosts: int, hosts_with_changes: int, hosts_with_failures: int, jobs_with_changes: int}
+     */
     private function collectHosts(): array
     {
         try {
@@ -234,6 +254,9 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @return array{total: int, online: int, offline: int}
+     */
     private function collectRunners(): array
     {
         try {
@@ -251,6 +274,9 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @return array{total: int, enabled: int, overdue: int}
+     */
     private function collectSchedules(): array
     {
         try {
@@ -272,6 +298,9 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @return array{pending: int, running: int}
+     */
     private function collectQueue(): array
     {
         try {
@@ -286,6 +315,9 @@ class MetricsController extends Controller
 
     // ── Formatters ──────────────────────────────────────────────────────────
 
+    /**
+     * @param array<string, array<string, mixed>> $metrics
+     */
     private function formatJson(array $metrics): Response
     {
         $response = \Yii::$app->response;
@@ -294,6 +326,9 @@ class MetricsController extends Controller
         return $response;
     }
 
+    /**
+     * @param array<string, array<string, mixed>> $metrics
+     */
     private function formatPrometheus(array $metrics): Response
     {
         $response = \Yii::$app->response;
@@ -306,22 +341,43 @@ class MetricsController extends Controller
     /**
      * Render metrics as Prometheus OpenMetrics text.
      * Static and pure so it can be tested without a web response.
+     *
+     * @param array<string, mixed> $metrics
      */
     public static function renderPrometheus(array $metrics): string
     {
         $lines = [];
 
-        self::renderHealthMetrics($lines, $metrics['health']);
-        self::renderJobMetrics($lines, $metrics['jobs']);
-        self::renderTaskMetrics($lines, $metrics['tasks']);
-        self::renderHostMetrics($lines, $metrics['hosts']);
-        self::renderRunnerMetrics($lines, $metrics['runners']);
-        self::renderScheduleMetrics($lines, $metrics['schedules']);
-        self::renderQueueMetrics($lines, $metrics['queue']);
+        /** @var array{database_up: bool, database_latency_ms: float|null, redis_up: bool, redis_latency_ms: float|null} $health */
+        $health = $metrics['health'];
+        /** @var array{total: int, by_status: array<string, int>, avg_duration_1h_sec: float|null} $jobs */
+        $jobs = $metrics['jobs'];
+        /** @var array{total: int, by_status: array<string, int>, last_1h: array<string, int>} $tasks */
+        $tasks = $metrics['tasks'];
+        /** @var array{totals: array<string, int>, unique_hosts: int, hosts_with_changes: int, hosts_with_failures: int, jobs_with_changes: int} $hosts */
+        $hosts = $metrics['hosts'];
+        /** @var array{total: int, online: int, offline: int} $runners */
+        $runners = $metrics['runners'];
+        /** @var array{total: int, enabled: int, overdue: int} $schedules */
+        $schedules = $metrics['schedules'];
+        /** @var array{pending: int, running: int} $queue */
+        $queue = $metrics['queue'];
+
+        self::renderHealthMetrics($lines, $health);
+        self::renderJobMetrics($lines, $jobs);
+        self::renderTaskMetrics($lines, $tasks);
+        self::renderHostMetrics($lines, $hosts);
+        self::renderRunnerMetrics($lines, $runners);
+        self::renderScheduleMetrics($lines, $schedules);
+        self::renderQueueMetrics($lines, $queue);
 
         return implode("\n", $lines) . "\n";
     }
 
+    /**
+     * @param string[] $lines
+     * @param array{database_up: bool, database_latency_ms: float|null, redis_up: bool, redis_latency_ms: float|null} $h
+     */
     private static function renderHealthMetrics(array &$lines, array $h): void
     {
         self::gauge($lines, 'ansilume_database_up', 'Whether the database is reachable (1=up, 0=down).', $h['database_up'] ? '1' : '0');
@@ -337,6 +393,10 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @param string[] $lines
+     * @param array{total: int, by_status: array<string, int>, avg_duration_1h_sec: float|null} $j
+     */
     private static function renderJobMetrics(array &$lines, array $j): void
     {
         self::gauge($lines, 'ansilume_jobs_total', 'Total number of jobs.', $j['total']);
@@ -347,6 +407,10 @@ class MetricsController extends Controller
         }
     }
 
+    /**
+     * @param string[] $lines
+     * @param array{total: int, by_status: array<string, int>, last_1h: array<string, int>} $t
+     */
     private static function renderTaskMetrics(array &$lines, array $t): void
     {
         self::gauge($lines, 'ansilume_tasks_total', 'Total number of task results recorded.', $t['total']);
@@ -354,6 +418,10 @@ class MetricsController extends Controller
         self::gaugeLabeled($lines, 'ansilume_tasks_last_1h', 'Task results by status (last hour).', 'status', $t['last_1h']);
     }
 
+    /**
+     * @param string[] $lines
+     * @param array{totals: array<string, int>, unique_hosts: int, hosts_with_changes: int, hosts_with_failures: int, jobs_with_changes: int} $hs
+     */
     private static function renderHostMetrics(array &$lines, array $hs): void
     {
         self::gaugeLabeled($lines, 'ansilume_host_results_total', 'Aggregated Ansible PLAY RECAP counters across all jobs.', 'result', $hs['totals']);
@@ -363,6 +431,10 @@ class MetricsController extends Controller
         self::gauge($lines, 'ansilume_jobs_with_changes', 'Jobs where at least one task made a change.', $hs['jobs_with_changes']);
     }
 
+    /**
+     * @param string[] $lines
+     * @param array{total: int, online: int, offline: int} $r
+     */
     private static function renderRunnerMetrics(array &$lines, array $r): void
     {
         self::gauge($lines, 'ansilume_runners_total', 'Total number of registered runners.', $r['total']);
@@ -370,6 +442,10 @@ class MetricsController extends Controller
         self::gauge($lines, 'ansilume_runners_offline', 'Registered runners that are not responding.', $r['offline']);
     }
 
+    /**
+     * @param string[] $lines
+     * @param array{total: int, enabled: int, overdue: int} $sc
+     */
     private static function renderScheduleMetrics(array &$lines, array $sc): void
     {
         self::gauge($lines, 'ansilume_schedules_total', 'Total number of schedules.', $sc['total']);
@@ -377,6 +453,10 @@ class MetricsController extends Controller
         self::gauge($lines, 'ansilume_schedules_overdue', 'Enabled schedules past due by more than 5 minutes.', $sc['overdue']);
     }
 
+    /**
+     * @param string[] $lines
+     * @param array{pending: int, running: int} $q
+     */
     private static function renderQueueMetrics(array &$lines, array $q): void
     {
         self::gauge($lines, 'ansilume_queue_pending', 'Jobs waiting to be picked up.', $q['pending']);
@@ -384,6 +464,7 @@ class MetricsController extends Controller
     }
 
     /**
+     * @param string[] $lines
      * @param string|int|float $value
      */
     private static function gauge(array &$lines, string $name, string $help, $value): void
@@ -394,6 +475,7 @@ class MetricsController extends Controller
     }
 
     /**
+     * @param string[] $lines
      * @param array<string, int|float> $values
      */
     private static function gaugeLabeled(array &$lines, string $name, string $help, string $label, array $values): void

@@ -15,6 +15,7 @@ class AnsibleJobCommandBuilder
     /**
      * Build the full command, optionally wrapped in `docker run`.
      *
+     * @param array<string, mixed> $payload
      * @return string[]
      */
     public function build(array $payload): array
@@ -30,6 +31,7 @@ class AnsibleJobCommandBuilder
     }
 
     /**
+     * @param array<string, mixed> $payload
      * @return string[]
      */
     public function buildAnsibleCommand(array $payload): array
@@ -51,6 +53,9 @@ class AnsibleJobCommandBuilder
 
     /**
      * Append optional playbook flags (verbosity, forks, become, limit, tags, extra-vars).
+     *
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
      */
     public function addPlaybookOptions(array &$cmd, array $payload): void
     {
@@ -76,6 +81,8 @@ class AnsibleJobCommandBuilder
     /**
      * Wrap an ansible-playbook command in `docker run --rm` for container isolation.
      *
+     * @param string[] $ansibleCmd
+     * @param array<string, mixed> $payload
      * @return string[]
      */
     public function wrapInDocker(array $ansibleCmd, array $payload): array
@@ -106,6 +113,9 @@ class AnsibleJobCommandBuilder
         return $dockerCmd;
     }
 
+    /**
+     * @param string[] $cmd
+     */
     private function addVerbosityFlag(array &$cmd, int $verbosity): void
     {
         if ($verbosity > 0) {
@@ -113,6 +123,10 @@ class AnsibleJobCommandBuilder
         }
     }
 
+    /**
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     */
     private function addBecomeFlags(array &$cmd, array $payload): void
     {
         if (empty($payload['become'])) {
@@ -126,6 +140,9 @@ class AnsibleJobCommandBuilder
         $cmd[] = $payload['become_user'] ?? 'root';
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     public function resolveProjectPath(array $payload): string
     {
         $project = \app\models\Project::findOne($payload['project_id'] ?? 0);
@@ -151,6 +168,9 @@ class AnsibleJobCommandBuilder
         return $path;
     }
 
+    /**
+     * @param array<string, mixed> $payload
+     */
     private function resolvePlaybookPath(array $payload): string
     {
         $base = $this->resolveProjectPath($payload);

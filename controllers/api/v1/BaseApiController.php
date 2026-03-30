@@ -67,18 +67,28 @@ abstract class BaseApiController extends Controller
         \Yii::$app->user->loginByAccessToken($raw);
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     protected function success(mixed $data, int $status = 200): array
     {
         \Yii::$app->response->statusCode = $status;
         return ['data' => $data];
     }
 
+    /**
+     * @return array{error: array{message: string}}
+     */
     protected function error(string $message, int $status = 400): array
     {
         \Yii::$app->response->statusCode = $status;
         return ['error' => ['message' => $message]];
     }
 
+    /**
+     * @param array<int, mixed> $items
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     */
     protected function paginated(array $items, int $total, int $page, int $perPage): array
     {
         return [

@@ -23,9 +23,9 @@ class JobLaunchService extends Component
     /**
      * Launch a job from a template with optional runtime overrides.
      *
-     * @param JobTemplate $template   The template to execute.
-     * @param int         $launchedBy User ID of the person launching.
-     * @param array       $overrides  Optional launch-time overrides: extra_vars, limit, verbosity.
+     * @param JobTemplate $template The template to execute.
+     * @param int $launchedBy User ID of the person launching.
+     * @param array<string, mixed> $overrides Optional launch-time overrides: extra_vars, limit, verbosity.
      *
      * @return Job The created job record.
      *
@@ -65,6 +65,9 @@ class JobLaunchService extends Component
         return $job;
     }
 
+    /**
+     * @param array<string, mixed> $overrides
+     */
     private function buildJobRecord(JobTemplate $template, int $launchedBy, array $overrides): Job
     {
         $job = new Job();
@@ -77,7 +80,7 @@ class JobLaunchService extends Component
         // Merge extra_vars: template defaults ← survey answers ← explicit overrides
         $merged = $this->mergeExtraVars($template, $overrides);
         if ($merged !== []) {
-            $job->extra_vars = json_encode($merged, JSON_UNESCAPED_UNICODE);
+            $job->extra_vars = json_encode($merged, JSON_UNESCAPED_UNICODE) ?: null;
         }
 
         if (!empty($overrides['limit'])) {
@@ -99,6 +102,9 @@ class JobLaunchService extends Component
     /**
      * Build merged extra_vars: template defaults, then survey answers, then explicit overrides.
      * Survey passwords are accepted but will be visible in extra_vars — callers should be aware.
+     *
+     * @param array<string, mixed> $overrides
+     * @return array<string, mixed>
      */
     protected function mergeExtraVars(\app\models\JobTemplate $template, array $overrides): array
     {
@@ -133,7 +139,7 @@ class JobLaunchService extends Component
 
     protected function buildRunnerPayload(\app\models\JobTemplate $template, \app\models\Job $job): string
     {
-        return json_encode([
+        return (string)json_encode([
             'template_id' => $template->id,
             'template_name' => $template->name,
             'project_id' => $template->project_id,

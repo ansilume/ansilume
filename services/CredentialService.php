@@ -21,7 +21,7 @@ class CredentialService extends Component
      * Encrypt and store the secret fields for a credential.
      *
      * @param Credential $credential The credential model (already validated).
-     * @param array      $secrets    Map of field name => raw value, e.g. ['private_key' => '...'].
+     * @param array<string, string> $secrets Map of field name => raw value, e.g. ['private_key' => '...'].
      */
     public function storeSecrets(Credential $credential, array $secrets): bool
     {
@@ -33,6 +33,7 @@ class CredentialService extends Component
      * Decrypt and return the secret fields for a credential.
      * Returns an empty array if no secrets are stored.
      *
+     * @return array<string, string>
      * @throws Exception on decryption failure.
      */
     public function getSecrets(Credential $credential): array
@@ -47,6 +48,9 @@ class CredentialService extends Component
 
     /**
      * Returns a redacted representation safe for logging or display.
+     *
+     * @param array<string, string> $secrets
+     * @return array<string, string>
      */
     public function redact(array $secrets): array
     {
@@ -57,6 +61,7 @@ class CredentialService extends Component
      * Generate a new Ed25519 SSH key pair.
      * Returns ['private_key' => '...', 'public_key' => '...'].
      *
+     * @return array{private_key: string, public_key: string}
      * @throws \RuntimeException on failure.
      */
     public function generateSshKeyPair(): array
@@ -72,8 +77,8 @@ class CredentialService extends Component
                 throw new \RuntimeException('ssh-keygen did not produce expected key files.');
             }
             return [
-                'private_key' => file_get_contents($tmp),
-                'public_key' => trim(file_get_contents($tmp . '.pub')),
+                'private_key' => (string)file_get_contents($tmp),
+                'public_key' => trim((string)file_get_contents($tmp . '.pub')),
             ];
         } finally {
             \app\helpers\FileHelper::safeUnlink($tmp);
@@ -83,8 +88,10 @@ class CredentialService extends Component
 
     /**
      * Analyse a private key and extract its public key and algorithm metadata.
-     * Returns ['public_key', 'algorithm', 'bits', 'secure'].
+     * Returns ['public_key', 'algorithm', 'bits', 'key_secure'].
      * On any failure returns an array with empty/null values rather than throwing.
+     *
+     * @return array{public_key: string, algorithm: string, bits: int, key_secure: bool|null}
      */
     public function analyzePrivateKey(string $privateKey): array
     {
@@ -148,6 +155,9 @@ class CredentialService extends Component
 
     /**
      * Run a command as a subprocess, returning stdout lines.
+     *
+     * @param string[] $cmd
+     * @param string[] $output
      * @throws \RuntimeException on non-zero exit.
      */
     private function runCommand(array $cmd, array &$output = []): void

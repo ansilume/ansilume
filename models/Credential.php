@@ -71,6 +71,8 @@ class Credential extends ActiveRecord
 
     /**
      * Returns the list of field names that must never be logged or rendered.
+     *
+     * @return string[]
      */
     public static function sensitiveFields(): array
     {

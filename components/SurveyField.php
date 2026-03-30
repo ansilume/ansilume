@@ -28,6 +28,9 @@ class SurveyField
     public array $options;
     public string $hint;
 
+    /**
+     * @param string[] $options
+     */
     public function __construct(
         string $name,
         string $label = '',
@@ -46,6 +49,9 @@ class SurveyField
         $this->hint = $hint;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     */
     public static function fromArray(array $data): self
     {
         return new self(
@@ -59,6 +65,9 @@ class SurveyField
         );
     }
 
+    /**
+     * @return array{name: string, label: string, type: string, required: bool, default: string, options: string[], hint: string}
+     */
     public function toArray(): array
     {
         return [
@@ -72,6 +81,9 @@ class SurveyField
         ];
     }
 
+    /**
+     * @return array<string, string>
+     */
     public static function types(): array
     {
         return [

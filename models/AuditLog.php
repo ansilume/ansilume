@@ -111,6 +111,9 @@ class AuditLog extends ActiveRecord
 
     /**
      * Audit logs are append-only; disable update.
+     *
+     * @param bool $runValidation
+     * @param string[]|null $attributeNames
      */
     public function update($runValidation = true, $attributeNames = null): never
     {

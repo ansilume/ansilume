@@ -91,6 +91,9 @@ class ProjectService extends Component
         }
     }
 
+    /**
+     * @param array<string, string> $env
+     */
     private function cloneOrPull(Project $project, string $dest, array $env): void
     {
         if (is_dir($dest . '/.git')) {
@@ -121,7 +124,8 @@ class ProjectService extends Component
      * If the project has an SSH key credential, writes it to a temp file and sets
      * GIT_SSH_COMMAND so git uses it — no passwords ever appear in the process table.
      *
-     * @param string|null $keyFile  Set to the temp key path if one was written (caller must delete it).
+     * @param string|null $keyFile Set to the temp key path if one was written (caller must delete it).
+     * @return array<string, string>
      */
     protected function buildGitEnv(Project $project, ?string &$keyFile): array
     {
@@ -138,6 +142,9 @@ class ProjectService extends Component
         return $env;
     }
 
+    /**
+     * @return array<string, string>
+     */
     private function baseGitEnv(): array
     {
         return [
@@ -179,11 +186,17 @@ class ProjectService extends Component
         return $keyFile;
     }
 
+    /**
+     * @param array<string, string> $env
+     */
     protected function gitClone(string $url, string $dest, string $branch, array $env): void
     {
         $this->runGit(['git', 'clone', '--branch', $branch, '--depth', '1', '--', $url, $dest], $env);
     }
 
+    /**
+     * @param array<string, string> $env
+     */
     protected function gitPull(string $dest, string $branch, array $env): void
     {
         $this->runGit(['git', '-C', $dest, 'fetch', '--depth', '1', 'origin', $branch], $env);
@@ -198,6 +211,8 @@ class ProjectService extends Component
      * Execute a git command as a subprocess.
      * All arguments are passed as an array — never shell-interpolated.
      *
+     * @param string[] $cmd
+     * @param array<string, string> $env
      * @throws \RuntimeException on non-zero exit code.
      */
     private function runGit(array $cmd, array $env = []): void
@@ -217,6 +232,8 @@ class ProjectService extends Component
     /**
      * Run a command and return [stdout, stderr, exitCode].
      *
+     * @param string[] $cmd
+     * @param array<string, string> $env
      * @return array{0: string, 1: string, 2: int}
      */
     private function execProcess(array $cmd, array $env): array

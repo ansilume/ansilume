@@ -33,6 +33,9 @@ class RunnerHttpClient
 
     /**
      * POST JSON to the ansilume API with Bearer authentication.
+     *
+     * @param array<string, mixed> $body
+     * @return array<string, mixed>|null
      */
     public function post(string $path, array $body): ?array
     {
@@ -43,6 +46,9 @@ class RunnerHttpClient
 
     /**
      * POST JSON to the ansilume API without authentication (for registration).
+     *
+     * @param array<string, mixed> $body
+     * @return array<string, mixed>|null
      */
     public function postUnauthenticated(string $path, array $body): ?array
     {
@@ -52,12 +58,17 @@ class RunnerHttpClient
     /**
      * Low-level HTTP POST. Returns decoded JSON response or null on network error / empty body.
      *
+     * @param array<string, mixed> $body
      * @param string[] $extraHeaders Additional HTTP headers.
+     * @return array<string, mixed>|null
      */
     private function httpPost(string $path, array $body, array $extraHeaders = []): ?array
     {
         $url = $this->apiUrl . $path;
         $payload = json_encode($body);
+        if ($payload === false) {
+            return null;
+        }
 
         $headers = array_merge([
             'Content-Type: application/json',

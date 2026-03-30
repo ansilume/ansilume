@@ -68,6 +68,8 @@ class Runner extends ActiveRecord
     /**
      * Generate a new token. Returns ['raw' => ..., 'hash' => ...].
      * Store only the hash; show raw once to the user.
+     *
+     * @return array{raw: string, hash: string}
      */
     public static function generateToken(): array
     {

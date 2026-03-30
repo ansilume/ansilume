@@ -16,6 +16,9 @@ use yii\web\NotFoundHttpException;
  */
 class JobTemplatesController extends BaseApiController
 {
+    /**
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     */
     public function actionIndex(): array
     {
         $dp = new ActiveDataProvider([
@@ -32,6 +35,9 @@ class JobTemplatesController extends BaseApiController
         );
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     public function actionView(int $id): array
     {
         $template = JobTemplate::findOne($id);
@@ -41,6 +47,9 @@ class JobTemplatesController extends BaseApiController
         return $this->success($this->serialize($template));
     }
 
+    /**
+     * @return array{id: int, name: string, description: string|null, project_id: int|null, project_name: string|null, inventory_id: int|null, inventory_name: string|null, credential_id: int|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string|null, become_user: string|null, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, notify_on_failure: bool, notify_on_success: bool, created_at: int, updated_at: int}
+     */
     private function serialize(JobTemplate $t): array
     {
         return [

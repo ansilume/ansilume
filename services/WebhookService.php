@@ -50,6 +50,9 @@ class WebhookService extends \yii\base\Component
     protected function deliver(Webhook $webhook, string $event, Job $job): void
     {
         $payload = json_encode($this->buildPayload($event, $job), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($payload === false) {
+            $payload = '{}';
+        }
 
         $headers = [
             'Content-Type: application/json',
@@ -91,6 +94,9 @@ class WebhookService extends \yii\base\Component
         }
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function buildPayload(string $event, Job $job): array
     {
         return [

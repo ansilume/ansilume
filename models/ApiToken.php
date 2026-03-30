@@ -60,6 +60,8 @@ class ApiToken extends ActiveRecord
     /**
      * Generate a new raw token, store its hash, return the raw value.
      * The raw value is shown once and must not be stored by the application.
+     *
+     * @return array{token: self, raw: string}
      */
     public static function generate(int $userId, string $name, ?int $expiresAt = null): array
     {

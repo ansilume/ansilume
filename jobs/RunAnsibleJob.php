@@ -130,6 +130,8 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     /**
      * Build the environment variables for the Ansible subprocess.
+     *
+     * @return array<string, string>
      */
     protected function buildProcessEnv(string $callbackFile, string $artifactDir): array
     {

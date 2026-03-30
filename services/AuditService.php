@@ -79,6 +79,9 @@ class AuditService extends Component
      */
     public array $targets = [];
 
+    /**
+     * @param array<string, mixed> $context Key-value metadata; must not contain raw secrets.
+     */
     public function log(
         string $action,
         ?string $objectType = null,
@@ -94,7 +97,7 @@ class AuditService extends Component
             'object_type' => $objectType,
             'object_id' => $objectId,
             'user_id' => $userId ?? $this->resolveUserId(),
-            'metadata' => !empty($context) ? json_encode($context, JSON_UNESCAPED_UNICODE) : null,
+            'metadata' => !empty($context) ? (json_encode($context, JSON_UNESCAPED_UNICODE) ?: null) : null,
             'ip_address' => $isWebRequest ? $request->getUserIP() : null,
             'user_agent' => $isWebRequest ? $request->getUserAgent() : null,
             'created_at' => time(),

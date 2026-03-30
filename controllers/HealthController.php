@@ -37,6 +37,9 @@ class HealthController extends Controller
         ];
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public function actionIndex(): array
     {
         $checks = $this->runChecks();
@@ -53,6 +56,9 @@ class HealthController extends Controller
         ];
     }
 
+    /**
+     * @return array<string, array<string, mixed>>
+     */
     protected function runChecks(): array
     {
         return [
@@ -64,6 +70,9 @@ class HealthController extends Controller
         ];
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function checkDatabase(): array
     {
         try {
@@ -74,6 +83,9 @@ class HealthController extends Controller
         }
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function checkRedis(): array
     {
         try {
@@ -86,6 +98,9 @@ class HealthController extends Controller
         }
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function checkMigrations(): array
     {
         try {
@@ -127,6 +142,9 @@ class HealthController extends Controller
         \Yii::$app->response->statusCode = $code;
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function checkRunners(): array
     {
         try {
@@ -150,6 +168,9 @@ class HealthController extends Controller
         }
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     protected function checkScheduler(): array
     {
         try {
@@ -174,6 +195,9 @@ class HealthController extends Controller
         }
     }
 
+    /**
+     * @return array{enabled: int, overdue: int}
+     */
     protected function getScheduleCounts(): array
     {
         $enabled = (int)Schedule::find()->where(['enabled' => 1])->count();
@@ -187,11 +211,17 @@ class HealthController extends Controller
         return ['enabled' => $enabled, 'overdue' => $overdue];
     }
 
+    /**
+     * @return array{total: int, online: int, offline: int}
+     */
     private function runnerSummary(): array
     {
         return $this->getRunnerCounts();
     }
 
+    /**
+     * @return array{total: int, online: int, offline: int}
+     */
     protected function getRunnerCounts(): array
     {
         try {
@@ -209,6 +239,9 @@ class HealthController extends Controller
         }
     }
 
+    /**
+     * @return array{total: int, enabled: int}
+     */
     private function scheduleSummary(): array
     {
         try {
@@ -220,6 +253,9 @@ class HealthController extends Controller
         }
     }
 
+    /**
+     * @return array{pending: int, running: int}
+     */
     private function queueSummary(): array
     {
         try {

@@ -18,6 +18,9 @@ use yii\web\Response;
  */
 class ProfileController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -28,6 +31,9 @@ class ProfileController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return [

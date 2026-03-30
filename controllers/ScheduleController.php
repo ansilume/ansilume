@@ -13,6 +13,9 @@ use yii\web\Response;
 
 class ScheduleController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -22,6 +25,9 @@ class ScheduleController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return [
@@ -51,7 +57,7 @@ class ScheduleController extends BaseController
         $model->enabled = true;
 
         if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = \Yii::$app->user->id;
+            $model->created_by = (int)\Yii::$app->user->id;
             $model->computeNextRunAt();
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
@@ -136,6 +142,9 @@ class ScheduleController extends BaseController
         return $model;
     }
 
+    /**
+     * @return array<int, string>
+     */
     private function getTemplateList(): array
     {
         $rows = JobTemplate::find()

@@ -43,9 +43,13 @@ class TotpService extends Component
      */
     public function buildProvisioningUri(string $secret, User $user): string
     {
+        if ($secret === '') {
+            throw new \InvalidArgumentException('TOTP secret must not be empty.');
+        }
         $totp = TOTP::createFromSecret($secret);
-        $totp->setLabel($user->email);
-        $totp->setIssuer(\Yii::$app->name ?? 'Ansilume');
+        $totp->setLabel((string)$user->email ?: 'user');
+        $issuer = \Yii::$app->name ?: 'Ansilume';
+        $totp->setIssuer($issuer);
         return $totp->getProvisioningUri();
     }
 
@@ -72,8 +76,13 @@ class TotpService extends Component
             return false;
         }
 
+        if ($secret === '') {
+            return false;
+        }
+
         $totp = TOTP::createFromSecret($secret);
-        return $totp->verify($code, null, $this->window);
+        /** @var non-empty-string $code Validated by preg_match above */
+        return $totp->verify($code, null, max(0, $this->window));
     }
 
     // ── Encrypted secret storage ─────────────────────────────────────────────
@@ -146,6 +155,8 @@ class TotpService extends Component
     /**
      * Verify a recovery code against the stored hashes.
      * Returns the index of the matched code (for invalidation), or -1 if no match.
+     *
+     * @param string[] $hashedCodes
      */
     public function verifyRecoveryCode(string $code, array $hashedCodes): int
     {
@@ -174,7 +185,7 @@ class TotpService extends Component
 
         // Remove the used code
         array_splice($codes, $index, 1);
-        $user->recovery_codes = !empty($codes) ? json_encode($codes) : null;
+        $user->recovery_codes = !empty($codes) ? (json_encode($codes) ?: null) : null;
         $user->save(false, ['recovery_codes']);
         return true;
     }
@@ -232,7 +243,7 @@ class TotpService extends Component
         }
         $data['attempts']++;
         $cache->set($key, $data, $this->lockoutDuration);
-        return max(0, $this->maxAttempts - $data['attempts']);
+        return (int)max(0, $this->maxAttempts - $data['attempts']);
     }
 
     /**
@@ -258,7 +269,7 @@ class TotpService extends Component
 
         $user->totp_secret = $this->encryptSecret($plainSecret);
         $user->totp_enabled = true;
-        $user->recovery_codes = json_encode($recovery['hashed']);
+        $user->recovery_codes = json_encode($recovery['hashed']) ?: null;
         $user->save(false, ['totp_secret', 'totp_enabled', 'recovery_codes']);
 
         return $recovery['raw'];

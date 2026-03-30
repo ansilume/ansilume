@@ -13,6 +13,8 @@ class ArtifactCollector
 {
     /**
      * Collect artifacts from the job's artifact directory if present.
+     *
+     * @param array<string, string> $env
      */
     public function collect(Job $job, array $env): void
     {

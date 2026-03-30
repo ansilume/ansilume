@@ -18,6 +18,9 @@ use yii\web\Response;
 
 class JobTemplateController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -31,6 +34,9 @@ class JobTemplateController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return [
@@ -71,7 +77,7 @@ class JobTemplateController extends BaseController
             $model->playbook = $playbook;
         }
         if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = \Yii::$app->user->id;
+            $model->created_by = (int)\Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_CREATED, 'job_template', $model->id, null, ['name' => $model->name]);
                 /** @var \app\services\LintService $lintService */
@@ -163,6 +169,9 @@ class JobTemplateController extends BaseController
         return $this->redirect(['view', 'id' => $id]);
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     private function formData(JobTemplate $model): array
     {
         return [

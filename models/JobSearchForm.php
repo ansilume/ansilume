@@ -28,6 +28,9 @@ class JobSearchForm extends Model
         ];
     }
 
+    /**
+     * @param array<string, mixed> $params
+     */
     public function search(array $params): ActiveDataProvider
     {
         $this->load($params, '');

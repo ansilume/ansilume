@@ -55,7 +55,7 @@ class ProjectFilesystemScanner
      * Recursively build a directory tree array, ignoring hidden entries.
      * Each node: ['name' => string, 'rel' => string, 'type' => 'dir'|'file', 'children' => [...]]
      *
-     * @return array<array{name: string, rel: string, type: string, children: array}>
+     * @return list<array{name: string, rel: string, type: string, children: list<mixed>}>
      */
     public function buildTree(string $base, string $dir, int $depth = 0, int $maxDepth = 5): array
     {
@@ -77,6 +77,9 @@ class ProjectFilesystemScanner
     // Playbook detection internals
     // -------------------------------------------------------------------------
 
+    /**
+     * @return string[]
+     */
     private function detectRootPlaybooks(string $base): array
     {
         $playbooks = [];
@@ -88,6 +91,9 @@ class ProjectFilesystemScanner
         return $playbooks;
     }
 
+    /**
+     * @return string[]
+     */
     private function detectPlaybooksInSubdir(string $base): array
     {
         $dir = $base . '/playbooks';
@@ -147,6 +153,9 @@ class ProjectFilesystemScanner
     // Directory tree internals
     // -------------------------------------------------------------------------
 
+    /**
+     * @return list<array{name: string, rel: string, type: string, children: list<mixed>}>
+     */
     private function scanDirectoryEntries(string $base, string $dir, int $depth, int $maxDepth): array
     {
         $nodes = [];
@@ -162,6 +171,9 @@ class ProjectFilesystemScanner
         return $nodes;
     }
 
+    /**
+     * @return array{name: string, rel: string, type: string, children: list<mixed>}
+     */
     private function buildNode(string $base, string $path, string $name, int $depth, int $maxDepth): array
     {
         $rel = ltrim(substr($path, strlen($base)), '/');

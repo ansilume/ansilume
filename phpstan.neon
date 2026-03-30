@@ -1,5 +1,5 @@
 parameters:
-    level: 5
+    level: 7
     bootstrapFiles:
         - phpstan-bootstrap.php
     paths:
@@ -19,3 +19,33 @@ parameters:
     ignoreErrors:
         # Yii2 queue extension adds $queue dynamically — not in the base Application class
         - '#Access to an undefined property yii\\(web|console)\\Application.*::\$queue#'
+
+        # ── Yii2 framework type-union limitations ────────────────────────────
+        # PHPStan sees \Yii::$app as yii\web\Application|yii\console\Application.
+        # Web controllers always get web Request/Response/Application — these
+        # are not real bugs, just framework type-system limitations.
+        #
+        # Strategy: suppress these globally; long-term fix is yii2-phpstan extension.
+
+        # \Yii::$app->get('service') returns object — calling methods on it
+        - '#Call to an undefined method object::#'
+
+        # \Yii::$app->user / ->session only exist on web Application
+        - '#Access to an undefined property yii\\(web|console)\\Application.*::\$(user|session)#'
+
+        # \Yii::$app->request->post() / ->get() only exist on web Request
+        - '#Call to an undefined method yii\\console\\Request\|yii\\web\\Request::(post|get)\(\)#'
+
+        # \Yii::$app->request->bodyParams / ->queryParams / ->rawBody / ->headers / ->isPost
+        - '#Access to an undefined property yii\\console\\Request\|yii\\web\\Request::\$(bodyParams|queryParams|rawBody|headers|isPost)#'
+
+        # \Yii::$app->response->format / ->statusCode / ->data / ->headers / ->sendFile()
+        - '#Access to an undefined property yii\\console\\Response\|yii\\web\\Response::\$(statusCode|format|data|headers)#'
+        - '#Call to an undefined method yii\\console\\Response\|yii\\web\\Response::sendFile\(\)#'
+        - '#should return yii\\web\\Response but returns yii\\console\\Response\|yii\\web\\Response#'
+
+        # Controller classes extend generic yii\web\Controller<T> / yii\console\Controller<T>
+        - '#extends generic class yii\\(web|console)\\Controller but does not specify its types: T#'
+
+        # ActiveQuery return types are generic in Yii2 but rarely specified
+        - '#return type with generic class yii\\db\\ActiveQuery does not specify its types: T#'

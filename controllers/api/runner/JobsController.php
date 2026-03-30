@@ -26,6 +26,8 @@ class JobsController extends BaseRunnerApiController
     /**
      * POST /api/runner/v1/heartbeat
      * Runner announces itself. Returns group and server time.
+     *
+     * @return array<string, mixed>
      */
     public function actionHeartbeat(): array
     {
@@ -45,6 +47,8 @@ class JobsController extends BaseRunnerApiController
      * POST /api/runner/v1/jobs/claim
      * Atomically claim the next queued job for this runner's group.
      * Returns 204 (no body) when there is nothing to run.
+     *
+     * @return array<string, mixed>
      */
     public function actionClaim(): array|Response
     {
@@ -68,11 +72,13 @@ class JobsController extends BaseRunnerApiController
     /**
      * POST /api/runner/v1/jobs/<id>/logs
      * Body: { stream: "stdout"|"stderr", content: "...", sequence: N }
+     *
+     * @return array<string, mixed>
      */
     public function actionLogs(int $id): array
     {
         $job = $this->findOwnedJob($id);
-        $body = \Yii::$app->request->bodyParams;
+        $body = (array)\Yii::$app->request->bodyParams;
 
         $stream = in_array($body['stream'] ?? '', ['stdout', 'stderr'], true)
             ? $body['stream']
@@ -94,11 +100,13 @@ class JobsController extends BaseRunnerApiController
     /**
      * POST /api/runner/v1/jobs/<id>/complete
      * Body: { exit_code: N, has_changes: bool }
+     *
+     * @return array<string, mixed>
      */
     public function actionComplete(int $id): array
     {
         $job = $this->findOwnedJob($id);
-        $body = \Yii::$app->request->bodyParams;
+        $body = (array)\Yii::$app->request->bodyParams;
         $exitCode = (int)($body['exit_code'] ?? 0);
         $hasChanges = !empty($body['has_changes']);
 
@@ -112,11 +120,14 @@ class JobsController extends BaseRunnerApiController
     /**
      * POST /api/runner/v1/jobs/<id>/tasks
      * Body: { tasks: [ {seq, name, action, host, status, changed, duration_ms}, ... ] }
+     *
+     * @return array<string, mixed>
      */
     public function actionTasks(int $id): array
     {
         $job = $this->findOwnedJob($id);
-        $tasks = \Yii::$app->request->bodyParams['tasks'] ?? [];
+        $tasks = (array)\Yii::$app->request->bodyParams;
+        $tasks = $tasks['tasks'] ?? [];
 
         if (!is_array($tasks)) {
             return $this->err('tasks must be an array');

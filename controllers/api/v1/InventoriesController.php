@@ -16,6 +16,9 @@ use yii\web\NotFoundHttpException;
  */
 class InventoriesController extends BaseApiController
 {
+    /**
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     */
     public function actionIndex(): array
     {
         $dp = new ActiveDataProvider([
@@ -32,6 +35,9 @@ class InventoriesController extends BaseApiController
         );
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     public function actionView(int $id): array
     {
         $inventory = Inventory::findOne($id);
@@ -41,6 +47,9 @@ class InventoriesController extends BaseApiController
         return $this->success($this->serialize($inventory));
     }
 
+    /**
+     * @return array{id: int, name: string, description: string|null, inventory_type: string, project_id: int|null, created_at: int, updated_at: int}
+     */
     private function serialize(Inventory $inv): array
     {
         return [

@@ -14,8 +14,12 @@ class RunnerProcessExecutor
     private const LOG_CHUNK_BYTES = 8192;
 
     private RunnerHttpClient $http;
+    /** @phpstan-ignore-next-line Yii2 Controller is generic but type param is irrelevant here */
     private Controller $controller;
 
+    /**
+     * @phpstan-ignore-next-line
+     */
     public function __construct(RunnerHttpClient $http, Controller $controller)
     {
         $this->http = $http;
@@ -26,6 +30,8 @@ class RunnerProcessExecutor
      * Run a process and stream output to the server.
      *
      * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     * @param array<string, string> $env
      * @return array{0: int, 1: int}  [exit code, final sequence number]
      */
     public function run(int $jobId, array $cmd, array $payload, array $env, int $timeoutMinutes): array
@@ -41,7 +47,10 @@ class RunnerProcessExecutor
     }
 
     /**
-     * @return array{0: array, 1: resource}|null  [pipes, process] or null on failure
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     * @param array<string, string> $env
+     * @return array{0: array<int, resource>, 1: resource}|null  [pipes, process] or null on failure
      */
     private function startProcess(int $jobId, array $cmd, array $payload, array $env): ?array
     {
@@ -76,6 +85,7 @@ class RunnerProcessExecutor
      * Read stdout/stderr from the process and stream to the server.
      *
      * @param resource $process
+     * @param array<int, resource> $pipes
      * @return array{0: int, 1: int}  [exit code, final sequence number]
      */
     private function streamProcessOutput(int $jobId, $process, array $pipes, int $timeoutMinutes): array
@@ -123,6 +133,7 @@ class RunnerProcessExecutor
     /**
      * Read available output from process pipes and stream to the server.
      *
+     * @param array<int, resource> $pipes
      * @return int Updated sequence number.
      */
     private function drainAndStreamLogs(int $jobId, array $pipes, int $sequence, int $remaining): int

@@ -72,6 +72,9 @@ class TriggerController extends Controller
         return $this->asJson(['job_id' => $job->id]);
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     private function parseOverrides(): array
     {
         $overrides = [];

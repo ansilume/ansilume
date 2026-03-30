@@ -18,6 +18,8 @@ class AnsibleJobProcess
      * Returns the process exit code.
      *
      * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     * @param array<string, string> $env
      * @throws JobTimeoutException if the process exceeds the timeout.
      */
     public function run(Job $job, array $cmd, array $payload, array $env, int $timeoutMinutes): int
@@ -44,7 +46,10 @@ class AnsibleJobProcess
     /**
      * Open the ansible-playbook subprocess.
      *
-     * @return array{resource: resource, pipes: array}
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     * @param array<string, string> $env
+     * @return array{resource: resource, pipes: array<int, resource>}
      */
     private function startProcess(array $cmd, array $payload, array $env): array
     {
@@ -73,6 +78,7 @@ class AnsibleJobProcess
      * Read stdout/stderr from the subprocess, writing log chunks.
      * Returns true if the process was killed due to timeout.
      *
+     * @param array<int, resource> $pipes
      * @param resource $process
      */
     private function streamProcessOutput(Job $job, array $pipes, int $timeoutMinutes, $process): bool
@@ -108,6 +114,7 @@ class AnsibleJobProcess
     /**
      * Read available output from process pipes and append as log entries.
      *
+     * @param array<int, resource> $pipes
      * @return int Updated sequence number.
      */
     private function drainAndAppendLogs(Job $job, array $pipes, int $sequence, int $remaining): int

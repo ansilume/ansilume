@@ -111,6 +111,8 @@ class ProjectAccessChecker extends Component
      * Logic:
      *   - Projects with NO team_project rows are open to all authenticated users.
      *   - Projects WITH team_project rows require team membership.
+     *
+     * @return array<int|string, mixed>|null
      */
     public function buildProjectFilter(?int $userId): ?array
     {

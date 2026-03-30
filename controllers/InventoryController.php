@@ -13,6 +13,9 @@ use yii\web\Response;
 
 class InventoryController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -23,6 +26,9 @@ class InventoryController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return ['delete' => ['POST'], 'parse-hosts' => ['POST']];
@@ -50,7 +56,7 @@ class InventoryController extends BaseController
             $model->project_id = $project_id;
         }
         if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = \Yii::$app->user->id;
+            $model->created_by = (int)\Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_CREATED, 'inventory', $model->id, null, ['name' => $model->name]);
                 $this->session()->setFlash('success', "Inventory \"{$model->name}\" created.");

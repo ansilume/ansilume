@@ -21,6 +21,9 @@ use yii\web\Response;
 
 class SiteController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -36,8 +39,8 @@ class SiteController extends BaseController
 
     public function actionIndex(): string
     {
-        $today = mktime(0, 0, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
-        $week = strtotime('-6 days', $today);
+        $today = (int)mktime(0, 0, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
+        $week = (int)strtotime('-6 days', $today);
 
         $stats = [
             'projects' => Project::find()->count(),
@@ -96,7 +99,7 @@ class SiteController extends BaseController
         \Yii::$app->response->format = Response::FORMAT_JSON;
 
         $days = max(7, min(365, $days));
-        $today = mktime(0, 0, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
+        $today = (int)mktime(0, 0, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
 
         $labels = [];
         $jobOk = [];
@@ -110,7 +113,7 @@ class SiteController extends BaseController
         $db = \Yii::$app->db;
 
         for ($i = $days - 1; $i >= 0; $i--) {
-            $dayStart = strtotime("-{$i} days", $today);
+            $dayStart = (int)strtotime("-{$i} days", $today);
             $dayEnd = $dayStart + 86399;
 
             $labels[] = date('d.m.', $dayStart);

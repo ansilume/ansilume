@@ -16,6 +16,9 @@ use yii\web\NotFoundHttpException;
  */
 class CredentialsController extends BaseApiController
 {
+    /**
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     */
     public function actionIndex(): array
     {
         $dp = new ActiveDataProvider([
@@ -32,6 +35,9 @@ class CredentialsController extends BaseApiController
         );
     }
 
+    /**
+     * @return array{data: mixed}
+     */
     public function actionView(int $id): array
     {
         $credential = Credential::findOne($id);
@@ -41,6 +47,9 @@ class CredentialsController extends BaseApiController
         return $this->success($this->serialize($credential));
     }
 
+    /**
+     * @return array{id: int, name: string, description: string|null, credential_type: string, username: string|null, created_at: int, updated_at: int}
+     */
     private function serialize(Credential $c): array
     {
         // secret_data is NEVER included — not even a redacted placeholder.

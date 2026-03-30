@@ -35,7 +35,7 @@ class Webhook extends ActiveRecord
         return [\yii\behaviors\TimestampBehavior::class];
     }
 
-    /** Temporary holder for the checkbox array from the form. */
+    /** @var string[]|null Temporary holder for the checkbox array from the form. */
     public ?array $eventsArray = null;
 
     public function rules(): array
@@ -78,6 +78,8 @@ class Webhook extends ActiveRecord
 
     /**
      * Returns the events as an array.
+     *
+     * @return string[]
      */
     public function getEventList(): array
     {
@@ -92,6 +94,9 @@ class Webhook extends ActiveRecord
         return $this->enabled && in_array($event, $this->getEventList(), true);
     }
 
+    /**
+     * @return array<string, string>
+     */
     public static function allEvents(): array
     {
         return [

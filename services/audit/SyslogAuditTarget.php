@@ -28,6 +28,9 @@ class SyslogAuditTarget implements AuditTargetInterface
     public function send(array $entry): void
     {
         $payload = json_encode($entry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($payload === false) {
+            $payload = '{}';
+        }
 
         openlog($this->ident, LOG_PID, $this->facility);
         syslog(LOG_INFO, $payload);

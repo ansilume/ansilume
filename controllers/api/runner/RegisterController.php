@@ -41,6 +41,8 @@ class RegisterController extends Controller
     /**
      * POST /api/runner/v1/register
      * Body: { name: "runner-1", bootstrap_secret: "..." }
+     *
+     * @return array{ok: bool, error?: string, data?: array{runner_id: int, runner_name: string, group_id: int, group_name: string, token: string}}
      */
     public function actionRegister(): array
     {
@@ -50,7 +52,7 @@ class RegisterController extends Controller
             return ['ok' => false, 'error' => 'Runner self-registration is not enabled (RUNNER_BOOTSTRAP_SECRET not set).'];
         }
 
-        $body = \Yii::$app->request->bodyParams;
+        $body = (array)\Yii::$app->request->bodyParams;
         $name = trim((string)($body['name'] ?? ''));
         $secret = (string)($body['bootstrap_secret'] ?? '');
 

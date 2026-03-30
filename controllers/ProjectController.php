@@ -16,6 +16,9 @@ use yii\web\Response;
 
 class ProjectController extends BaseController
 {
+    /**
+     * @return array<int, array<string, mixed>>
+     */
     protected function accessRules(): array
     {
         return [
@@ -26,6 +29,9 @@ class ProjectController extends BaseController
         ];
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     protected function verbRules(): array
     {
         return ['delete' => ['POST'], 'sync' => ['POST'], 'lint' => ['POST']];
@@ -202,6 +208,9 @@ class ProjectController extends BaseController
         return $this->redirect(['view', 'id' => $id]);
     }
 
+    /**
+     * @return \app\models\Credential[]
+     */
     private function sshCredentials(): array
     {
         return Credential::find()

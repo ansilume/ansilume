@@ -49,35 +49,33 @@ class InventoryService extends Component
     /**
      * Parse an inventory and return structured host/group data.
      *
-     * @return array{groups: array, hosts: array, error: ?string}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
      */
     public function resolve(Inventory $inventory): array
     {
-        $empty = ['groups' => [], 'hosts' => [], 'error' => null];
-
         if (!$this->runner()->isAvailable()) {
-            return array_merge($empty, ['error' => 'ansible-inventory is not installed on this server.']);
+            return ['groups' => [], 'hosts' => [], 'error' => 'ansible-inventory is not installed on this server.'];
         }
 
         return match ($inventory->inventory_type) {
             Inventory::TYPE_STATIC => $this->resolveStatic($inventory),
             Inventory::TYPE_FILE => $this->resolveFile($inventory),
             Inventory::TYPE_DYNAMIC => $this->resolveFile($inventory),
-            default => array_merge($empty, ['error' => "Unknown inventory type: {$inventory->inventory_type}"]),
+            default => ['groups' => [], 'hosts' => [], 'error' => "Unknown inventory type: {$inventory->inventory_type}"],
         };
     }
 
     /**
      * Parse inventory and cache results in the database.
      *
-     * @return array{groups: array, hosts: array, error: ?string}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
      */
     public function resolveAndCache(Inventory $inventory): array
     {
         $result = $this->resolve($inventory);
 
         $inventory->parsed_hosts = $result['error'] === null
-            ? json_encode(['groups' => $result['groups'], 'hosts' => $result['hosts']], JSON_UNESCAPED_SLASHES)
+            ? (json_encode(['groups' => $result['groups'], 'hosts' => $result['hosts']], JSON_UNESCAPED_SLASHES) ?: null)
             : null;
         $inventory->parsed_error = $result['error'];
         $inventory->parsed_at = time();
@@ -89,7 +87,7 @@ class InventoryService extends Component
     /**
      * Return cached parse results, or null if not yet parsed.
      *
-     * @return array{groups: array, hosts: array, error: ?string}|null
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}|null
      */
     public function getCached(Inventory $inventory): ?array
     {
@@ -109,6 +107,9 @@ class InventoryService extends Component
         ];
     }
 
+    /**
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     */
     protected function resolveStatic(Inventory $inventory): array
     {
         $content = $inventory->content;
@@ -130,6 +131,9 @@ class InventoryService extends Component
         }
     }
 
+    /**
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     */
     protected function resolveFile(Inventory $inventory): array
     {
         $project = $inventory->project;
@@ -174,7 +178,7 @@ class InventoryService extends Component
     /**
      * Run the inventory through the runner and parse the JSON output.
      *
-     * @return array{groups: array, hosts: array, error: ?string}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
      */
     protected function runAndParse(string $inventoryPath, ?string $cwd = null): array
     {
@@ -184,13 +188,13 @@ class InventoryService extends Component
             return ['groups' => [], 'hosts' => [], 'error' => $result['error']];
         }
 
-        return $this->parseOutput($result['stdout']);
+        return $this->parseOutput($result['stdout'] ?? '');
     }
 
     /**
      * Parse the JSON output of `ansible-inventory --list`.
      *
-     * @return array{groups: array, hosts: array, error: ?string}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
      */
     protected function parseOutput(string $json): array
     {
@@ -210,6 +214,9 @@ class InventoryService extends Component
 
     /**
      * Extract group definitions from ansible-inventory JSON (everything except _meta).
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, array{hosts: array<int, string>, children: array<int, string>, vars: array<string, mixed>}>
      */
     protected function extractGroups(array $data): array
     {
@@ -230,6 +237,10 @@ class InventoryService extends Component
     /**
      * Build a flat host list from _meta.hostvars, filling in any hosts
      * referenced by groups but missing from _meta.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, array{hosts: array<int, string>, children: array<int, string>, vars: array<string, mixed>}> $groups
+     * @return array<string, mixed>
      */
     protected function extractHosts(array $data, array $groups): array
     {

@@ -24,6 +24,8 @@ abstract class BaseController extends Controller
     /**
      * Return Yii2 access-rule config arrays (without the superadmin rule).
      * Example: [['actions' => ['index'], 'allow' => true, 'roles' => ['@']]]
+     *
+     * @return array<int, array<string, mixed>>
      */
     protected function accessRules(): array
     {
@@ -33,6 +35,8 @@ abstract class BaseController extends Controller
     /**
      * Return VerbFilter actions map.
      * Example: ['delete' => ['POST'], 'update' => ['POST', 'PUT']]
+     *
+     * @return array<string, string[]>
      */
     protected function verbRules(): array
     {

@@ -61,7 +61,7 @@ class WorkerHeartbeat
     /**
      * Fetch all live worker records from Redis.
      *
-     * @return array[] List of worker info arrays.
+     * @return array<int, array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int}>
      */
     public static function all(): array
     {

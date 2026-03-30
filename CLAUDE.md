@@ -259,9 +259,16 @@ Avoid opaque JSON unless it is genuinely schema-flexible (extra vars, artifact m
 - `declare(strict_types=1)` enforcement
 - PHP syntax check (excluding `vendor/`, `docker/`)
 - phpcs PSR-12 compliance (strict, no excuses)
+- PHPMD (cyclomatic complexity, unused code)
+- PHPCPD (copy-paste detection)
+- PHPStan static analysis
 - XSS / output escaping audit
 - `@` error suppression detection
 - Controller consistency checks (RBAC, CSRF, base class)
+
+### PHPStan level strategy
+
+The long-term goal is to reach **PHPStan level max (9)** with zero errors. Levels are raised incrementally — every level increase must be accompanied by fixing all new findings before merging. The current enforced level is tracked in `phpstan.neon`. When adding new code, always write PHPDoc array shapes (`@param array<string, int>`, `@return array{key: type}`) and precise return types so that higher levels pass without rework.
 
 Always run the full `./tests.sh` — never partial or `--fast`.
 

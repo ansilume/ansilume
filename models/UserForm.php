@@ -80,6 +80,9 @@ class UserForm extends Model
         ];
     }
 
+    /**
+     * @return array<string, string>
+     */
     public static function roleOptions(): array
     {
         return [

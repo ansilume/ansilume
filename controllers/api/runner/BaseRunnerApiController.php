@@ -62,6 +62,9 @@ abstract class BaseRunnerApiController extends Controller
         $this->currentRunner = $runner;
     }
 
+    /**
+     * @return array{ok: true}|array{ok: true, data: mixed}
+     */
     protected function ok(mixed $data = null): array
     {
         if ($data === null) {
@@ -70,6 +73,9 @@ abstract class BaseRunnerApiController extends Controller
         return ['ok' => true, 'data' => $data];
     }
 
+    /**
+     * @return array{ok: false, error: string}
+     */
     protected function err(string $message, int $status = 400): array
     {
         \Yii::$app->response->statusCode = $status;
