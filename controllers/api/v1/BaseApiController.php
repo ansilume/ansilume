@@ -48,7 +48,7 @@ abstract class BaseApiController extends Controller
      */
     protected function authenticateRequest(): void
     {
-        $header = \Yii::$app->request->headers->get('Authorization', '');
+        $header = (string)\Yii::$app->request->headers->get('Authorization', '');
         if (!str_starts_with($header, 'Bearer ')) {
             throw new UnauthorizedHttpException('Bearer token required.');
         }

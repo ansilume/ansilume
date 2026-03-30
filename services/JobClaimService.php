@@ -85,10 +85,11 @@ class JobClaimService extends Component
      */
     public function buildExecutionPayload(Job $job): array
     {
+        /** @var array<string, mixed> $raw */
         $raw = json_decode($job->runner_payload ?? '{}', true) ?: [];
 
         $projectPath = $this->resolveProjectPath($raw);
-        $playbookPath = rtrim($projectPath, '/') . '/' . ltrim($raw['playbook'] ?? 'site.yml', '/');
+        $playbookPath = rtrim($projectPath, '/') . '/' . ltrim((string)($raw['playbook'] ?? 'site.yml'), '/');
 
         $inventory = $this->resolveInventory($raw);
 
@@ -99,15 +100,15 @@ class JobClaimService extends Component
             'inventory_type' => $inventory['type'],
             'inventory_content' => $inventory['content'], // for static
             'inventory_path' => $inventory['path'], // for file-based
-            'extra_vars' => $raw['extra_vars'] ?? null,
-            'limit' => $raw['limit'] ?? null,
+            'extra_vars' => isset($raw['extra_vars']) ? (string)$raw['extra_vars'] : null,
+            'limit' => isset($raw['limit']) ? (string)$raw['limit'] : null,
             'verbosity' => (int)($raw['verbosity'] ?? 0),
             'forks' => (int)($raw['forks'] ?? 5),
             'become' => !empty($raw['become']),
-            'become_method' => $raw['become_method'] ?? 'sudo',
-            'become_user' => $raw['become_user'] ?? 'root',
-            'tags' => $raw['tags'] ?? null,
-            'skip_tags' => $raw['skip_tags'] ?? null,
+            'become_method' => (string)($raw['become_method'] ?? 'sudo'),
+            'become_user' => (string)($raw['become_user'] ?? 'root'),
+            'tags' => isset($raw['tags']) ? (string)$raw['tags'] : null,
+            'skip_tags' => isset($raw['skip_tags']) ? (string)$raw['skip_tags'] : null,
             'timeout_minutes' => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
         ];
     }
@@ -117,6 +118,7 @@ class JobClaimService extends Component
      */
     protected function resolveProjectPath(array $payload): string
     {
+        /** @var Project|null $project */
         $project = Project::findOne($payload['project_id'] ?? 0);
         return $project?->local_path ?? '/tmp/ansilume/projects';
     }
@@ -127,6 +129,7 @@ class JobClaimService extends Component
      */
     protected function resolveInventory(array $payload): array
     {
+        /** @var Inventory|null $inventory */
         $inventory = Inventory::findOne($payload['inventory_id'] ?? 0);
         if ($inventory === null) {
             return ['type' => 'static', 'content' => "localhost\n", 'path' => null];

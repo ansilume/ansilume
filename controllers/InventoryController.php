@@ -55,8 +55,8 @@ class InventoryController extends BaseController
         if ($project_id !== null) {
             $model->project_id = $project_id;
         }
-        if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = (int)\Yii::$app->user->id;
+        if ($model->load((array)\Yii::$app->request->post())) {
+            $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_CREATED, 'inventory', $model->id, null, ['name' => $model->name]);
                 $this->session()->setFlash('success', "Inventory \"{$model->name}\" created.");
@@ -72,7 +72,7 @@ class InventoryController extends BaseController
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
-        if ($model->load(\Yii::$app->request->post()) && $model->save()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_UPDATED, 'inventory', $model->id, null, ['name' => $model->name]);
             $this->session()->setFlash('success', "Inventory \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
@@ -108,6 +108,7 @@ class InventoryController extends BaseController
 
     private function findModel(int $id): Inventory
     {
+        /** @var Inventory|null $model */
         $model = Inventory::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Inventory #{$id} not found.");

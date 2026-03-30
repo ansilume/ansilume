@@ -76,8 +76,8 @@ class JobTemplateController extends BaseController
         if ($playbook !== null) {
             $model->playbook = $playbook;
         }
-        if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = (int)\Yii::$app->user->id;
+        if ($model->load((array)\Yii::$app->request->post())) {
+            $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_CREATED, 'job_template', $model->id, null, ['name' => $model->name]);
                 /** @var \app\services\LintService $lintService */
@@ -93,7 +93,7 @@ class JobTemplateController extends BaseController
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
-        if ($model->load(\Yii::$app->request->post()) && $model->save()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_UPDATED, 'job_template', $model->id, null, ['name' => $model->name]);
             /** @var \app\services\LintService $lintService */
             $lintService = \Yii::$app->get('lintService');
@@ -118,16 +118,19 @@ class JobTemplateController extends BaseController
     {
         // Allow id to arrive as a POST body param (quick-launch from dashboard).
         if ($id === 0) {
-            $id = (int)\Yii::$app->request->post('id', 0);
+            /** @var int|string $postedId */
+            $postedId = \Yii::$app->request->post('id', 0);
+            $id = (int)$postedId;
         }
         $template = $this->findModel($id);
-        $overrides = \Yii::$app->request->post('overrides', []);
+        /** @var array<string, mixed> $overrides */
+        $overrides = (array)\Yii::$app->request->post('overrides', []);
 
         if (\Yii::$app->request->isPost) {
             try {
                 /** @var JobLaunchService $svc */
                 $svc = \Yii::$app->get('jobLaunchService');
-                $job = $svc->launch($template, (int)\Yii::$app->user->id, $overrides);
+                $job = $svc->launch($template, (int)(\Yii::$app->user->id ?? 0), $overrides);
                 $this->session()->setFlash('success', "Job #{$job->id} queued.");
                 return $this->redirect(['/job/view', 'id' => $job->id]);
             } catch (\RuntimeException $e) {
@@ -185,6 +188,7 @@ class JobTemplateController extends BaseController
 
     private function findModel(int $id): JobTemplate
     {
+        /** @var JobTemplate|null $model */
         $model = JobTemplate::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Job template #{$id} not found.");

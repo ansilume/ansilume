@@ -25,7 +25,8 @@ class InventoriesController extends BaseApiController
             'query' => Inventory::find()->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
-        $page = (int)\Yii::$app->request->get('page', 1);
+        /** @var int $page */
+        $page = \Yii::$app->request->get('page', 1);
 
         return $this->paginated(
             array_map(fn ($inv) => $this->serialize($inv), $dp->getModels()),
@@ -40,6 +41,7 @@ class InventoriesController extends BaseApiController
      */
     public function actionView(int $id): array
     {
+        /** @var Inventory|null $inventory */
         $inventory = Inventory::findOne($id);
         if ($inventory === null) {
             throw new NotFoundHttpException("Inventory #{$id} not found.");

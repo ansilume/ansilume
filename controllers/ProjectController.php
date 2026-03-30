@@ -221,6 +221,7 @@ class ProjectController extends BaseController
 
     private function findModel(int $id): Project
     {
+        /** @var Project|null $model */
         $model = Project::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Project #{$id} not found.");

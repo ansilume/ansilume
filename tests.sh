@@ -413,9 +413,9 @@ else
 fi
 
 # =============================================================================
-# 9. PHPStan — static analysis (level 5)
+# 9. PHPStan — static analysis (level max / 9)
 # =============================================================================
-section "PHPStan (level 7)"
+section "PHPStan (level max)"
 
 if [[ $FAST -eq 1 ]]; then
     skip "PHPStan (--fast mode)"
@@ -426,7 +426,7 @@ elif dc php vendor/bin/phpstan --version >/dev/null 2>&1; then
         --configuration=phpstan.neon \
         2>&1 || true)
     if echo "$PHPSTAN_OUT" | grep -q "\[OK\]"; then
-        ok "PHPStan level 7 passed"
+        ok "PHPStan level max passed"
     else
         fail "PHPStan found errors"
         echo "$PHPSTAN_OUT" | tail -30 | sed 's/^/     /'

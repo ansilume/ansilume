@@ -27,7 +27,8 @@ class SchedulesController extends BaseApiController
             'query' => Schedule::find()->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
-        $page = (int)\Yii::$app->request->get('page', 1);
+        /** @var int $page */
+        $page = \Yii::$app->request->get('page', 1);
 
         return $this->paginated(
             array_map(fn ($s) => $this->serialize($s), $dp->getModels()),
@@ -81,6 +82,7 @@ class SchedulesController extends BaseApiController
 
     private function findModel(int $id): Schedule
     {
+        /** @var Schedule|null $schedule */
         $schedule = Schedule::findOne($id);
         if ($schedule === null) {
             throw new NotFoundHttpException("Schedule #{$id} not found.");

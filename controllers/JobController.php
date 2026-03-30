@@ -147,6 +147,7 @@ class JobController extends BaseController
     {
         $this->findModel($id);
 
+        /** @var JobArtifact|null $artifact */
         $artifact = JobArtifact::findOne(['id' => $artifact_id, 'job_id' => $id]);
         if ($artifact === null) {
             throw new NotFoundHttpException("Artifact not found.");
@@ -165,6 +166,7 @@ class JobController extends BaseController
 
     private function findModel(int $id): Job
     {
+        /** @var Job|null $model */
         $model = Job::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Job #{$id} not found.");

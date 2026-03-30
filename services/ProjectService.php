@@ -115,7 +115,7 @@ class ProjectService extends Component
      */
     public function localPath(Project $project): string
     {
-        $base = \Yii::getAlias(rtrim($this->workspacePath, '/'));
+        $base = (string)\Yii::getAlias(rtrim($this->workspacePath, '/'));
         return $base . '/' . $project->id;
     }
 

@@ -99,6 +99,7 @@ class InventoryService extends Component
             return ['groups' => [], 'hosts' => [], 'error' => $inventory->parsed_error];
         }
 
+        /** @var array<string, mixed> $data */
         $data = json_decode($inventory->parsed_hosts ?? '{}', true) ?: [];
         return [
             'groups' => $data['groups'] ?? [],
@@ -245,7 +246,11 @@ class InventoryService extends Component
     protected function extractHosts(array $data, array $groups): array
     {
         $hosts = [];
-        foreach (($data['_meta']['hostvars'] ?? []) as $hostname => $vars) {
+        /** @var array<string, mixed> $meta */
+        $meta = $data['_meta'] ?? [];
+        /** @var array<string, mixed> $hostvars */
+        $hostvars = $meta['hostvars'] ?? [];
+        foreach ($hostvars as $hostname => $vars) {
             $hosts[$hostname] = $vars;
         }
 

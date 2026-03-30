@@ -66,8 +66,9 @@ class RunnerController extends Controller
             return ExitCode::UNSPECIFIED_ERROR;
         }
 
-        $runnerName = $info['data']['runner_name'] ?? 'unknown';
-        $groupName = $info['data']['group_name'] ?? 'unknown';
+        $data = is_array($info['data'] ?? null) ? $info['data'] : [];
+        $runnerName = (string)($data['runner_name'] ?? 'unknown');
+        $groupName = (string)($data['group_name'] ?? 'unknown');
         $this->stdout("Runner '{$runnerName}' started. Group: '{$groupName}'. Polling {$apiUrl}\n");
 
         $this->registerSignalHandlers();
@@ -84,13 +85,19 @@ class RunnerController extends Controller
      */
     protected function verifyTokenWithRetry(): ?array
     {
-        $info = $this->http->post('/api/runner/v1/heartbeat', []);
+        $http = $this->http;
+        $resolver = $this->tokenResolver;
+        if ($http === null || $resolver === null) {
+            return null;
+        }
 
-        if ($this->http->getLastHttpStatus() === 401 && $this->tokenResolver->hasCacheFile()) {
-            $token = $this->tokenResolver->clearCacheAndResolve();
+        $info = $http->post('/api/runner/v1/heartbeat', []);
+
+        if ($http->getLastHttpStatus() === 401 && $resolver->hasCacheFile()) {
+            $token = $resolver->clearCacheAndResolve();
             if ($token !== '') {
-                $this->http->setToken($token);
-                $info = $this->http->post('/api/runner/v1/heartbeat', []);
+                $http->setToken($token);
+                $info = $http->post('/api/runner/v1/heartbeat', []);
             }
         }
 
@@ -119,7 +126,7 @@ class RunnerController extends Controller
             }
 
             if (time() - $lastHeartbeat >= self::HEARTBEAT_INTERVAL) {
-                $this->http->post('/api/runner/v1/heartbeat', []);
+                $this->http()->post('/api/runner/v1/heartbeat', []);
                 $lastHeartbeat = time();
             }
 
@@ -144,11 +151,11 @@ class RunnerController extends Controller
      */
     private function claimJob(): ?array
     {
-        $result = $this->http->post('/api/runner/v1/jobs/claim', []);
+        $result = $this->http()->post('/api/runner/v1/jobs/claim', []);
         if ($result === null || !isset($result['data'])) {
             return null;
         }
-        return $result['data'];
+        return is_array($result['data']) ? $result['data'] : null;
     }
 
     /**
@@ -162,21 +169,21 @@ class RunnerController extends Controller
         $env = $this->buildProcessEnv($callbackFile);
 
         $inventoryTmpFile = null;
-        if ($payload['inventory_type'] === 'static') {
-            $inventoryTmpFile = $this->writeInventoryTempFile($payload['inventory_content'] ?? "localhost\n");
+        if (($payload['inventory_type'] ?? '') === 'static') {
+            $inventoryTmpFile = $this->writeInventoryTempFile((string)($payload['inventory_content'] ?? "localhost\n"));
             $cmd = array_map(
                 fn ($part) => $part === '__INVENTORY_TMP__' ? $inventoryTmpFile : $part,
                 $cmd
             );
         }
 
-        $executor = new RunnerProcessExecutor($this->http, $this);
+        $executor = new RunnerProcessExecutor($this->http(), $this);
         $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
         [$exitCode] = $executor->run($jobId, $cmd, $payload, $env, $timeoutMinutes);
 
         $this->collectAndSendTasks($jobId, $callbackFile);
 
-        $this->http->post("/api/runner/v1/jobs/{$jobId}/complete", [
+        $this->http()->post("/api/runner/v1/jobs/{$jobId}/complete", [
             'exit_code' => $exitCode,
             'has_changes' => false,
         ]);
@@ -222,8 +229,16 @@ class RunnerController extends Controller
         \app\helpers\FileHelper::safeUnlink($callbackFile);
 
         if (!empty($tasks)) {
-            $this->http->post("/api/runner/v1/jobs/{$jobId}/tasks", ['tasks' => $tasks]);
+            $this->http()->post("/api/runner/v1/jobs/{$jobId}/tasks", ['tasks' => $tasks]);
         }
+    }
+
+    private function http(): RunnerHttpClient
+    {
+        if ($this->http === null) {
+            throw new \RuntimeException('HTTP client not initialized.');
+        }
+        return $this->http;
     }
 
     private function writeInventoryTempFile(string $content): string

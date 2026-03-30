@@ -56,8 +56,8 @@ class ScheduleController extends BaseController
         $model->timezone = 'UTC';
         $model->enabled = true;
 
-        if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = (int)\Yii::$app->user->id;
+        if ($model->load((array)\Yii::$app->request->post())) {
+            $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             $model->computeNextRunAt();
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
@@ -82,7 +82,7 @@ class ScheduleController extends BaseController
     {
         $model = $this->findModel($id);
 
-        if ($model->load(\Yii::$app->request->post())) {
+        if ($model->load((array)\Yii::$app->request->post())) {
             $model->computeNextRunAt();
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
@@ -135,6 +135,7 @@ class ScheduleController extends BaseController
 
     private function findModel(int $id): Schedule
     {
+        /** @var Schedule|null $model */
         $model = Schedule::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Schedule #{$id} not found.");

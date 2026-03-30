@@ -79,11 +79,12 @@ class CredentialController extends BaseController
     public function actionCreate(): Response|string
     {
         $model = new Credential();
-        if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = (int)\Yii::$app->user->id;
+        if ($model->load((array)\Yii::$app->request->post())) {
+            $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->validate()) {
                 /** @var CredentialService $cs */
                 $cs = \Yii::$app->get('credentialService');
+                /** @var array<string, string> $secrets */
                 $secrets = $this->extractSecrets($model->credential_type, $cs);
                 if ($cs->storeSecrets($model, $secrets)) {
                     \Yii::$app->get('auditService')->log(
@@ -104,10 +105,11 @@ class CredentialController extends BaseController
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
-        if ($model->load(\Yii::$app->request->post())) {
+        if ($model->load((array)\Yii::$app->request->post())) {
             if ($model->validate()) {
                 /** @var CredentialService $cs */
                 $cs = \Yii::$app->get('credentialService');
+                /** @var array<string, string> $secrets */
                 $secrets = $this->extractSecrets($model->credential_type, $cs);
                 if (!empty(array_filter($secrets))) {
                     $cs->storeSecrets($model, $secrets);
@@ -167,7 +169,7 @@ class CredentialController extends BaseController
      */
     private function extractSecrets(string $type, CredentialService $cs): array
     {
-        $post = \Yii::$app->request->post('secrets', []);
+        $post = (array)\Yii::$app->request->post('secrets', []);
         if ($type !== Credential::TYPE_SSH_KEY) {
             return match ($type) {
                 Credential::TYPE_USERNAME_PASSWORD => ['password' => $post['password'] ?? ''],
@@ -178,7 +180,9 @@ class CredentialController extends BaseController
         }
 
         // Normalise line endings — browsers submit \r\n from textareas
-        $privateKey = str_replace("\r\n", "\n", str_replace("\r", "\n", (string)($post['private_key'] ?? '')));
+        /** @var string $rawKey */
+        $rawKey = $post['private_key'] ?? '';
+        $privateKey = str_replace("\r\n", "\n", str_replace("\r", "\n", $rawKey));
         $secrets = ['private_key' => $privateKey];
 
         if ($privateKey !== '') {
@@ -194,6 +198,7 @@ class CredentialController extends BaseController
 
     private function findModel(int $id): Credential
     {
+        /** @var Credential|null $model */
         $model = Credential::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Credential #{$id} not found.");

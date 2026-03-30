@@ -25,7 +25,8 @@ class ProjectsController extends BaseApiController
             'query' => Project::find()->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
-        $page = (int)\Yii::$app->request->get('page', 1);
+        /** @var int $page */
+        $page = \Yii::$app->request->get('page', 1);
 
         return $this->paginated(
             array_map(fn ($p) => $this->serialize($p), $dp->getModels()),
@@ -40,6 +41,7 @@ class ProjectsController extends BaseApiController
      */
     public function actionView(int $id): array
     {
+        /** @var Project|null $project */
         $project = Project::findOne($id);
         if ($project === null) {
             throw new NotFoundHttpException("Project #{$id} not found.");

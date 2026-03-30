@@ -24,6 +24,7 @@ class AuditLogController extends BaseController
 
     public function actionIndex(): string
     {
+        /** @var \yii\web\Request $request */
         $request = \Yii::$app->request;
 
         $query = AuditLog::find()
@@ -34,13 +35,13 @@ class AuditLogController extends BaseController
         $filterUser = $request->get('user_id');
         $filterObject = $request->get('object_type');
 
-        if ($filterAction) {
+        if (is_string($filterAction) && $filterAction !== '') {
             $query->andWhere(['like', 'action', $filterAction]);
         }
-        if ($filterUser && ctype_digit((string)$filterUser)) {
+        if (is_string($filterUser) && ctype_digit($filterUser)) {
             $query->andWhere(['user_id' => (int)$filterUser]);
         }
-        if ($filterObject) {
+        if (is_string($filterObject) && $filterObject !== '') {
             $query->andWhere(['object_type' => $filterObject]);
         }
 
@@ -62,6 +63,7 @@ class AuditLogController extends BaseController
 
     public function actionView(int $id): string
     {
+        /** @var AuditLog|null $entry */
         $entry = AuditLog::findOne($id);
         if ($entry === null) {
             throw new NotFoundHttpException("Audit log entry #{$id} not found.");

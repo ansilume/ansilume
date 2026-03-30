@@ -53,7 +53,9 @@ class WorkerController extends Controller
         });
 
         // Delegate to Yii2 queue listener (loop=true, timeout=3 → blocking brpop with 3s timeout)
-        \Yii::$app->queue->run(true, 3);
+        /** @var \yii\queue\redis\Queue $queue */
+        $queue = \Yii::$app->queue;
+        $queue->run(true, 3);
 
         $heartbeat->deregister();
         return ExitCode::OK;

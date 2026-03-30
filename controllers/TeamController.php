@@ -77,8 +77,8 @@ class TeamController extends BaseController
     public function actionCreate(): Response|string
     {
         $model = new Team();
-        if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = (int)\Yii::$app->user->id;
+        if ($model->load((array)\Yii::$app->request->post())) {
+            $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_CREATED, 'team', $model->id, null, ['name' => $model->name]);
                 $this->session()->setFlash('success', "Team \"{$model->name}\" created.");
@@ -91,7 +91,7 @@ class TeamController extends BaseController
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
-        if ($model->load(\Yii::$app->request->post()) && $model->save()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEAM_UPDATED, 'team', $model->id, null, ['name' => $model->name]);
             $this->session()->setFlash('success', "Team \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
@@ -112,7 +112,9 @@ class TeamController extends BaseController
     public function actionAddMember(int $id): Response
     {
         $team = $this->findModel($id);
-        $userId = (int)\Yii::$app->request->post('user_id');
+        /** @var int|string $rawUserId */
+        $rawUserId = \Yii::$app->request->post('user_id');
+        $userId = (int)$rawUserId;
         if (!$userId) {
             throw new BadRequestHttpException('user_id required.');
         }
@@ -140,7 +142,10 @@ class TeamController extends BaseController
     public function actionAddProject(int $id): Response
     {
         $team = $this->findModel($id);
-        $projectId = (int)\Yii::$app->request->post('project_id');
+        /** @var int|string $rawProjectId */
+        $rawProjectId = \Yii::$app->request->post('project_id');
+        $projectId = (int)$rawProjectId;
+        /** @var string $role */
         $role = \Yii::$app->request->post('role', TeamProject::ROLE_VIEWER);
         if (!$projectId) {
             throw new BadRequestHttpException('project_id required.');
@@ -172,6 +177,7 @@ class TeamController extends BaseController
 
     private function findModel(int $id): Team
     {
+        /** @var Team|null $model */
         $model = Team::find()
             ->with(['teamMembers.user', 'teamProjects.project'])
             ->where(['id' => $id])

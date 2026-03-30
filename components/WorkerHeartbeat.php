@@ -73,8 +73,9 @@ class WorkerHeartbeat
             $workers = [];
             foreach ($keys as $key) {
                 $raw = $redis->get($key);
-                $data = $raw !== false ? json_decode($raw, true) : null;
-                if ($data && ($data['seen_at'] ?? 0) >= $cutoff) {
+                $data = ($raw !== false && is_string($raw)) ? json_decode($raw, true) : null;
+                if (is_array($data) && (int)($data['seen_at'] ?? 0) >= $cutoff) {
+                    /** @var array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int} $data */
                     $workers[] = $data;
                 }
             }

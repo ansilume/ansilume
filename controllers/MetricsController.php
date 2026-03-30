@@ -41,7 +41,9 @@ class MetricsController extends Controller
 
     protected function getRequestedFormat(): string
     {
-        return \Yii::$app->request->get('format', 'prometheus');
+        /** @var string $format */
+        $format = \Yii::$app->request->get('format', 'prometheus');
+        return $format;
     }
 
     // ── Collectors ──────────────────────────────────────────────────────────
@@ -137,6 +139,7 @@ class MetricsController extends Controller
             $total = (int)Job::find()->count();
 
             // Average duration of jobs finished in the last hour
+            /** @var string|null $avgDuration */
             $avgDuration = Job::find()
                 ->where(['status' => [Job::STATUS_SUCCEEDED, Job::STATUS_FAILED]])
                 ->andWhere(['>', 'finished_at', time() - 3600])
@@ -202,13 +205,25 @@ class MetricsController extends Controller
     {
         try {
             // Aggregate all-time host summary totals
+            /** @var string|null $ok */
+            $ok = JobHostSummary::find()->sum('ok');
+            /** @var string|null $changed */
+            $changed = JobHostSummary::find()->sum('changed');
+            /** @var string|null $failed */
+            $failed = JobHostSummary::find()->sum('failed');
+            /** @var string|null $skipped */
+            $skipped = JobHostSummary::find()->sum('skipped');
+            /** @var string|null $unreachable */
+            $unreachable = JobHostSummary::find()->sum('unreachable');
+            /** @var string|null $rescued */
+            $rescued = JobHostSummary::find()->sum('rescued');
             $totals = [
-                'ok' => (int)JobHostSummary::find()->sum('ok'),
-                'changed' => (int)JobHostSummary::find()->sum('changed'),
-                'failed' => (int)JobHostSummary::find()->sum('failed'),
-                'skipped' => (int)JobHostSummary::find()->sum('skipped'),
-                'unreachable' => (int)JobHostSummary::find()->sum('unreachable'),
-                'rescued' => (int)JobHostSummary::find()->sum('rescued'),
+                'ok' => (int)$ok,
+                'changed' => (int)$changed,
+                'failed' => (int)$failed,
+                'skipped' => (int)$skipped,
+                'unreachable' => (int)$unreachable,
+                'rescued' => (int)$rescued,
             ];
 
             // Unique hosts seen

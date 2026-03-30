@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services;
 
+use app\services\TotpRateLimiter;
 use app\services\TotpService;
 use app\tests\unit\services\TestableTotpService;
 use OTPHP\TOTP;
@@ -20,6 +21,7 @@ class TotpServiceTest extends TestCase
     protected function setUp(): void
     {
         $this->service = new TestableTotpService();
+        $this->service->rateLimiter = new TotpRateLimiter();
     }
 
     // ── Secret generation ────────────────────────────────────────────────────
@@ -209,41 +211,41 @@ class TotpServiceTest extends TestCase
 
     public function testIsLockedOutReturnsFalseInitially(): void
     {
-        $this->assertFalse($this->service->isLockedOut(99999));
+        $this->assertFalse($this->service->rateLimiter->isLockedOut(99999));
     }
 
     public function testRecordFailedAttemptDecrementsRemaining(): void
     {
-        $userId    = 88888;
-        $remaining = $this->service->recordFailedAttempt($userId);
+        $userId = 88888;
+        $remaining = $this->service->rateLimiter->recordFailedAttempt($userId);
         $this->assertSame(4, $remaining);
 
         // Clean up
-        $this->service->clearRateLimit($userId);
+        $this->service->rateLimiter->clearRateLimit($userId);
     }
 
     public function testLockoutAfterMaxAttempts(): void
     {
         $userId = 77777;
         for ($i = 0; $i < 5; $i++) {
-            $this->service->recordFailedAttempt($userId);
+            $this->service->rateLimiter->recordFailedAttempt($userId);
         }
-        $this->assertTrue($this->service->isLockedOut($userId));
+        $this->assertTrue($this->service->rateLimiter->isLockedOut($userId));
 
         // Clean up
-        $this->service->clearRateLimit($userId);
+        $this->service->rateLimiter->clearRateLimit($userId);
     }
 
     public function testClearRateLimitResetsLockout(): void
     {
         $userId = 66666;
         for ($i = 0; $i < 5; $i++) {
-            $this->service->recordFailedAttempt($userId);
+            $this->service->rateLimiter->recordFailedAttempt($userId);
         }
-        $this->assertTrue($this->service->isLockedOut($userId));
+        $this->assertTrue($this->service->rateLimiter->isLockedOut($userId));
 
-        $this->service->clearRateLimit($userId);
-        $this->assertFalse($this->service->isLockedOut($userId));
+        $this->service->rateLimiter->clearRateLimit($userId);
+        $this->assertFalse($this->service->rateLimiter->isLockedOut($userId));
     }
 
     // ── Custom recovery code count ───────────────────────────────────────────

@@ -43,7 +43,9 @@ class CredentialService extends Component
         }
 
         $json = $this->decrypt($credential->secret_data);
-        return json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        /** @var array<string, string> $decoded */
+        $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        return $decoded;
     }
 
     /**

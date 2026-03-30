@@ -155,10 +155,11 @@ class SiteController extends BaseController
             return $this->goHome();
         }
         $model = new LoginForm();
-        if ($model->load(\Yii::$app->request->post()) && $model->validateCredentials()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->validateCredentials()) {
             // Credentials valid — check if TOTP is required
             if ($model->requiresTotp()) {
                 // Store pending login in session, redirect to TOTP step
+                /** @var \app\models\User $user Validated above */
                 $user = $model->getUserModel();
                 /** @var \yii\web\Session $session */
                 $session = \Yii::$app->session;
@@ -201,6 +202,7 @@ class SiteController extends BaseController
         /** @var \yii\web\Session $session */
         $session = \Yii::$app->session;
 
+        /** @var int|null $userId */
         $userId = $session->get('totp_pending_user_id');
         if (empty($userId)) {
             return $this->redirect(['login']);
@@ -214,7 +216,7 @@ class SiteController extends BaseController
         }
 
         $model = new TotpVerifyForm($user);
-        if ($model->load(\Yii::$app->request->post()) && $model->validate()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->validate()) {
             $remember = (bool)$session->get('totp_pending_remember', false);
             $duration = $remember ? 3600 * 24 * 30 : 0;
 
@@ -259,7 +261,7 @@ class SiteController extends BaseController
         }
 
         $model = new PasswordResetRequestForm();
-        if ($model->load(\Yii::$app->request->post()) && $model->validate()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->validate()) {
             $model->sendResetEmail();
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_PASSWORD_RESET_REQUESTED,
@@ -292,7 +294,7 @@ class SiteController extends BaseController
             return $this->redirect(['forgot-password']);
         }
 
-        if ($model->load(\Yii::$app->request->post()) && $model->validate() && $model->resetPassword()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->validate() && $model->resetPassword()) {
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_PASSWORD_RESET_COMPLETED,
                 'user',

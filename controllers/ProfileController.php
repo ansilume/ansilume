@@ -47,7 +47,7 @@ class ProfileController extends BaseController
 
     public function actionTokens(): string
     {
-        $userId = (int)\Yii::$app->user->id;
+        $userId = (int)(\Yii::$app->user->id ?? 0);
         $tokens = ApiToken::find()
             ->where(['user_id' => $userId])
             ->orderBy(['id' => SORT_DESC])
@@ -61,13 +61,15 @@ class ProfileController extends BaseController
 
     public function actionCreateToken(): Response
     {
-        $name = trim((string)\Yii::$app->request->post('name', ''));
+        /** @var string $rawName */
+        $rawName = \Yii::$app->request->post('name', '');
+        $name = trim($rawName);
         if ($name === '') {
             $this->session()->setFlash('danger', 'Token name is required.');
             return $this->redirect(['tokens']);
         }
 
-        ['raw' => $raw, 'token' => $tokenModel] = ApiToken::generate((int)\Yii::$app->user->id, $name);
+        ['raw' => $raw, 'token' => $tokenModel] = ApiToken::generate((int)(\Yii::$app->user->id ?? 0), $name);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_API_TOKEN_CREATED, 'api_token', $tokenModel->id, null, ['name' => $name]);
 
         $this->session()->setFlash('new_token', $raw);
@@ -77,7 +79,8 @@ class ProfileController extends BaseController
 
     public function actionDeleteToken(int $id): Response
     {
-        $token = ApiToken::findOne(['id' => $id, 'user_id' => (int)\Yii::$app->user->id]);
+        /** @var ApiToken|null $token */
+        $token = ApiToken::findOne(['id' => $id, 'user_id' => (int)(\Yii::$app->user->id ?? 0)]);
         if ($token === null) {
             throw new NotFoundHttpException('Token not found.');
         }
@@ -126,6 +129,7 @@ class ProfileController extends BaseController
         // Store secret in session so it persists across the setup flow
         /** @var \yii\web\Session $session */
         $session = \Yii::$app->session;
+        /** @var string|null $secret */
         $secret = $session->get('totp_setup_secret');
         if (empty($secret)) {
             $secret = $totp->generateSecret();
@@ -154,6 +158,7 @@ class ProfileController extends BaseController
 
         /** @var \yii\web\Session $session */
         $session = \Yii::$app->session;
+        /** @var string|null $secret */
         $secret = $session->get('totp_setup_secret');
         if (empty($secret)) {
             $this->session()->setFlash('danger', 'TOTP setup session expired. Please start again.');
@@ -161,7 +166,7 @@ class ProfileController extends BaseController
         }
 
         $model = new TotpSetupForm($user, $secret);
-        if ($model->load(\Yii::$app->request->post()) && $model->validate()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->validate()) {
             $recoveryCodes = $model->enable();
 
             // Clear the setup session
@@ -206,7 +211,7 @@ class ProfileController extends BaseController
         }
 
         $model = new TotpDisableForm($user);
-        if ($model->load(\Yii::$app->request->post()) && $model->validate()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->validate()) {
             $model->disable();
 
             \Yii::$app->get('auditService')->log(

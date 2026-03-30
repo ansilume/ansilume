@@ -84,7 +84,7 @@ class JobLaunchService extends Component
         }
 
         if (!empty($overrides['limit'])) {
-            $job->limit = $overrides['limit'];
+            $job->limit = (string)$overrides['limit'];
         }
 
         if (isset($overrides['verbosity'])) {
@@ -128,7 +128,7 @@ class JobLaunchService extends Component
         if (!empty($overrides['extra_vars'])) {
             $explicit = is_array($overrides['extra_vars'])
                 ? $overrides['extra_vars']
-                : json_decode($overrides['extra_vars'], true);
+                : json_decode((string)$overrides['extra_vars'], true);
             if (is_array($explicit)) {
                 $base = array_merge($base, $explicit);
             }

@@ -102,13 +102,14 @@ class RunnerTokenResolver
             return '';
         }
 
-        if (empty($response['ok']) || empty($response['data']['token'])) {
-            $error = $response['error'] ?? 'unknown error';
+        $responseData = is_array($response['data'] ?? null) ? $response['data'] : [];
+        if (empty($response['ok']) || empty($responseData['token'])) {
+            $error = (string)($response['error'] ?? 'unknown error');
             $this->controller->stderr("ERROR: Registration failed: {$error}\n");
             return '';
         }
 
-        $token = $response['data']['token'];
+        $token = (string)$responseData['token'];
         $this->cacheToken($name, $token);
 
         $this->controller->stdout("Registered successfully. Token cached.\n");

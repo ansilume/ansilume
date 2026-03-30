@@ -43,7 +43,7 @@ abstract class BaseRunnerApiController extends Controller
 
     private function authenticateRunner(): void
     {
-        $header = \Yii::$app->request->headers->get('Authorization', '');
+        $header = (string)\Yii::$app->request->headers->get('Authorization', '');
         if (!str_starts_with($header, 'Bearer ')) {
             throw new UnauthorizedHttpException('Runner token required.');
         }
@@ -60,6 +60,17 @@ abstract class BaseRunnerApiController extends Controller
         $runner->last_seen_at = time();
 
         $this->currentRunner = $runner;
+    }
+
+    /**
+     * Get the authenticated runner. Always non-null after beforeAction().
+     */
+    protected function runner(): Runner
+    {
+        if ($this->currentRunner === null) {
+            throw new UnauthorizedHttpException('Runner not authenticated.');
+        }
+        return $this->currentRunner;
     }
 
     /**

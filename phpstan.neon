@@ -1,5 +1,5 @@
 parameters:
-    level: 7
+    level: 9
     bootstrapFiles:
         - phpstan-bootstrap.php
     paths:
@@ -49,3 +49,14 @@ parameters:
 
         # ActiveQuery return types are generic in Yii2 but rarely specified
         - '#return type with generic class yii\\db\\ActiveQuery does not specify its types: T#'
+
+        # ── Level 9: mixed → scalar cast safety ───────────────────────────────
+        # PHPStan level 9 forbids (int)$mixed and (string)$mixed even though
+        # these are safe, defensive casts. In Yii2 code, array<string, mixed>
+        # values are always mixed; extracting them requires casting.
+        # Suppress the cast error globally — the real bugs (offset access on
+        # mixed, method calls on mixed) are NOT suppressed.
+        - '#Cannot cast mixed to (int|float|string)#'
+
+        # InventoryService::getCached() returns shape with mixed offsets from json_decode
+        - '#should return array\{groups: array<string, mixed>, hosts: array<string, mixed>, error: string\|null\}\|null but returns#'

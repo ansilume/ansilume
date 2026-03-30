@@ -60,8 +60,8 @@ class RunnerProcessExecutor
             2 => ['pipe', 'w'],
         ];
 
-        $projectCwd = $payload['project_path'] ?? null;
-        $cwd = ($projectCwd && is_dir($projectCwd)) ? $projectCwd : null;
+        $projectCwd = isset($payload['project_path']) ? (string)$payload['project_path'] : '';
+        $cwd = ($projectCwd !== '' && is_dir($projectCwd)) ? $projectCwd : null;
         $process = proc_open($cmd, $descriptorspec, $pipes, $cwd, $env);
 
         if (!is_resource($process)) {

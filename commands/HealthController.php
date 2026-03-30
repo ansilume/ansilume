@@ -41,7 +41,7 @@ class HealthController extends Controller
 
         // Migrations
         try {
-            $path = \Yii::getAlias('@app/migrations');
+            $path = (string)\Yii::getAlias('@app/migrations');
             $files = glob($path . '/m*.php');
             $expected = $files !== false ? count($files) : 0;
             $applied = (int)\Yii::$app->db->createCommand(

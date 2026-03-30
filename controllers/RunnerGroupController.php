@@ -84,9 +84,9 @@ class RunnerGroupController extends BaseController
     public function actionCreate(): string|Response
     {
         $model = new RunnerGroup();
-        $model->created_by = (int)\Yii::$app->user->id;
+        $model->created_by = (int)(\Yii::$app->user->id ?? 0);
 
-        if ($model->load(\Yii::$app->request->post()) && $model->save()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_GROUP_CREATED, 'runner_group', $model->id, null, ['name' => $model->name]);
             $this->session()->setFlash('success', "Runner group \"{$model->name}\" created.");
             return $this->redirect(['view', 'id' => $model->id]);
@@ -99,7 +99,7 @@ class RunnerGroupController extends BaseController
     {
         $model = $this->findModel($id);
 
-        if ($model->load(\Yii::$app->request->post()) && $model->save()) {
+        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_GROUP_UPDATED, 'runner_group', $model->id, null, ['name' => $model->name]);
             $this->session()->setFlash('success', 'Runner group updated.');
             return $this->redirect(['view', 'id' => $model->id]);
@@ -120,6 +120,7 @@ class RunnerGroupController extends BaseController
 
     private function findModel(int $id): RunnerGroup
     {
+        /** @var RunnerGroup|null $model */
         $model = RunnerGroup::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Runner group #{$id} not found.");

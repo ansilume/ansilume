@@ -57,7 +57,8 @@ class UserController extends BaseController
     {
         $form = new UserForm();
 
-        if ($form->load(\Yii::$app->request->post()) && $form->save()) {
+        if ($form->load((array)\Yii::$app->request->post()) && $form->save()) {
+            /** @var \app\models\User $newUser Just saved successfully */
             $newUser = $form->getUser();
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_CREATED, 'user', $newUser->id, null, ['username' => $form->username]);
             $this->session()->setFlash('success', "User \"{$form->username}\" created.");
@@ -75,7 +76,7 @@ class UserController extends BaseController
         // Prevent demoting the only superadmin
         $this->guardLastSuperadmin($user);
 
-        if ($form->load(\Yii::$app->request->post()) && $form->save()) {
+        if ($form->load((array)\Yii::$app->request->post()) && $form->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_UPDATED, 'user', $user->id, null, ['username' => $form->username]);
             $this->session()->setFlash('success', "User \"{$form->username}\" updated.");
             return $this->redirect(['view', 'id' => $user->id]);
@@ -116,7 +117,7 @@ class UserController extends BaseController
 
     private function guardSelf(User $user): void
     {
-        if ($user->id === (int)\Yii::$app->user->id) {
+        if ($user->id === (int)(\Yii::$app->user->id ?? 0)) {
             throw new ForbiddenHttpException('You cannot perform this action on your own account.');
         }
     }

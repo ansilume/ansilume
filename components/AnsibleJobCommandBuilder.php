@@ -73,7 +73,7 @@ class AnsibleJobCommandBuilder
         foreach ($optionMap as $key => $flag) {
             if (!empty($payload[$key])) {
                 $cmd[] = $flag;
-                $cmd[] = $key === 'forks' ? (string)(int)$payload[$key] : $payload[$key];
+                $cmd[] = $key === 'forks' ? (string)(int)($payload[$key] ?? 0) : (string)($payload[$key] ?? '');
             }
         }
     }
@@ -135,9 +135,9 @@ class AnsibleJobCommandBuilder
 
         $cmd[] = '--become';
         $cmd[] = '--become-method';
-        $cmd[] = $payload['become_method'] ?? 'sudo';
+        $cmd[] = (string)($payload['become_method'] ?? 'sudo');
         $cmd[] = '--become-user';
-        $cmd[] = $payload['become_user'] ?? 'root';
+        $cmd[] = (string)($payload['become_user'] ?? 'root');
     }
 
     /**
@@ -145,12 +145,14 @@ class AnsibleJobCommandBuilder
      */
     public function resolveProjectPath(array $payload): string
     {
+        /** @var \app\models\Project|null $project */
         $project = \app\models\Project::findOne($payload['project_id'] ?? 0);
         return $project?->local_path ?? '/tmp/ansilume/projects';
     }
 
     private function resolveInventoryArg(int $inventoryId): ?string
     {
+        /** @var \app\models\Inventory|null $inventory */
         $inventory = \app\models\Inventory::findOne($inventoryId);
         if ($inventory === null) {
             return null;
@@ -174,6 +176,6 @@ class AnsibleJobCommandBuilder
     private function resolvePlaybookPath(array $payload): string
     {
         $base = $this->resolveProjectPath($payload);
-        return rtrim($base, '/') . '/' . ltrim($payload['playbook'] ?? 'site.yml', '/');
+        return rtrim($base, '/') . '/' . ltrim((string)($payload['playbook'] ?? 'site.yml'), '/');
     }
 }

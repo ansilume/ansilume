@@ -19,7 +19,7 @@ class RunnerCommandBuilder
 
         $this->addInventoryArgs($cmd, $payload);
 
-        $cmd[] = $payload['playbook_path'];
+        $cmd[] = (string)($payload['playbook_path'] ?? '');
 
         $this->addPlaybookOptions($cmd, $payload);
 
@@ -32,12 +32,12 @@ class RunnerCommandBuilder
      */
     private function addInventoryArgs(array &$cmd, array $payload): void
     {
-        if ($payload['inventory_type'] === 'static') {
+        if (($payload['inventory_type'] ?? '') === 'static') {
             $cmd[] = '-i';
             $cmd[] = '__INVENTORY_TMP__';
         } elseif (!empty($payload['inventory_path'])) {
             $cmd[] = '-i';
-            $cmd[] = $payload['inventory_path'];
+            $cmd[] = (string)$payload['inventory_path'];
         }
     }
 
@@ -61,7 +61,7 @@ class RunnerCommandBuilder
         foreach ($optionMap as $key => $flag) {
             if (!empty($payload[$key])) {
                 $cmd[] = $flag;
-                $cmd[] = $key === 'forks' ? (string)(int)$payload[$key] : $payload[$key];
+                $cmd[] = $key === 'forks' ? (string)(int)($payload[$key] ?? 0) : (string)($payload[$key] ?? '');
             }
         }
     }
@@ -88,8 +88,8 @@ class RunnerCommandBuilder
 
         $cmd[] = '--become';
         $cmd[] = '--become-method';
-        $cmd[] = $payload['become_method'] ?? 'sudo';
+        $cmd[] = (string)($payload['become_method'] ?? 'sudo');
         $cmd[] = '--become-user';
-        $cmd[] = $payload['become_user'] ?? 'root';
+        $cmd[] = (string)($payload['become_user'] ?? 'root');
     }
 }

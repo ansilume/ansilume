@@ -33,6 +33,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     public function execute($queue): void
     {
+        /** @var Job|null $job */
         $job = Job::findOne($this->jobId);
         if ($job === null) {
             \Yii::error("RunAnsibleJob: job #{$this->jobId} not found.", __CLASS__);
@@ -104,7 +105,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      */
     private function runPlaybook(Job $job): int
     {
-        $payload = json_decode($job->runner_payload ?? '{}', true);
+        $decoded = json_decode($job->runner_payload ?? '{}', true);
+        /** @var array<string, mixed> $payload */
+        $payload = is_array($decoded) ? $decoded : [];
         $builder = new AnsibleJobCommandBuilder();
         $cmd = $builder->build($payload);
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $job->id . '_' . uniqid('', true) . '.ndjson';

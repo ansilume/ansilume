@@ -36,7 +36,10 @@ class RunnerController extends BaseController
 
     public function actionCreate(): Response
     {
-        $groupId = (int)\Yii::$app->request->post('group_id');
+        /** @var int|string $rawGroupId */
+        $rawGroupId = \Yii::$app->request->post('group_id');
+        $groupId = (int)$rawGroupId;
+        /** @var RunnerGroup|null $group */
         $group = RunnerGroup::findOne($groupId);
 
         if ($group === null) {
@@ -46,9 +49,13 @@ class RunnerController extends BaseController
 
         $model = new Runner();
         $model->runner_group_id = $group->id;
-        $model->name = (string)\Yii::$app->request->post('name', '');
-        $model->description = (string)\Yii::$app->request->post('description', '') ?: null;
-        $model->created_by = (int)\Yii::$app->user->id;
+        /** @var string $runnerName */
+        $runnerName = \Yii::$app->request->post('name', '');
+        $model->name = $runnerName;
+        /** @var string $runnerDesc */
+        $runnerDesc = \Yii::$app->request->post('description', '');
+        $model->description = $runnerDesc ?: null;
+        $model->created_by = (int)(\Yii::$app->user->id ?? 0);
 
         $token = Runner::generateToken();
         $model->token_hash = $token['hash'];
@@ -100,6 +107,7 @@ class RunnerController extends BaseController
 
     private function findModel(int $id): Runner
     {
+        /** @var Runner|null $model */
         $model = Runner::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Runner #{$id} not found.");

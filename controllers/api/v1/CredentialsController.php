@@ -25,7 +25,8 @@ class CredentialsController extends BaseApiController
             'query' => Credential::find()->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
-        $page = (int)\Yii::$app->request->get('page', 1);
+        /** @var int $page */
+        $page = \Yii::$app->request->get('page', 1);
 
         return $this->paginated(
             array_map(fn ($c) => $this->serialize($c), $dp->getModels()),
@@ -40,6 +41,7 @@ class CredentialsController extends BaseApiController
      */
     public function actionView(int $id): array
     {
+        /** @var Credential|null $credential */
         $credential = Credential::findOne($id);
         if ($credential === null) {
             throw new NotFoundHttpException("Credential #{$id} not found.");

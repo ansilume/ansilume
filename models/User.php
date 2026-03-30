@@ -84,7 +84,9 @@ class User extends ActiveRecord implements IdentityInterface
 
     public function getId(): int
     {
-        return (int)$this->id;
+        /** @var int $id */
+        $id = $this->id;
+        return $id;
     }
 
     public function getAuthKey(): string

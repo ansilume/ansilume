@@ -25,7 +25,8 @@ class JobTemplatesController extends BaseApiController
             'query' => JobTemplate::find()->with(['project', 'inventory'])->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
-        $page = (int)\Yii::$app->request->get('page', 1);
+        /** @var int $page */
+        $page = \Yii::$app->request->get('page', 1);
 
         return $this->paginated(
             array_map(fn ($t) => $this->serialize($t), $dp->getModels()),
@@ -40,6 +41,7 @@ class JobTemplatesController extends BaseApiController
      */
     public function actionView(int $id): array
     {
+        /** @var JobTemplate|null $template */
         $template = JobTemplate::findOne($id);
         if ($template === null) {
             throw new NotFoundHttpException("Template #{$id} not found.");

@@ -21,11 +21,8 @@ class TotpService extends Component
     /** Time window tolerance: accept codes ±1 period (30 s). */
     public int $window = 1;
 
-    /** Maximum TOTP verify attempts before lockout. */
-    public int $maxAttempts = 5;
-
-    /** Lockout duration in seconds after max attempts. */
-    public int $lockoutDuration = 300;
+    /** @var TotpRateLimiter */
+    public TotpRateLimiter $rateLimiter;
 
     // ── Secret management ────────────────────────────────────────────────────
 
@@ -212,50 +209,6 @@ class TotpService extends Component
         return count($this->getStoredRecoveryCodes($user));
     }
 
-    // ── Rate limiting ────────────────────────────────────────────────────────
-
-    /**
-     * Check if the user is locked out from TOTP attempts.
-     */
-    public function isLockedOut(int $userId): bool
-    {
-        $key = $this->rateLimitKey($userId);
-        /** @var \yii\caching\CacheInterface $cache */
-        $cache = \Yii::$app->cache;
-        $data = $cache->get($key);
-        if ($data === false) {
-            return false;
-        }
-        return $data['attempts'] >= $this->maxAttempts;
-    }
-
-    /**
-     * Record a failed TOTP attempt. Returns remaining attempts.
-     */
-    public function recordFailedAttempt(int $userId): int
-    {
-        $key = $this->rateLimitKey($userId);
-        /** @var \yii\caching\CacheInterface $cache */
-        $cache = \Yii::$app->cache;
-        $data = $cache->get($key);
-        if ($data === false) {
-            $data = ['attempts' => 0];
-        }
-        $data['attempts']++;
-        $cache->set($key, $data, $this->lockoutDuration);
-        return (int)max(0, $this->maxAttempts - $data['attempts']);
-    }
-
-    /**
-     * Clear the rate limit counter (after successful login).
-     */
-    public function clearRateLimit(int $userId): void
-    {
-        /** @var \yii\caching\CacheInterface $cache */
-        $cache = \Yii::$app->cache;
-        $cache->delete($this->rateLimitKey($userId));
-    }
-
     // ── Enable / Disable ─────────────────────────────────────────────────────
 
     /**
@@ -318,10 +271,5 @@ class TotpService extends Component
             $code .= $chars[ord($bytes[$i]) % strlen($chars)];
         }
         return substr($code, 0, 4) . '-' . substr($code, 4, 4);
-    }
-
-    private function rateLimitKey(int $userId): string
-    {
-        return 'totp_rate_limit_' . $userId;
     }
 }

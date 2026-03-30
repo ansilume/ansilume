@@ -95,7 +95,8 @@ class RunnerHttpClient
             return null;
         }
 
-        return json_decode($raw, true) ?: null;
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : null;
     }
 
     /**

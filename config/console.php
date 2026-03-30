@@ -96,6 +96,9 @@ return [
         ],
         'totpService' => [
             'class' => 'app\services\TotpService',
+            'rateLimiter' => [
+                'class' => 'app\services\TotpRateLimiter',
+            ],
         ],
         'inventoryService' => [
             'class' => 'app\services\InventoryService',

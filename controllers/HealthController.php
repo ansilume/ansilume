@@ -124,7 +124,7 @@ class HealthController extends Controller
 
     protected function countMigrationFiles(): int
     {
-        $path = \Yii::getAlias('@app/migrations');
+        $path = (string)\Yii::getAlias('@app/migrations');
         $files = glob($path . '/m*.php');
         return $files !== false ? count($files) : 0;
     }

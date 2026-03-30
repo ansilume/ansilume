@@ -6,7 +6,6 @@ namespace app\controllers\api\runner;
 
 use app\models\Job;
 use app\models\JobLog;
-use app\services\AuditService;
 use app\services\JobClaimService;
 use app\services\JobCompletionService;
 use yii\web\NotFoundHttpException;
@@ -31,7 +30,7 @@ class JobsController extends BaseRunnerApiController
      */
     public function actionHeartbeat(): array
     {
-        $runner = $this->currentRunner;
+        $runner = $this->runner();
         $group = $runner->group;
 
         return $this->ok([
@@ -52,7 +51,7 @@ class JobsController extends BaseRunnerApiController
      */
     public function actionClaim(): array|Response
     {
-        $runner = $this->currentRunner;
+        $runner = $this->runner();
         $group = $runner->group;
 
         /** @var JobClaimService $svc */
@@ -142,11 +141,12 @@ class JobsController extends BaseRunnerApiController
 
     private function findOwnedJob(int $id): Job
     {
+        /** @var Job|null $job */
         $job = Job::findOne($id);
         if ($job === null) {
             throw new NotFoundHttpException("Job #{$id} not found.");
         }
-        if ((int)$job->runner_id !== $this->currentRunner->id) {
+        if ((int)$job->runner_id !== $this->runner()->id) {
             throw new \yii\web\ForbiddenHttpException('This job belongs to a different runner.');
         }
         return $job;

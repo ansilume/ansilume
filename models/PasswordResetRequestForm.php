@@ -30,6 +30,7 @@ class PasswordResetRequestForm extends Model
      */
     public function sendResetEmail(): bool
     {
+        /** @var User|null $user */
         $user = User::findOne(['email' => $this->email, 'status' => User::STATUS_ACTIVE]);
         if ($user === null) {
             return true;

@@ -50,8 +50,8 @@ class WebhookController extends BaseController
     {
         $model = new Webhook();
 
-        if ($model->load(\Yii::$app->request->post())) {
-            $model->created_by = (int)\Yii::$app->user->id;
+        if ($model->load((array)\Yii::$app->request->post())) {
+            $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
                     AuditLog::ACTION_WEBHOOK_CREATED,
@@ -72,7 +72,7 @@ class WebhookController extends BaseController
     {
         $model = $this->findModel($id);
 
-        if ($model->load(\Yii::$app->request->post())) {
+        if ($model->load((array)\Yii::$app->request->post())) {
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(
                     AuditLog::ACTION_WEBHOOK_UPDATED,
@@ -107,6 +107,7 @@ class WebhookController extends BaseController
 
     private function findModel(int $id): Webhook
     {
+        /** @var Webhook|null $model */
         $model = Webhook::findOne($id);
         if ($model === null) {
             throw new NotFoundHttpException("Webhook #{$id} not found.");

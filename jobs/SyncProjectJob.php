@@ -20,6 +20,7 @@ class SyncProjectJob extends BaseObject implements JobInterface
 
     public function execute($queue): void
     {
+        /** @var Project|null $project */
         $project = Project::findOne($this->projectId);
 
         if ($project === null) {

@@ -103,6 +103,7 @@ class RegisterController extends Controller
 
     private function ensureDefaultGroup(int $createdBy): RunnerGroup
     {
+        /** @var RunnerGroup|null $group */
         $group = RunnerGroup::findOne(['name' => 'default']);
         if ($group !== null) {
             return $group;
@@ -155,6 +156,7 @@ class RegisterController extends Controller
     {
         $token = Runner::generateToken();
 
+        /** @var Runner|null $runner */
         $runner = Runner::findOne(['runner_group_id' => $groupId, 'name' => $name]);
         if ($runner === null) {
             $runner = new Runner();

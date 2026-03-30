@@ -55,13 +55,13 @@ class SurveyField
     public static function fromArray(array $data): self
     {
         return new self(
-            $data['name'] ?? '',
-            $data['label'] ?? '',
-            $data['type'] ?? self::TYPE_TEXT,
+            (string)($data['name'] ?? ''),
+            (string)($data['label'] ?? ''),
+            (string)($data['type'] ?? self::TYPE_TEXT),
             (bool)($data['required'] ?? false),
-            $data['default'] ?? '',
-            $data['options'] ?? [],
-            $data['hint'] ?? ''
+            (string)($data['default'] ?? ''),
+            is_array($data['options'] ?? null) ? $data['options'] : [],
+            (string)($data['hint'] ?? '')
         );
     }
 

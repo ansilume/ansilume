@@ -33,7 +33,8 @@ class JobsController extends BaseApiController
 
         $jobs = $dp->getModels();
         $total = $dp->totalCount;
-        $page = (int)(\Yii::$app->request->get('page', 1));
+        /** @var int $page */
+        $page = \Yii::$app->request->get('page', 1);
         $per = 25;
 
         return $this->paginated(
@@ -60,6 +61,7 @@ class JobsController extends BaseApiController
         $body = (array)\Yii::$app->request->bodyParams;
 
         $templateId = (int)($body['template_id'] ?? 0);
+        /** @var JobTemplate|null $template */
         $template = JobTemplate::findOne($templateId);
 
         if ($template === null) {
@@ -86,7 +88,7 @@ class JobsController extends BaseApiController
         try {
             /** @var JobLaunchService $svc */
             $svc = \Yii::$app->get('jobLaunchService');
-            $job = $svc->launch($template, (int)\Yii::$app->user->id, $overrides);
+            $job = $svc->launch($template, (int)(\Yii::$app->user->id ?? 0), $overrides);
             return $this->success($this->serializeJob($job), 201);
         } catch (\RuntimeException $e) {
             return $this->error('Launch failed: ' . $e->getMessage(), 500);
@@ -118,6 +120,7 @@ class JobsController extends BaseApiController
 
     private function findJob(int $id): Job
     {
+        /** @var Job|null $job */
         $job = Job::findOne($id);
         if ($job === null) {
             throw new NotFoundHttpException("Job #{$id} not found.");

@@ -47,7 +47,7 @@ class TotpVerifyForm extends Model
         /** @var TotpService $totp */
         $totp = \Yii::$app->get('totpService');
 
-        if ($totp->isLockedOut($this->_user->id)) {
+        if ($totp->rateLimiter->isLockedOut($this->_user->id)) {
             $this->addError($attribute, 'Too many failed attempts. Please wait a few minutes before trying again.');
             return;
         }
@@ -62,18 +62,18 @@ class TotpVerifyForm extends Model
 
         // Try TOTP code first (6 digits)
         if (preg_match('/^\d{6}$/', $code) && $totp->verifyCode($secret, $code)) {
-            $totp->clearRateLimit($this->_user->id);
+            $totp->rateLimiter->clearRateLimit($this->_user->id);
             return;
         }
 
         // Try recovery code (XXXX-XXXX or XXXXXXXX)
         if ($totp->useRecoveryCode($this->_user, $code)) {
             $this->_usedRecoveryCode = true;
-            $totp->clearRateLimit($this->_user->id);
+            $totp->rateLimiter->clearRateLimit($this->_user->id);
             return;
         }
 
-        $remaining = $totp->recordFailedAttempt($this->_user->id);
+        $remaining = $totp->rateLimiter->recordFailedAttempt($this->_user->id);
         if ($remaining > 0) {
             $this->addError($attribute, "Invalid code. {$remaining} attempts remaining.");
         } else {

@@ -121,13 +121,13 @@ class JobCompletionService extends Component
     {
         $task = new JobTask();
         $task->job_id = $job->id;
-        $task->sequence = (int)($data['seq'] ?? 0);
-        $task->task_name = (string)($data['name'] ?? '');
-        $task->task_action = (string)($data['action'] ?? '');
-        $task->host = (string)($data['host'] ?? '');
-        $task->status = (string)($data['status'] ?? 'ok');
-        $task->changed = (int)(bool)($data['changed'] ?? false);
-        $task->duration_ms = (int)($data['duration_ms'] ?? 0);
+        $task->sequence = isset($data['seq']) ? (int)$data['seq'] : 0;
+        $task->task_name = isset($data['name']) ? (string)$data['name'] : '';
+        $task->task_action = isset($data['action']) ? (string)$data['action'] : '';
+        $task->host = isset($data['host']) ? (string)$data['host'] : '';
+        $task->status = isset($data['status']) ? (string)$data['status'] : 'ok';
+        $task->changed = !empty($data['changed']) ? 1 : 0;
+        $task->duration_ms = isset($data['duration_ms']) ? (int)$data['duration_ms'] : 0;
         $task->created_at = time();
         $task->save(false);
 
@@ -162,8 +162,9 @@ class JobCompletionService extends Component
     {
         $now = time();
         foreach ($hostBuckets as $host => $counts) {
-            $summary = JobHostSummary::findOne(['job_id' => $job->id, 'host' => $host])
-                ?? new JobHostSummary();
+            /** @var JobHostSummary|null $existing */
+            $existing = JobHostSummary::findOne(['job_id' => $job->id, 'host' => $host]);
+            $summary = $existing ?? new JobHostSummary();
             $summary->job_id = $job->id;
             $summary->host = $host;
             $summary->ok += $counts['ok'];

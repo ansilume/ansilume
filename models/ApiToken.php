@@ -50,6 +50,7 @@ class ApiToken extends ActiveRecord
     public static function findByRawToken(string $raw): ?self
     {
         $hash = hash('sha256', $raw);
+        /** @var static|null $token */
         $token = static::findOne(['token_hash' => $hash]);
         if ($token === null || $token->isExpired()) {
             return null;

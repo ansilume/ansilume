@@ -62,8 +62,10 @@ class LoginForm extends Model
     public function login(): bool
     {
         if ($this->validate()) {
+            /** @var User $user Validated above — user exists */
+            $user = $this->getUser();
             $duration = $this->rememberMe ? 3600 * 24 * 30 : 0;
-            return \Yii::$app->user->login($this->getUser(), $duration);
+            return \Yii::$app->user->login($user, $duration);
         }
         return false;
     }
