@@ -32,8 +32,8 @@ checks:
     # PSR-12 is authoritative for code style — suppress conflicting fixes:
     # - PSR-12 requires space after 'function' in closures: function ($x)
     # - PSR-12 requires spaces around bitwise OR: CONST_A | CONST_B
-    spacing_of_function_keyword: false
-    spacing_around_non_boolean_binary_operators: false
+    spacing_of_function_arguments: false
+    spacing_around_non_conditional_operators: false
 
 tools:
   php_code_sniffer:
