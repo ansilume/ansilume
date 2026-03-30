@@ -16,7 +16,7 @@ $started = $job->started_at ? date('Y-m-d H:i:s T', $job->started_at) : '—';
 $finished = $job->finished_at ? date('Y-m-d H:i:s T', $job->finished_at) : '—';
 
 $duration = '—';
-if ($job->started_at && $job->finished_at) {
+if ($job->started_at !== null && $job->finished_at !== null) {
     $secs = $job->finished_at - $job->started_at;
     if ($secs < 60) {
         $duration = $secs . 's';

@@ -13,7 +13,7 @@ $this->title = 'Webhooks';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Webhooks</h2>
-    <?php if (\Yii::$app->user->can('admin')) : ?>
+    <?php if (\Yii::$app->user?->can('admin')) : ?>
         <?= Html::a('New Webhook', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
@@ -58,7 +58,7 @@ $this->title = 'Webhooks';
                     </td>
                     <td class="text-end text-nowrap">
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                        <?php if (\Yii::$app->user->can('admin')) : ?>
+                        <?php if (\Yii::$app->user?->can('admin')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                         <?php endif; ?>
                     </td>

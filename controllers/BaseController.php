@@ -72,7 +72,8 @@ abstract class BaseController extends Controller
      */
     protected function session(): \yii\web\Session
     {
-        /** @var \yii\web\Session */
-        return \Yii::$app->session;
+        /** @var \yii\web\Session $session */
+        $session = \Yii::$app->session;
+        return $session;
     }
 }

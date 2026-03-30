@@ -64,7 +64,9 @@ abstract class BaseApiController extends Controller
         ApiToken::updateAll(['last_used_at' => time()], ['id' => $token->id]);
 
         // Make user available via Yii::$app->user if needed
-        \Yii::$app->user->loginByAccessToken($raw);
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $userComponent */
+        $userComponent = \Yii::$app->user;
+        $userComponent->loginByAccessToken($raw);
     }
 
     /**

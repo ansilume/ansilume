@@ -19,13 +19,13 @@ $this->title = $model->name;
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('job.launch')) : ?>
+        <?php if (\Yii::$app->user?->can('job.launch')) : ?>
             <?= Html::a('Launch', ['launch', 'id' => $model->id], ['class' => 'btn btn-success']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('job-template.update')) : ?>
+        <?php if (\Yii::$app->user?->can('job-template.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary ms-1']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('job-template.delete')) : ?>
+        <?php if (\Yii::$app->user?->can('job-template.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this template?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
@@ -87,7 +87,7 @@ $this->title = $model->name;
     </div>
     <?php endif; ?>
 
-    <?php if (\Yii::$app->user->can('job-template.update')) : ?>
+    <?php if (\Yii::$app->user?->can('job-template.update')) : ?>
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">

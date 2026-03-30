@@ -31,7 +31,7 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
             <p class="text-muted mt-1 mb-0"><?= Html::encode($group->description) ?></p>
         <?php endif; ?>
     </div>
-    <?php if (\Yii::$app->user->can('runner-group.update')) : ?>
+    <?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
         <?= Html::a('Edit Group', ['update', 'id' => $group->id], ['class' => 'btn btn-outline-secondary']) ?>
     <?php endif; ?>
 </div>
@@ -58,7 +58,7 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
 <?php endif; ?>
 
 <!-- Add Runner form -->
-<?php if (\Yii::$app->user->can('runner-group.update')) : ?>
+<?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
 <div class="card mb-4">
     <div class="card-header">Add Runner</div>
     <div class="card-body">
@@ -123,7 +123,7 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
                     </td>
                     <td class="text-muted small"><?= Html::encode($runner->description ?? '') ?></td>
                     <td class="text-end">
-                        <?php if (\Yii::$app->user->can('runner-group.update')) : ?>
+                        <?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
                             <form method="post" action="<?= Url::to(['/runner/regenerate-token', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="return confirm('Regenerate token for &quot;<?= addslashes($runner->name) ?>&quot;? The old token will stop working immediately.')">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-warning me-1">Regen Token</button>

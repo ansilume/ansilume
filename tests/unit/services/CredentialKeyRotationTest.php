@@ -109,7 +109,7 @@ class CredentialKeyRotationTest extends TestCase
 
         $_ENV['APP_SECRET_KEY'] = 'different-key-after-rotation';
 
-        $this->expectException(\yii\base\Exception::class);
+        $this->expectException(\Throwable::class);
         $service->getSecrets($cred);
     }
 

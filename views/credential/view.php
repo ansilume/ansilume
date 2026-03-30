@@ -21,10 +21,10 @@ $this->title = $model->name;
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('credential.update')) : ?>
+        <?php if (\Yii::$app->user?->can('credential.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('credential.delete')) : ?>
+        <?php if (\Yii::$app->user?->can('credential.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this credential?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>

@@ -13,7 +13,7 @@ $this->title = 'Schedules';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Schedules</h2>
-    <?php if (\Yii::$app->user->can('job.launch')) : ?>
+    <?php if (\Yii::$app->user?->can('job.launch')) : ?>
         <?= Html::a('New Schedule', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
@@ -70,7 +70,7 @@ $this->title = 'Schedules';
                     </td>
                     <td class="text-end text-nowrap">
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                        <?php if (\Yii::$app->user->can('job.launch')) : ?>
+                        <?php if (\Yii::$app->user?->can('job.launch')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                             <form method="post" action="<?= Url::to(['toggle', 'id' => $model->id]) ?>" style="display:inline"
                                   onsubmit="return confirm('<?= $model->enabled ? 'Disable this schedule?' : 'Enable this schedule?' ?>')">

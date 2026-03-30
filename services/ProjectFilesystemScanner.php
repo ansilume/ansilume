@@ -55,7 +55,7 @@ class ProjectFilesystemScanner
      * Recursively build a directory tree array, ignoring hidden entries.
      * Each node: ['name' => string, 'rel' => string, 'type' => 'dir'|'file', 'children' => [...]]
      *
-     * @return list<array{name: string, rel: string, type: string, children: array<int, mixed>}>
+     * @return array<int, array{name: string, rel: string, type: string, children: array<int, mixed>}>
      */
     public function buildTree(string $base, string $dir, int $depth = 0, int $maxDepth = 5): array
     {
@@ -155,7 +155,7 @@ class ProjectFilesystemScanner
     // -------------------------------------------------------------------------
 
     /**
-     * @return list<array{name: string, rel: string, type: string, children: array<int, mixed>}>
+     * @return array<int, array{name: string, rel: string, type: string, children: array<int, mixed>}>
      */
     private function scanDirectoryEntries(string $base, string $dir, int $depth, int $maxDepth): array
     {

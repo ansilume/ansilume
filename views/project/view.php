@@ -24,7 +24,7 @@ $this->title = $model->name;
         <h2 class="mb-0"><?= Html::encode($model->name) ?></h2>
     </div>
     <div class="btn-group">
-        <?php if (\Yii::$app->user->can('project.update')) : ?>
+        <?php if (\Yii::$app->user?->can('project.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
             <?php if ($model->scm_type === Project::SCM_TYPE_GIT) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['sync', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Queue a sync for this project?')">
@@ -37,7 +37,7 @@ $this->title = $model->name;
                 <button type="submit" class="btn btn-outline-secondary ms-1">Run Lint</button>
             </form>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('project.delete')) : ?>
+        <?php if (\Yii::$app->user?->can('project.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this project?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
@@ -107,7 +107,7 @@ $this->title = $model->name;
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Job Templates</span>
-                <?php if (\Yii::$app->user->can('job-template.create')) : ?>
+                <?php if (\Yii::$app->user?->can('job-template.create')) : ?>
                     <?= Html::a('New Template', ['/job-template/create', 'project_id' => $model->id], ['class' => 'btn btn-sm btn-outline-primary']) ?>
                 <?php endif; ?>
             </div>
@@ -174,7 +174,7 @@ $this->title = $model->name;
                 <?php foreach ($playbooks as $pb) : ?>
                 <li class="list-group-item d-flex justify-content-between align-items-center">
                     <code><?= Html::encode($pb) ?></code>
-                    <?php if (\Yii::$app->user->can('job-template.create')) : ?>
+                    <?php if (\Yii::$app->user?->can('job-template.create')) : ?>
                         <?= Html::a('Create Template', ['/job-template/create', 'project_id' => $model->id, 'playbook' => $pb], ['class' => 'btn btn-sm btn-outline-success']) ?>
                     <?php endif; ?>
                 </li>

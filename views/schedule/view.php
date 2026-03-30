@@ -13,7 +13,7 @@ $this->title = Html::encode($model->name);
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0"><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('job.launch')) : ?>
+        <?php if (\Yii::$app->user?->can('job.launch')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
             <form method="post" action="<?= Url::to(['toggle', 'id' => $model->id]) ?>" style="display:inline"
                   onsubmit="return confirm('<?= $model->enabled ? 'Disable this schedule?' : 'Enable this schedule?' ?>')">

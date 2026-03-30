@@ -29,7 +29,9 @@ class ProjectService extends Component
         $project->status = Project::STATUS_SYNCING;
         $project->save(false);
 
-        \Yii::$app->queue->push(new SyncProjectJob(['projectId' => $project->id]));
+        /** @var \yii\queue\Queue $queue */
+        $queue = \Yii::$app->queue;
+        $queue->push(new SyncProjectJob(['projectId' => $project->id]));
     }
 
     /**

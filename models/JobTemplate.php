@@ -220,7 +220,8 @@ class JobTemplate extends ActiveRecord
         if ($token === '') {
             return null;
         }
-        /** @var static|null */
-        return static::findOne(['trigger_token' => $token]);
+        /** @var static|null $result */
+        $result = static::findOne(['trigger_token' => $token]);
+        return $result;
     }
 }

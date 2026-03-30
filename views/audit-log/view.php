@@ -30,7 +30,7 @@ $this->title = 'Audit Entry #' . $entry->id;
                     <dd class="col-8">
                         <?php if ($entry->user) : ?>
                             <?= Html::a(Html::encode($entry->user->username), ['/user/view', 'id' => $entry->user_id]) ?>
-                        <?php elseif ($entry->user_id) : ?>
+                        <?php elseif ($entry->user_id !== null) : ?>
                             #<?= $entry->user_id ?> (deleted)
                         <?php else : ?>
                             <span class="text-muted">system</span>

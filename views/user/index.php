@@ -13,7 +13,7 @@ $this->title = 'Users';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Users</h2>
-    <?php if (\Yii::$app->user->can('user.create')) : ?>
+    <?php if (\Yii::$app->user?->can('user.create')) : ?>
         <?= Html::a('New User', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
@@ -53,7 +53,7 @@ $this->title = 'Users';
                 <td><?= date('Y-m-d', $user->created_at) ?></td>
                 <td class="text-end text-nowrap">
                     <?= Html::a('View', ['view', 'id' => $user->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                    <?php if (\Yii::$app->user->can('user.update')) : ?>
+                    <?php if (\Yii::$app->user?->can('user.update')) : ?>
                         <?= Html::a('Edit', ['update', 'id' => $user->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                     <?php endif; ?>
                 </td>

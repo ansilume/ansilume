@@ -10,7 +10,7 @@ use app\models\User;
 use yii\helpers\Html;
 
 $this->title = $user->username;
-$isSelf = ($user->id === (int)\Yii::$app->user->id);
+$isSelf = ($user->id === (int)\Yii::$app->user?->id);
 ?>
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
@@ -22,10 +22,10 @@ $isSelf = ($user->id === (int)\Yii::$app->user->id);
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($user->username) ?></h2>
     <div>
-        <?php if (\Yii::$app->user->can('user.update')) : ?>
+        <?php if (\Yii::$app->user?->can('user.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $user->id], ['class' => 'btn btn-outline-secondary']) ?>
         <?php endif; ?>
-        <?php if (!$isSelf && \Yii::$app->user->can('user.delete')) : ?>
+        <?php if (!$isSelf && \Yii::$app->user?->can('user.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['toggle-status', 'id' => $user->id]) ?>" style="display:inline" onsubmit="return confirm('Change status?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-warning ms-1"><?= $user->status === User::STATUS_ACTIVE ? 'Deactivate' : 'Activate' // xss-ok: hardcoded strings?></button>

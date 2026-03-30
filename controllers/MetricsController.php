@@ -91,7 +91,7 @@ class MetricsController extends Controller
         try {
             $start = hrtime(true);
             \Yii::$app->db->createCommand('SELECT 1')->queryScalar();
-            $ms = (hrtime(true) - $start) / 1_000_000;
+            $ms = (hrtime(true) - $start) / 1000000;
             return ['up' => true, 'latency_ms' => round($ms, 2)];
         } catch (\Throwable) {
             return ['up' => false, 'latency_ms' => null];
@@ -108,7 +108,7 @@ class MetricsController extends Controller
             /** @var \yii\caching\CacheInterface $cache */
             $cache = \Yii::$app->cache;
             $cache->set('metrics_probe', 1, 5);
-            $ms = (hrtime(true) - $start) / 1_000_000;
+            $ms = (hrtime(true) - $start) / 1000000;
             return ['up' => true, 'latency_ms' => round($ms, 2)];
         } catch (\Throwable) {
             return ['up' => false, 'latency_ms' => null];

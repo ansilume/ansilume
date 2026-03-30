@@ -224,7 +224,9 @@ class SiteController extends BaseController
             $session->remove('totp_pending_user_id');
             $session->remove('totp_pending_remember');
 
-            \Yii::$app->user->login($user, $duration);
+            /** @var \yii\web\User<\yii\web\IdentityInterface> $userComponent */
+            $userComponent = \Yii::$app->user;
+            $userComponent->login($user, $duration);
 
             // Regenerate session ID to prevent fixation
             $session->regenerateID(true);

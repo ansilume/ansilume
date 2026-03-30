@@ -65,7 +65,9 @@ class LoginForm extends Model
             /** @var User $user Validated above — user exists */
             $user = $this->getUser();
             $duration = $this->rememberMe ? 3600 * 24 * 30 : 0;
-            return \Yii::$app->user->login($user, $duration);
+            /** @var \yii\web\User<\yii\web\IdentityInterface> $userComponent */
+            $userComponent = \Yii::$app->user;
+            return $userComponent->login($user, $duration);
         }
         return false;
     }

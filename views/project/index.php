@@ -14,7 +14,7 @@ $this->title = 'Projects';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Projects</h2>
-    <?php if (\Yii::$app->user->can('project.create')) : ?>
+    <?php if (\Yii::$app->user?->can('project.create')) : ?>
         <?= Html::a('New Project', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
@@ -60,7 +60,7 @@ $this->title = 'Projects';
                     <td><?= $model->last_synced_at ? date('Y-m-d H:i', $model->last_synced_at) : '—' ?></td>
                     <td><?= Html::encode($model->creator->username ?? '—') ?></td>
                     <td class="text-end text-nowrap">
-                        <?php if (\Yii::$app->user->can('project.update') && $model->scm_type === Project::SCM_TYPE_GIT) : ?>
+                        <?php if (\Yii::$app->user?->can('project.update') && $model->scm_type === Project::SCM_TYPE_GIT) : ?>
                             <form method="post" action="<?= Url::to(['sync', 'id' => $model->id]) ?>" style="display:inline">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-primary"
@@ -68,7 +68,7 @@ $this->title = 'Projects';
                             </form>
                         <?php endif; ?>
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
-                        <?php if (\Yii::$app->user->can('project.update')) : ?>
+                        <?php if (\Yii::$app->user?->can('project.update')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                         <?php endif; ?>
                     </td>

@@ -86,7 +86,8 @@ class Runner extends ActiveRecord
         if ($rawToken === '') {
             return null;
         }
-        /** @var static|null */
-        return static::findOne(['token_hash' => hash('sha256', $rawToken)]);
+        /** @var static|null $result */
+        $result = static::findOne(['token_hash' => hash('sha256', $rawToken)]);
+        return $result;
     }
 }

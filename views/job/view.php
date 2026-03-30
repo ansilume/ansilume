@@ -41,13 +41,13 @@ $isLive = !$job->isFinished();
         </div>
     </div>
     <div>
-        <?php if ($job->isCancelable() && \Yii::$app->user->can('job.cancel')) : ?>
+        <?php if ($job->isCancelable() && \Yii::$app->user?->can('job.cancel')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['cancel', 'id' => $job->id]) ?>" style="display:inline" onsubmit="return confirm('Cancel this job?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger">Cancel</button>
             </form>
         <?php endif; ?>
-        <?php if ($job->isFinished() && $job->jobTemplate && !$job->jobTemplate->isDeleted() && \Yii::$app->user->can('job.launch')) : ?>
+        <?php if ($job->isFinished() && $job->jobTemplate && !$job->jobTemplate->isDeleted() && \Yii::$app->user?->can('job.launch')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['relaunch', 'id' => $job->id]) ?>" style="display:inline" onsubmit="return confirm('Re-launch this job with the same parameters?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-success ms-1">Re-launch</button>

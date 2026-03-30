@@ -58,6 +58,8 @@ class JobsController extends BaseApiController
      */
     public function actionCreate(): array
     {
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
+        $user = \Yii::$app->user;
         $body = (array)\Yii::$app->request->bodyParams;
 
         $templateId = (int)($body['template_id'] ?? 0);
@@ -68,7 +70,7 @@ class JobsController extends BaseApiController
             return $this->error("Job template #{$templateId} not found.", 404);
         }
 
-        if (!\Yii::$app->user->can('job.launch')) {
+        if (!$user->can('job.launch')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -88,7 +90,7 @@ class JobsController extends BaseApiController
         try {
             /** @var JobLaunchService $svc */
             $svc = \Yii::$app->get('jobLaunchService');
-            $job = $svc->launch($template, (int)(\Yii::$app->user->id ?? 0), $overrides);
+            $job = $svc->launch($template, (int)($user->id ?? 0), $overrides);
             return $this->success($this->serializeJob($job), 201);
         } catch (\RuntimeException $e) {
             return $this->error('Launch failed: ' . $e->getMessage(), 500);
@@ -100,13 +102,15 @@ class JobsController extends BaseApiController
      */
     public function actionCancel(int $id): array
     {
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
+        $user = \Yii::$app->user;
         $job = $this->findJob($id);
 
         if (!$job->isCancelable()) {
             return $this->error("Job #{$id} cannot be canceled in status '{$job->status}'.", 409);
         }
 
-        if (!\Yii::$app->user->can('job.cancel')) {
+        if (!$user->can('job.cancel')) {
             return $this->error('Forbidden.', 403);
         }
 

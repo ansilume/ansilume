@@ -12,7 +12,7 @@ $this->title = 'Job Templates';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Job Templates</h2>
-    <?php if (\Yii::$app->user->can('job-template.create')) : ?>
+    <?php if (\Yii::$app->user?->can('job-template.create')) : ?>
         <?= Html::a('New Template', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
@@ -36,11 +36,11 @@ $this->title = 'Job Templates';
                     <td><?= Html::encode($model->inventory->name ?? '—') ?></td>
                     <td><?= Html::encode($model->runnerGroup->name ?? '—') ?></td>
                     <td class="text-end text-nowrap">
-                        <?php if (\Yii::$app->user->can('job.launch')) : ?>
+                        <?php if (\Yii::$app->user?->can('job.launch')) : ?>
                             <?= Html::a('Launch', ['launch', 'id' => $model->id], ['class' => 'btn btn-sm btn-success']) ?>
                         <?php endif; ?>
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
-                        <?php if (\Yii::$app->user->can('job-template.update')) : ?>
+                        <?php if (\Yii::$app->user?->can('job-template.update')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                         <?php endif; ?>
                     </td>

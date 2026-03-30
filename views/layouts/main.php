@@ -122,7 +122,7 @@ $active = fn (string $prefix): string =>
         <img src="/ansilume.svg" alt="Ansilume" style="width:100%; object-fit:contain; filter: brightness(0) invert(1);">
     </a>
 
-    <?php if (!\Yii::$app->user->isGuest) : ?>
+    <?php if (!\Yii::$app->user?->isGuest) : ?>
     <nav class="nav flex-column mt-1">
         <a class="nav-link<?= $route === 'site/index' ? ' active' : '' ?>" href="<?= Url::to(['/']) ?>">Dashboard</a>
     </nav>
@@ -138,15 +138,15 @@ $active = fn (string $prefix): string =>
     <span class="nav-section">Operations</span>
     <nav class="nav flex-column">
         <a class="nav-link<?= $active('job') // xss-ok: hardcoded CSS class?>"          href="<?= Url::to(['/job/index']) ?>">Jobs</a>
-        <?php if (\Yii::$app->user->can('job.launch')) : ?>
+        <?php if (\Yii::$app->user?->can('job.launch')) : ?>
         <a class="nav-link<?= $active('schedule') // xss-ok: hardcoded CSS class?>"     href="<?= Url::to(['/schedule/index']) ?>">Schedules</a>
         <?php endif; ?>
-        <?php if (\Yii::$app->user->can('runner-group.view')) : ?>
+        <?php if (\Yii::$app->user?->can('runner-group.view')) : ?>
         <a class="nav-link<?= $active('runner-group') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/runner-group/index']) ?>">Runners</a>
         <?php endif; ?>
     </nav>
 
-        <?php if (\Yii::$app->user->can('user.view')) : ?>
+        <?php if (\Yii::$app->user?->can('user.view')) : ?>
     <span class="nav-section">Admin</span>
     <nav class="nav flex-column">
         <a class="nav-link<?= $active('user') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/user/index']) ?>">Users</a>
@@ -158,8 +158,8 @@ $active = fn (string $prefix): string =>
 
     <div class="sidebar-footer" title="Ansilume <?= Html::encode(\Yii::$app->params['version']) ?>">
         <div class="d-flex align-items-center gap-2 mb-1">
-            <span class="text-white" style="font-size:.85rem"><?= Html::encode(\Yii::$app->user->identity->username) ?></span>
-            <?php if (\Yii::$app->user->identity->is_superadmin) : ?>
+            <span class="text-white" style="font-size:.85rem"><?= Html::encode(\Yii::$app->user?->identity?->username) ?></span>
+            <?php if (\Yii::$app->user?->identity?->is_superadmin) : ?>
                 <span class="badge text-bg-warning" style="font-size:.6rem">SA</span>
             <?php endif; ?>
         </div>

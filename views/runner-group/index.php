@@ -15,7 +15,7 @@ $this->title = 'Runner Groups';
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Runner Groups</h2>
-    <?php if (\Yii::$app->user->can('runner-group.create')) : ?>
+    <?php if (\Yii::$app->user?->can('runner-group.create')) : ?>
         <?= Html::a('New Group', ['create'], ['class' => 'btn btn-success']) ?>
     <?php endif; ?>
 </div>
@@ -54,10 +54,10 @@ $this->title = 'Runner Groups';
                         <span class="badge text-bg-<?= $badge ?>"><?= $on ?>/<?= $cnt ?> online</span>
                     </td>
                     <td class="text-end">
-                        <?php if (\Yii::$app->user->can('runner-group.update')) : ?>
+                        <?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $group->id], ['class' => 'btn btn-sm btn-outline-secondary me-1']) ?>
                         <?php endif; ?>
-                        <?php if (\Yii::$app->user->can('runner-group.delete')) : ?>
+                        <?php if (\Yii::$app->user?->can('runner-group.delete')) : ?>
                             <form method="post" action="<?= Url::to(['delete', 'id' => $group->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this runner group and all its runners?')">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
