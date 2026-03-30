@@ -196,7 +196,7 @@ $this->title = 'Dashboard';
                         <td class="text-nowrap"><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
                         <td class="text-nowrap">
                             <?php
-                            if ($job->started_at && $job->finished_at) {
+                            if ($job->started_at !== null && $job->finished_at !== null) {
                                 $secs = $job->finished_at - $job->started_at;
                                 echo gmdate($secs >= 3600 ? 'H:i:s' : 'i:s', $secs);
                             } else {

@@ -14,7 +14,7 @@ $this->title = $group->name;
 $apiUrl = \Yii::$app->request->hostInfo;
 
 // Show token flash (only displayed once after creation or regen)
-$tokenFlash = \Yii::$app->session->getFlash('runner_token');
+$tokenFlash = \Yii::$app->session?->getFlash('runner_token');
 ?>
 
 <nav aria-label="breadcrumb">
@@ -112,7 +112,7 @@ $tokenFlash = \Yii::$app->session->getFlash('runner_token');
                     <td>
                         <?php if ($runner->isOnline()) : ?>
                             <span class="badge text-bg-success">Online</span>
-                        <?php elseif ($runner->last_seen_at) : ?>
+                        <?php elseif ($runner->last_seen_at !== null) : ?>
                             <span class="badge text-bg-secondary">Offline</span>
                         <?php else : ?>
                             <span class="badge text-bg-warning">Never seen</span>

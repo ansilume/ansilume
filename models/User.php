@@ -168,11 +168,12 @@ class User extends ActiveRecord implements IdentityInterface
             return null;
         }
 
-        /** @var self|null */
-        return static::findOne([
+        /** @var self|null $result */
+        $result = static::findOne([
             'password_reset_token' => $token,
             'status' => self::STATUS_ACTIVE,
         ]);
+        return $result;
     }
 
     /**

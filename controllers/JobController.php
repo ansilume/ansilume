@@ -157,9 +157,9 @@ class JobController extends BaseController
             throw new NotFoundHttpException("Artifact file no longer exists on disk.");
         }
 
-        /** @var \yii\web\Response $response */
-        $response = \Yii::$app->response;
-        return $response->sendFile(
+        /** @var \yii\web\Response $webResponse */
+        $webResponse = \Yii::$app->response;
+        return $webResponse->sendFile(
             $artifact->storage_path,
             $artifact->display_name,
             ['mimeType' => $artifact->mime_type, 'inline' => false]

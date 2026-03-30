@@ -42,7 +42,8 @@ $this->title = $isNew ? 'New User' : 'Edit: ' . $user->username;
         User::STATUS_INACTIVE => 'Inactive',
     ]) ?>
 
-    <?php if (\Yii::$app->user?->identity?->is_superadmin) : ?>
+    <?php $identityCheck = \Yii::$app->user?->identity; ?>
+    <?php if ($identityCheck instanceof \app\models\User && $identityCheck->is_superadmin) : ?>
         <?= $f->field($form, 'is_superadmin')->checkbox()->hint('Superadmins bypass all RBAC checks.') ?>
     <?php endif; ?>
 

@@ -147,7 +147,7 @@ $this->title = $model->name;
                 <span>Ansible Lint <small class="text-muted fw-normal">(--profile production, full project)</small></span>
                 <span>
                     <?= $lintBadge // xss-ok: hardcoded badge HTML?>
-                    <?php if ($model->lint_at) : ?>
+                    <?php if ($model->lint_at !== null) : ?>
                         <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output?></small>
                     <?php endif; ?>
                 </span>

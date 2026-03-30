@@ -62,7 +62,7 @@ $this->title = 'Audit Log';
                 <td>
                     <?php if ($entry->object_type) : ?>
                         <span class="text-muted"><?= Html::encode($entry->object_type) ?></span>
-                        <?php if ($entry->object_id) :
+                        <?php if ($entry->object_id !== null) :
                             ?>#<?= $entry->object_id ?><?php
                         endif; ?>
                     <?php else : ?>

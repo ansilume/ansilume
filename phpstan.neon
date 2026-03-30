@@ -42,7 +42,6 @@ parameters:
         # \Yii::$app->response->format / ->statusCode / ->data / ->headers / ->sendFile()
         - '#Access to an undefined property yii\\console\\Response\|yii\\web\\Response::\$(statusCode|format|data|headers)#'
 
-        - '#should return yii\\web\\Response but returns yii\\console\\Response\|yii\\web\\Response#'
 
         # Controller classes extend generic yii\web\Controller<T> / yii\console\Controller<T>
         - '#extends generic class yii\\(web|console)\\Controller but does not specify its types: T#'

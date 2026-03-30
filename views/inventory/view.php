@@ -79,7 +79,7 @@ $cachedJson = $cached !== null ? json_encode($cached) : 'null';
         <div class="card-header d-flex justify-content-between align-items-center">
             <span>Resolved Hosts &amp; Groups</span>
             <div>
-                <?php if ($model->parsed_at) : ?>
+                <?php if ($model->parsed_at !== null) : ?>
                     <small class="text-muted me-2" id="parsed-at-label">Parsed <?= date('Y-m-d H:i', $model->parsed_at) ?></small>
                 <?php endif; ?>
                 <button type="button" class="btn btn-sm btn-outline-primary" id="btn-parse-inventory">

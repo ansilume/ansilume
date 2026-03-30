@@ -335,10 +335,11 @@ class MetricsController extends Controller
      */
     private function formatJson(array $metrics): Response
     {
-        $response = \Yii::$app->response;
-        $response->format = Response::FORMAT_JSON;
-        $response->data = $metrics;
-        return $response;
+        /** @var Response $webResponse */
+        $webResponse = \Yii::$app->response;
+        $webResponse->format = Response::FORMAT_JSON;
+        $webResponse->data = $metrics;
+        return $webResponse;
     }
 
     /**
@@ -346,11 +347,12 @@ class MetricsController extends Controller
      */
     private function formatPrometheus(array $metrics): Response
     {
-        $response = \Yii::$app->response;
-        $response->format = Response::FORMAT_RAW;
-        $response->headers->set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
-        $response->data = self::renderPrometheus($metrics);
-        return $response;
+        /** @var Response $webResponse */
+        $webResponse = \Yii::$app->response;
+        $webResponse->format = Response::FORMAT_RAW;
+        $webResponse->headers->set('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+        $webResponse->data = self::renderPrometheus($metrics);
+        return $webResponse;
     }
 
     /**

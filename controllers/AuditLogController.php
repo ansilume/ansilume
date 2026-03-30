@@ -24,16 +24,16 @@ class AuditLogController extends BaseController
 
     public function actionIndex(): string
     {
-        /** @var \yii\web\Request $request */
-        $request = \Yii::$app->request;
+        /** @var \yii\web\Request $webRequest */
+        $webRequest = \Yii::$app->request;
 
         $query = AuditLog::find()
             ->with('user')
             ->orderBy(['id' => SORT_DESC]);
 
-        $filterAction = $request->get('action');
-        $filterUser = $request->get('user_id');
-        $filterObject = $request->get('object_type');
+        $filterAction = $webRequest->get('action');
+        $filterUser = $webRequest->get('user_id');
+        $filterObject = $webRequest->get('object_type');
 
         if (is_string($filterAction) && $filterAction !== '') {
             $query->andWhere(['like', 'action', $filterAction]);

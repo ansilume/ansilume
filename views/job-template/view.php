@@ -105,7 +105,7 @@ $this->title = $model->name;
                 <?php endif; ?>
             </div>
             <div class="card-body">
-                <?php $rawToken = \Yii::$app->session->getFlash('trigger_token_raw'); ?>
+                <?php $rawToken = \Yii::$app->session?->getFlash('trigger_token_raw'); ?>
                 <?php if ($rawToken) : ?>
                     <?php $triggerUrl = \yii\helpers\Url::to(['/trigger/fire', 'token' => $rawToken], true) ?>
                     <div class="alert alert-warning mb-3">
@@ -163,7 +163,7 @@ $this->title = $model->name;
                 <span>Ansible Lint <small class="text-muted fw-normal">(--profile production)</small></span>
                 <span>
                     <?= $lintBadge // xss-ok: hardcoded badge HTML?>
-                    <?php if ($model->lint_at) : ?>
+                    <?php if ($model->lint_at !== null) : ?>
                         <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output?></small>
                     <?php endif; ?>
                 </span>
@@ -196,7 +196,7 @@ $this->title = $model->name;
                                 <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                                 <td><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
                                 <td><?php
-                                if ($job->started_at && $job->finished_at) {
+                                if ($job->started_at !== null && $job->finished_at !== null) {
                                         echo gmdate('i:s', $job->finished_at - $job->started_at);
                                 } else {
                                     echo '—';

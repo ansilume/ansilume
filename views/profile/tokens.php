@@ -53,7 +53,7 @@ $this->title = 'API Tokens';
                 <td><?= date('Y-m-d', $token->created_at) ?></td>
                 <td><?= $token->last_used_at ? date('Y-m-d H:i', $token->last_used_at) : '<span class="text-muted">Never</span>' ?></td>
                 <td>
-                    <?php if ($token->expires_at) : ?>
+                    <?php if ($token->expires_at !== null) : ?>
                         <?php if ($token->isExpired()) : ?>
                             <span class="badge text-bg-danger">Expired</span>
                         <?php else : ?>

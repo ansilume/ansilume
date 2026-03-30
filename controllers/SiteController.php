@@ -312,7 +312,9 @@ class SiteController extends BaseController
     public function actionLogout(): Response
     {
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_LOGOUT);
-        \Yii::$app->user->logout();
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $userComponent */
+        $userComponent = \Yii::$app->user;
+        $userComponent->logout();
         return $this->goHome();
     }
 }

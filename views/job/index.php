@@ -153,10 +153,10 @@ $this->title = 'Jobs';
                     <td><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
                     <td>
                         <?php
-                        if ($job->started_at && $job->finished_at) {
+                        if ($job->started_at !== null && $job->finished_at !== null) {
                             $s = $job->finished_at - $job->started_at;
                             echo gmdate($s >= 3600 ? 'H:i:s' : 'i:s', $s);
-                        } elseif ($job->started_at) {
+                        } elseif ($job->started_at !== null) {
                             echo '<span class="text-primary">Running…</span>';
                         } else {
                             echo '—';

@@ -158,8 +158,10 @@ $active = fn (string $prefix): string =>
 
     <div class="sidebar-footer" title="Ansilume <?= Html::encode(\Yii::$app->params['version']) ?>">
         <div class="d-flex align-items-center gap-2 mb-1">
-            <span class="text-white" style="font-size:.85rem"><?= Html::encode(\Yii::$app->user?->identity?->username) ?></span>
-            <?php if (\Yii::$app->user?->identity?->is_superadmin) : ?>
+            <?php $identity = \Yii::$app->user?->identity; ?>
+            <?php $currentUser = $identity instanceof \app\models\User ? $identity : null; ?>
+            <span class="text-white" style="font-size:.85rem"><?= Html::encode($currentUser?->username) ?></span>
+            <?php if ($currentUser?->is_superadmin) : ?>
                 <span class="badge text-bg-warning" style="font-size:.6rem">SA</span>
             <?php endif; ?>
         </div>
@@ -183,7 +185,7 @@ $active = fn (string $prefix): string =>
     </div>
 
     <div id="page-content">
-        <?php foreach (\Yii::$app->session->getAllFlashes() as $type => $messages) : ?>
+        <?php foreach (\Yii::$app->session?->getAllFlashes() ?? [] as $type => $messages) : ?>
             <?php foreach ((array)$messages as $message) : ?>
                 <div class="alert alert-<?= Html::encode($type) ?> alert-dismissible fade show" role="alert">
                     <?= Html::encode($message) ?>
