@@ -234,6 +234,57 @@ class RunAnsibleJobTest extends TestCase
         $this->assertTrue(true);
     }
 
+    // -------------------------------------------------------------------------
+    // RunAnsibleJob::parseCallbackFile
+    // -------------------------------------------------------------------------
+
+    public function testParseCallbackFileReturnsTaskData(): void
+    {
+        $file = sys_get_temp_dir() . '/ansilume_test_cb_' . uniqid('', true) . '.ndjson';
+        $lines = [
+            json_encode(['seq' => 1, 'name' => 'Install package', 'host' => 'web1', 'status' => 'ok', 'changed' => false]),
+            json_encode(['seq' => 2, 'name' => 'Start service', 'host' => 'web1', 'status' => 'changed', 'changed' => true]),
+        ];
+        file_put_contents($file, implode("\n", $lines) . "\n");
+
+        $job = new TestableRunAnsibleJob();
+        $tasks = $job->parseCallbackFile($file);
+        unlink($file);
+
+        $this->assertCount(2, $tasks);
+        $this->assertSame('Install package', $tasks[0]['name']);
+        $this->assertTrue($tasks[1]['changed']);
+    }
+
+    public function testParseCallbackFileSkipsInvalidJson(): void
+    {
+        $file = sys_get_temp_dir() . '/ansilume_test_cb_' . uniqid('', true) . '.ndjson';
+        file_put_contents($file, "not-json\n" . json_encode(['seq' => 1]) . "\n");
+
+        $job = new TestableRunAnsibleJob();
+        $tasks = $job->parseCallbackFile($file);
+        unlink($file);
+
+        $this->assertCount(1, $tasks);
+        $this->assertSame(1, $tasks[0]['seq']);
+    }
+
+    public function testParseCallbackFileReturnsEmptyForEmptyFile(): void
+    {
+        $file = sys_get_temp_dir() . '/ansilume_test_cb_' . uniqid('', true) . '.ndjson';
+        file_put_contents($file, '');
+
+        $job = new TestableRunAnsibleJob();
+        $tasks = $job->parseCallbackFile($file);
+        unlink($file);
+
+        $this->assertSame([], $tasks);
+    }
+
+    // -------------------------------------------------------------------------
+    // ArtifactCollector::cleanupDirectory
+    // -------------------------------------------------------------------------
+
     public function testCleanupDirectoryHandlesSymlinks(): void
     {
         $dir = sys_get_temp_dir() . '/ansilume_test_cleanup_' . uniqid('', true);
@@ -260,5 +311,10 @@ class TestableRunAnsibleJob extends RunAnsibleJob
     public function buildProcessEnv(string $callbackFile, string $artifactDir): array
     {
         return parent::buildProcessEnv($callbackFile, $artifactDir);
+    }
+
+    public function parseCallbackFile(string $callbackFile): array
+    {
+        return parent::parseCallbackFile($callbackFile);
     }
 }

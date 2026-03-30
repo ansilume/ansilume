@@ -311,126 +311,97 @@ class MetricsController extends Controller
     {
         $lines = [];
 
-        // Health
-        $h = $metrics['health'];
-        $lines[] = '# HELP ansilume_database_up Whether the database is reachable (1=up, 0=down).';
-        $lines[] = '# TYPE ansilume_database_up gauge';
-        $lines[] = 'ansilume_database_up ' . ($h['database_up'] ? '1' : '0');
-
-        if ($h['database_latency_ms'] !== null) {
-            $lines[] = '# HELP ansilume_database_latency_ms Database probe latency in milliseconds.';
-            $lines[] = '# TYPE ansilume_database_latency_ms gauge';
-            $lines[] = 'ansilume_database_latency_ms ' . $h['database_latency_ms'];
-        }
-
-        $lines[] = '# HELP ansilume_redis_up Whether Redis is reachable (1=up, 0=down).';
-        $lines[] = '# TYPE ansilume_redis_up gauge';
-        $lines[] = 'ansilume_redis_up ' . ($h['redis_up'] ? '1' : '0');
-
-        if ($h['redis_latency_ms'] !== null) {
-            $lines[] = '# HELP ansilume_redis_latency_ms Redis probe latency in milliseconds.';
-            $lines[] = '# TYPE ansilume_redis_latency_ms gauge';
-            $lines[] = 'ansilume_redis_latency_ms ' . $h['redis_latency_ms'];
-        }
-
-        // Jobs
-        $j = $metrics['jobs'];
-        $lines[] = '# HELP ansilume_jobs_total Total number of jobs.';
-        $lines[] = '# TYPE ansilume_jobs_total gauge';
-        $lines[] = 'ansilume_jobs_total ' . $j['total'];
-
-        $lines[] = '# HELP ansilume_jobs_by_status Number of jobs by status.';
-        $lines[] = '# TYPE ansilume_jobs_by_status gauge';
-        foreach ($j['by_status'] as $status => $count) {
-            $lines[] = 'ansilume_jobs_by_status{status="' . $status . '"} ' . $count;
-        }
-
-        if ($j['avg_duration_1h_sec'] !== null) {
-            $lines[] = '# HELP ansilume_jobs_avg_duration_seconds Average job duration (last hour).';
-            $lines[] = '# TYPE ansilume_jobs_avg_duration_seconds gauge';
-            $lines[] = 'ansilume_jobs_avg_duration_seconds ' . $j['avg_duration_1h_sec'];
-        }
-
-        // Tasks
-        $t = $metrics['tasks'];
-        $lines[] = '# HELP ansilume_tasks_total Total number of task results recorded.';
-        $lines[] = '# TYPE ansilume_tasks_total gauge';
-        $lines[] = 'ansilume_tasks_total ' . $t['total'];
-
-        $lines[] = '# HELP ansilume_tasks_by_status Task results by status (all time).';
-        $lines[] = '# TYPE ansilume_tasks_by_status gauge';
-        foreach ($t['by_status'] as $status => $count) {
-            $lines[] = 'ansilume_tasks_by_status{status="' . $status . '"} ' . $count;
-        }
-
-        $lines[] = '# HELP ansilume_tasks_last_1h Task results by status (last hour).';
-        $lines[] = '# TYPE ansilume_tasks_last_1h gauge';
-        foreach ($t['last_1h'] as $status => $count) {
-            $lines[] = 'ansilume_tasks_last_1h{status="' . $status . '"} ' . $count;
-        }
-
-        // Hosts
-        $hs = $metrics['hosts'];
-        $lines[] = '# HELP ansilume_host_results_total Aggregated Ansible PLAY RECAP counters across all jobs.';
-        $lines[] = '# TYPE ansilume_host_results_total gauge';
-        foreach ($hs['totals'] as $key => $val) {
-            $lines[] = 'ansilume_host_results_total{result="' . $key . '"} ' . $val;
-        }
-
-        $lines[] = '# HELP ansilume_hosts_unique Number of unique hosts seen across all jobs.';
-        $lines[] = '# TYPE ansilume_hosts_unique gauge';
-        $lines[] = 'ansilume_hosts_unique ' . $hs['unique_hosts'];
-
-        $lines[] = '# HELP ansilume_hosts_with_changes Unique hosts that had at least one change.';
-        $lines[] = '# TYPE ansilume_hosts_with_changes gauge';
-        $lines[] = 'ansilume_hosts_with_changes ' . $hs['hosts_with_changes'];
-
-        $lines[] = '# HELP ansilume_hosts_with_failures Unique hosts that had at least one failure.';
-        $lines[] = '# TYPE ansilume_hosts_with_failures gauge';
-        $lines[] = 'ansilume_hosts_with_failures ' . $hs['hosts_with_failures'];
-
-        $lines[] = '# HELP ansilume_jobs_with_changes Jobs where at least one task made a change.';
-        $lines[] = '# TYPE ansilume_jobs_with_changes gauge';
-        $lines[] = 'ansilume_jobs_with_changes ' . $hs['jobs_with_changes'];
-
-        // Runners
-        $r = $metrics['runners'];
-        $lines[] = '# HELP ansilume_runners_total Total number of registered runners.';
-        $lines[] = '# TYPE ansilume_runners_total gauge';
-        $lines[] = 'ansilume_runners_total ' . $r['total'];
-
-        $lines[] = '# HELP ansilume_runners_online Runners that checked in recently.';
-        $lines[] = '# TYPE ansilume_runners_online gauge';
-        $lines[] = 'ansilume_runners_online ' . $r['online'];
-
-        $lines[] = '# HELP ansilume_runners_offline Registered runners that are not responding.';
-        $lines[] = '# TYPE ansilume_runners_offline gauge';
-        $lines[] = 'ansilume_runners_offline ' . $r['offline'];
-
-        // Schedules
-        $sc = $metrics['schedules'];
-        $lines[] = '# HELP ansilume_schedules_total Total number of schedules.';
-        $lines[] = '# TYPE ansilume_schedules_total gauge';
-        $lines[] = 'ansilume_schedules_total ' . $sc['total'];
-
-        $lines[] = '# HELP ansilume_schedules_enabled Number of enabled schedules.';
-        $lines[] = '# TYPE ansilume_schedules_enabled gauge';
-        $lines[] = 'ansilume_schedules_enabled ' . $sc['enabled'];
-
-        $lines[] = '# HELP ansilume_schedules_overdue Enabled schedules past due by more than 5 minutes.';
-        $lines[] = '# TYPE ansilume_schedules_overdue gauge';
-        $lines[] = 'ansilume_schedules_overdue ' . $sc['overdue'];
-
-        // Queue
-        $q = $metrics['queue'];
-        $lines[] = '# HELP ansilume_queue_pending Jobs waiting to be picked up.';
-        $lines[] = '# TYPE ansilume_queue_pending gauge';
-        $lines[] = 'ansilume_queue_pending ' . $q['pending'];
-
-        $lines[] = '# HELP ansilume_queue_running Jobs currently executing.';
-        $lines[] = '# TYPE ansilume_queue_running gauge';
-        $lines[] = 'ansilume_queue_running ' . $q['running'];
+        self::renderHealthMetrics($lines, $metrics['health']);
+        self::renderJobMetrics($lines, $metrics['jobs']);
+        self::renderTaskMetrics($lines, $metrics['tasks']);
+        self::renderHostMetrics($lines, $metrics['hosts']);
+        self::renderRunnerMetrics($lines, $metrics['runners']);
+        self::renderScheduleMetrics($lines, $metrics['schedules']);
+        self::renderQueueMetrics($lines, $metrics['queue']);
 
         return implode("\n", $lines) . "\n";
+    }
+
+    private static function renderHealthMetrics(array &$lines, array $h): void
+    {
+        self::gauge($lines, 'ansilume_database_up', 'Whether the database is reachable (1=up, 0=down).', $h['database_up'] ? '1' : '0');
+
+        if ($h['database_latency_ms'] !== null) {
+            self::gauge($lines, 'ansilume_database_latency_ms', 'Database probe latency in milliseconds.', $h['database_latency_ms']);
+        }
+
+        self::gauge($lines, 'ansilume_redis_up', 'Whether Redis is reachable (1=up, 0=down).', $h['redis_up'] ? '1' : '0');
+
+        if ($h['redis_latency_ms'] !== null) {
+            self::gauge($lines, 'ansilume_redis_latency_ms', 'Redis probe latency in milliseconds.', $h['redis_latency_ms']);
+        }
+    }
+
+    private static function renderJobMetrics(array &$lines, array $j): void
+    {
+        self::gauge($lines, 'ansilume_jobs_total', 'Total number of jobs.', $j['total']);
+        self::gaugeLabeled($lines, 'ansilume_jobs_by_status', 'Number of jobs by status.', 'status', $j['by_status']);
+
+        if ($j['avg_duration_1h_sec'] !== null) {
+            self::gauge($lines, 'ansilume_jobs_avg_duration_seconds', 'Average job duration (last hour).', $j['avg_duration_1h_sec']);
+        }
+    }
+
+    private static function renderTaskMetrics(array &$lines, array $t): void
+    {
+        self::gauge($lines, 'ansilume_tasks_total', 'Total number of task results recorded.', $t['total']);
+        self::gaugeLabeled($lines, 'ansilume_tasks_by_status', 'Task results by status (all time).', 'status', $t['by_status']);
+        self::gaugeLabeled($lines, 'ansilume_tasks_last_1h', 'Task results by status (last hour).', 'status', $t['last_1h']);
+    }
+
+    private static function renderHostMetrics(array &$lines, array $hs): void
+    {
+        self::gaugeLabeled($lines, 'ansilume_host_results_total', 'Aggregated Ansible PLAY RECAP counters across all jobs.', 'result', $hs['totals']);
+        self::gauge($lines, 'ansilume_hosts_unique', 'Number of unique hosts seen across all jobs.', $hs['unique_hosts']);
+        self::gauge($lines, 'ansilume_hosts_with_changes', 'Unique hosts that had at least one change.', $hs['hosts_with_changes']);
+        self::gauge($lines, 'ansilume_hosts_with_failures', 'Unique hosts that had at least one failure.', $hs['hosts_with_failures']);
+        self::gauge($lines, 'ansilume_jobs_with_changes', 'Jobs where at least one task made a change.', $hs['jobs_with_changes']);
+    }
+
+    private static function renderRunnerMetrics(array &$lines, array $r): void
+    {
+        self::gauge($lines, 'ansilume_runners_total', 'Total number of registered runners.', $r['total']);
+        self::gauge($lines, 'ansilume_runners_online', 'Runners that checked in recently.', $r['online']);
+        self::gauge($lines, 'ansilume_runners_offline', 'Registered runners that are not responding.', $r['offline']);
+    }
+
+    private static function renderScheduleMetrics(array &$lines, array $sc): void
+    {
+        self::gauge($lines, 'ansilume_schedules_total', 'Total number of schedules.', $sc['total']);
+        self::gauge($lines, 'ansilume_schedules_enabled', 'Number of enabled schedules.', $sc['enabled']);
+        self::gauge($lines, 'ansilume_schedules_overdue', 'Enabled schedules past due by more than 5 minutes.', $sc['overdue']);
+    }
+
+    private static function renderQueueMetrics(array &$lines, array $q): void
+    {
+        self::gauge($lines, 'ansilume_queue_pending', 'Jobs waiting to be picked up.', $q['pending']);
+        self::gauge($lines, 'ansilume_queue_running', 'Jobs currently executing.', $q['running']);
+    }
+
+    /**
+     * @param string|int|float $value
+     */
+    private static function gauge(array &$lines, string $name, string $help, $value): void
+    {
+        $lines[] = "# HELP {$name} {$help}";
+        $lines[] = "# TYPE {$name} gauge";
+        $lines[] = "{$name} {$value}";
+    }
+
+    /**
+     * @param array<string, int|float> $values
+     */
+    private static function gaugeLabeled(array &$lines, string $name, string $help, string $label, array $values): void
+    {
+        $lines[] = "# HELP {$name} {$help}";
+        $lines[] = "# TYPE {$name} gauge";
+        foreach ($values as $key => $val) {
+            $lines[] = "{$name}{{$label}=\"{$key}\"} {$val}";
+        }
     }
 }

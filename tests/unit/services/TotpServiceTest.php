@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\unit\services;
 
 use app\services\TotpService;
+use app\tests\unit\services\TestableTotpService;
 use OTPHP\TOTP;
 use PHPUnit\Framework\TestCase;
 
@@ -14,11 +15,11 @@ use PHPUnit\Framework\TestCase;
  */
 class TotpServiceTest extends TestCase
 {
-    private TotpService $service;
+    private TestableTotpService $service;
 
     protected function setUp(): void
     {
-        $this->service = new TotpService();
+        $this->service = new TestableTotpService();
     }
 
     // ── Secret generation ────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ class TotpServiceTest extends TestCase
 
     public function testCustomRecoveryCodeCount(): void
     {
-        $service = new TotpService();
+        $service = new TestableTotpService();
         $service->recoveryCodeCount = 5;
         $result = $service->generateRecoveryCodes();
         $this->assertCount(5, $result['raw']);

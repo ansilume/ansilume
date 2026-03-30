@@ -158,6 +158,57 @@ class JobCompletionServiceTest extends TestCase
         $service->complete($this->makeJob(Job::STATUS_RUNNING), 0);
     }
 
+    public function testCompleteTimedOutSetsStatusTimedOut(): void
+    {
+        $job = $this->makeJob(Job::STATUS_RUNNING);
+        $service = new JobCompletionService();
+        $service->completeTimedOut($job);
+        $this->assertSame(Job::STATUS_TIMED_OUT, $job->status);
+    }
+
+    public function testCompleteTimedOutSetsExitCodeMinusOne(): void
+    {
+        $job = $this->makeJob(Job::STATUS_RUNNING);
+        $service = new JobCompletionService();
+        $service->completeTimedOut($job);
+        $this->assertSame(-1, $job->exit_code);
+    }
+
+    public function testCompleteTimedOutSetsFinishedAt(): void
+    {
+        $before = time();
+        $job = $this->makeJob(Job::STATUS_RUNNING);
+        $service = new JobCompletionService();
+        $service->completeTimedOut($job);
+        $this->assertGreaterThanOrEqual($before, $job->finished_at);
+    }
+
+    public function testCompleteTimedOutDispatchesFailureWebhook(): void
+    {
+        $webhook = $this->getMockBuilder(WebhookService::class)
+            ->onlyMethods(['dispatch'])
+            ->getMock();
+        $webhook->expects($this->once())
+            ->method('dispatch')
+            ->with(\app\models\Webhook::EVENT_JOB_FAILURE, $this->anything());
+        \Yii::$app->set('webhookService', $webhook);
+
+        $service = new JobCompletionService();
+        $service->completeTimedOut($this->makeJob(Job::STATUS_RUNNING));
+    }
+
+    public function testCompleteTimedOutSendsFailureNotification(): void
+    {
+        $notify = $this->getMockBuilder(NotificationService::class)
+            ->onlyMethods(['notifyJobFailed'])
+            ->getMock();
+        $notify->expects($this->once())->method('notifyJobFailed');
+        \Yii::$app->set('notificationService', $notify);
+
+        $service = new JobCompletionService();
+        $service->completeTimedOut($this->makeJob(Job::STATUS_RUNNING));
+    }
+
     private function makeJob(string $status): Job
     {
         $job = $this->getMockBuilder(Job::class)

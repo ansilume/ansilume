@@ -81,7 +81,7 @@ class TotpService extends Component
     /**
      * Encrypt a TOTP secret for database storage.
      */
-    public function encryptSecret(string $plainSecret): string
+    protected function encryptSecret(string $plainSecret): string
     {
         $key = $this->deriveKey();
         $iv = random_bytes(16);
@@ -97,7 +97,7 @@ class TotpService extends Component
     /**
      * Decrypt a TOTP secret from database storage.
      */
-    public function decryptSecret(string $ciphertext): string
+    protected function decryptSecret(string $ciphertext): string
     {
         $key = $this->deriveKey();
         $raw = base64_decode($ciphertext, true);
@@ -126,7 +126,7 @@ class TotpService extends Component
      *   'raw' = plaintext codes to show the user once
      *   'hashed' = bcrypt hashes to store in DB
      */
-    public function generateRecoveryCodes(): array
+    protected function generateRecoveryCodes(): array
     {
         $raw = [];
         $hashed = [];

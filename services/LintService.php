@@ -107,8 +107,8 @@ class LintService extends Component
 
     protected function isAvailable(): bool
     {
-        exec('which ansible-lint 2>/dev/null', $out, $code);
-        return $code === 0;
+        exec('which ansible-lint 2>/dev/null', $lines, $code);
+        return $code === 0 && !empty($lines);
     }
 
     /**

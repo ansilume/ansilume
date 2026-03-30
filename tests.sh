@@ -366,6 +366,53 @@ else
 fi
 
 # =============================================================================
+# 8c. PHPMD — mess detection (complexity, unused code)
+# =============================================================================
+section "PHPMD (complexity + unused code)"
+
+if dc php vendor/bin/phpmd --version >/dev/null 2>&1; then
+    PHPMD_OUT=$(dc php vendor/bin/phpmd \
+        controllers,services,commands,jobs,components,helpers,models \
+        text phpmd.xml \
+        --suffixes php \
+        --exclude vendor,tests \
+        2>&1 || true)
+    if [[ -z "$PHPMD_OUT" ]]; then
+        ok "PHPMD passed (no violations)"
+    else
+        PHPMD_COUNT=$(echo "$PHPMD_OUT" | grep -c . || echo "0")
+        fail "PHPMD: ${PHPMD_COUNT} violation(s) found"
+        echo "$PHPMD_OUT" | head -20 | sed 's/^/     /'
+    fi
+else
+    skip "phpmd not available"
+fi
+
+# =============================================================================
+# 8d. PHPCPD — copy-paste detection
+# =============================================================================
+section "PHPCPD (copy-paste detection)"
+
+if dc php vendor/bin/phpcpd --version >/dev/null 2>&1; then
+    PHPCPD_OUT=$(dc php vendor/bin/phpcpd \
+        --min-lines=15 \
+        --min-tokens=70 \
+        --exclude=vendor --exclude=tests --exclude=migrations --exclude=views \
+        . 2>&1 || true)
+    if echo "$PHPCPD_OUT" | grep -q "0.00% duplicated"; then
+        ok "PHPCPD passed (no duplications)"
+    elif echo "$PHPCPD_OUT" | grep -qP "Found \d+ clones"; then
+        CLONE_COUNT=$(echo "$PHPCPD_OUT" | grep -oP 'Found \K\d+(?= clones)')
+        fail "PHPCPD: ${CLONE_COUNT} clone(s) found"
+        echo "$PHPCPD_OUT" | head -20 | sed 's/^/     /'
+    else
+        ok "PHPCPD passed"
+    fi
+else
+    skip "phpcpd not available"
+fi
+
+# =============================================================================
 # 9. PHPStan — static analysis (level 5)
 # =============================================================================
 section "PHPStan (level 5)"

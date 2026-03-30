@@ -46,71 +46,92 @@ class ArtifactService extends Component
             return [];
         }
 
-        $artifacts = [];
-        $count = 0;
-
         $iterator = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($sourceDir, \FilesystemIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::LEAVES_ONLY
         );
 
         $realSourceDir = realpath($sourceDir);
+        $artifacts = [];
+        $count = 0;
 
         foreach ($iterator as $file) {
             /** @var \SplFileInfo $file */
-            if (!$file->isFile()) {
-                continue;
-            }
-
-            // Skip symlinks — prevents exfiltration of files outside the artifact dir
-            if ($file->isLink()) {
-                \Yii::warning("ArtifactService: skipping symlink {$file->getPathname()} for job #{$job->id}", __CLASS__);
-                continue;
-            }
-
-            // Verify the real path is inside the source directory (defense in depth)
-            $realFilePath = $file->getRealPath();
-            if ($realFilePath === false || ($realSourceDir !== false && !str_starts_with($realFilePath, $realSourceDir))) {
-                \Yii::warning("ArtifactService: skipping file outside source dir {$file->getPathname()} for job #{$job->id}", __CLASS__);
-                continue;
-            }
-
             if ($count >= $this->maxArtifactsPerJob) {
                 \Yii::warning("ArtifactService: artifact limit ({$this->maxArtifactsPerJob}) reached for job #{$job->id}", __CLASS__);
                 break;
             }
 
-            $fileSize = $file->getSize();
-            if ($fileSize > $this->maxFileSize) {
-                \Yii::warning("ArtifactService: skipping oversized artifact {$file->getFilename()} ({$fileSize} bytes) for job #{$job->id}", __CLASS__);
+            if (!$this->isEligibleFile($file, $realSourceDir, $job->id)) {
                 continue;
             }
 
-            $relativePath = ltrim(
-                substr($file->getPathname(), strlen($sourceDir)),
-                DIRECTORY_SEPARATOR
-            );
-
-            $storedName = $this->generateStoredName($file->getFilename());
-            $destPath = $basePath . DIRECTORY_SEPARATOR . $storedName;
-
-            if (!copy($file->getPathname(), $destPath)) {
-                \Yii::error("ArtifactService: failed to copy {$file->getPathname()} to {$destPath}", __CLASS__);
-                continue;
-            }
-
-            chmod($destPath, 0640);
-
-            $artifact = $this->saveArtifactRecord($job, $storedName, $relativePath, $file->getPathname(), $fileSize, $destPath);
+            $artifact = $this->collectSingleFile($job, $file, $sourceDir, $basePath);
             if ($artifact !== null) {
                 $artifacts[] = $artifact;
                 $count++;
-            } else {
-                \app\helpers\FileHelper::safeUnlink($destPath);
             }
         }
 
         return $artifacts;
+    }
+
+    /**
+     * Check whether a file should be collected as an artifact.
+     *
+     * @param string|false $realSourceDir
+     */
+    private function isEligibleFile(\SplFileInfo $file, $realSourceDir, int $jobId): bool
+    {
+        if (!$file->isFile()) {
+            return false;
+        }
+
+        if ($file->isLink()) {
+            \Yii::warning("ArtifactService: skipping symlink {$file->getPathname()} for job #{$jobId}", __CLASS__);
+            return false;
+        }
+
+        $realFilePath = $file->getRealPath();
+        if ($realFilePath === false || ($realSourceDir !== false && !str_starts_with($realFilePath, $realSourceDir))) {
+            \Yii::warning("ArtifactService: skipping file outside source dir {$file->getPathname()} for job #{$jobId}", __CLASS__);
+            return false;
+        }
+
+        if ($file->getSize() > $this->maxFileSize) {
+            \Yii::warning("ArtifactService: skipping oversized artifact {$file->getFilename()} ({$file->getSize()} bytes) for job #{$jobId}", __CLASS__);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Copy a single file into artifact storage and persist the record.
+     */
+    private function collectSingleFile(Job $job, \SplFileInfo $file, string $sourceDir, string $basePath): ?JobArtifact
+    {
+        $relativePath = ltrim(
+            substr($file->getPathname(), strlen($sourceDir)),
+            DIRECTORY_SEPARATOR
+        );
+
+        $storedName = $this->generateStoredName($file->getFilename());
+        $destPath = $basePath . DIRECTORY_SEPARATOR . $storedName;
+
+        if (!copy($file->getPathname(), $destPath)) {
+            \Yii::error("ArtifactService: failed to copy {$file->getPathname()} to {$destPath}", __CLASS__);
+            return null;
+        }
+
+        chmod($destPath, 0640);
+
+        $artifact = $this->saveArtifactRecord($job, $storedName, $relativePath, $file->getPathname(), $file->getSize(), $destPath);
+        if ($artifact === null) {
+            \app\helpers\FileHelper::safeUnlink($destPath);
+        }
+
+        return $artifact;
     }
 
     /**

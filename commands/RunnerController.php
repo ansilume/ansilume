@@ -161,7 +161,7 @@ class RunnerController extends Controller
 
         $executor = new RunnerProcessExecutor($this->http, $this);
         $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
-        [$exitCode, $sequence] = $executor->run($jobId, $cmd, $payload, $env, $timeoutMinutes);
+        [$exitCode] = $executor->run($jobId, $cmd, $payload, $env, $timeoutMinutes);
 
         $this->collectAndSendTasks($jobId, $callbackFile);
 

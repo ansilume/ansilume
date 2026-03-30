@@ -51,6 +51,30 @@ class JobCompletionService extends Component
         }
     }
 
+    public function completeTimedOut(Job $job): void
+    {
+        $job->exit_code = -1;
+        $job->finished_at = time();
+        $job->status = Job::STATUS_TIMED_OUT;
+        $job->save(false);
+
+        \Yii::$app->get('auditService')->log(
+            AuditService::ACTION_JOB_FINISHED,
+            'job',
+            $job->id,
+            null,
+            ['exit_code' => -1, 'status' => Job::STATUS_TIMED_OUT]
+        );
+
+        /** @var WebhookService $ws */
+        $ws = \Yii::$app->get('webhookService');
+        $ws->dispatch(Webhook::EVENT_JOB_FAILURE, $job);
+
+        /** @var NotificationService $ns */
+        $ns = \Yii::$app->get('notificationService');
+        $ns->notifyJobFailed($job);
+    }
+
     public function appendLog(Job $job, string $stream, string $content, int $sequence): void
     {
         $log = new JobLog();
@@ -67,41 +91,63 @@ class JobCompletionService extends Component
     public function saveTasks(Job $job, array $tasks): void
     {
         $hasChanges = false;
-        $hostBuckets = []; // host => [ok, changed, failed, skipped, unreachable, rescued]
+        $hostBuckets = [];
 
         foreach ($tasks as $data) {
-            $task = new JobTask();
-            $task->job_id = $job->id;
-            $task->sequence = (int)($data['seq'] ?? 0);
-            $task->task_name = (string)($data['name'] ?? '');
-            $task->task_action = (string)($data['action'] ?? '');
-            $task->host = (string)($data['host'] ?? '');
-            $task->status = (string)($data['status'] ?? 'ok');
-            $task->changed = (int)(bool)($data['changed'] ?? false);
-            $task->duration_ms = (int)($data['duration_ms'] ?? 0);
-            $task->created_at = time();
-            $task->save(false);
+            $task = $this->persistTask($job, $data);
 
             if ($task->changed) {
                 $hasChanges = true;
             }
 
-            // Accumulate per-host recap counters
-            $host = $task->host;
-            if ($host !== '') {
-                if (!isset($hostBuckets[$host])) {
-                    $hostBuckets[$host] = ['ok' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0, 'unreachable' => 0, 'rescued' => 0];
-                }
-                $status = $task->status;
-                if ($task->changed) {
-                    $hostBuckets[$host]['changed']++;
-                } elseif (isset($hostBuckets[$host][$status])) {
-                    $hostBuckets[$host][$status]++;
-                }
-            }
+            $this->accumulateHostBucket($hostBuckets, $task);
         }
 
-        // Persist host summaries (upsert by job_id + host)
+        $this->persistHostSummaries($job, $hostBuckets);
+
+        if ($hasChanges && !$job->has_changes) {
+            $job->has_changes = 1;
+            $job->save(false);
+        }
+    }
+
+    private function persistTask(Job $job, array $data): JobTask
+    {
+        $task = new JobTask();
+        $task->job_id = $job->id;
+        $task->sequence = (int)($data['seq'] ?? 0);
+        $task->task_name = (string)($data['name'] ?? '');
+        $task->task_action = (string)($data['action'] ?? '');
+        $task->host = (string)($data['host'] ?? '');
+        $task->status = (string)($data['status'] ?? 'ok');
+        $task->changed = (int)(bool)($data['changed'] ?? false);
+        $task->duration_ms = (int)($data['duration_ms'] ?? 0);
+        $task->created_at = time();
+        $task->save(false);
+
+        return $task;
+    }
+
+    private function accumulateHostBucket(array &$hostBuckets, JobTask $task): void
+    {
+        $host = $task->host;
+        if ($host === '') {
+            return;
+        }
+
+        if (!isset($hostBuckets[$host])) {
+            $hostBuckets[$host] = ['ok' => 0, 'changed' => 0, 'failed' => 0, 'skipped' => 0, 'unreachable' => 0, 'rescued' => 0];
+        }
+
+        if ($task->changed) {
+            $hostBuckets[$host]['changed']++;
+        } elseif (isset($hostBuckets[$host][$task->status])) {
+            $hostBuckets[$host][$task->status]++;
+        }
+    }
+
+    private function persistHostSummaries(Job $job, array $hostBuckets): void
+    {
         $now = time();
         foreach ($hostBuckets as $host => $counts) {
             $summary = JobHostSummary::findOne(['job_id' => $job->id, 'host' => $host])
@@ -118,11 +164,6 @@ class JobCompletionService extends Component
                 $summary->created_at = $now;
             }
             $summary->save(false);
-        }
-
-        if ($hasChanges && !$job->has_changes) {
-            $job->has_changes = 1;
-            $job->save(false);
         }
     }
 }

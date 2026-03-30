@@ -23,8 +23,8 @@ class AnsibleInventoryRunner extends Component
      */
     public function isAvailable(): bool
     {
-        exec('which ansible-inventory 2>/dev/null', $out, $code);
-        return $code === 0;
+        exec('which ansible-inventory 2>/dev/null', $lines, $code);
+        return $code === 0 && !empty($lines);
     }
 
     /**

@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+<!--
+  PHPMD ruleset for Ansilume — matches Scrutinizer-CI checks.
+
+  Enabled: codesize (complexity), unusedcode.
+  Disabled rulesets: cleancode (StaticAccess noise with Yii2),
+                     naming (ShortVariable $id/$db is fine),
+                     design (too opinionated for framework code).
+-->
+<ruleset name="Ansilume"
+         xmlns="http://pmd.sf.net/ruleset/1.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sf.net/ruleset/1.0.0
+                             http://pmd.sf.net/ruleset_xml_schema.xsd"
+         xsi:noNamespaceSchemaLocation="http://pmd.sf.net/ruleset_xml_schema.xsd">
+
+    <description>Ansilume PHPMD rules — codesize + unused code</description>
+
+    <!-- ================================================================== -->
+    <!-- Codesize: catch high-complexity methods early                       -->
+    <!-- ================================================================== -->
+    <rule ref="rulesets/codesize.xml/CyclomaticComplexity">
+        <properties>
+            <!-- Scrutinizer default is 10; we match that -->
+            <property name="reportLevel" value="10" />
+        </properties>
+    </rule>
+
+    <rule ref="rulesets/codesize.xml/NPathComplexity">
+        <properties>
+            <property name="minimum" value="200" />
+        </properties>
+    </rule>
+
+    <rule ref="rulesets/codesize.xml/ExcessiveMethodLength">
+        <properties>
+            <property name="minimum" value="100" />
+        </properties>
+    </rule>
+
+    <rule ref="rulesets/codesize.xml/ExcessiveClassLength">
+        <properties>
+            <property name="minimum" value="500" />
+        </properties>
+    </rule>
+
+    <rule ref="rulesets/codesize.xml/TooManyPublicMethods">
+        <properties>
+            <!-- CLAUDE.md says ~15 methods max; allow a bit of headroom -->
+            <property name="maxmethods" value="15" />
+        </properties>
+    </rule>
+
+    <rule ref="rulesets/codesize.xml/ExcessiveParameterList" />
+
+    <!-- ================================================================== -->
+    <!-- Unused code: catch dead code before it rots                        -->
+    <!-- ================================================================== -->
+    <rule ref="rulesets/unusedcode.xml">
+        <!-- Yii2 interfaces require $queue, $action, $request etc.
+             Suppress unused formal parameters globally — the real value
+             is catching unused local variables. -->
+        <exclude name="UnusedFormalParameter" />
+    </rule>
+
+</ruleset>

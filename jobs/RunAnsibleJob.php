@@ -10,10 +10,9 @@ use app\components\ArtifactCollector;
 use app\jobs\JobTimeoutException;
 use app\models\Job;
 use app\models\JobLog;
-use app\models\JobTask;
 use app\models\Webhook;
 use app\services\AuditService;
-use app\services\NotificationService;
+use app\services\JobCompletionService;
 use app\services\WebhookService;
 use yii\base\BaseObject;
 use yii\queue\JobInterface;
@@ -82,33 +81,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     private function transitionToFinished(Job $job, int $exitCode): void
     {
-        $job->exit_code = $exitCode;
-        $job->finished_at = time();
-        $job->status = $exitCode === 0 ? Job::STATUS_SUCCEEDED : Job::STATUS_FAILED;
-        $job->save(false);
-
-        \Yii::$app->get('auditService')->log(
-            AuditService::ACTION_JOB_FINISHED,
-            'job',
-            $job->id,
-            null,
-            ['exit_code' => $exitCode, 'status' => $job->status]
-        );
-
-        /** @var WebhookService $ws */
-        $ws = \Yii::$app->get('webhookService');
-        $event = $job->status === Job::STATUS_SUCCEEDED
-            ? Webhook::EVENT_JOB_SUCCESS
-            : Webhook::EVENT_JOB_FAILURE;
-        $ws->dispatch($event, $job);
-
-        /** @var NotificationService $ns */
-        $ns = \Yii::$app->get('notificationService');
-        if ($job->status === Job::STATUS_FAILED) {
-            $ns->notifyJobFailed($job);
-        } elseif ($job->status === Job::STATUS_SUCCEEDED) {
-            $ns->notifyJobSucceeded($job);
-        }
+        /** @var JobCompletionService $completionService */
+        $completionService = \Yii::$app->get('jobCompletionService');
+        $completionService->complete($job, $exitCode);
     }
 
     private function transitionToFailed(Job $job, int $exitCode): void
@@ -118,26 +93,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     private function transitionToTimedOut(Job $job): void
     {
-        $job->exit_code = -1;
-        $job->finished_at = time();
-        $job->status = Job::STATUS_TIMED_OUT;
-        $job->save(false);
-
-        \Yii::$app->get('auditService')->log(
-            AuditService::ACTION_JOB_FINISHED,
-            'job',
-            $job->id,
-            null,
-            ['exit_code' => -1, 'status' => Job::STATUS_TIMED_OUT]
-        );
-
-        /** @var WebhookService $ws */
-        $ws = \Yii::$app->get('webhookService');
-        $ws->dispatch(Webhook::EVENT_JOB_FAILURE, $job);
-
-        /** @var NotificationService $ns */
-        $ns = \Yii::$app->get('notificationService');
-        $ns->notifyJobFailed($job);
+        /** @var JobCompletionService $completionService */
+        $completionService = \Yii::$app->get('jobCompletionService');
+        $completionService->completeTimedOut($job);
     }
 
     /**
@@ -187,8 +145,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
     }
 
     /**
-     * Parse the NDJSON callback file and persist JobTask records.
-     * Sets job->has_changes if any task reported a change.
+     * Parse the NDJSON callback file and persist JobTask records via JobCompletionService.
      */
     private function saveTaskResults(Job $job, string $callbackFile): void
     {
@@ -197,50 +154,36 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         }
 
         try {
-            $lines = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-            $hasChanges = $this->persistTaskLines($job, $lines ?: []);
+            $tasks = $this->parseCallbackFile($callbackFile);
         } finally {
             \app\helpers\FileHelper::safeUnlink($callbackFile);
         }
 
-        if ($hasChanges) {
-            $job->has_changes = 1;
-            $job->save(false);
+        if (!empty($tasks)) {
+            /** @var JobCompletionService $completionService */
+            $completionService = \Yii::$app->get('jobCompletionService');
+            $completionService->saveTasks($job, $tasks);
         }
     }
 
     /**
-     * Parse NDJSON lines and persist each as a JobTask record.
-     * Returns true if any task reported a change.
+     * Parse NDJSON callback file into an array of task data.
+     *
+     * @return array<int, array<string, mixed>>
      */
-    protected function persistTaskLines(Job $job, array $lines): bool
+    protected function parseCallbackFile(string $callbackFile): array
     {
-        $hasChanges = false;
+        $tasks = [];
+        $lines = file($callbackFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
 
         foreach ($lines as $line) {
             $data = json_decode($line, true);
-            if (!is_array($data)) {
-                continue;
-            }
-
-            $task = new JobTask();
-            $task->job_id = $job->id;
-            $task->sequence = (int)($data['seq'] ?? 0);
-            $task->task_name = (string)($data['name'] ?? '');
-            $task->task_action = (string)($data['action'] ?? '');
-            $task->host = (string)($data['host'] ?? '');
-            $task->status = (string)($data['status'] ?? 'ok');
-            $task->changed = (int)(bool)($data['changed'] ?? false);
-            $task->duration_ms = (int)($data['duration_ms'] ?? 0);
-            $task->created_at = time();
-            $task->save(false);
-
-            if ($task->changed) {
-                $hasChanges = true;
+            if (is_array($data)) {
+                $tasks[] = $data;
             }
         }
 
-        return $hasChanges;
+        return $tasks;
     }
 
     private function appendLog(Job $job, string $stream, string $content, int $sequence = 0): void
