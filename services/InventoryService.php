@@ -72,6 +72,7 @@ class InventoryService extends Component
      */
     public function resolveAndCache(Inventory $inventory): array
     {
+        /** @var array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null} $result */
         $result = $this->resolve($inventory);
 
         $inventory->parsed_hosts = $result['error'] === null

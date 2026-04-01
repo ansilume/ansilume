@@ -13,6 +13,10 @@
   <img src="https://img.shields.io/badge/MariaDB-10.11-003545?logo=mariadb&logoColor=white" alt="MariaDB">
   <img src="https://img.shields.io/badge/Redis-7.2-DC382D?logo=redis&logoColor=white" alt="Redis">
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker">
+  <br>
+  <a href="https://scrutinizer-ci.com/g/ansilume/ansilume/?branch=main"><img src="https://scrutinizer-ci.com/g/ansilume/ansilume/badges/quality-score.png?b=main" alt="Scrutinizer Code Quality"></a>
+  <a href="https://scrutinizer-ci.com/g/ansilume/ansilume/build-status/main"><img src="https://scrutinizer-ci.com/g/ansilume/ansilume/badges/build.png?b=main" alt="Build Status"></a>
+  <a href="https://scrutinizer-ci.com/g/ansilume/ansilume/?branch=main"><img src="https://scrutinizer-ci.com/g/ansilume/ansilume/badges/code-intelligence.svg?b=main" alt="Code Intelligence Status"></a>
   <img src="https://img.shields.io/badge/License-Apache%202.0-green" alt="License">
 </p>
 

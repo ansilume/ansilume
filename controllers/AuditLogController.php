@@ -24,8 +24,8 @@ class AuditLogController extends BaseController
 
     public function actionIndex(): string
     {
-        /** @var \yii\web\Request $webRequest */
         $webRequest = \Yii::$app->request;
+        assert($webRequest instanceof \yii\web\Request);
 
         $query = AuditLog::find()
             ->with('user')
