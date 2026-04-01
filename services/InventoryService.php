@@ -119,10 +119,12 @@ class InventoryService extends Component
             return ['groups' => [], 'hosts' => [], 'error' => 'Inventory content is empty.'];
         }
 
-        $tmpFile = tempnam(sys_get_temp_dir(), 'ansilume_inv_');
-        if ($tmpFile === false) {
+        $tmpBase = tempnam(sys_get_temp_dir(), 'ansilume_inv_');
+        if ($tmpBase === false) {
             return ['groups' => [], 'hosts' => [], 'error' => 'Failed to create temp file.'];
         }
+        $tmpFile = $tmpBase . '.yml';
+        rename($tmpBase, $tmpFile);
 
         try {
             file_put_contents($tmpFile, $content);

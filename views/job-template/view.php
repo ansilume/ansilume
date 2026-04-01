@@ -112,8 +112,13 @@ $this->title = $model->name;
                         <strong>Copy this token now — it will not be shown again.</strong>
                         <div class="mt-2">
                             <code id="trigger-token-display"><?= Html::encode($rawToken) ?></code>
-                            <button class="btn btn-sm btn-outline-secondary ms-2"
-                                    onclick="navigator.clipboard.writeText('<?= Html::encode($rawToken) ?>')">Copy</button>
+                            <button class="btn btn-sm btn-outline-secondary ms-2" id="btn-copy-trigger-token"
+                                    onclick="navigator.clipboard.writeText('<?= Html::encode($rawToken) ?>').then(function(){
+                                        var btn = document.getElementById('btn-copy-trigger-token');
+                                        btn.textContent = 'Copied!';
+                                        btn.classList.replace('btn-outline-secondary','btn-success');
+                                        setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
+                                    })">Copy</button>
                         </div>
                         <div class="mt-2 text-muted small">
                             Trigger URL: <code><?= Html::encode($triggerUrl) ?></code>
@@ -125,8 +130,13 @@ $this->title = $model->name;
                     ?>
                     <div class="input-group">
                         <code id="trigger-curl-example" class="form-control bg-body-secondary font-monospace small text-break" style="white-space:pre-wrap;"><?= Html::encode($curlExample) ?></code>
-                        <button class="btn btn-outline-secondary btn-sm"
-                                onclick="navigator.clipboard.writeText('<?= Html::encode($curlExample) ?>')">Copy</button>
+                        <button class="btn btn-outline-secondary btn-sm" id="btn-copy-curl"
+                                onclick="navigator.clipboard.writeText('<?= Html::encode($curlExample) ?>').then(function(){
+                                    var btn = document.getElementById('btn-copy-curl');
+                                    btn.textContent = 'Copied!';
+                                    btn.classList.replace('btn-outline-secondary','btn-success');
+                                    setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
+                                })">Copy</button>
                     </div>
                     <p class="mt-2 mb-0 small text-muted">
                         Pass optional overrides via JSON body:

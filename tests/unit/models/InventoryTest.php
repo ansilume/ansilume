@@ -43,7 +43,7 @@ class InventoryTest extends TestCase
         $inv = new Inventory();
         $inv->name           = 'Test';
         $inv->inventory_type = Inventory::TYPE_STATIC;
-        $inv->content        = "[web]\nlocalhost";
+        $inv->content        = "all:\n  hosts:\n    localhost:";
         $inv->validate(['inventory_type', 'content']);
         $this->assertArrayNotHasKey('inventory_type', $inv->errors);
         $this->assertArrayNotHasKey('content', $inv->errors);
@@ -89,5 +89,64 @@ class InventoryTest extends TestCase
         $inv->project_id     = 1;
         $inv->validate(['source_path']);
         $this->assertArrayHasKey('source_path', $inv->errors);
+    }
+
+    public function testValidYamlContentPasses(): void
+    {
+        $inv = new Inventory();
+        $inv->name           = 'Test';
+        $inv->inventory_type = Inventory::TYPE_STATIC;
+        $inv->content        = "all:\n  hosts:\n    web1:\n    web2:\n      ansible_user: ubuntu";
+        $inv->validate(['content']);
+        $this->assertArrayNotHasKey('content', $inv->errors);
+    }
+
+    public function testInvalidYamlContentFails(): void
+    {
+        $inv = new Inventory();
+        $inv->name           = 'Test';
+        $inv->inventory_type = Inventory::TYPE_STATIC;
+        $inv->content        = "all:\n  hosts:\n    - invalid: [unclosed";
+        $inv->validate(['content']);
+        $this->assertArrayHasKey('content', $inv->errors);
+        $this->assertStringContainsString('Invalid YAML', $inv->errors['content'][0]);
+    }
+
+    public function testScalarYamlContentFails(): void
+    {
+        $inv = new Inventory();
+        $inv->name           = 'Test';
+        $inv->inventory_type = Inventory::TYPE_STATIC;
+        $inv->content        = 'just a plain string';
+        $inv->validate(['content']);
+        $this->assertArrayHasKey('content', $inv->errors);
+        $this->assertStringContainsString('YAML mapping', $inv->errors['content'][0]);
+    }
+
+    public function testYamlValidationSkippedForNonStaticType(): void
+    {
+        $inv = new Inventory();
+        $inv->name           = 'Test';
+        $inv->inventory_type = Inventory::TYPE_FILE;
+        $inv->content        = 'not: valid: yaml: {{{{';
+        $inv->source_path    = 'hosts.yml';
+        $inv->project_id     = 1;
+        $inv->validate(['content']);
+        $this->assertArrayNotHasKey('content', $inv->errors);
+    }
+
+    public function testYamlValidationSkippedForEmptyContent(): void
+    {
+        $inv = new Inventory();
+        $inv->name           = 'Test';
+        $inv->inventory_type = Inventory::TYPE_STATIC;
+        $inv->content        = '';
+        $inv->validate(['content']);
+        // Empty content triggers the 'required' rule, but NOT a YAML parse error
+        $errors = $inv->errors['content'] ?? [];
+        foreach ($errors as $msg) {
+            $this->assertStringNotContainsString('Invalid YAML', $msg);
+            $this->assertStringNotContainsString('YAML mapping', $msg);
+        }
     }
 }

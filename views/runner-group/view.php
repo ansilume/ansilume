@@ -43,7 +43,13 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
     <div class="input-group mb-3">
         <input type="text" class="form-control font-monospace" id="token-display"
                value="<?= Html::encode($tokenFlash['raw_token']) ?>" readonly>
-        <button class="btn btn-outline-secondary" type="button" onclick="navigator.clipboard.writeText(document.getElementById('token-display').value)">Copy</button>
+        <button class="btn btn-outline-secondary" type="button" id="btn-copy-token"
+                onclick="navigator.clipboard.writeText(document.getElementById('token-display').value).then(function(){
+                    var btn = document.getElementById('btn-copy-token');
+                    btn.textContent = 'Copied!';
+                    btn.classList.replace('btn-outline-secondary','btn-success');
+                    setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
+                })">Copy</button>
     </div>
     <p class="mb-1"><strong>Docker one-liner:</strong></p>
     <?php

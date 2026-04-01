@@ -23,7 +23,7 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
     <?= $form->field($model, 'description')->textarea(['rows' => 2]) ?>
 
     <?= $form->field($model, 'inventory_type')->dropDownList([
-        Inventory::TYPE_STATIC => 'Static (inline INI/YAML)',
+        Inventory::TYPE_STATIC => 'Static (inline YAML)',
         Inventory::TYPE_FILE => 'File (from project)',
         Inventory::TYPE_DYNAMIC => 'Dynamic script',
     ], ['id' => 'inventory-type']) ?>
@@ -33,8 +33,8 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
         <?= $form->field($model, 'content')->textarea([
             'rows' => 12,
             'class' => 'form-control font-monospace',
-            'placeholder' => "[all]\n192.168.1.10\n192.168.1.11 ansible_user=ubuntu",
-        ])->label('Inventory Content (INI or YAML)') ?>
+            'placeholder' => "all:\n  hosts:\n    192.168.1.10:\n    192.168.1.11:\n      ansible_user: ubuntu",
+        ])->label('Inventory Content (YAML)') ?>
     </div>
 
     <div id="field-project" <?= $model->inventory_type === Inventory::TYPE_STATIC ? 'style="display:none"' : '' // xss-ok: hardcoded attribute?>>
@@ -44,7 +44,7 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
             ['prompt' => '— Select project —']
         ) ?>
         <?= $form->field($model, 'source_path')->textInput([
-            'placeholder' => 'inventories/production.ini',
+            'placeholder' => 'inventories/production.yml',
             'maxlength' => 512,
         ])->hint('Path relative to the project root') ?>
     </div>

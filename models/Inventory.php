@@ -57,7 +57,26 @@ class Inventory extends ActiveRecord
                 'whenClient' => "function(attr, val) { return $('#inventory-type').val() === 'file'; }",
             ],
             [['project_id', 'created_by'], 'integer'],
+            [['content'], 'validateYaml'],
         ];
+    }
+
+    public function validateYaml(string $attribute): void
+    {
+        if ($this->inventory_type !== self::TYPE_STATIC || empty($this->$attribute)) {
+            return;
+        }
+
+        try {
+            $parsed = \Symfony\Component\Yaml\Yaml::parse((string)$this->$attribute);
+        } catch (\Symfony\Component\Yaml\Exception\ParseException $e) {
+            $this->addError($attribute, 'Invalid YAML: ' . $e->getMessage());
+            return;
+        }
+
+        if (!is_array($parsed)) {
+            $this->addError($attribute, 'Inventory must be a YAML mapping (not a scalar).');
+        }
     }
 
     public function getCreator(): \yii\db\ActiveQuery

@@ -165,7 +165,7 @@ class AnsibleJobCommandBuilder
 
     private function writeInventoryTempFile(string $content): string
     {
-        $path = sys_get_temp_dir() . '/ansilume_inv_' . uniqid('', true);
+        $path = sys_get_temp_dir() . '/ansilume_inv_' . uniqid('', true) . '.yml';
         file_put_contents($path, $content);
         return $path;
     }
