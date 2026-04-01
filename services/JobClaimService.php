@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\models\Credential;
 use app\models\Inventory;
 use app\models\Job;
 use app\models\Project;
@@ -81,7 +82,7 @@ class JobClaimService extends Component
      * Build the resolved execution payload that the runner needs to run the job.
      * Resolves IDs to actual paths/content so the runner needs no DB access.
      *
-     * @return array{job_id: int, project_path: string, playbook_path: string, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, timeout_minutes: int}
+     * @return array{job_id: int, project_path: string, playbook_path: string, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null}
      */
     public function buildExecutionPayload(Job $job): array
     {
@@ -110,6 +111,35 @@ class JobClaimService extends Component
             'tags' => isset($raw['tags']) ? (string)$raw['tags'] : null,
             'skip_tags' => isset($raw['skip_tags']) ? (string)$raw['skip_tags'] : null,
             'timeout_minutes' => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
+            'credential' => $this->resolveCredential($raw),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array{credential_type: string, username: string|null, secrets: array<string, string>}|null
+     */
+    protected function resolveCredential(array $payload): ?array
+    {
+        $credentialId = (int)($payload['credential_id'] ?? 0);
+        if ($credentialId === 0) {
+            return null;
+        }
+
+        /** @var Credential|null $credential */
+        $credential = Credential::findOne($credentialId);
+        if ($credential === null) {
+            return null;
+        }
+
+        /** @var CredentialService $credentialService */
+        $credentialService = \Yii::$app->get('credentialService');
+        $secrets = $credentialService->getSecrets($credential);
+
+        return [
+            'credential_type' => $credential->credential_type,
+            'username' => $credential->username,
+            'secrets' => $secrets,
         ];
     }
 

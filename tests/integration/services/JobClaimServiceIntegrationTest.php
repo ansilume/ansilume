@@ -160,6 +160,48 @@ class JobClaimServiceIntegrationTest extends DbTestCase
         $this->assertSame('/etc/ansible/hosts', $payload['inventory_path']);
     }
 
+    public function testBuildExecutionPayloadResolvesCredential(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+
+        $credential = $this->createCredential($user->id, \app\models\Credential::TYPE_SSH_KEY);
+        /** @var \app\services\CredentialService $credService */
+        $credService = \Yii::$app->get('credentialService');
+        $credService->storeSecrets($credential, ['private_key' => 'test-key-data']);
+
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+        $template->credential_id = $credential->id;
+        $template->save(false);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertNotNull($payload['credential']);
+        $this->assertSame('ssh_key', $payload['credential']['credential_type']);
+        $this->assertSame('test-key-data', $payload['credential']['secrets']['private_key']);
+    }
+
+    public function testBuildExecutionPayloadReturnsNullCredentialWhenNone(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertNull($payload['credential']);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

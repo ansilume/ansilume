@@ -19,17 +19,19 @@ use yii\db\BaseActiveRecord;
  */
 class JobClaimServiceTest extends TestCase
 {
-    /** Default no-DB service: returns a fixed project path and static localhost inventory */
+    /** Default no-DB service: returns a fixed project path, static localhost inventory, and optional credential */
     private function makeService(
         string $projectPath = '/var/projects/default',
-        ?array $inventory = null
+        ?array $inventory = null,
+        ?array $credential = null,
     ): JobClaimService {
         $inv = $inventory ?? ['type' => 'static', 'content' => "localhost\n", 'path' => null];
 
-        return new class ($projectPath, $inv) extends JobClaimService {
+        return new class ($projectPath, $inv, $credential) extends JobClaimService {
             public function __construct(
                 private readonly string $projectPath,
                 private readonly array $inv,
+                private readonly ?array $cred,
             ) {
             }
 
@@ -41,6 +43,11 @@ class JobClaimServiceTest extends TestCase
             protected function resolveInventory(array $payload): array
             {
                 return $this->inv;
+            }
+
+            protected function resolveCredential(array $payload): ?array
+            {
+                return $this->cred;
             }
         };
     }
@@ -117,6 +124,28 @@ class JobClaimServiceTest extends TestCase
         $this->assertSame('static', $payload['inventory_type']);
         $this->assertSame("web1\nweb2\n", $payload['inventory_content']);
         $this->assertNull($payload['inventory_path']);
+    }
+
+    public function testPayloadContainsNullCredentialWhenNoCredentialId(): void
+    {
+        $job = $this->makeJob(1, []);
+        $payload = $this->makeService()->buildExecutionPayload($job);
+        $this->assertNull($payload['credential']);
+    }
+
+    public function testPayloadContainsCredentialDataWhenPresent(): void
+    {
+        $cred = [
+            'credential_type' => 'ssh_key',
+            'username' => 'deploy',
+            'secrets' => ['private_key' => 'test-key'],
+        ];
+        $job = $this->makeJob(1, ['credential_id' => 5]);
+        $payload = $this->makeService(credential: $cred)->buildExecutionPayload($job);
+
+        $this->assertSame('ssh_key', $payload['credential']['credential_type']);
+        $this->assertSame('deploy', $payload['credential']['username']);
+        $this->assertSame('test-key', $payload['credential']['secrets']['private_key']);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

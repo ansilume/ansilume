@@ -7,11 +7,14 @@ namespace app\jobs;
 use app\components\AnsibleJobCommandBuilder;
 use app\components\AnsibleJobProcess;
 use app\components\ArtifactCollector;
+use app\components\CredentialInjector;
 use app\jobs\JobTimeoutException;
+use app\models\Credential;
 use app\models\Job;
 use app\models\JobLog;
 use app\models\Webhook;
 use app\services\AuditService;
+use app\services\CredentialService;
 use app\services\JobCompletionService;
 use app\services\WebhookService;
 use yii\base\BaseObject;
@@ -120,15 +123,54 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         $env = $this->buildProcessEnv($callbackFile, $artifactDir);
         $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
 
-        $process = new AnsibleJobProcess();
-        $exitCode = $process->run($job, $cmd, $payload, $env, $timeoutMinutes);
+        $credentialInjector = new CredentialInjector();
+        $injection = $credentialInjector->inject($this->resolveCredentialData($payload));
+        $cmd = array_merge($cmd, $injection->args);
+        $env = array_merge($env, $injection->env);
 
-        $this->saveTaskResults($job, $callbackFile);
+        try {
+            $process = new AnsibleJobProcess();
+            $exitCode = $process->run($job, $cmd, $payload, $env, $timeoutMinutes);
 
-        $collector = new ArtifactCollector();
-        $collector->collect($job, $env);
+            $this->saveTaskResults($job, $callbackFile);
 
-        return $exitCode;
+            $collector = new ArtifactCollector();
+            $collector->collect($job, $env);
+
+            return $exitCode;
+        } finally {
+            CredentialInjector::cleanup($injection->tempFiles);
+        }
+    }
+
+    /**
+     * Load and decrypt credential data from DB for the given payload.
+     *
+     * @param array<string, mixed> $payload
+     * @return array{credential_type: string, username: string|null, secrets: array<string, string>}|null
+     */
+    private function resolveCredentialData(array $payload): ?array
+    {
+        $credentialId = (int)($payload['credential_id'] ?? 0);
+        if ($credentialId === 0) {
+            return null;
+        }
+
+        /** @var Credential|null $credential */
+        $credential = Credential::findOne($credentialId);
+        if ($credential === null) {
+            return null;
+        }
+
+        /** @var CredentialService $credentialService */
+        $credentialService = \Yii::$app->get('credentialService');
+        $secrets = $credentialService->getSecrets($credential);
+
+        return [
+            'credential_type' => $credential->credential_type,
+            'username' => $credential->username,
+            'secrets' => $secrets,
+        ];
     }
 
     /**

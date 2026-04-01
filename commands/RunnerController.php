@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\CredentialInjector;
 use app\components\RunnerCommandBuilder;
 use app\components\RunnerHttpClient;
 use app\components\RunnerProcessExecutor;
@@ -177,22 +178,33 @@ class RunnerController extends Controller
             );
         }
 
-        $executor = new RunnerProcessExecutor($this->http(), $this);
-        $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
-        [$exitCode] = $executor->run($jobId, $cmd, $payload, $env, $timeoutMinutes);
+        // Inject credential (SSH key, vault password, etc.) into command and env
+        $credentialInjector = new CredentialInjector();
+        /** @var array{credential_type: string, username: string|null, secrets: array<string, string>}|null $credData */
+        $credData = $payload['credential'] ?? null;
+        $injection = $credentialInjector->inject(is_array($credData) ? $credData : null);
+        $cmd = array_merge($cmd, $injection->args);
+        $env = array_merge($env, $injection->env);
 
-        $this->collectAndSendTasks($jobId, $callbackFile);
+        try {
+            $executor = new RunnerProcessExecutor($this->http(), $this);
+            $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
+            [$exitCode] = $executor->run($jobId, $cmd, $payload, $env, $timeoutMinutes);
 
-        $this->http()->post("/api/runner/v1/jobs/{$jobId}/complete", [
-            'exit_code' => $exitCode,
-            'has_changes' => false,
-        ]);
+            $this->collectAndSendTasks($jobId, $callbackFile);
 
-        if ($inventoryTmpFile) {
-            \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
+            $this->http()->post("/api/runner/v1/jobs/{$jobId}/complete", [
+                'exit_code' => $exitCode,
+                'has_changes' => false,
+            ]);
+
+            $this->stdout("Job #{$jobId} finished with exit code {$exitCode}.\n");
+        } finally {
+            CredentialInjector::cleanup($injection->tempFiles);
+            if ($inventoryTmpFile) {
+                \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
+            }
         }
-
-        $this->stdout("Job #{$jobId} finished with exit code {$exitCode}.\n");
     }
 
     /**
