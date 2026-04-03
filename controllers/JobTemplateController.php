@@ -125,6 +125,11 @@ class JobTemplateController extends BaseController
         $template = $this->findModel($id);
         /** @var array<string, mixed> $overrides */
         $overrides = (array)\Yii::$app->request->post('overrides', []);
+        /** @var array<string, mixed> $survey */
+        $survey = (array)\Yii::$app->request->post('survey', []);
+        if (!empty($survey)) {
+            $overrides['survey'] = $survey;
+        }
 
         if (\Yii::$app->request->isPost) {
             try {
