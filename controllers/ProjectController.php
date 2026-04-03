@@ -140,7 +140,7 @@ class ProjectController extends BaseController
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
-        return $this->render('form', ['model' => $model, 'sshCredentials' => $this->sshCredentials()]);
+        return $this->render('form', ['model' => $model, 'scmCredentials' => $this->scmCredentials()]);
     }
 
     public function actionUpdate(int $id): Response|string
@@ -159,7 +159,7 @@ class ProjectController extends BaseController
             }
             return $this->redirect(['view', 'id' => $model->id]);
         }
-        return $this->render('form', ['model' => $model, 'sshCredentials' => $this->sshCredentials()]);
+        return $this->render('form', ['model' => $model, 'scmCredentials' => $this->scmCredentials()]);
     }
 
     public function actionDelete(int $id): Response
@@ -209,12 +209,18 @@ class ProjectController extends BaseController
     }
 
     /**
+     * Credentials compatible with SCM authentication (SSH key, token, username/password).
+     *
      * @return \app\models\Credential[]
      */
-    private function sshCredentials(): array
+    private function scmCredentials(): array
     {
         return Credential::find()
-            ->where(['credential_type' => Credential::TYPE_SSH_KEY])
+            ->where(['credential_type' => [
+                Credential::TYPE_SSH_KEY,
+                Credential::TYPE_TOKEN,
+                Credential::TYPE_USERNAME_PASSWORD,
+            ]])
             ->orderBy('name')
             ->all();
     }

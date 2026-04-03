@@ -62,6 +62,7 @@ class Project extends ActiveRecord
             [['scm_branch'], 'string', 'max' => 128],
             [['scm_credential_id'], 'integer'],
             [['scm_credential_id'], 'exist', 'skipOnError' => true, 'targetClass' => Credential::class, 'targetAttribute' => ['scm_credential_id' => 'id']],
+            [['scm_credential_id'], 'validateScmCredentialType'],
             [['status'], 'in', 'range' => [self::STATUS_NEW, self::STATUS_SYNCING, self::STATUS_SYNCED, self::STATUS_ERROR]],
         ];
     }
@@ -84,6 +85,47 @@ class Project extends ActiveRecord
     public function getInventories(): \yii\db\ActiveQuery
     {
         return $this->hasMany(Inventory::class, ['project_id' => 'id']);
+    }
+
+    public function isHttpsScmUrl(): bool
+    {
+        return (bool)preg_match('#^https?://#i', (string)$this->scm_url);
+    }
+
+    public function isSshScmUrl(): bool
+    {
+        $url = (string)$this->scm_url;
+        return (bool)(
+            preg_match('#^(git|ssh)@[\w.\-]+:.+#i', $url)
+            || preg_match('#^ssh://[\w.\-@]+/.+#i', $url)
+        );
+    }
+
+    /**
+     * Validate that the credential type is compatible with the SCM URL scheme.
+     * SSH URLs require ssh_key credentials; HTTPS URLs require token or username_password.
+     */
+    public function validateScmCredentialType(): void
+    {
+        if ($this->scm_credential_id === null || empty($this->scm_url)) {
+            return;
+        }
+
+        $credential = Credential::findOne($this->scm_credential_id);
+        if ($credential === null) {
+            return;
+        }
+
+        $sshTypes = [Credential::TYPE_SSH_KEY];
+        $httpsTypes = [Credential::TYPE_TOKEN, Credential::TYPE_USERNAME_PASSWORD];
+
+        if ($this->isSshScmUrl() && !in_array($credential->credential_type, $sshTypes, true)) {
+            $this->addError('scm_credential_id', 'SSH URLs require an SSH Key credential.');
+        }
+
+        if ($this->isHttpsScmUrl() && !in_array($credential->credential_type, $httpsTypes, true)) {
+            $this->addError('scm_credential_id', 'HTTPS URLs require a Token or Username/Password credential.');
+        }
     }
 
     public function validateScmUrl(): void

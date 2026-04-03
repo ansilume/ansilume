@@ -76,6 +76,43 @@ class ProjectTest extends TestCase
         $this->assertFalse($project->hasErrors('scm_url'));
     }
 
+    // ── isHttpsScmUrl / isSshScmUrl ──────────────────────────────────────────
+
+    public function testIsHttpsScmUrlForHttpsUrls(): void
+    {
+        $p = $this->makeProject(['scm_url' => 'https://github.com/org/repo.git']);
+        $this->assertTrue($p->isHttpsScmUrl());
+        $this->assertFalse($p->isSshScmUrl());
+    }
+
+    public function testIsHttpsScmUrlForHttpUrls(): void
+    {
+        $p = $this->makeProject(['scm_url' => 'http://internal.example.com/repo']);
+        $this->assertTrue($p->isHttpsScmUrl());
+        $this->assertFalse($p->isSshScmUrl());
+    }
+
+    public function testIsSshScmUrlForGitAtUrls(): void
+    {
+        $p = $this->makeProject(['scm_url' => 'git@github.com:org/repo.git']);
+        $this->assertTrue($p->isSshScmUrl());
+        $this->assertFalse($p->isHttpsScmUrl());
+    }
+
+    public function testIsSshScmUrlForSshProtocolUrls(): void
+    {
+        $p = $this->makeProject(['scm_url' => 'ssh://git@github.com/org/repo.git']);
+        $this->assertTrue($p->isSshScmUrl());
+        $this->assertFalse($p->isHttpsScmUrl());
+    }
+
+    public function testIsNeitherForEmptyUrl(): void
+    {
+        $p = $this->makeProject(['scm_url' => '']);
+        $this->assertFalse($p->isHttpsScmUrl());
+        $this->assertFalse($p->isSshScmUrl());
+    }
+
     // ── constants ─────────────────────────────────────────────────────────────
 
     public function testScmTypeConstants(): void

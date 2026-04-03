@@ -4,13 +4,19 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\Project $model */
-/** @var app\models\Credential[] $sshCredentials */
+/** @var app\models\Credential[] $scmCredentials */
 
+use app\models\Credential;
 use app\models\Project;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->isNewRecord ? 'New Project' : 'Edit: ' . $model->name;
+
+$credOptions = ['' => '— None (public repo) —'];
+foreach ($scmCredentials as $c) {
+    $credOptions[$c->id] = $c->name . ' (' . Credential::typeLabel($c->credential_type) . ')';
+}
 ?>
 <div class="row justify-content-center">
 <div class="col-lg-7">
@@ -29,15 +35,12 @@ $this->title = $model->isNewRecord ? 'New Project' : 'Edit: ' . $model->name;
 
     <div id="git-fields" <?= $model->scm_type !== Project::SCM_TYPE_GIT ? 'style="display:none"' : '' // xss-ok: hardcoded attribute?>>
 
-        <?= $form->field($model, 'scm_url')->textInput(['maxlength' => 512, 'placeholder' => 'git@github.com:org/repo.git']) ?>
+        <?= $form->field($model, 'scm_url')->textInput(['maxlength' => 512, 'placeholder' => 'https://github.com/org/repo.git', 'id' => 'project-scm_url']) ?>
         <?= $form->field($model, 'scm_branch')->textInput(['maxlength' => 128]) ?>
         <?= $form->field($model, 'scm_credential_id')->dropDownList(
-            ['' => '— None (public repo) —'] + array_column(
-                array_map(fn ($c) => ['id' => $c->id, 'name' => $c->name], $sshCredentials),
-                'name',
-                'id'
-            )
-        )->hint('Select an SSH Key credential to authenticate with a private repository. The public key must be added as a Deploy Key on GitHub/GitLab.') ?>
+            $credOptions,
+            ['id' => 'project-scm_credential_id']
+        )->hint('SSH URLs require an SSH Key credential. HTTPS URLs require a Token or Username/Password credential.') ?>
     </div>
 
     <div id="manual-fields" <?= $model->scm_type !== Project::SCM_TYPE_MANUAL ? 'style="display:none"' : '' // xss-ok: hardcoded attribute?>>
@@ -60,7 +63,7 @@ $this->title = $model->isNewRecord ? 'New Project' : 'Edit: ' . $model->name;
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
-    var scmType     = document.getElementById('project-scm_type');
+    var scmType      = document.getElementById('project-scm_type');
     var gitFields    = document.getElementById('git-fields');
     var manualFields = document.getElementById('manual-fields');
     if (scmType) {
