@@ -91,6 +91,10 @@ class JobLaunchService extends Component
             $job->verbosity = (int)$overrides['verbosity'];
         }
 
+        if (!empty($overrides['check_mode'])) {
+            $job->check_mode = 1;
+        }
+
         $job->timeout_minutes = $template->timeout_minutes;
 
         // Snapshot runner payload for auditability
@@ -155,6 +159,7 @@ class JobLaunchService extends Component
             'become_user' => $template->become_user,
             'tags' => $template->tags,
             'skip_tags' => $template->skip_tags,
+            'check_mode' => (bool)$job->check_mode,
             'timeout_minutes' => $template->timeout_minutes,
         ], JSON_UNESCAPED_UNICODE);
     }

@@ -86,6 +86,9 @@ class JobsController extends BaseApiController
         if (isset($body['verbosity'])) {
             $overrides['verbosity'] = (int)$body['verbosity'];
         }
+        if (!empty($body['check_mode'])) {
+            $overrides['check_mode'] = 1;
+        }
 
         try {
             /** @var JobLaunchService $svc */
@@ -133,7 +136,7 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, status: string, job_template_id: int, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, exit_code: int|null, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
+     * @return array{id: int, status: string, job_template_id: int, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, check_mode: bool, exit_code: int|null, execution_command: string|null, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
      */
     private function serializeJob(Job $job): array
     {
@@ -146,7 +149,9 @@ class JobsController extends BaseApiController
             'extra_vars' => $job->extra_vars ? json_decode($job->extra_vars, true) : null,
             'limit' => $job->limit,
             'verbosity' => $job->verbosity,
+            'check_mode' => (bool)$job->check_mode,
             'exit_code' => $job->exit_code,
+            'execution_command' => $job->execution_command,
             'queued_at' => $job->queued_at,
             'started_at' => $job->started_at,
             'finished_at' => $job->finished_at,

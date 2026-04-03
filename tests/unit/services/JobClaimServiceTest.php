@@ -49,6 +49,11 @@ class JobClaimServiceTest extends TestCase
             {
                 return $this->cred;
             }
+
+            protected function storeExecutionCommand(\app\models\Job $job, array $command): void
+            {
+                // no-op in unit tests (no DB)
+            }
         };
     }
 
@@ -72,6 +77,7 @@ class JobClaimServiceTest extends TestCase
         $this->assertNull($payload['tags']);
         $this->assertNull($payload['skip_tags']);
         $this->assertNull($payload['extra_vars']);
+        $this->assertFalse($payload['check_mode']);
     }
 
     public function testPayloadMapsRunnerPayloadFields(): void
@@ -146,6 +152,89 @@ class JobClaimServiceTest extends TestCase
         $this->assertSame('ssh_key', $payload['credential']['credential_type']);
         $this->assertSame('deploy', $payload['credential']['username']);
         $this->assertSame('test-key', $payload['credential']['secrets']['private_key']);
+    }
+
+    public function testPayloadContainsCommandArray(): void
+    {
+        $raw = ['playbook' => 'site.yml'];
+        $job = $this->makeJob(1, $raw);
+        $payload = $this->makeService('/var/projects/1')->buildExecutionPayload($job);
+
+        $this->assertIsArray($payload['command']);
+        $this->assertSame('ansible-playbook', $payload['command'][0]);
+        $this->assertContains('/var/projects/1/site.yml', $payload['command']);
+    }
+
+    public function testCommandIncludesAllFlags(): void
+    {
+        $raw = [
+            'playbook' => 'deploy.yml',
+            'verbosity' => 2,
+            'forks' => 10,
+            'become' => true,
+            'become_method' => 'su',
+            'become_user' => 'deploy',
+            'limit' => 'webservers',
+            'tags' => 'app',
+            'skip_tags' => 'slow',
+            'extra_vars' => '{"env":"prod"}',
+        ];
+        $job = $this->makeJob(1, $raw);
+        $service = $this->makeService(
+            '/var/projects/1',
+            ['type' => 'file', 'content' => null, 'path' => '/etc/ansible/hosts'],
+        );
+        $payload = $service->buildExecutionPayload($job);
+        $cmd = $payload['command'];
+
+        $this->assertContains('-vv', $cmd);
+        $this->assertContains('--forks', $cmd);
+        $this->assertContains('10', $cmd);
+        $this->assertContains('--become', $cmd);
+        $this->assertContains('--become-method', $cmd);
+        $this->assertContains('su', $cmd);
+        $this->assertContains('--become-user', $cmd);
+        $this->assertContains('deploy', $cmd);
+        $this->assertContains('--limit', $cmd);
+        $this->assertContains('webservers', $cmd);
+        $this->assertContains('--tags', $cmd);
+        $this->assertContains('app', $cmd);
+        $this->assertContains('--skip-tags', $cmd);
+        $this->assertContains('slow', $cmd);
+        $this->assertContains('--extra-vars', $cmd);
+        $this->assertContains('{"env":"prod"}', $cmd);
+        $this->assertContains('-i', $cmd);
+        $this->assertContains('/etc/ansible/hosts', $cmd);
+    }
+
+    public function testCheckModeDefaultsToFalse(): void
+    {
+        $job = $this->makeJob(1, []);
+        $payload = $this->makeService()->buildExecutionPayload($job);
+        $this->assertFalse($payload['check_mode']);
+        $this->assertNotContains('--check', $payload['command']);
+    }
+
+    public function testCheckModeTrueAddsFlags(): void
+    {
+        $raw = ['playbook' => 'site.yml', 'check_mode' => true];
+        $job = $this->makeJob(1, $raw);
+        $payload = $this->makeService()->buildExecutionPayload($job);
+        $this->assertTrue($payload['check_mode']);
+        $this->assertContains('--check', $payload['command']);
+        $this->assertContains('--diff', $payload['command']);
+    }
+
+    public function testCommandUsesInventoryPlaceholderForStatic(): void
+    {
+        $raw = ['playbook' => 'site.yml'];
+        $job = $this->makeJob(1, $raw);
+        $service = $this->makeService(
+            inventory: ['type' => 'static', 'content' => "web1\n", 'path' => null],
+        );
+        $payload = $service->buildExecutionPayload($job);
+
+        $this->assertContains('__INVENTORY_TMP__', $payload['command']);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

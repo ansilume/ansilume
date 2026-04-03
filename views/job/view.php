@@ -33,6 +33,9 @@ $isLive = !$job->isFinished();
             <span class="badge text-bg-<?= Job::statusCssClass($job->status) ?> ms-2 fs-6" id="status-badge">
                 <?= Html::encode(Job::statusLabel($job->status)) ?>
             </span>
+            <?php if ($job->check_mode) : ?>
+                <span class="badge text-bg-info ms-2 fs-6">Dry Run</span>
+            <?php endif; ?>
         </h2>
         <div class="text-muted small mt-1">
             <?= Html::encode($job->jobTemplate->name ?? '—') ?> &mdash;
@@ -102,16 +105,33 @@ $isLive = !$job->isFinished();
         </div>
     </div>
 
-    <?php if ($job->extra_vars) : ?>
-    <div class="col-md-6">
+    <div class="col-md-6" id="exec-cmd-target">
+        <?php if ($job->execution_command) : ?>
+        <div class="card <?= $job->extra_vars ? 'mb-3' : '' // xss-ok: hardcoded CSS class?>">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Execution Command</span>
+                <button type="button" id="btn-copy-cmd" class="btn btn-sm btn-outline-secondary"
+                        onclick="navigator.clipboard.writeText(document.getElementById('exec-cmd-display').textContent).then(function(){
+                            var btn = document.getElementById('btn-copy-cmd');
+                            btn.textContent = 'Copied!';
+                            btn.classList.replace('btn-outline-secondary','btn-success');
+                            setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
+                        })">Copy</button>
+            </div>
+            <div class="card-body p-0">
+                <pre class="job-log m-0" id="exec-cmd-display" style="max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"><?= Html::encode($job->execution_command) ?></pre>
+            </div>
+        </div>
+        <?php endif; ?>
+        <?php if ($job->extra_vars) : ?>
         <div class="card">
             <div class="card-header">Extra Vars (launch-time)</div>
             <div class="card-body p-0">
                 <pre class="job-log m-0" style="max-height:150px;overflow-y:auto;"><?= Html::encode($job->extra_vars) ?></pre>
             </div>
         </div>
+        <?php endif; ?>
     </div>
-    <?php endif; ?>
 </div>
 
 <?php if (!empty($hostSummaries)) : ?>
@@ -318,6 +338,26 @@ if (logEl.scrollHeight > logEl.clientHeight) {
                 }
                 badgeEl.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
                 badgeEl.className   = 'badge text-bg-' + (statusClasses[data.status] || 'secondary') + ' ms-2 fs-6';
+
+                if (data.execution_command && !document.getElementById('exec-cmd-display')) {
+                    var card = document.createElement('div');
+                    card.className = 'card mb-3';
+                    card.innerHTML = '<div class="card-header d-flex justify-content-between align-items-center">'
+                        + '<span>Execution Command</span>'
+                        + '<button type="button" id="btn-copy-cmd" class="btn btn-sm btn-outline-secondary"'
+                        + ' onclick="navigator.clipboard.writeText(document.getElementById(\'exec-cmd-display\').textContent).then(function(){'
+                        + 'var btn=document.getElementById(\'btn-copy-cmd\');btn.textContent=\'Copied!\';btn.classList.replace(\'btn-outline-secondary\',\'btn-success\');'
+                        + 'setTimeout(function(){btn.textContent=\'Copy\';btn.classList.replace(\'btn-success\',\'btn-outline-secondary\');},2000);'
+                        + '})">Copy</button></div>'
+                        + '<div class="card-body p-0">'
+                        + '<pre class="job-log m-0" id="exec-cmd-display" style="max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>'
+                        + '</div>';
+                    card.querySelector('#exec-cmd-display').textContent = data.execution_command;
+                    var cmdTarget = document.getElementById('exec-cmd-target');
+                    if (cmdTarget) {
+                        cmdTarget.appendChild(card);
+                    }
+                }
 
                 if (data.finished) {
                     // Reload to show PLAY RECAP, tasks, and artifacts

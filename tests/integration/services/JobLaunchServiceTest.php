@@ -122,6 +122,28 @@ class JobLaunchServiceTest extends DbTestCase
         $this->assertSame('large', $vars['size']);
     }
 
+    public function testLaunchWithCheckModeOverride(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        $job = $this->service->launch($template, $user->id, ['check_mode' => 1]);
+
+        $this->assertSame(1, (int)$job->check_mode);
+        $payload = json_decode($job->runner_payload, true);
+        $this->assertTrue($payload['check_mode']);
+    }
+
+    public function testLaunchWithoutCheckModeDefaultsToZero(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        $job = $this->service->launch($template, $user->id);
+
+        $this->assertSame(0, (int)$job->check_mode);
+        $payload = json_decode($job->runner_payload, true);
+        $this->assertFalse($payload['check_mode']);
+    }
+
     public function testLaunchSnapshotsTimeoutMinutesFromTemplate(): void
     {
         [$template, $user] = $this->makeFixtures();

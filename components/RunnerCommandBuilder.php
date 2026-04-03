@@ -22,6 +22,7 @@ class RunnerCommandBuilder
         $cmd[] = (string)($payload['playbook_path'] ?? '');
 
         $this->addPlaybookOptions($cmd, $payload);
+        $this->addCheckModeFlags($cmd, $payload);
 
         return $cmd;
     }
@@ -73,6 +74,18 @@ class RunnerCommandBuilder
     {
         if ($verbosity > 0) {
             $cmd[] = '-' . str_repeat('v', min($verbosity, 5));
+        }
+    }
+
+    /**
+     * @param string[] $cmd
+     * @param array<string, mixed> $payload
+     */
+    private function addCheckModeFlags(array &$cmd, array $payload): void
+    {
+        if (!empty($payload['check_mode'])) {
+            $cmd[] = '--check';
+            $cmd[] = '--diff';
         }
     }
 

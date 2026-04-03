@@ -87,6 +87,7 @@ class JobController extends BaseController
                 'content' => $l->content,
             ], $chunks),
             'finished' => $job->isFinished(),
+            'execution_command' => $job->execution_command,
         ]);
     }
 

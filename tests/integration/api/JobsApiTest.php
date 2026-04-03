@@ -120,6 +120,30 @@ class JobsApiTest extends DbTestCase
         $this->assertNotNull($job->created_at);
     }
 
+    public function testLaunchWithCheckModeOverride(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+
+        $svc = \Yii::$app->get('jobLaunchService');
+        $job = $svc->launch($tpl, $user->id, [
+            'check_mode' => 1,
+        ]);
+
+        $this->assertSame(1, (int)$job->check_mode);
+        $payload = json_decode($job->runner_payload, true);
+        $this->assertTrue($payload['check_mode']);
+    }
+
+    public function testLaunchWithoutCheckModeDefaultsToZero(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+
+        $svc = \Yii::$app->get('jobLaunchService');
+        $job = $svc->launch($tpl, $user->id);
+
+        $this->assertSame(0, (int)$job->check_mode);
+    }
+
     public function testJobTemplateRelationIsResolvable(): void
     {
         [$user, $tpl] = $this->scaffold();

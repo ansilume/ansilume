@@ -114,6 +114,9 @@ $this->title = 'Jobs';
                             ['view', 'id' => $job->id],
                             ['class' => 'badge text-bg-' . Job::statusCssClass($job->status) . ' text-decoration-none']
                         ) ?>
+                        <?php if ($job->check_mode) : ?>
+                            <span class="badge text-bg-info">Dry Run</span>
+                        <?php endif; ?>
                     </td>
                     <td>
                         <?= Html::encode($job->jobTemplate->name ?? '—') ?>

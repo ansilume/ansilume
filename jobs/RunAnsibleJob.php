@@ -4,17 +4,16 @@ declare(strict_types=1);
 
 namespace app\jobs;
 
-use app\components\AnsibleJobCommandBuilder;
 use app\components\AnsibleJobProcess;
 use app\components\ArtifactCollector;
 use app\components\CredentialInjector;
+use app\components\DockerCommandWrapper;
 use app\jobs\JobTimeoutException;
-use app\models\Credential;
 use app\models\Job;
 use app\models\JobLog;
 use app\models\Webhook;
 use app\services\AuditService;
-use app\services\CredentialService;
+use app\services\JobClaimService;
 use app\services\JobCompletionService;
 use app\services\WebhookService;
 use yii\base\BaseObject;
@@ -104,15 +103,24 @@ class RunAnsibleJob extends BaseObject implements JobInterface
 
     /**
      * Execute ansible-playbook as a subprocess.
+     * Uses JobClaimService to resolve the payload and build the canonical command
+     * (same code path as pull-based runners — single source of truth).
      * Returns the process exit code.
      */
     private function runPlaybook(Job $job): int
     {
-        $decoded = json_decode($job->runner_payload ?? '{}', true);
-        /** @var array<string, mixed> $payload */
-        $payload = is_array($decoded) ? $decoded : [];
-        $builder = new AnsibleJobCommandBuilder();
-        $cmd = $builder->build($payload);
+        /** @var JobClaimService $claimService */
+        $claimService = \Yii::$app->get('jobClaimService');
+        $payload = $claimService->buildExecutionPayload($job);
+
+        /** @var array<int, string> $cmd */
+        $cmd = $payload['command'];
+
+        $runnerMode = $_ENV['RUNNER_MODE'] ?? 'local';
+        if ($runnerMode === 'docker') {
+            $cmd = DockerCommandWrapper::wrap($cmd, (string)($payload['project_path'] ?? ''));
+        }
+
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $job->id . '_' . uniqid('', true) . '.ndjson';
 
         \Yii::info("RunAnsibleJob: starting job #{$job->id}: " . implode(' ', $cmd), __CLASS__);
@@ -123,8 +131,19 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         $env = $this->buildProcessEnv($callbackFile, $artifactDir);
         $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
 
+        $inventoryTmpFile = null;
+        if ($payload['inventory_type'] === 'static') {
+            $inventoryTmpFile = $this->writeInventoryTempFile((string)($payload['inventory_content'] ?? "localhost\n"));
+            $cmd = array_map(
+                fn (string $part) => $part === '__INVENTORY_TMP__' ? $inventoryTmpFile : $part,
+                $cmd
+            );
+        }
+
         $credentialInjector = new CredentialInjector();
-        $injection = $credentialInjector->inject($this->resolveCredentialData($payload));
+        /** @var array{credential_type: string, username: string|null, secrets: array<string, string>}|null $credData */
+        $credData = $payload['credential'];
+        $injection = $credentialInjector->inject($credData);
         $cmd = array_merge($cmd, $injection->args);
         $env = array_merge($env, $injection->env);
 
@@ -140,37 +159,17 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             return $exitCode;
         } finally {
             CredentialInjector::cleanup($injection->tempFiles);
+            if ($inventoryTmpFile) {
+                \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
+            }
         }
     }
 
-    /**
-     * Load and decrypt credential data from DB for the given payload.
-     *
-     * @param array<string, mixed> $payload
-     * @return array{credential_type: string, username: string|null, secrets: array<string, string>}|null
-     */
-    private function resolveCredentialData(array $payload): ?array
+    private function writeInventoryTempFile(string $content): string
     {
-        $credentialId = (int)($payload['credential_id'] ?? 0);
-        if ($credentialId === 0) {
-            return null;
-        }
-
-        /** @var Credential|null $credential */
-        $credential = Credential::findOne($credentialId);
-        if ($credential === null) {
-            return null;
-        }
-
-        /** @var CredentialService $credentialService */
-        $credentialService = \Yii::$app->get('credentialService');
-        $secrets = $credentialService->getSecrets($credential);
-
-        return [
-            'credential_type' => $credential->credential_type,
-            'username' => $credential->username,
-            'secrets' => $secrets,
-        ];
+        $path = sys_get_temp_dir() . '/ansilume_inv_' . uniqid('', true) . '.yml';
+        file_put_contents($path, $content);
+        return $path;
     }
 
     /**

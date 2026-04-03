@@ -186,6 +186,41 @@ class RunnerCommandBuilderTest extends TestCase
         $this->assertContains('{"foo":"bar"}', $cmd);
     }
 
+    public function testCheckModeAddsCheckAndDiff(): void
+    {
+        $cmd = $this->builder->build([
+            'inventory_type' => 'file',
+            'playbook_path' => 'site.yml',
+            'check_mode' => true,
+        ]);
+
+        $this->assertContains('--check', $cmd);
+        $this->assertContains('--diff', $cmd);
+    }
+
+    public function testCheckModeFalseOmitsFlags(): void
+    {
+        $cmd = $this->builder->build([
+            'inventory_type' => 'file',
+            'playbook_path' => 'site.yml',
+            'check_mode' => false,
+        ]);
+
+        $this->assertNotContains('--check', $cmd);
+        $this->assertNotContains('--diff', $cmd);
+    }
+
+    public function testCheckModeAbsentOmitsFlags(): void
+    {
+        $cmd = $this->builder->build([
+            'inventory_type' => 'file',
+            'playbook_path' => 'site.yml',
+        ]);
+
+        $this->assertNotContains('--check', $cmd);
+        $this->assertNotContains('--diff', $cmd);
+    }
+
     public function testFullPayload(): void
     {
         $cmd = $this->builder->build([
@@ -199,6 +234,7 @@ class RunnerCommandBuilderTest extends TestCase
             'limit' => 'prod',
             'tags' => 'deploy',
             'extra_vars' => '{"version":"1.0"}',
+            'check_mode' => true,
         ]);
 
         $this->assertSame('ansible-playbook', $cmd[0]);
@@ -210,5 +246,7 @@ class RunnerCommandBuilderTest extends TestCase
         $this->assertContains('--limit', $cmd);
         $this->assertContains('--tags', $cmd);
         $this->assertContains('--extra-vars', $cmd);
+        $this->assertContains('--check', $cmd);
+        $this->assertContains('--diff', $cmd);
     }
 }

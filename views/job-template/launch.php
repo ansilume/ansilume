@@ -116,8 +116,8 @@ $hasSurvey = !empty($surveyFields);
         <div class="card-body">
             <div class="mb-3">
                 <label class="form-label">Extra Vars <span class="text-muted small">(JSON, merged with template defaults<?= $hasSurvey ? ' and survey answers' : '' // xss-ok: hardcoded strings?>)</span></label>
-                <textarea name="overrides[extra_vars]" class="form-control font-monospace" rows="4"
-                          placeholder='{"env": "staging"}'><?= Html::encode(!$hasSurvey ? ($template->extra_vars ?? '') : '') ?></textarea>
+                <textarea name="overrides[extra_vars]" class="form-control font-monospace" rows="4"><?= Html::encode(!$hasSurvey ? ($template->extra_vars ?? '') : '') ?></textarea>
+                <div class="form-text">Example: <code>{"env": "staging"}</code></div>
             </div>
             <div class="mb-3">
                 <label class="form-label">Limit</label>
@@ -132,6 +132,17 @@ $hasSurvey = !empty($surveyFields);
                         <option value="<?= $v ?>" <?= $v == $template->verbosity ? 'selected' : '' ?>><?= $label ?></option>
                     <?php endforeach; ?>
                 </select>
+            </div>
+            <div class="mb-0">
+                <div class="form-check">
+                    <input type="hidden" name="overrides[check_mode]" value="0">
+                    <input type="checkbox" name="overrides[check_mode]" id="override-check-mode"
+                           class="form-check-input" value="1">
+                    <label class="form-check-label" for="override-check-mode">
+                        Dry run (check mode)
+                    </label>
+                </div>
+                <div class="form-text">Run with <code>--check --diff</code> — simulate changes without applying them.</div>
             </div>
         </div>
     </div>

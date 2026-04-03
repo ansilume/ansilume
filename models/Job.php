@@ -13,7 +13,9 @@ use yii\db\ActiveRecord;
  * @property string|null $extra_vars       JSON
  * @property string|null $limit
  * @property int|null    $verbosity
- * @property string|null $runner_payload   JSON snapshot
+ * @property int         $check_mode          1 = dry run (--check --diff)
+ * @property string|null $runner_payload      JSON snapshot
+ * @property string|null $execution_command   Ansible command built at claim/run time
  * @property int         $launched_by
  * @property int|null    $queued_at
  * @property int|null    $started_at
@@ -60,10 +62,11 @@ class Job extends ActiveRecord
             [['job_template_id', 'launched_by'], 'required'],
             [['job_template_id', 'launched_by', 'exit_code', 'pid'], 'integer'],
             [['status'], 'in', 'range' => self::statuses()],
-            [['extra_vars', 'runner_payload'], 'string'],
+            [['extra_vars', 'runner_payload', 'execution_command'], 'string'],
             [['extra_vars'], 'validateJson'],
             [['limit'], 'string', 'max' => 255],
             [['verbosity'], 'integer', 'min' => 0, 'max' => 5],
+            [['check_mode'], 'boolean'],
         ];
     }
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace app\commands;
 
 use app\components\CredentialInjector;
-use app\components\RunnerCommandBuilder;
 use app\components\RunnerHttpClient;
 use app\components\RunnerProcessExecutor;
 use app\components\RunnerTokenResolver;
@@ -165,8 +164,9 @@ class RunnerController extends Controller
     private function executeJob(int $jobId, array $payload): void
     {
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $jobId . '_' . uniqid('', true) . '.ndjson';
-        $builder = new RunnerCommandBuilder();
-        $cmd = $builder->build($payload);
+        /** @var array<int, string> $cmdFromServer */
+        $cmdFromServer = is_array($payload['command'] ?? null) ? $payload['command'] : [];
+        $cmd = array_map('strval', $cmdFromServer);
         $env = $this->buildProcessEnv($callbackFile);
 
         $inventoryTmpFile = null;

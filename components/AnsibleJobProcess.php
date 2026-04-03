@@ -59,8 +59,7 @@ class AnsibleJobProcess
             2 => ['pipe', 'w'],
         ];
 
-        $builder = new AnsibleJobCommandBuilder();
-        $projectCwd = $builder->resolveProjectPath($payload);
+        $projectCwd = (string)($payload['project_path'] ?? '');
         $process = proc_open($cmd, $descriptorspec, $pipes, is_dir($projectCwd) ? $projectCwd : null, $env);
 
         if (!is_resource($process)) {

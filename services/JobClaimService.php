@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\RunnerCommandBuilder;
 use app\models\Credential;
 use app\models\Inventory;
 use app\models\Job;
@@ -81,8 +82,9 @@ class JobClaimService extends Component
     /**
      * Build the resolved execution payload that the runner needs to run the job.
      * Resolves IDs to actual paths/content so the runner needs no DB access.
+     * Also builds and stores the canonical execution command on the job record.
      *
-     * @return array{job_id: int, project_path: string, playbook_path: string, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null}
+     * @return array{job_id: int, project_path: string, playbook_path: string, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null, command: array<int, string>}
      */
     public function buildExecutionPayload(Job $job): array
     {
@@ -94,7 +96,7 @@ class JobClaimService extends Component
 
         $inventory = $this->resolveInventory($raw);
 
-        return [
+        $payload = [
             'job_id' => $job->id,
             'project_path' => $projectPath,
             'playbook_path' => $playbookPath,
@@ -110,9 +112,28 @@ class JobClaimService extends Component
             'become_user' => (string)($raw['become_user'] ?? 'root'),
             'tags' => isset($raw['tags']) ? (string)$raw['tags'] : null,
             'skip_tags' => isset($raw['skip_tags']) ? (string)$raw['skip_tags'] : null,
+            'check_mode' => !empty($raw['check_mode']),
             'timeout_minutes' => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
             'credential' => $this->resolveCredential($raw),
         ];
+
+        $builder = new RunnerCommandBuilder();
+        $payload['command'] = $builder->build($payload);
+
+        $this->storeExecutionCommand($job, $payload['command']);
+
+        return $payload;
+    }
+
+    /**
+     * Store the canonical command string on the job record.
+     *
+     * @param array<int, string> $command
+     */
+    protected function storeExecutionCommand(Job $job, array $command): void
+    {
+        $job->execution_command = implode(' ', $command);
+        $job->save(false);
     }
 
     /**
