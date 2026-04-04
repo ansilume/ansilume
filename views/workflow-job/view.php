@@ -72,11 +72,11 @@ $steps = $model->stepExecutions;
                         $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
                         $label = WorkflowJobStep::statusLabel($wjs->status);
                         ?>
-                        <tr class="<?= $isCurrent ? 'table-active' : '' ?>">
+                        <tr class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
                             <td><?= Html::encode((string)($i + 1)) ?></td>
                             <td><?= Html::encode($wjs->workflowStep?->name ?? '—') ?></td>
                             <td>
-                                <span class="badge text-bg-<?= $cssClass ?>">
+                                <span class="badge text-bg-<?= Html::encode($cssClass) ?>">
                                     <?= Html::encode($label) ?>
                                 </span>
                             </td>

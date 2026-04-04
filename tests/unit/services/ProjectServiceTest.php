@@ -41,6 +41,68 @@ class ProjectServiceTest extends TestCase
         $this->assertSame('/workspace/100', $service->localPath($this->makeProject(100)));
     }
 
+    public function testBaseGitEnvContainsRequiredKeys(): void
+    {
+        $service = new ProjectService();
+        $ref = new \ReflectionMethod(ProjectService::class, 'baseGitEnv');
+        $ref->setAccessible(true);
+
+        /** @var array<string, string> $env */
+        $env = $ref->invoke($service);
+
+        $this->assertArrayHasKey('HOME', $env);
+        $this->assertSame('0', $env['GIT_TERMINAL_PROMPT']);
+        $this->assertSame('1', $env['GIT_CONFIG_COUNT']);
+        $this->assertSame('safe.directory', $env['GIT_CONFIG_KEY_0']);
+        $this->assertSame('*', $env['GIT_CONFIG_VALUE_0']);
+    }
+
+    public function testBuildCredentialHelperScriptContainsUsernameAndPassword(): void
+    {
+        $service = new ProjectService();
+        $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
+        $ref->setAccessible(true);
+
+        $script = $ref->invoke($service, 'myuser', 'mypass');
+
+        $this->assertStringContainsString('username=myuser', $script);
+        $this->assertStringContainsString('password=mypass', $script);
+        $this->assertStringStartsWith('!f() {', $script);
+        $this->assertStringEndsWith('; }; f', $script);
+    }
+
+    public function testBuildCredentialHelperScriptWrapsInShellFunction(): void
+    {
+        $service = new ProjectService();
+        $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
+        $ref->setAccessible(true);
+
+        $script = $ref->invoke($service, 'bot', 'tok3n');
+
+        // Must be a credential helper shell function
+        $this->assertMatchesRegularExpression('/^!f\(\) \{.*\}; f$/', $script);
+        // Must contain echo for each credential line
+        $this->assertStringContainsString('echo "username=bot"', $script);
+        $this->assertStringContainsString('echo "password=tok3n"', $script);
+    }
+
+    public function testCleanupKeyFileDeletesTempFile(): void
+    {
+        $service = new ProjectService();
+        $ref = new \ReflectionMethod(ProjectService::class, 'cleanupKeyFile');
+        $ref->setAccessible(true);
+
+        // null does nothing
+        $ref->invoke($service, null);
+        $this->assertTrue(true);
+
+        // Real temp file gets removed
+        $tmp = tempnam(sys_get_temp_dir(), 'test_');
+        $this->assertFileExists($tmp);
+        $ref->invoke($service, $tmp);
+        $this->assertFileDoesNotExist($tmp);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private function makeProject(int $id): Project

@@ -66,4 +66,69 @@ class EmailChannelTest extends TestCase
         $channel->send($nt, 'Subject', 'Body', []);
         $this->assertTrue(true);
     }
+
+    public function testNonStringEmailsAreFiltered(): void
+    {
+        $nt = $this->makeTemplate('{"emails": [123, null, false]}');
+        $channel = new EmailChannel();
+
+        // All non-string entries → empty after filter → should not send
+        $channel->send($nt, 'Subject', 'Body', []);
+        $this->assertTrue(true);
+    }
+
+    public function testSendWithValidEmailsCallsMailer(): void
+    {
+        $nt = $this->makeTemplate('{"emails": ["ops@example.com"]}');
+
+        $message = $this->createMock(\yii\mail\MessageInterface::class);
+        $message->method('setFrom')->willReturnSelf();
+        $message->method('setTo')->willReturnSelf();
+        $message->method('setSubject')->willReturnSelf();
+        $message->method('setHtmlBody')->willReturnSelf();
+        $message->method('setTextBody')->willReturnSelf();
+        $message->expects($this->once())->method('send')->willReturn(true);
+
+        $mailer = $this->createMock(\yii\mail\MailerInterface::class);
+        $mailer->method('compose')->willReturn($message);
+
+        // Capture existing mailer config (do NOT access ->mailer which triggers instantiation)
+        $origDef = \Yii::$app->getComponents()['mailer'] ?? null;
+        \Yii::$app->set('mailer', $mailer);
+
+        try {
+            $channel = new EmailChannel();
+            $channel->send($nt, 'Alert', 'Details', []);
+        } finally {
+            \Yii::$app->set('mailer', $origDef);
+        }
+    }
+
+    public function testSendThrowsWhenMailerReturnsFalse(): void
+    {
+        $nt = $this->makeTemplate('{"emails": ["ops@example.com"]}');
+
+        $message = $this->createMock(\yii\mail\MessageInterface::class);
+        $message->method('setFrom')->willReturnSelf();
+        $message->method('setTo')->willReturnSelf();
+        $message->method('setSubject')->willReturnSelf();
+        $message->method('setHtmlBody')->willReturnSelf();
+        $message->method('setTextBody')->willReturnSelf();
+        $message->method('send')->willReturn(false);
+
+        $mailer = $this->createMock(\yii\mail\MailerInterface::class);
+        $mailer->method('compose')->willReturn($message);
+
+        $origDef = \Yii::$app->getComponents()['mailer'] ?? null;
+        \Yii::$app->set('mailer', $mailer);
+
+        try {
+            $channel = new EmailChannel();
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('Mailer::send() returned false');
+            $channel->send($nt, 'Alert', 'Details', []);
+        } finally {
+            \Yii::$app->set('mailer', $origDef);
+        }
+    }
 }

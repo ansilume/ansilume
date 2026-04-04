@@ -90,4 +90,61 @@ class TeamsChannelTest extends TestCase
         $decoded = json_decode((string)$channel->capturedPayload, true);
         $this->assertSame('FF0000', $decoded['themeColor']);
     }
+
+    public function testThemeColorForRunningStatus(): void
+    {
+        $nt = $this->makeTemplate('{"webhook_url": "https://outlook.office.com/test"}');
+
+        $channel = new class extends TeamsChannel {
+            public ?string $capturedPayload = null;
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedPayload = $payload;
+                return '1';
+            }
+        };
+
+        $channel->send($nt, 'Job Running', 'Started', ['job.status' => 'running']);
+        $decoded = json_decode((string)$channel->capturedPayload, true);
+        $this->assertSame('0078D7', $decoded['themeColor']);
+    }
+
+    public function testThemeColorForUnknownStatusDefaultsGray(): void
+    {
+        $nt = $this->makeTemplate('{"webhook_url": "https://outlook.office.com/test"}');
+
+        $channel = new class extends TeamsChannel {
+            public ?string $capturedPayload = null;
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedPayload = $payload;
+                return '1';
+            }
+        };
+
+        $channel->send($nt, 'Job Pending', 'Waiting', ['job.status' => 'pending']);
+        $decoded = json_decode((string)$channel->capturedPayload, true);
+        $this->assertSame('808080', $decoded['themeColor']);
+    }
+
+    public function testPayloadWithoutJobUrlOmitsPotentialAction(): void
+    {
+        $nt = $this->makeTemplate('{"webhook_url": "https://outlook.office.com/test"}');
+
+        $channel = new class extends TeamsChannel {
+            public ?string $capturedPayload = null;
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedPayload = $payload;
+                return '1';
+            }
+        };
+
+        $channel->send($nt, 'Job Done', 'OK', ['job.status' => 'successful']);
+        $decoded = json_decode((string)$channel->capturedPayload, true);
+        $this->assertArrayNotHasKey('potentialAction', $decoded);
+    }
 }

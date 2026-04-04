@@ -6,6 +6,7 @@ namespace app\tests\integration;
 
 use app\models\ApprovalRule;
 use app\models\Credential;
+use app\models\Webhook;
 use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
@@ -231,6 +232,25 @@ abstract class DbTestCase extends TestCase
         $r->updated_at = time();
         $r->save(false);
         return $r;
+    }
+
+    protected function createWebhook(
+        int $createdBy,
+        string $events = 'job.success,job.failure',
+        bool $enabled = true,
+        ?string $secret = null
+    ): Webhook {
+        $w = new Webhook();
+        $w->name = 'test-webhook-' . uniqid('', true);
+        $w->url = 'https://example.com/webhook';
+        $w->events = $events;
+        $w->enabled = $enabled;
+        $w->secret = $secret;
+        $w->created_by = $createdBy;
+        $w->created_at = time();
+        $w->updated_at = time();
+        $w->save(false);
+        return $w;
     }
 
     protected function createWorkflowTemplate(int $createdBy): WorkflowTemplate

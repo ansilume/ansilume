@@ -163,6 +163,54 @@ class ScheduleServiceTest extends DbTestCase
         return $s;
     }
 
+    public function testRunDuePassesExtraVarsToLaunchedJob(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        $schedule = $this->createSchedule($template->id, $user->id, true, time() - 60);
+        $schedule->extra_vars = '{"env": "staging"}';
+        $schedule->save(false);
+
+        $this->service->runDue();
+
+        /** @var Job|null $job */
+        $job = Job::find()->where(['job_template_id' => $template->id])->one();
+        $this->assertNotNull($job);
+        $extraVars = json_decode((string)$job->extra_vars, true);
+        $this->assertIsArray($extraVars);
+        $this->assertSame('staging', $extraVars['env'] ?? null);
+    }
+
+    public function testRunDueSetsLastRunAtAfterLaunch(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        $schedule = $this->createSchedule($template->id, $user->id, true, time() - 60);
+        $this->assertNull($schedule->last_run_at);
+
+        $this->service->runDue();
+
+        $schedule->refresh();
+        $this->assertNotNull($schedule->last_run_at);
+        $this->assertGreaterThanOrEqual(time() - 5, $schedule->last_run_at);
+    }
+
+    public function testRunDueWithInvalidCronExpressionSkipsSchedule(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        $schedule = $this->createSchedule(
+            $template->id,
+            $user->id,
+            true,
+            null,
+            'invalid-cron'
+        );
+
+        $launched = $this->service->runDue();
+        $this->assertSame(0, $this->countJobsForTemplate($template->id));
+    }
+
     private function countJobsForTemplate(int $templateId): int
     {
         return (int)Job::find()->where(['job_template_id' => $templateId])->count();

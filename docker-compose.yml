@@ -239,6 +239,24 @@ services:
     networks:
       - ansilume
 
+  playwright:
+    build:
+      context: .
+      dockerfile: docker/playwright/Dockerfile
+    container_name: ansilume_playwright
+    profiles: [e2e]
+    working_dir: /e2e
+    environment:
+      - BASE_URL=http://nginx
+    volumes:
+      - ./tests/e2e/test-results:/e2e/test-results
+      - ./tests/e2e/playwright-report:/e2e/playwright-report
+    depends_on:
+      nginx:
+        condition: service_healthy
+    networks:
+      - ansilume
+
 networks:
   ansilume:
     driver: bridge

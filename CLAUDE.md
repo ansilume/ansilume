@@ -256,6 +256,7 @@ Avoid opaque JSON unless it is genuinely schema-flexible (extra vars, artifact m
 `./tests.sh` is the single source of truth for the test suite. It runs inside Docker and includes:
 
 - PHPUnit (unit + integration tests)
+- Playwright E2E browser tests (full UI walkthrough per role)
 - `declare(strict_types=1)` enforcement
 - PHP syntax check (excluding `vendor/`, `docker/`)
 - phpcs PSR-12 compliance (strict, no excuses)
@@ -275,6 +276,28 @@ Always run the full `./tests.sh` — never partial or `--fast`.
 ### Coverage requirement
 
 Every new feature or change must have **100% test coverage**. Every public method, every branch, every error path. No exceptions, no "I'll add tests later".
+
+### E2E browser tests are mandatory
+
+Every feature that touches the UI **must** be covered by Playwright E2E tests in `tests/e2e/tests/`. This is not optional and not separate from the coverage requirement — it is part of it.
+
+- When adding a new controller or view, add matching `*.spec.ts` files covering the happy path, validation errors, and RBAC (admin/operator/viewer).
+- When modifying an existing controller or view, extend the existing spec files so the new behavior is exercised in a real browser.
+- When adding a new permission or role check, add an RBAC spec that proves the right roles are allowed and the wrong roles are blocked (403 or hidden UI).
+- When seeding new entities is needed, extend `commands/E2eController.php` (keep it idempotent, always prefixed `e2e-`).
+- PHPUnit coverage alone does **not** satisfy Definition of Done for UI features. The test is whether a real browser click-through works end-to-end.
+
+### Regression tests for every bug
+
+Whenever a bug is found — reported by a user, caught in production, discovered in review, or hit during development — you must write a test that would have caught it **before** shipping the fix. No bug gets fixed without a test that locks in the fix.
+
+- **PHPUnit regression test** when the bug lives in a service, model, API, or other PHP layer.
+- **Playwright regression test** when the bug manifests in the UI, in a form submission, in navigation, or in an RBAC/permission check visible to the user.
+- The test must **fail on the unfixed code** and **pass on the fixed code**. Verify this explicitly — don't just assume.
+- Name or comment the test so it is clear it was written for a specific bug (e.g. "regression: schedule with empty cron was accepted"). This makes future refactors safe.
+- If the bug was caused by a missing edge case, add tests for the full class of edge cases, not just the one instance.
+
+The rule is simple: **a bug may only happen once**. The second time is a test failure, not an incident.
 
 ### What makes a good test
 
@@ -309,8 +332,10 @@ A task is not done unless:
 - Errors are handled clearly
 - Migrations are included when needed
 - **Tests with 100% coverage** are added — happy path, error paths, authorization, validation
+- **Playwright E2E tests** exist for any UI-facing change — per-role click-through plus RBAC
 - **API endpoint** exists for the feature (no UI-only functionality)
 - **API endpoint is tested** — response codes, response structure, auth, validation, error cases
+- **If this work fixes a bug**: a regression test exists that fails without the fix and passes with it
 - No secrets are exposed
 - Naming is consistent with the domain language
 - The code fits the existing structure and style

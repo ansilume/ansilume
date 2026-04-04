@@ -83,4 +83,57 @@ class SlackChannelTest extends TestCase
         $this->assertSame('Job Failed', $decoded['text']);
         $this->assertCount(1, $decoded['blocks']);
     }
+
+    public function testBlockContainsMrkdwnWithSubjectAndBody(): void
+    {
+        $nt = $this->makeTemplate('{"webhook_url": "https://hooks.slack.com/test"}');
+
+        $channel = new class extends SlackChannel {
+            public ?string $capturedPayload = null;
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedPayload = $payload;
+                return 'ok';
+            }
+        };
+
+        $channel->send($nt, 'Alert', 'Something broke', []);
+
+        $decoded = json_decode((string)$channel->capturedPayload, true);
+        $block = $decoded['blocks'][0];
+        $this->assertSame('section', $block['type']);
+        $this->assertSame('mrkdwn', $block['text']['type']);
+        $this->assertStringContainsString('*Alert*', $block['text']['text']);
+        $this->assertStringContainsString('Something broke', $block['text']['text']);
+    }
+
+    public function testPostHeadersContainJsonContentType(): void
+    {
+        $nt = $this->makeTemplate('{"webhook_url": "https://hooks.slack.com/test"}');
+
+        $channel = new class extends SlackChannel {
+            /** @var string[] */
+            public array $capturedHeaders = [];
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedHeaders = $headers;
+                return 'ok';
+            }
+        };
+
+        $channel->send($nt, 'Test', 'Body', []);
+
+        $this->assertContains('Content-Type: application/json', $channel->capturedHeaders);
+    }
+
+    public function testInvalidConfigDoesNotSend(): void
+    {
+        $nt = $this->makeTemplate('');
+        $channel = new SlackChannel();
+
+        $channel->send($nt, 'Subject', 'Body', []);
+        $this->assertTrue(true);
+    }
 }

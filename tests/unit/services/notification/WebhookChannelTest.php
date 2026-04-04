@@ -75,4 +75,82 @@ class WebhookChannelTest extends TestCase
         $this->assertContains('X-Token: abc', $channel->capturedHeaders);
         $this->assertContains('Content-Type: application/json', $channel->capturedHeaders);
     }
+
+    public function testNoCustomHeadersSendsOnlyContentType(): void
+    {
+        $nt = $this->makeTemplate('{"url": "https://example.com/hook"}');
+
+        $channel = new class extends WebhookChannel {
+            /** @var string[] */
+            public array $capturedHeaders = [];
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedHeaders = $headers;
+                return 'ok';
+            }
+        };
+
+        $channel->send($nt, 'Test', 'Body', []);
+
+        $this->assertCount(1, $channel->capturedHeaders);
+        $this->assertSame('Content-Type: application/json', $channel->capturedHeaders[0]);
+    }
+
+    public function testMultipleCustomHeaders(): void
+    {
+        $config = json_encode([
+            'url' => 'https://example.com/hook',
+            'headers' => ['X-Token' => 'abc', 'X-Source' => 'ansilume'],
+        ]);
+        $nt = $this->makeTemplate((string)$config);
+
+        $channel = new class extends WebhookChannel {
+            /** @var string[] */
+            public array $capturedHeaders = [];
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedHeaders = $headers;
+                return 'ok';
+            }
+        };
+
+        $channel->send($nt, 'Test', 'Body', []);
+
+        $this->assertContains('Content-Type: application/json', $channel->capturedHeaders);
+        $this->assertContains('X-Token: abc', $channel->capturedHeaders);
+        $this->assertContains('X-Source: ansilume', $channel->capturedHeaders);
+        $this->assertCount(3, $channel->capturedHeaders);
+    }
+
+    public function testInvalidConfigDoesNotSend(): void
+    {
+        $nt = $this->makeTemplate('');
+        $channel = new WebhookChannel();
+
+        $channel->send($nt, 'Subject', 'Body', []);
+        $this->assertTrue(true);
+    }
+
+    public function testVariablesPassedInPayload(): void
+    {
+        $nt = $this->makeTemplate('{"url": "https://example.com/hook"}');
+
+        $channel = new class extends WebhookChannel {
+            public ?string $capturedPayload = null;
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedPayload = $payload;
+                return 'ok';
+            }
+        };
+
+        $vars = ['job.id' => '1', 'job.status' => 'failed', 'template.name' => 'Deploy'];
+        $channel->send($nt, 'Alert', 'Failed', $vars);
+
+        $decoded = json_decode((string)$channel->capturedPayload, true);
+        $this->assertSame($vars, $decoded['variables']);
+    }
 }

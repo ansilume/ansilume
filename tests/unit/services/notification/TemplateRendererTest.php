@@ -68,4 +68,62 @@ class TemplateRendererTest extends TestCase
         $result = $this->renderer->render('{{ launched_by }}', ['launched_by' => 'admin']);
         $this->assertSame('admin', $result);
     }
+
+    public function testBuildJobVariablesContainsAllKeys(): void
+    {
+        $job = $this->makeJob();
+
+        $vars = $this->renderer->buildJobVariables($job);
+
+        $this->assertArrayHasKey('job.id', $vars);
+        $this->assertArrayHasKey('job.status', $vars);
+        $this->assertArrayHasKey('job.exit_code', $vars);
+        $this->assertArrayHasKey('job.duration', $vars);
+        $this->assertArrayHasKey('job.url', $vars);
+        $this->assertArrayHasKey('template.name', $vars);
+        $this->assertArrayHasKey('project.name', $vars);
+        $this->assertArrayHasKey('launched_by', $vars);
+        $this->assertArrayHasKey('timestamp', $vars);
+    }
+
+    public function testBuildJobVariablesComputesDuration(): void
+    {
+        $job = $this->makeJob(['started_at' => 1000, 'finished_at' => 1045]);
+
+        $vars = $this->renderer->buildJobVariables($job);
+
+        $this->assertSame('45s', $vars['job.duration']);
+    }
+
+    public function testBuildJobVariablesWithNoDurationWhenNotFinished(): void
+    {
+        $job = $this->makeJob(['started_at' => 1000, 'finished_at' => null]);
+
+        $vars = $this->renderer->buildJobVariables($job);
+
+        $this->assertSame('', $vars['job.duration']);
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     */
+    private function makeJob(array $extra = []): \app\models\Job
+    {
+        $job = $this->getMockBuilder(\app\models\Job::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods([])
+            ->getMock();
+        $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
+        $ref->setAccessible(true);
+        $ref->setValue($job, array_merge([
+            'id' => 42,
+            'status' => 'succeeded',
+            'job_template_id' => 1,
+            'launched_by' => 1,
+            'exit_code' => 0,
+            'started_at' => 1000,
+            'finished_at' => 1120,
+        ], $extra));
+        return $job;
+    }
 }

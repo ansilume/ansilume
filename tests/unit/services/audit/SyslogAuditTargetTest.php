@@ -48,4 +48,21 @@ class SyslogAuditTargetTest extends TestCase
         $target->send($entry);
         $this->assertTrue(true);
     }
+
+    public function testSendWithEmptyEntryDoesNotThrow(): void
+    {
+        $target = new SyslogAuditTarget('ansilume-test', 'LOG_LOCAL0');
+        $target->send([]);
+        $this->assertTrue(true);
+    }
+
+    public function testSendWithUnicodeContent(): void
+    {
+        $target = new SyslogAuditTarget('ansilume-test', 'LOG_LOCAL0');
+        $target->send([
+            'action' => 'test.unicode',
+            'metadata' => ['note' => 'Ü日本語'],
+        ]);
+        $this->assertTrue(true);
+    }
 }

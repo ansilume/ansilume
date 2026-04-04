@@ -55,14 +55,16 @@ class Webhook extends ActiveRecord
     }
 
     /**
-     * Convert the checkbox array (from the form) to the comma-separated events string.
+     * Convert the checkbox array (from the form) to the comma-separated events string
+     * before validation runs — the `events` attribute carries a `required` rule that
+     * would otherwise fail on form submissions that only populate `eventsArray`.
      */
-    public function afterValidate(): void
+    public function beforeValidate(): bool
     {
-        parent::afterValidate();
         if ($this->eventsArray !== null) {
             $this->events = implode(',', array_filter((array)$this->eventsArray));
         }
+        return parent::beforeValidate();
     }
 
     public function validateEvents(string $attribute): void

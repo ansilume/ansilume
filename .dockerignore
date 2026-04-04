@@ -23,6 +23,7 @@ vendor/
 
 # Tests and docs (not needed in production images)
 tests/
+!tests/e2e/
 tests.sh
 phpunit.xml
 phpstan.neon
