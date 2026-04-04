@@ -140,6 +140,11 @@ $active = fn (string $prefix): string =>
         <a class="nav-link<?= $active('notification-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/notification-template/index']) ?>">Templates</a>
     </nav>
 
+    <span class="nav-section">Reporting</span>
+    <nav class="nav flex-column">
+        <a class="nav-link<?= $active('analytics') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/analytics/index']) ?>">Analytics</a>
+    </nav>
+
     <span class="nav-section">Operations</span>
     <nav class="nav flex-column">
         <a class="nav-link<?= $active('job') // xss-ok: hardcoded CSS class?>"          href="<?= Url::to(['/job/index']) ?>">Jobs</a>

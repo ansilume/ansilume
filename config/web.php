@@ -18,6 +18,7 @@ $config = [
         'api/v1/credentials' => 'app\controllers\api\v1\CredentialsController',
         'api/v1/schedules' => 'app\controllers\api\v1\SchedulesController',
         'api/v1/notification-templates' => 'app\controllers\api\v1\NotificationTemplatesController',
+        'api/v1/analytics' => 'app\controllers\api\v1\AnalyticsController',
         'runner-api' => 'app\controllers\api\runner\JobsController',
         'runner-register' => 'app\controllers\api\runner\RegisterController',
     ],
@@ -125,6 +126,9 @@ $config = [
         'notificationDispatcher' => [
             'class' => 'app\services\NotificationDispatcher',
         ],
+        'analyticsService' => [
+            'class' => 'app\services\AnalyticsService',
+        ],
         'lintService' => [
             'class' => 'app\services\LintService',
         ],
@@ -226,9 +230,18 @@ $config = [
                 'schedule/<action>/<id:\d+>' => 'schedule/<action>',
                 'webhook/<action>' => 'webhook/<action>',
                 'webhook/<action>/<id:\d+>' => 'webhook/<action>',
+                // Analytics API
+                ['pattern' => 'api/v1/analytics/summary', 'route' => 'api/v1/analytics/summary', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/template-reliability', 'route' => 'api/v1/analytics/template-reliability', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/project-activity', 'route' => 'api/v1/analytics/project-activity', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/user-activity', 'route' => 'api/v1/analytics/user-activity', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/host-health', 'route' => 'api/v1/analytics/host-health', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/job-trend', 'route' => 'api/v1/analytics/job-trend', 'verb' => 'GET'],
                 // Notification templates
                 'notification-template/<action>' => 'notification-template/<action>',
                 'notification-template/<action>/<id:\d+>' => 'notification-template/<action>',
+                // Analytics
+                'analytics/<action>' => 'analytics/<action>',
                 // Hyphenated controller names
                 'job-template/generate-trigger-token/<id:\d+>' => 'job-template/generate-trigger-token',
                 'job-template/revoke-trigger-token/<id:\d+>' => 'job-template/revoke-trigger-token',
