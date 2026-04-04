@@ -8,6 +8,7 @@ use app\models\Credential;
 use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
+use app\models\NotificationTemplate;
 use app\models\Project;
 use app\models\Runner;
 use app\models\RunnerGroup;
@@ -156,6 +157,26 @@ abstract class DbTestCase extends TestCase
         $c->updated_at      = time();
         $c->save(false);
         return $c;
+    }
+
+    protected function createNotificationTemplate(
+        int $createdBy,
+        string $channel = NotificationTemplate::CHANNEL_EMAIL,
+        string $events = 'job.failed',
+        string $config = '{"emails": ["test@example.com"]}'
+    ): NotificationTemplate {
+        $nt = new NotificationTemplate();
+        $nt->name = 'test-nt-' . uniqid('', true);
+        $nt->channel = $channel;
+        $nt->config = $config;
+        $nt->subject_template = 'Job #{{ job.id }} {{ job.status }}';
+        $nt->body_template = 'Template: {{ template.name }}';
+        $nt->events = $events;
+        $nt->created_by = $createdBy;
+        $nt->created_at = time();
+        $nt->updated_at = time();
+        $nt->save(false);
+        return $nt;
     }
 
     protected function createTeam(int $createdBy): Team

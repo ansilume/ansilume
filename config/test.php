@@ -36,6 +36,9 @@ return [
         'notificationService' => [
             'class' => 'app\services\NotificationService',
         ],
+        'notificationDispatcher' => [
+            'class' => 'app\services\NotificationDispatcher',
+        ],
         'webhookService' => [
             'class' => 'app\services\WebhookService',
         ],

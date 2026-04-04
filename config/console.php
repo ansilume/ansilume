@@ -73,6 +73,9 @@ return [
         'notificationService' => [
             'class' => 'app\services\NotificationService',
         ],
+        'notificationDispatcher' => [
+            'class' => 'app\services\NotificationDispatcher',
+        ],
         'lintService' => [
             'class' => 'app\services\LintService',
         ],

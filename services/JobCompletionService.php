@@ -8,6 +8,7 @@ use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobLog;
 use app\models\JobTask;
+use app\models\NotificationTemplate;
 use app\models\Webhook;
 use yii\base\Component;
 
@@ -42,13 +43,7 @@ class JobCompletionService extends Component
             : Webhook::EVENT_JOB_FAILURE;
         $ws->dispatch($event, $job);
 
-        /** @var NotificationService $ns */
-        $ns = \Yii::$app->get('notificationService');
-        if ($job->status === Job::STATUS_FAILED) {
-            $ns->notifyJobFailed($job);
-        } elseif ($job->status === Job::STATUS_SUCCEEDED) {
-            $ns->notifyJobSucceeded($job);
-        }
+        $this->dispatchNotifications($job);
     }
 
     public function completeTimedOut(Job $job): void
@@ -70,9 +65,32 @@ class JobCompletionService extends Component
         $ws = \Yii::$app->get('webhookService');
         $ws->dispatch(Webhook::EVENT_JOB_FAILURE, $job);
 
+        $this->dispatchNotifications($job);
+    }
+
+    private function dispatchNotifications(Job $job): void
+    {
+        // New notification templates (multi-channel)
+        $event = match ($job->status) {
+            Job::STATUS_SUCCEEDED => NotificationTemplate::EVENT_JOB_SUCCEEDED,
+            Job::STATUS_FAILED => NotificationTemplate::EVENT_JOB_FAILED,
+            Job::STATUS_TIMED_OUT => NotificationTemplate::EVENT_JOB_TIMED_OUT,
+            default => null,
+        };
+        if ($event !== null) {
+            /** @var NotificationDispatcher $dispatcher */
+            $dispatcher = \Yii::$app->get('notificationDispatcher');
+            $dispatcher->dispatch($event, $job);
+        }
+
+        // Legacy email notifications (backward compatibility)
         /** @var NotificationService $ns */
         $ns = \Yii::$app->get('notificationService');
-        $ns->notifyJobFailed($job);
+        if ($job->status === Job::STATUS_FAILED || $job->status === Job::STATUS_TIMED_OUT) {
+            $ns->notifyJobFailed($job);
+        } elseif ($job->status === Job::STATUS_SUCCEEDED) {
+            $ns->notifyJobSucceeded($job);
+        }
     }
 
     public function appendLog(Job $job, string $stream, string $content, int $sequence): void

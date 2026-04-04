@@ -45,6 +45,7 @@ use yii\db\ActiveRecord;
  * @property RunnerGroup|null $runnerGroup
  * @property User        $creator
  * @property Job[]       $jobs
+ * @property NotificationTemplate[] $notificationTemplates
  */
 class JobTemplate extends ActiveRecord
 {
@@ -160,6 +161,12 @@ class JobTemplate extends ActiveRecord
     public function getJobs(): \yii\db\ActiveQuery
     {
         return $this->hasMany(Job::class, ['job_template_id' => 'id']);
+    }
+
+    public function getNotificationTemplates(): \yii\db\ActiveQuery
+    {
+        return $this->hasMany(NotificationTemplate::class, ['id' => 'notification_template_id'])
+            ->viaTable('{{%job_template_notification}}', ['job_template_id' => 'id']);
     }
 
     /**

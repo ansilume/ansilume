@@ -8,6 +8,8 @@ use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Inventory;
 use app\models\JobTemplate;
+use app\models\JobTemplateNotification;
+use app\models\NotificationTemplate;
 use app\models\Project;
 use app\models\RunnerGroup;
 use app\services\JobLaunchService;
@@ -79,6 +81,7 @@ class JobTemplateController extends BaseController
         if ($model->load((array)\Yii::$app->request->post())) {
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->save()) {
+                $this->syncNotificationTemplates($model);
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_CREATED, 'job_template', $model->id, null, ['name' => $model->name]);
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
@@ -94,6 +97,7 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
+            $this->syncNotificationTemplates($model);
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_UPDATED, 'job_template', $model->id, null, ['name' => $model->name]);
             /** @var \app\services\LintService $lintService */
             $lintService = \Yii::$app->get('lintService');
@@ -182,13 +186,39 @@ class JobTemplateController extends BaseController
      */
     private function formData(JobTemplate $model): array
     {
+        $selectedIds = [];
+        if (!$model->isNewRecord) {
+            $selectedIds = JobTemplateNotification::find()
+                ->select('notification_template_id')
+                ->where(['job_template_id' => $model->id])
+                ->column();
+        }
+
         return [
             'model' => $model,
             'projects' => Project::find()->orderBy('name')->all(),
             'inventories' => Inventory::find()->orderBy('name')->all(),
             'credentials' => Credential::find()->orderBy('name')->all(),
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
+            'notificationTemplates' => NotificationTemplate::find()->orderBy('name')->all(),
+            'selectedNotificationIds' => $selectedIds,
         ];
+    }
+
+    private function syncNotificationTemplates(JobTemplate $model): void
+    {
+        /** @var int[] $ids */
+        $ids = (array)\Yii::$app->request->post('notification_template_ids', []);
+        $ids = array_map('intval', array_filter($ids));
+
+        JobTemplateNotification::deleteAll(['job_template_id' => $model->id]);
+
+        foreach ($ids as $ntId) {
+            $link = new JobTemplateNotification();
+            $link->job_template_id = $model->id;
+            $link->notification_template_id = $ntId;
+            $link->save(false);
+        }
     }
 
     private function findModel(int $id): JobTemplate

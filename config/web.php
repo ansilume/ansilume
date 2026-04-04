@@ -17,6 +17,7 @@ $config = [
         'api/v1/inventories' => 'app\controllers\api\v1\InventoriesController',
         'api/v1/credentials' => 'app\controllers\api\v1\CredentialsController',
         'api/v1/schedules' => 'app\controllers\api\v1\SchedulesController',
+        'api/v1/notification-templates' => 'app\controllers\api\v1\NotificationTemplatesController',
         'runner-api' => 'app\controllers\api\runner\JobsController',
         'runner-register' => 'app\controllers\api\runner\RegisterController',
     ],
@@ -121,6 +122,9 @@ $config = [
         'notificationService' => [
             'class' => 'app\services\NotificationService',
         ],
+        'notificationDispatcher' => [
+            'class' => 'app\services\NotificationDispatcher',
+        ],
         'lintService' => [
             'class' => 'app\services\LintService',
         ],
@@ -181,6 +185,13 @@ $config = [
                 ['pattern' => 'api/v1/schedules/<id:\d+>/toggle', 'route' => 'api/v1/schedules/toggle', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/schedules/<id:\d+>', 'route' => 'api/v1/schedules/view'],
                 ['pattern' => 'api/v1/schedules', 'route' => 'api/v1/schedules/index'],
+                // Notification templates API
+                ['pattern' => 'api/v1/notification-templates/<id:\d+>/test', 'route' => 'api/v1/notification-templates/test', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/notification-templates/<id:\d+>', 'route' => 'api/v1/notification-templates/view', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/notification-templates/<id:\d+>', 'route' => 'api/v1/notification-templates/update', 'verb' => 'PUT'],
+                ['pattern' => 'api/v1/notification-templates/<id:\d+>', 'route' => 'api/v1/notification-templates/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/notification-templates', 'route' => 'api/v1/notification-templates/index', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/notification-templates', 'route' => 'api/v1/notification-templates/create', 'verb' => 'POST'],
                 // Runner pull API
                 ['pattern' => 'api/runner/v1/register', 'route' => 'runner-register/register', 'verb' => 'POST'],
                 ['pattern' => 'api/runner/v1/heartbeat', 'route' => 'runner-api/heartbeat', 'verb' => 'POST'],
@@ -215,6 +226,9 @@ $config = [
                 'schedule/<action>/<id:\d+>' => 'schedule/<action>',
                 'webhook/<action>' => 'webhook/<action>',
                 'webhook/<action>/<id:\d+>' => 'webhook/<action>',
+                // Notification templates
+                'notification-template/<action>' => 'notification-template/<action>',
+                'notification-template/<action>/<id:\d+>' => 'notification-template/<action>',
                 // Hyphenated controller names
                 'job-template/generate-trigger-token/<id:\d+>' => 'job-template/generate-trigger-token',
                 'job-template/revoke-trigger-token/<id:\d+>' => 'job-template/revoke-trigger-token',

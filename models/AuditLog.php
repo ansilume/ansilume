@@ -92,6 +92,11 @@ class AuditLog extends ActiveRecord
     public const ACTION_WEBHOOK_UPDATED = 'webhook.updated';
     public const ACTION_WEBHOOK_DELETED = 'webhook.deleted';
 
+    // -- Notification template actions -----------------------------------------
+    public const ACTION_NOTIFICATION_TEMPLATE_CREATED = 'notification-template.created';
+    public const ACTION_NOTIFICATION_TEMPLATE_UPDATED = 'notification-template.updated';
+    public const ACTION_NOTIFICATION_TEMPLATE_DELETED = 'notification-template.deleted';
+
     // -- API token actions -----------------------------------------------------
     public const ACTION_API_TOKEN_CREATED = 'api-token.created';
     public const ACTION_API_TOKEN_DELETED = 'api-token.deleted';
