@@ -45,6 +45,8 @@ class Job extends ActiveRecord
     public const STATUS_FAILED = 'failed';
     public const STATUS_CANCELED = 'canceled';
     public const STATUS_TIMED_OUT = 'timed_out';
+    public const STATUS_PENDING_APPROVAL = 'pending_approval';
+    public const STATUS_REJECTED = 'rejected';
 
     public static function tableName(): string
     {
@@ -93,6 +95,8 @@ class Job extends ActiveRecord
             self::STATUS_FAILED,
             self::STATUS_CANCELED,
             self::STATUS_TIMED_OUT,
+            self::STATUS_PENDING_APPROVAL,
+            self::STATUS_REJECTED,
         ];
     }
 
@@ -103,6 +107,7 @@ class Job extends ActiveRecord
             self::STATUS_FAILED,
             self::STATUS_CANCELED,
             self::STATUS_TIMED_OUT,
+            self::STATUS_REJECTED,
         ], true);
     }
 
@@ -117,6 +122,7 @@ class Job extends ActiveRecord
             self::STATUS_PENDING,
             self::STATUS_QUEUED,
             self::STATUS_RUNNING,
+            self::STATUS_PENDING_APPROVAL,
         ], true);
     }
 
@@ -130,6 +136,8 @@ class Job extends ActiveRecord
             self::STATUS_FAILED => 'Failed',
             self::STATUS_CANCELED => 'Canceled',
             self::STATUS_TIMED_OUT => 'Timed Out',
+            self::STATUS_PENDING_APPROVAL => 'Awaiting Approval',
+            self::STATUS_REJECTED => 'Rejected',
             default => $status,
         };
     }
@@ -143,6 +151,8 @@ class Job extends ActiveRecord
             self::STATUS_FAILED => 'danger',
             self::STATUS_CANCELED => 'warning',
             self::STATUS_TIMED_OUT => 'danger',
+            self::STATUS_PENDING_APPROVAL => 'info',
+            self::STATUS_REJECTED => 'danger',
             default => 'secondary',
         };
     }

@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace app\tests\unit\controllers;
 
+use app\controllers\ApprovalController;
+use app\controllers\ApprovalRuleController;
 use app\controllers\AuditLogController;
 use app\controllers\CredentialController;
 use app\controllers\JobTemplateController;
 use app\controllers\ProjectController;
+use app\controllers\WorkflowJobController;
+use app\controllers\WorkflowTemplateController;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -235,5 +239,123 @@ class ControllerAccessRulesTest extends TestCase
     {
         $rules = $this->getAccessRules(ProjectController::class);
         $this->assertActionRequiresRole($rules, 'sync', 'project.update');
+    }
+
+    // -------------------------------------------------------------------------
+    // ApprovalRuleController
+    // -------------------------------------------------------------------------
+
+    public function testApprovalRuleViewRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(ApprovalRuleController::class);
+        $this->assertActionRequiresRole($rules, 'index', 'approval-rule.view');
+        $this->assertActionRequiresRole($rules, 'view', 'approval-rule.view');
+    }
+
+    public function testApprovalRuleCreateRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(ApprovalRuleController::class);
+        $this->assertActionRequiresRole($rules, 'create', 'approval-rule.create');
+    }
+
+    public function testApprovalRuleDeleteRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(ApprovalRuleController::class);
+        $this->assertActionRequiresRole($rules, 'delete', 'approval-rule.delete');
+    }
+
+    public function testApprovalRuleDeleteIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(ApprovalRuleController::class);
+        $this->assertActionIsPostOnly($verbs, 'delete');
+    }
+
+    // -------------------------------------------------------------------------
+    // ApprovalController
+    // -------------------------------------------------------------------------
+
+    public function testApprovalViewRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(ApprovalController::class);
+        $this->assertActionRequiresRole($rules, 'index', 'approval.view');
+        $this->assertActionRequiresRole($rules, 'view', 'approval.view');
+    }
+
+    public function testApprovalDecideRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(ApprovalController::class);
+        $this->assertActionRequiresRole($rules, 'approve', 'approval.decide');
+        $this->assertActionRequiresRole($rules, 'reject', 'approval.decide');
+    }
+
+    public function testApprovalDecideIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(ApprovalController::class);
+        $this->assertActionIsPostOnly($verbs, 'approve');
+        $this->assertActionIsPostOnly($verbs, 'reject');
+    }
+
+    // -------------------------------------------------------------------------
+    // WorkflowTemplateController
+    // -------------------------------------------------------------------------
+
+    public function testWorkflowTemplateViewRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(WorkflowTemplateController::class);
+        $this->assertActionRequiresRole($rules, 'index', 'workflow-template.view');
+        $this->assertActionRequiresRole($rules, 'view', 'workflow-template.view');
+    }
+
+    public function testWorkflowTemplateCreateRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(WorkflowTemplateController::class);
+        $this->assertActionRequiresRole($rules, 'create', 'workflow-template.create');
+    }
+
+    public function testWorkflowTemplateDeleteRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(WorkflowTemplateController::class);
+        $this->assertActionRequiresRole($rules, 'delete', 'workflow-template.delete');
+    }
+
+    public function testWorkflowTemplateLaunchRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(WorkflowTemplateController::class);
+        $this->assertActionRequiresRole($rules, 'launch', 'workflow.launch');
+    }
+
+    public function testWorkflowTemplateDeleteIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(WorkflowTemplateController::class);
+        $this->assertActionIsPostOnly($verbs, 'delete');
+    }
+
+    public function testWorkflowTemplateLaunchIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(WorkflowTemplateController::class);
+        $this->assertActionIsPostOnly($verbs, 'launch');
+    }
+
+    // -------------------------------------------------------------------------
+    // WorkflowJobController
+    // -------------------------------------------------------------------------
+
+    public function testWorkflowJobViewRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(WorkflowJobController::class);
+        $this->assertActionRequiresRole($rules, 'index', 'workflow.view');
+        $this->assertActionRequiresRole($rules, 'view', 'workflow.view');
+    }
+
+    public function testWorkflowJobCancelRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(WorkflowJobController::class);
+        $this->assertActionRequiresRole($rules, 'cancel', 'workflow.cancel');
+    }
+
+    public function testWorkflowJobCancelIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(WorkflowJobController::class);
+        $this->assertActionIsPostOnly($verbs, 'cancel');
     }
 }

@@ -92,6 +92,25 @@ class AuditLog extends ActiveRecord
     public const ACTION_WEBHOOK_UPDATED = 'webhook.updated';
     public const ACTION_WEBHOOK_DELETED = 'webhook.deleted';
 
+    // -- Approval actions ------------------------------------------------------
+    public const ACTION_APPROVAL_RULE_CREATED = 'approval-rule.created';
+    public const ACTION_APPROVAL_RULE_UPDATED = 'approval-rule.updated';
+    public const ACTION_APPROVAL_RULE_DELETED = 'approval-rule.deleted';
+    public const ACTION_APPROVAL_REQUESTED = 'approval.requested';
+    public const ACTION_APPROVAL_DECIDED = 'approval.decided';
+    public const ACTION_APPROVAL_TIMED_OUT = 'approval.timed_out';
+
+    // -- Workflow actions ------------------------------------------------------
+    public const ACTION_WORKFLOW_TEMPLATE_CREATED = 'workflow-template.created';
+    public const ACTION_WORKFLOW_TEMPLATE_UPDATED = 'workflow-template.updated';
+    public const ACTION_WORKFLOW_TEMPLATE_DELETED = 'workflow-template.deleted';
+    public const ACTION_WORKFLOW_LAUNCHED = 'workflow.launched';
+    public const ACTION_WORKFLOW_COMPLETED = 'workflow.completed';
+    public const ACTION_WORKFLOW_FAILED = 'workflow.failed';
+    public const ACTION_WORKFLOW_CANCELED = 'workflow.canceled';
+    public const ACTION_WORKFLOW_STEP_STARTED = 'workflow.step.started';
+    public const ACTION_WORKFLOW_STEP_COMPLETED = 'workflow.step.completed';
+
     // -- Notification template actions -----------------------------------------
     public const ACTION_NOTIFICATION_TEMPLATE_CREATED = 'notification-template.created';
     public const ACTION_NOTIFICATION_TEMPLATE_UPDATED = 'notification-template.updated';

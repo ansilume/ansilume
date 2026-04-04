@@ -79,6 +79,12 @@ return [
         'analyticsService' => [
             'class' => 'app\services\AnalyticsService',
         ],
+        'approvalService' => [
+            'class' => 'app\services\ApprovalService',
+        ],
+        'workflowExecutionService' => [
+            'class' => 'app\services\WorkflowExecutionService',
+        ],
         'lintService' => [
             'class' => 'app\services\LintService',
         ],

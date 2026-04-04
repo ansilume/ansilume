@@ -140,6 +140,18 @@ $active = fn (string $prefix): string =>
         <a class="nav-link<?= $active('notification-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/notification-template/index']) ?>">Templates</a>
     </nav>
 
+    <span class="nav-section">Workflows</span>
+    <nav class="nav flex-column">
+        <a class="nav-link<?= $active('workflow-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-template/index']) ?>">Templates</a>
+        <a class="nav-link<?= $active('workflow-job') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-job/index']) ?>">Executions</a>
+    </nav>
+
+    <span class="nav-section">Approvals</span>
+    <nav class="nav flex-column">
+        <a class="nav-link<?= $active('approval-rule') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval-rule/index']) ?>">Rules</a>
+        <a class="nav-link<?= $active('approval') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval/index']) ?>">Requests</a>
+    </nav>
+
     <span class="nav-section">Reporting</span>
     <nav class="nav flex-column">
         <a class="nav-link<?= $active('analytics') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/analytics/index']) ?>">Analytics</a>

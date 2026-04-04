@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\models\ApprovalRule;
 use app\models\Job;
 use app\models\JobTemplate;
 use yii\base\Component;
@@ -34,6 +35,7 @@ class JobLaunchService extends Component
     public function launch(JobTemplate $template, int $launchedBy, array $overrides = []): Job
     {
         $job = $this->buildJobRecord($template, $launchedBy, $overrides);
+        $needsApproval = $this->requiresApproval($template);
 
         $transaction = \Yii::$app->db->beginTransaction();
         try {
@@ -41,11 +43,15 @@ class JobLaunchService extends Component
                 throw new \RuntimeException('Failed to save job record: ' . json_encode($job->errors));
             }
 
-            $job->status = Job::STATUS_QUEUED;
-            $job->queued_at = time();
+            if ($needsApproval) {
+                $job->status = Job::STATUS_PENDING_APPROVAL;
+            } else {
+                $job->status = Job::STATUS_QUEUED;
+                $job->queued_at = time();
+            }
 
             if (!$job->save()) {
-                throw new \RuntimeException('Failed to update job status to queued: ' . json_encode($job->errors));
+                throw new \RuntimeException('Failed to update job status: ' . json_encode($job->errors));
             }
 
             $transaction->commit();
@@ -62,7 +68,34 @@ class JobLaunchService extends Component
             ['template_id' => $template->id, 'template_name' => $template->name]
         );
 
+        if ($needsApproval) {
+            $this->initiateApproval($job, $template);
+        }
+
         return $job;
+    }
+
+    private function requiresApproval(JobTemplate $template): bool
+    {
+        if ($template->approval_rule_id === null) {
+            return false;
+        }
+        /** @var ApprovalRule|null $rule */
+        $rule = $template->approvalRule;
+        return $rule !== null;
+    }
+
+    private function initiateApproval(Job $job, JobTemplate $template): void
+    {
+        /** @var ApprovalRule|null $rule */
+        $rule = $template->approvalRule;
+        if ($rule === null) {
+            return;
+        }
+
+        /** @var ApprovalService $approvalService */
+        $approvalService = \Yii::$app->get('approvalService');
+        $approvalService->createRequest($job, $rule);
     }
 
     /**

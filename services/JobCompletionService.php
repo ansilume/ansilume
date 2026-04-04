@@ -10,6 +10,7 @@ use app\models\JobLog;
 use app\models\JobTask;
 use app\models\NotificationTemplate;
 use app\models\Webhook;
+use app\models\WorkflowJobStep;
 use yii\base\Component;
 
 /**
@@ -44,6 +45,7 @@ class JobCompletionService extends Component
         $ws->dispatch($event, $job);
 
         $this->dispatchNotifications($job);
+        $this->advanceWorkflow($job);
     }
 
     public function completeTimedOut(Job $job): void
@@ -66,6 +68,23 @@ class JobCompletionService extends Component
         $ws->dispatch(Webhook::EVENT_JOB_FAILURE, $job);
 
         $this->dispatchNotifications($job);
+        $this->advanceWorkflow($job);
+    }
+
+    /**
+     * If this job belongs to a workflow step, advance the workflow.
+     */
+    private function advanceWorkflow(Job $job): void
+    {
+        /** @var WorkflowJobStep|null $wjs */
+        $wjs = WorkflowJobStep::findOne(['job_id' => $job->id]);
+        if ($wjs === null) {
+            return;
+        }
+
+        /** @var WorkflowExecutionService $wes */
+        $wes = \Yii::$app->get('workflowExecutionService');
+        $wes->onChildJobCompleted($job);
     }
 
     private function dispatchNotifications(Job $job): void

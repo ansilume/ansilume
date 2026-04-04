@@ -19,6 +19,10 @@ $config = [
         'api/v1/schedules' => 'app\controllers\api\v1\SchedulesController',
         'api/v1/notification-templates' => 'app\controllers\api\v1\NotificationTemplatesController',
         'api/v1/analytics' => 'app\controllers\api\v1\AnalyticsController',
+        'api/v1/approval-rules' => 'app\controllers\api\v1\ApprovalRulesController',
+        'api/v1/approvals' => 'app\controllers\api\v1\ApprovalsController',
+        'api/v1/workflow-templates' => 'app\controllers\api\v1\WorkflowTemplatesController',
+        'api/v1/workflow-jobs' => 'app\controllers\api\v1\WorkflowJobsController',
         'runner-api' => 'app\controllers\api\runner\JobsController',
         'runner-register' => 'app\controllers\api\runner\RegisterController',
     ],
@@ -129,6 +133,12 @@ $config = [
         'analyticsService' => [
             'class' => 'app\services\AnalyticsService',
         ],
+        'approvalService' => [
+            'class' => 'app\services\ApprovalService',
+        ],
+        'workflowExecutionService' => [
+            'class' => 'app\services\WorkflowExecutionService',
+        ],
         'lintService' => [
             'class' => 'app\services\LintService',
         ],
@@ -196,6 +206,28 @@ $config = [
                 ['pattern' => 'api/v1/notification-templates/<id:\d+>', 'route' => 'api/v1/notification-templates/delete', 'verb' => 'DELETE'],
                 ['pattern' => 'api/v1/notification-templates', 'route' => 'api/v1/notification-templates/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/notification-templates', 'route' => 'api/v1/notification-templates/create', 'verb' => 'POST'],
+                // Approval rules API
+                ['pattern' => 'api/v1/approval-rules/<id:\d+>', 'route' => 'api/v1/approval-rules/view', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/approval-rules/<id:\d+>', 'route' => 'api/v1/approval-rules/update', 'verb' => 'PUT'],
+                ['pattern' => 'api/v1/approval-rules/<id:\d+>', 'route' => 'api/v1/approval-rules/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/approval-rules', 'route' => 'api/v1/approval-rules/index', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/approval-rules', 'route' => 'api/v1/approval-rules/create', 'verb' => 'POST'],
+                // Approvals API
+                ['pattern' => 'api/v1/approvals/<id:\d+>/approve', 'route' => 'api/v1/approvals/approve', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/approvals/<id:\d+>/reject', 'route' => 'api/v1/approvals/reject', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/approvals/<id:\d+>', 'route' => 'api/v1/approvals/view', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/approvals', 'route' => 'api/v1/approvals/index', 'verb' => 'GET'],
+                // Workflow templates API
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>/launch', 'route' => 'api/v1/workflow-templates/launch', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/view', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/update', 'verb' => 'PUT'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/index', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/create', 'verb' => 'POST'],
+                // Workflow jobs API
+                ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/cancel', 'route' => 'api/v1/workflow-jobs/cancel', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/workflow-jobs/<id:\d+>', 'route' => 'api/v1/workflow-jobs/view', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/workflow-jobs', 'route' => 'api/v1/workflow-jobs/index', 'verb' => 'GET'],
                 // Runner pull API
                 ['pattern' => 'api/runner/v1/register', 'route' => 'runner-register/register', 'verb' => 'POST'],
                 ['pattern' => 'api/runner/v1/heartbeat', 'route' => 'runner-api/heartbeat', 'verb' => 'POST'],
@@ -242,6 +274,18 @@ $config = [
                 'notification-template/<action>/<id:\d+>' => 'notification-template/<action>',
                 // Analytics
                 'analytics/<action>' => 'analytics/<action>',
+                // Approval rules
+                'approval-rule/<action>' => 'approval-rule/<action>',
+                'approval-rule/<action>/<id:\d+>' => 'approval-rule/<action>',
+                // Approvals
+                'approval/<action>' => 'approval/<action>',
+                'approval/<action>/<id:\d+>' => 'approval/<action>',
+                // Workflow templates
+                'workflow-template/<action>' => 'workflow-template/<action>',
+                'workflow-template/<action>/<id:\d+>' => 'workflow-template/<action>',
+                // Workflow jobs
+                'workflow-job/<action>' => 'workflow-job/<action>',
+                'workflow-job/<action>/<id:\d+>' => 'workflow-job/<action>',
                 // Hyphenated controller names
                 'job-template/generate-trigger-token/<id:\d+>' => 'job-template/generate-trigger-token',
                 'job-template/revoke-trigger-token/<id:\d+>' => 'job-template/revoke-trigger-token',

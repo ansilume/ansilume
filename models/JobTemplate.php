@@ -26,6 +26,7 @@ use yii\db\ActiveRecord;
  * @property string|null $skip_tags
  * @property int         $timeout_minutes   Timeout in minutes (default 120)
  * @property int|null    $runner_group_id
+ * @property int|null    $approval_rule_id
  * @property string|null $survey_fields     JSON array of SurveyField definitions
  * @property bool        $notify_on_failure
  * @property bool        $notify_on_success
@@ -43,6 +44,7 @@ use yii\db\ActiveRecord;
  * @property Inventory   $inventory
  * @property Credential|null $credential
  * @property RunnerGroup|null $runnerGroup
+ * @property ApprovalRule|null $approvalRule
  * @property User        $creator
  * @property Job[]       $jobs
  * @property NotificationTemplate[] $notificationTemplates
@@ -112,7 +114,7 @@ class JobTemplate extends ActiveRecord
             [['notify_emails'], 'validateJson'],
             [['notify_on_failure', 'notify_on_success'], 'boolean'],
             [['trigger_token'], 'string', 'max' => 64],
-            [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'created_by'], 'integer'],
+            [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'approval_rule_id', 'created_by'], 'integer'],
         ];
     }
 
@@ -151,6 +153,11 @@ class JobTemplate extends ActiveRecord
     public function getRunnerGroup(): \yii\db\ActiveQuery
     {
         return $this->hasOne(RunnerGroup::class, ['id' => 'runner_group_id']);
+    }
+
+    public function getApprovalRule(): \yii\db\ActiveQuery
+    {
+        return $this->hasOne(ApprovalRule::class, ['id' => 'approval_rule_id']);
     }
 
     public function getCreator(): \yii\db\ActiveQuery

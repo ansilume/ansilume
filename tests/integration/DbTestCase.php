@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration;
 
+use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Inventory;
 use app\models\Job;
@@ -16,6 +17,8 @@ use app\models\Team;
 use app\models\TeamMember;
 use app\models\TeamProject;
 use app\models\User;
+use app\models\WorkflowStep;
+use app\models\WorkflowTemplate;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -209,5 +212,53 @@ abstract class DbTestCase extends TestCase
         $tp->created_at = time();
         $tp->save(false);
         return $tp;
+    }
+
+    protected function createApprovalRule(
+        int $createdBy,
+        string $approverType = ApprovalRule::APPROVER_TYPE_ROLE,
+        string $config = '{"role": "operator"}',
+        int $requiredApprovals = 1
+    ): ApprovalRule {
+        $r = new ApprovalRule();
+        $r->name = 'test-rule-' . uniqid('', true);
+        $r->approver_type = $approverType;
+        $r->approver_config = $config;
+        $r->required_approvals = $requiredApprovals;
+        $r->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $r->created_by = $createdBy;
+        $r->created_at = time();
+        $r->updated_at = time();
+        $r->save(false);
+        return $r;
+    }
+
+    protected function createWorkflowTemplate(int $createdBy): WorkflowTemplate
+    {
+        $wt = new WorkflowTemplate();
+        $wt->name = 'test-workflow-' . uniqid('', true);
+        $wt->created_by = $createdBy;
+        $wt->created_at = time();
+        $wt->updated_at = time();
+        $wt->save(false);
+        return $wt;
+    }
+
+    protected function createWorkflowStep(
+        int $workflowTemplateId,
+        int $stepOrder,
+        string $stepType = WorkflowStep::TYPE_JOB,
+        ?int $jobTemplateId = null
+    ): WorkflowStep {
+        $ws = new WorkflowStep();
+        $ws->workflow_template_id = $workflowTemplateId;
+        $ws->name = 'step-' . $stepOrder;
+        $ws->step_order = $stepOrder;
+        $ws->step_type = $stepType;
+        $ws->job_template_id = $jobTemplateId;
+        $ws->created_at = time();
+        $ws->updated_at = time();
+        $ws->save(false);
+        return $ws;
     }
 }

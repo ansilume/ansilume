@@ -16,7 +16,7 @@ class JobTest extends TestCase
     public function testAllStatusesAreDefined(): void
     {
         $statuses = Job::statuses();
-        $expected = ['pending', 'queued', 'running', 'succeeded', 'failed', 'canceled', 'timed_out'];
+        $expected = ['pending', 'queued', 'running', 'succeeded', 'failed', 'canceled', 'timed_out', 'pending_approval', 'rejected'];
         $this->assertEqualsCanonicalizing($expected, $statuses);
     }
 
@@ -28,9 +28,15 @@ class JobTest extends TestCase
         }
     }
 
+    public function testIsFinishedForRejectedStatus(): void
+    {
+        $job = $this->makeJob('rejected');
+        $this->assertTrue($job->isFinished(), 'Expected isFinished() for status rejected');
+    }
+
     public function testIsNotFinishedForActiveStatuses(): void
     {
-        foreach (['pending', 'queued', 'running'] as $status) {
+        foreach (['pending', 'queued', 'running', 'pending_approval'] as $status) {
             $job = $this->makeJob($status);
             $this->assertFalse($job->isFinished(), "Expected !isFinished() for status '{$status}'");
         }
@@ -38,7 +44,7 @@ class JobTest extends TestCase
 
     public function testIsCancelableForActiveStatuses(): void
     {
-        foreach (['pending', 'queued', 'running'] as $status) {
+        foreach (['pending', 'queued', 'running', 'pending_approval'] as $status) {
             $job = $this->makeJob($status);
             $this->assertTrue($job->isCancelable(), "Expected isCancelable() for status '{$status}'");
         }
@@ -46,7 +52,7 @@ class JobTest extends TestCase
 
     public function testIsNotCancelableForTerminalStatuses(): void
     {
-        foreach (['succeeded', 'failed', 'canceled'] as $status) {
+        foreach (['succeeded', 'failed', 'canceled', 'rejected'] as $status) {
             $job = $this->makeJob($status);
             $this->assertFalse($job->isCancelable(), "Expected !isCancelable() for status '{$status}'");
         }
