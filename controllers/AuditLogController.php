@@ -52,12 +52,33 @@ class AuditLogController extends BaseController
 
         $users = User::find()->orderBy('username')->all();
 
+        // Resolve object names for rows whose object_type is "user" so the
+        // table can show the username instead of just "user #7".
+        /** @var AuditLog[] $rows */
+        $rows = $dataProvider->getModels();
+        $userObjectIds = [];
+        foreach ($rows as $row) {
+            if ($row->object_type === 'user' && $row->object_id !== null) {
+                $userObjectIds[] = (int)$row->object_id;
+            }
+        }
+        $objectUsernames = [];
+        if ($userObjectIds !== []) {
+            /** @var array<int, string> $objectUsernames */
+            $objectUsernames = User::find()
+                ->select(['username', 'id'])
+                ->where(['id' => array_unique($userObjectIds)])
+                ->indexBy('id')
+                ->column();
+        }
+
         return $this->render('index', [
             'dataProvider' => $dataProvider,
             'filterAction' => $filterAction,
             'filterUser' => $filterUser,
             'filterObject' => $filterObject,
             'users' => $users,
+            'objectUsernames' => $objectUsernames,
         ]);
     }
 

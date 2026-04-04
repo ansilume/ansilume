@@ -1,0 +1,57 @@
+name: OSSF Scorecard
+
+# Informative only: this workflow measures supply-chain security posture
+# against the OpenSSF Scorecard checks. It is intentionally NOT a required
+# status check — results are published as SARIF in the Security tab and as a
+# build artifact, but failures must never block merges.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 06:17 UTC (off-peak to avoid GitHub rate limits)
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    # Keep it informative — never fail the workflow.
+    continue-on-error: true
+    permissions:
+      security-events: write   # upload SARIF to the Security tab
+      id-token: write          # needed for publish_results
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run analysis
+        uses: ossf/scorecard-action@v2.4.0
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          # publish_results requires the repo to be public. If the repo is
+          # private, set this to false and skip the Security tab upload.
+          publish_results: true
+
+      - name: Upload SARIF artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard-sarif
+          path: scorecard-results.sarif
+          retention-days: 7
+
+      - name: Upload SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard-results.sarif

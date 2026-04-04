@@ -52,8 +52,8 @@ class NotificationDispatcherTest extends TestCase
             ['id', 'name', 'description', 'project_id', 'inventory_id', 'credential_id',
              'playbook', 'extra_vars', 'verbosity', 'forks', 'become', 'become_method',
              'become_user', 'limit', 'tags', 'skip_tags', 'timeout_minutes',
-             'runner_group_id', 'survey_fields', 'notify_on_failure', 'notify_on_success',
-             'notify_emails', 'trigger_token', 'lint_output', 'lint_at', 'lint_exit_code',
+             'runner_group_id', 'survey_fields',
+             'trigger_token', 'lint_output', 'lint_at', 'lint_exit_code',
              'created_by', 'created_at', 'updated_at', 'deleted_at']
         );
 

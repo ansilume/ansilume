@@ -346,6 +346,58 @@ fi
 # =============================================================================
 # 7. Composer validation
 # =============================================================================
+section "OpenAPI spec"
+
+OPENAPI_FILE="web/openapi.yaml"
+if [[ ! -f "$OPENAPI_FILE" ]]; then
+    fail "$OPENAPI_FILE is missing — the API spec is mandatory (see CLAUDE.md)"
+else
+    OPENAPI_OUT=$(dc php -r '
+        require "vendor/autoload.php";
+        try {
+            $data = Symfony\Component\Yaml\Yaml::parseFile("web/openapi.yaml");
+            if (!is_array($data)) { fwrite(STDERR, "openapi.yaml did not parse as a mapping\n"); exit(1); }
+            foreach (["openapi","info","paths","components"] as $key) {
+                if (!array_key_exists($key, $data)) { fwrite(STDERR, "openapi.yaml missing top-level key: $key\n"); exit(1); }
+            }
+            // Shallow $ref resolution check: every $ref that points inside this
+            // document must resolve to an existing path.
+            $refs = [];
+            $walk = function ($node) use (&$walk, &$refs) {
+                if (is_array($node)) {
+                    foreach ($node as $k => $v) {
+                        if ($k === "\$ref" && is_string($v)) { $refs[] = $v; }
+                        else { $walk($v); }
+                    }
+                }
+            };
+            $walk($data);
+            $missing = [];
+            foreach ($refs as $ref) {
+                if (strpos($ref, "#/") !== 0) { continue; }
+                $parts = explode("/", substr($ref, 2));
+                $cur = $data;
+                foreach ($parts as $p) {
+                    if (!is_array($cur) || !array_key_exists($p, $cur)) { $missing[] = $ref; continue 2; }
+                    $cur = $cur[$p];
+                }
+            }
+            if ($missing) { fwrite(STDERR, "unresolved \$refs: " . implode(", ", array_unique($missing)) . "\n"); exit(1); }
+            echo "ok:" . count($data["paths"]) . ":" . count($refs);
+        } catch (\Throwable $e) {
+            fwrite(STDERR, "openapi.yaml parse error: " . $e->getMessage() . "\n");
+            exit(1);
+        }
+    ' 2>&1 || true)
+    if [[ "$OPENAPI_OUT" =~ ^ok: ]]; then
+        PATHS=$(echo "$OPENAPI_OUT" | cut -d: -f2)
+        REFS=$(echo "$OPENAPI_OUT" | cut -d: -f3)
+        ok "OpenAPI spec valid (${PATHS} paths, ${REFS} \$refs resolved)"
+    else
+        fail "OpenAPI spec invalid: $OPENAPI_OUT"
+    fi
+fi
+
 section "Composer"
 
 if dc composer validate --no-check-all --quiet 2>&1; then

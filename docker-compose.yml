@@ -117,6 +117,21 @@ services:
     networks:
       - ansilume
 
+  swagger:
+    image: swaggerapi/swagger-ui:v5.17.14
+    container_name: ansilume_swagger
+    restart: unless-stopped
+    ports:
+      - "${SWAGGER_PORT:-8088}:8080"
+    environment:
+      # swagger-ui runs in the user's browser, so the URL must be reachable
+      # from the host. Nginx serves /openapi.yaml with permissive CORS.
+      - SWAGGER_JSON_URL=http://localhost:${NGINX_PORT:-8080}/openapi.yaml
+      - DOC_EXPANSION=none
+      - DEFAULT_MODELS_EXPAND_DEPTH=1
+    networks:
+      - ansilume
+
   schedule-runner:
     build:
       context: .

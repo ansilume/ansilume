@@ -8,6 +8,7 @@ declare(strict_types=1);
 /** @var string|null $filterUser */
 /** @var string|null $filterObject */
 /** @var app\models\User[] $users */
+/** @var array<int, string> $objectUsernames */
 
 use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
@@ -62,9 +63,12 @@ $this->title = 'Audit Log';
                 <td>
                     <?php if ($entry->object_type) : ?>
                         <span class="text-muted"><?= Html::encode($entry->object_type) ?></span>
-                        <?php if ($entry->object_id !== null) :
-                            ?>#<?= $entry->object_id ?><?php
-                        endif; ?>
+                        <?php if ($entry->object_id !== null) : ?>
+                            #<?= (int)$entry->object_id ?><?php
+                            if ($entry->object_type === 'user' && isset($objectUsernames[(int)$entry->object_id])) : ?>
+                                <span class="text-muted">(<?= Html::encode($objectUsernames[(int)$entry->object_id]) ?>)</span>
+                            <?php endif; ?>
+                        <?php endif; ?>
                     <?php else : ?>
                         —
                     <?php endif; ?>

@@ -50,7 +50,7 @@ class JobTemplatesController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, name: string, description: string|null, project_id: int|null, project_name: string|null, inventory_id: int|null, inventory_name: string|null, credential_id: int|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string|null, become_user: string|null, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, notify_on_failure: bool, notify_on_success: bool, created_at: int, updated_at: int}
+     * @return array{id: int, name: string, description: string|null, project_id: int|null, project_name: string|null, inventory_id: int|null, inventory_name: string|null, credential_id: int|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string|null, become_user: string|null, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, created_at: int, updated_at: int}
      */
     private function serialize(JobTemplate $t): array
     {
@@ -73,8 +73,6 @@ class JobTemplatesController extends BaseApiController
             'tags' => $t->tags,
             'skip_tags' => $t->skip_tags,
             'has_survey' => $t->hasSurvey(),
-            'notify_on_failure' => (bool)$t->notify_on_failure,
-            'notify_on_success' => (bool)$t->notify_on_success,
             'created_at' => $t->created_at,
             'updated_at' => $t->updated_at,
         ];

@@ -33,9 +33,6 @@ return [
         'scheduleService' => [
             'class' => 'app\services\ScheduleService',
         ],
-        'notificationService' => [
-            'class' => 'app\services\NotificationService',
-        ],
         'notificationDispatcher' => [
             'class' => 'app\services\NotificationDispatcher',
         ],

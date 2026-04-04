@@ -28,9 +28,6 @@ use yii\db\ActiveRecord;
  * @property int|null    $runner_group_id
  * @property int|null    $approval_rule_id
  * @property string|null $survey_fields     JSON array of SurveyField definitions
- * @property bool        $notify_on_failure
- * @property bool        $notify_on_success
- * @property string|null $notify_emails     JSON array of email addresses
  * @property string|null $trigger_token     Hashed trigger token (bcrypt)
  * @property string|null $lint_output       Last ansible-lint output
  * @property int|null    $lint_at           Unix timestamp of last lint run
@@ -109,10 +106,8 @@ class JobTemplate extends ActiveRecord
             [['limit'], 'string', 'max' => 255],
             [['timeout_minutes'], 'integer', 'min' => 1, 'max' => 1440],
             [['tags', 'skip_tags'], 'string', 'max' => 512],
-            [['survey_fields', 'notify_emails'], 'string'],
+            [['survey_fields'], 'string'],
             [['survey_fields'], 'validateJson'],
-            [['notify_emails'], 'validateJson'],
-            [['notify_on_failure', 'notify_on_success'], 'boolean'],
             [['trigger_token'], 'string', 'max' => 64],
             [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'approval_rule_id', 'created_by'], 'integer'],
         ];
@@ -189,20 +184,6 @@ class JobTemplate extends ActiveRecord
     public function hasSurvey(): bool
     {
         return !empty($this->survey_fields) && $this->getSurveyFields() !== [];
-    }
-
-    /**
-     * Parse notify_emails JSON into a flat array of strings.
-     *
-     * @return string[]
-     */
-    public function getNotifyEmailList(): array
-    {
-        if (empty($this->notify_emails)) {
-            return [];
-        }
-        $list = json_decode($this->notify_emails, true);
-        return is_array($list) ? array_filter($list, 'is_string') : [];
     }
 
     /**

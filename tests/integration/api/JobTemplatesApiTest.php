@@ -43,8 +43,6 @@ class JobTemplatesApiTest extends DbTestCase
             'tags' => $tpl->tags,
             'skip_tags' => $tpl->skip_tags,
             'has_survey' => $tpl->hasSurvey(),
-            'notify_on_failure' => (bool)$tpl->notify_on_failure,
-            'notify_on_success' => (bool)$tpl->notify_on_success,
             'created_at' => $tpl->created_at,
             'updated_at' => $tpl->updated_at,
         ];

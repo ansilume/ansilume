@@ -1,0 +1,847 @@
+openapi: 3.1.0
+info:
+  title: Ansilume REST API
+  version: "1.5.0"
+  description: |
+    REST API v1 for the Ansilume automation platform.
+
+    Every feature of Ansilume is reachable via this API — the web UI is one
+    client among many. When a feature changes, this document **must** be
+    updated in the same commit (see `CLAUDE.md`).
+
+    ## Authentication
+
+    All endpoints under `/api/v1/` require a Bearer token except where noted.
+    Create a token via the browser (*Profile → API Tokens*) or from the console:
+
+    ```bash
+    docker compose exec app php yii api-token/create admin "my-token" --raw
+    ```
+
+    Pass it as:
+
+    ```
+    Authorization: Bearer <token>
+    ```
+
+    ## Errors
+
+    Error responses have the shape `{ "error": { "message": "..." } }` and
+    use conventional HTTP status codes (401, 403, 404, 422).
+
+servers:
+  - url: http://localhost:8080
+    description: Local dev (via nginx)
+  - url: https://ansilume.example.com
+    description: Production (replace with your deployment)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Projects
+  - name: Inventories
+  - name: Credentials
+  - name: Job Templates
+  - name: Jobs
+  - name: Schedules
+  - name: Notification Templates
+  - name: Approval Rules
+  - name: Approvals
+  - name: Workflow Templates
+  - name: Workflow Jobs
+  - name: Triggers
+
+paths:
+  # ─────────────────────────────── Projects ───────────────────────────────
+  /api/v1/projects:
+    get:
+      tags: [Projects]
+      summary: List projects
+      parameters:
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectList' }
+  /api/v1/projects/{id}:
+    get:
+      tags: [Projects]
+      summary: Get a single project
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200': { $ref: '#/components/responses/ProjectResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Inventories ─────────────────────────────
+  /api/v1/inventories:
+    get:
+      tags: [Inventories]
+      summary: List inventories
+      parameters:
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InventoryList' }
+    post:
+      tags: [Inventories]
+      summary: Create an inventory
+      description: Requires `inventory.create` permission.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InventoryInput' }
+            examples:
+              static:
+                summary: Static YAML inventory
+                value:
+                  name: zabbix-hq
+                  inventory_type: static
+                  content: "---\nall:\n  hosts:\n    zabbix-hq:\n      ansible_host: 10.1.42.108\n"
+      responses:
+        '201': { $ref: '#/components/responses/InventoryResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/inventories/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [Inventories]
+      summary: Get a single inventory
+      responses:
+        '200': { $ref: '#/components/responses/InventoryResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Inventories]
+      summary: Update an inventory
+      description: Requires `inventory.update`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InventoryInput' }
+      responses:
+        '200': { $ref: '#/components/responses/InventoryResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Inventories]
+      summary: Delete an inventory
+      description: Requires `inventory.delete`.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────────── Credentials ─────────────────────────────
+  /api/v1/credentials:
+    get:
+      tags: [Credentials]
+      summary: List credentials
+      description: Secret material is never returned, not even redacted placeholders.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+      responses:
+        '200':
+          description: Paginated list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CredentialList' }
+    post:
+      tags: [Credentials]
+      summary: Create a credential
+      description: |
+        Requires `credential.create`. For `ssh_key` type, provide the raw PEM
+        private key in `secrets.private_key`; public key and algorithm are
+        derived server-side via `ssh-keygen -y`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialInput' }
+            examples:
+              ssh:
+                summary: SSH key credential
+                value:
+                  name: ssh
+                  credential_type: ssh_key
+                  username: root
+                  secrets:
+                    private_key: "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----\n"
+              password:
+                summary: Username/password credential
+                value:
+                  name: db-root
+                  credential_type: username_password
+                  username: root
+                  secrets:
+                    password: hunter2
+      responses:
+        '201': { $ref: '#/components/responses/CredentialResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/credentials/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [Credentials]
+      summary: Get a single credential
+      responses:
+        '200': { $ref: '#/components/responses/CredentialResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Credentials]
+      summary: Update a credential
+      description: |
+        Requires `credential.update`. If `secrets` is omitted or empty the
+        existing encrypted secret blob is kept unchanged; only metadata is
+        updated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CredentialInput' }
+      responses:
+        '200': { $ref: '#/components/responses/CredentialResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Credentials]
+      summary: Delete a credential
+      description: Requires `credential.delete`.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────────── Job Templates ───────────────────────────
+  /api/v1/job-templates:
+    get:
+      tags: [Job Templates]
+      summary: List job templates
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateList' } } }
+  /api/v1/job-templates/{id}:
+    get:
+      tags: [Job Templates]
+      summary: Get a single job template
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/JobTemplateResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ────────────────────────────── Jobs ──────────────────────────────
+  /api/v1/jobs:
+    get:
+      tags: [Jobs]
+      summary: List jobs
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobList' } } }
+    post:
+      tags: [Jobs]
+      summary: Launch a job from a template
+      description: Requires `job.launch`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [job_template_id]
+              properties:
+                job_template_id: { type: integer }
+                extra_vars:      { type: object, additionalProperties: true }
+                limit:           { type: string }
+                tags:            { type: string }
+      responses:
+        '201': { $ref: '#/components/responses/JobResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/jobs/{id}:
+    get:
+      tags: [Jobs]
+      summary: Get a single job
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/JobResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/jobs/{id}/cancel:
+    post:
+      tags: [Jobs]
+      summary: Cancel a running job
+      description: Requires `job.cancel`.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/JobResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────────── Schedules ───────────────────────────
+  /api/v1/schedules:
+    get:
+      tags: [Schedules]
+      summary: List schedules
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/ScheduleList' } } }
+  /api/v1/schedules/{id}:
+    get:
+      tags: [Schedules]
+      summary: Get a single schedule
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/ScheduleResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/schedules/{id}/toggle:
+    post:
+      tags: [Schedules]
+      summary: Toggle a schedule between enabled and disabled
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/ScheduleResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────── Notification Templates ───────────────────────
+  /api/v1/notification-templates:
+    get:
+      tags: [Notification Templates]
+      summary: List notification templates
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/NotificationTemplateList' } } }
+    post:
+      tags: [Notification Templates]
+      summary: Create a notification template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationTemplateInput' }
+      responses:
+        '201': { $ref: '#/components/responses/NotificationTemplateResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/notification-templates/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Notification Templates]
+      summary: Get a single notification template
+      responses:
+        '200': { $ref: '#/components/responses/NotificationTemplateResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Notification Templates]
+      summary: Update a notification template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationTemplateInput' }
+      responses:
+        '200': { $ref: '#/components/responses/NotificationTemplateResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Notification Templates]
+      summary: Delete a notification template
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/notification-templates/{id}/test:
+    post:
+      tags: [Notification Templates]
+      summary: Send a test notification through this template
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200':
+          description: Test dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      sent: { type: boolean }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────────── Approval Rules ───────────────────────────
+  /api/v1/approval-rules:
+    get:
+      tags: [Approval Rules]
+      summary: List approval rules
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+    post:
+      tags: [Approval Rules]
+      summary: Create an approval rule
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '201': { $ref: '#/components/responses/GenericResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/approval-rules/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Approval Rules]
+      summary: Get an approval rule
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Approval Rules]
+      summary: Update an approval rule
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Approval Rules]
+      summary: Delete an approval rule
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ────────────────────────────── Approvals ──────────────────────────────
+  /api/v1/approvals:
+    get:
+      tags: [Approvals]
+      summary: List pending approvals
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+  /api/v1/approvals/{id}:
+    get:
+      tags: [Approvals]
+      summary: Get an approval request
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/approvals/{id}/approve:
+    post:
+      tags: [Approvals]
+      summary: Approve a pending request
+      description: Requires `approval.decide`.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/approvals/{id}/reject:
+    post:
+      tags: [Approvals]
+      summary: Reject a pending request
+      description: Requires `approval.decide`.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────── Workflow Templates ───────────────────────
+  /api/v1/workflow-templates:
+    get:
+      tags: [Workflow Templates]
+      summary: List workflow templates
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+    post:
+      tags: [Workflow Templates]
+      summary: Create a workflow template
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '201': { $ref: '#/components/responses/GenericResponse' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/workflow-templates/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Workflow Templates]
+      summary: Get a workflow template
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Workflow Templates]
+      summary: Update a workflow template
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Workflow Templates]
+      summary: Delete a workflow template
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/workflow-templates/{id}/launch:
+    post:
+      tags: [Workflow Templates]
+      summary: Launch a workflow from this template
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '201': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ────────────────────────── Workflow Jobs ──────────────────────────
+  /api/v1/workflow-jobs:
+    get:
+      tags: [Workflow Jobs]
+      summary: List workflow job executions
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+  /api/v1/workflow-jobs/{id}:
+    get:
+      tags: [Workflow Jobs]
+      summary: Get a single workflow job execution
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/workflow-jobs/{id}/cancel:
+    post:
+      tags: [Workflow Jobs]
+      summary: Cancel a running workflow job
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────────── Triggers ───────────────────────────
+  /trigger/{token}:
+    post:
+      tags: [Triggers]
+      summary: Public webhook endpoint to launch a job by trigger token
+      description: |
+        Authentication is the token itself (path parameter). This endpoint is
+        **not** under `/api/v1/` and does not use the Bearer scheme.
+      security: []
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string }
+      responses:
+        '201':
+          description: Job launched
+          content: { application/json: { schema: { type: object } } }
+        '404':
+          description: Unknown token
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-hex
+      description: API token minted via `/profile/tokens` or `php yii api-token/create`.
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    Page:
+      name: page
+      in: query
+      required: false
+      schema: { type: integer, minimum: 1, default: 1 }
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Forbidden:
+      description: Caller lacks the required permission
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    ValidationError:
+      description: Invalid input
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    DeletedResponse:
+      description: Deletion confirmed
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  deleted: { type: boolean }
+    GenericResponse:
+      description: Success
+      content: { application/json: { schema: { type: object, properties: { data: { type: object } } } } }
+    InventoryResponse:
+      description: Inventory
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Inventory' }
+    CredentialResponse:
+      description: Credential (secrets never included)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Credential' }
+    ProjectResponse:
+      description: Project
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Project' }
+    JobTemplateResponse:
+      description: Job template
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/JobTemplate' }
+    JobResponse:
+      description: Job
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Job' }
+    ScheduleResponse:
+      description: Schedule
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Schedule' }
+    NotificationTemplateResponse:
+      description: Notification template
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/NotificationTemplate' }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+    PaginationMeta:
+      type: object
+      properties:
+        total:    { type: integer }
+        page:     { type: integer }
+        per_page: { type: integer }
+        pages:    { type: integer }
+
+    Project:
+      type: object
+      properties:
+        id:          { type: integer }
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        scm_type:    { type: string, enum: [manual, git] }
+        scm_url:     { type: string, nullable: true }
+        scm_branch:  { type: string, nullable: true }
+        created_at:  { type: integer, description: Unix timestamp }
+        updated_at:  { type: integer }
+    ProjectList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Project' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    Inventory:
+      type: object
+      properties:
+        id:             { type: integer }
+        name:           { type: string }
+        description:    { type: string, nullable: true }
+        inventory_type: { type: string, enum: [static, dynamic, file] }
+        project_id:     { type: integer, nullable: true }
+        created_at:     { type: integer }
+        updated_at:     { type: integer }
+    InventoryInput:
+      type: object
+      required: [name, inventory_type]
+      properties:
+        name:           { type: string, maxLength: 128 }
+        description:    { type: string, nullable: true }
+        inventory_type: { type: string, enum: [static, dynamic, file] }
+        content:        { type: string, description: Required when inventory_type = static }
+        source_path:    { type: string, description: Required when inventory_type = file }
+        project_id:     { type: integer, nullable: true }
+    InventoryList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Inventory' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    Credential:
+      type: object
+      description: Secret material is never returned by the API.
+      properties:
+        id:              { type: integer }
+        name:            { type: string }
+        description:     { type: string, nullable: true }
+        credential_type: { type: string, enum: [ssh_key, username_password, vault, token] }
+        username:        { type: string, nullable: true }
+        created_at:      { type: integer }
+        updated_at:      { type: integer }
+    CredentialInput:
+      type: object
+      required: [name, credential_type]
+      properties:
+        name:            { type: string, maxLength: 128 }
+        description:     { type: string, nullable: true }
+        credential_type: { type: string, enum: [ssh_key, username_password, vault, token] }
+        username:        { type: string, nullable: true }
+        secrets:
+          type: object
+          description: |
+            Secret fields keyed by name. The accepted keys depend on
+            `credential_type`:
+
+              * `ssh_key`           → `private_key` (PEM)
+              * `username_password` → `password`
+              * `vault`             → `vault_password`
+              * `token`             → `token`
+          additionalProperties: { type: string }
+    CredentialList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Credential' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    JobTemplate:
+      type: object
+      properties:
+        id:              { type: integer }
+        name:            { type: string }
+        description:     { type: string, nullable: true }
+        project_id:      { type: integer }
+        inventory_id:    { type: integer }
+        credential_id:   { type: integer, nullable: true }
+        playbook:        { type: string }
+        runner_group_id: { type: integer, nullable: true }
+        created_at:      { type: integer }
+        updated_at:      { type: integer }
+    JobTemplateList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/JobTemplate' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    Job:
+      type: object
+      properties:
+        id:              { type: integer }
+        job_template_id: { type: integer, nullable: true }
+        status:
+          type: string
+          enum: [pending, waiting, running, successful, failed, error, canceled]
+        started_at:      { type: integer, nullable: true }
+        finished_at:     { type: integer, nullable: true }
+        created_at:      { type: integer }
+        updated_at:      { type: integer }
+    JobList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Job' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    Schedule:
+      type: object
+      properties:
+        id:              { type: integer }
+        name:            { type: string }
+        cron_expression: { type: string }
+        job_template_id: { type: integer }
+        enabled:         { type: boolean }
+        created_at:      { type: integer }
+        updated_at:      { type: integer }
+    ScheduleList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Schedule' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    NotificationTemplate:
+      type: object
+      properties:
+        id:         { type: integer }
+        name:       { type: string }
+        channel:    { type: string, enum: [email, slack, teams, webhook, telegram] }
+        events:
+          type: string
+          description: 'Comma-separated list (e.g. "job.failed,job.succeeded")'
+        config:     { type: string, description: JSON string with channel-specific settings }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    NotificationTemplateInput:
+      type: object
+      required: [name, channel, events]
+      properties:
+        name:    { type: string, maxLength: 128 }
+        channel: { type: string, enum: [email, slack, teams, webhook, telegram] }
+        events:  { type: string }
+        config:  { type: string }
+    NotificationTemplateList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/NotificationTemplate' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    GenericList:
+      type: object
+      properties:
+        data: { type: array, items: { type: object } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }

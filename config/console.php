@@ -70,9 +70,6 @@ return [
         'credentialService' => [
             'class' => 'app\services\CredentialService',
         ],
-        'notificationService' => [
-            'class' => 'app\services\NotificationService',
-        ],
         'notificationDispatcher' => [
             'class' => 'app\services\NotificationDispatcher',
         ],

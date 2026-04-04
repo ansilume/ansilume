@@ -89,27 +89,18 @@ class JobCompletionService extends Component
 
     private function dispatchNotifications(Job $job): void
     {
-        // New notification templates (multi-channel)
         $event = match ($job->status) {
             Job::STATUS_SUCCEEDED => NotificationTemplate::EVENT_JOB_SUCCEEDED,
             Job::STATUS_FAILED => NotificationTemplate::EVENT_JOB_FAILED,
             Job::STATUS_TIMED_OUT => NotificationTemplate::EVENT_JOB_TIMED_OUT,
             default => null,
         };
-        if ($event !== null) {
-            /** @var NotificationDispatcher $dispatcher */
-            $dispatcher = \Yii::$app->get('notificationDispatcher');
-            $dispatcher->dispatch($event, $job);
+        if ($event === null) {
+            return;
         }
-
-        // Legacy email notifications (backward compatibility)
-        /** @var NotificationService $ns */
-        $ns = \Yii::$app->get('notificationService');
-        if ($job->status === Job::STATUS_FAILED || $job->status === Job::STATUS_TIMED_OUT) {
-            $ns->notifyJobFailed($job);
-        } elseif ($job->status === Job::STATUS_SUCCEEDED) {
-            $ns->notifyJobSucceeded($job);
-        }
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+        $dispatcher->dispatch($event, $job);
     }
 
     public function appendLog(Job $job, string $stream, string $content, int $sequence): void

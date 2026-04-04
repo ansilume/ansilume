@@ -136,22 +136,6 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     <p class="text-muted">No notification templates configured. <?= Html::a('Create one', ['/notification-template/create']) ?>.</p>
     <?php endif; ?>
 
-    <h6 class="text-muted">Legacy Email Notifications</h6>
-    <div class="row g-2">
-        <div class="col-md-3">
-            <?= $form->field($model, 'notify_on_failure')->checkbox()->hint('Send email when the job fails') ?>
-        </div>
-        <div class="col-md-3">
-            <?= $form->field($model, 'notify_on_success')->checkbox()->hint('Send email when the job succeeds') ?>
-        </div>
-        <div class="col-md-6">
-            <?= $form->field($model, 'notify_emails')->textInput([
-                'placeholder' => '["ops@example.com","alert@example.com"]',
-                'class' => 'form-control font-monospace',
-            ])->hint('JSON array of email addresses') ?>
-        </div>
-    </div>
-
     <div class="mt-4">
         <?= Html::submitButton($model->isNewRecord ? 'Create Template' : 'Save Changes', ['class' => 'btn btn-primary']) ?>
         <?= Html::a('Cancel', $model->isNewRecord ? ['index'] : ['view', 'id' => $model->id], ['class' => 'btn btn-outline-secondary ms-2']) ?>

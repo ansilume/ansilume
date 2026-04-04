@@ -429,6 +429,34 @@ Business logic lives in services, not controllers, so workflows are reusable by:
 - Cron schedules (`ScheduleService`)
 - Webhooks (`WebhookService`)
 
+### OpenAPI spec is mandatory
+
+The canonical OpenAPI 3.1 spec lives at `web/openapi.yaml` and is served
+publicly by nginx at `/openapi.yaml` (CORS-enabled). A Swagger UI container
+(`docker compose up -d swagger`, port `8088` by default) consumes it and gives
+operators an interactive API explorer.
+
+The spec is part of the contract, not documentation that can lag behind:
+
+- **Every new endpoint** (new route, new verb on an existing route) must be
+  added to `web/openapi.yaml` in the same commit as the controller change.
+- **Every change to an existing endpoint** — new field, renamed field,
+  changed response shape, new status code, tightened validation — must be
+  reflected in the spec in the same commit.
+- **Every new schema** (request body, response body, nested object) must
+  have a named entry under `components.schemas` and be referenced via `$ref`.
+  Never inline request/response types when they are reused.
+- **Examples are required** for non-trivial POST/PUT bodies so Swagger UI
+  users can hit "Try it out" without guessing.
+- **Secrets must never appear** in spec examples or default values —
+  placeholders only (e.g. `"-----BEGIN OPENSSH PRIVATE KEY-----\n...\n..."`).
+- **The spec version** (`info.version`) should track the application version
+  and be bumped together with `./bin/release`.
+
+A test in `tests.sh` validates that `web/openapi.yaml` parses as valid YAML
+and resolves all `$ref`s. If you add an endpoint without updating the spec,
+the suite will fail.
+
 ---
 
 ## Performance Guidance

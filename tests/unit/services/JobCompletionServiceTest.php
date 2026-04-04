@@ -7,7 +7,7 @@ namespace app\tests\unit\services;
 use app\models\Job;
 use app\services\AuditService;
 use app\services\JobCompletionService;
-use app\services\NotificationService;
+use app\services\NotificationDispatcher;
 use app\services\WebhookService;
 use PHPUnit\Framework\TestCase;
 use yii\db\BaseActiveRecord;
@@ -23,7 +23,7 @@ class JobCompletionServiceTest extends TestCase
     protected function setUp(): void
     {
         // Save originals before replacing with stubs
-        foreach (['auditService', 'webhookService', 'notificationService'] as $id) {
+        foreach (['auditService', 'webhookService', 'notificationDispatcher'] as $id) {
             $this->originalComponents[$id] = \Yii::$app->has($id) ? \Yii::$app->get($id) : null;
         }
 
@@ -34,8 +34,8 @@ class JobCompletionServiceTest extends TestCase
         $webhook = $this->getMockBuilder(WebhookService::class)->onlyMethods(['dispatch'])->getMock();
         \Yii::$app->set('webhookService', $webhook);
 
-        $notify = $this->getMockBuilder(NotificationService::class)->onlyMethods(['notifyJobFailed'])->getMock();
-        \Yii::$app->set('notificationService', $notify);
+        $dispatcher = $this->getMockBuilder(NotificationDispatcher::class)->onlyMethods(['dispatch'])->getMock();
+        \Yii::$app->set('notificationDispatcher', $dispatcher);
     }
 
     protected function tearDown(): void
@@ -51,7 +51,7 @@ class JobCompletionServiceTest extends TestCase
 
     public function testExitCodeZeroSetsStatusSucceeded(): void
     {
-        $job     = $this->makeJob(Job::STATUS_RUNNING);
+        $job = $this->makeJob(Job::STATUS_RUNNING);
         $service = new JobCompletionService();
         $service->complete($job, 0);
         $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
@@ -59,7 +59,7 @@ class JobCompletionServiceTest extends TestCase
 
     public function testNonZeroExitCodeSetsStatusFailed(): void
     {
-        $job     = $this->makeJob(Job::STATUS_RUNNING);
+        $job = $this->makeJob(Job::STATUS_RUNNING);
         $service = new JobCompletionService();
         $service->complete($job, 1);
         $this->assertSame(Job::STATUS_FAILED, $job->status);
@@ -67,7 +67,7 @@ class JobCompletionServiceTest extends TestCase
 
     public function testExitCodeTwoAlsoFails(): void
     {
-        $job     = $this->makeJob(Job::STATUS_RUNNING);
+        $job = $this->makeJob(Job::STATUS_RUNNING);
         $service = new JobCompletionService();
         $service->complete($job, 2);
         $this->assertSame(Job::STATUS_FAILED, $job->status);
@@ -75,7 +75,7 @@ class JobCompletionServiceTest extends TestCase
 
     public function testCompleteStoresExitCode(): void
     {
-        $job     = $this->makeJob(Job::STATUS_RUNNING);
+        $job = $this->makeJob(Job::STATUS_RUNNING);
         $service = new JobCompletionService();
         $service->complete($job, 42);
         $this->assertSame(42, $job->exit_code);
@@ -83,8 +83,8 @@ class JobCompletionServiceTest extends TestCase
 
     public function testCompleteSetsFinishedAt(): void
     {
-        $before  = time();
-        $job     = $this->makeJob(Job::STATUS_RUNNING);
+        $before = time();
+        $job = $this->makeJob(Job::STATUS_RUNNING);
         $service = new JobCompletionService();
         $service->complete($job, 0);
         $this->assertGreaterThanOrEqual($before, $job->finished_at);
@@ -92,7 +92,7 @@ class JobCompletionServiceTest extends TestCase
 
     public function testHasChangesSetWhenTrue(): void
     {
-        $job     = $this->makeJob(Job::STATUS_RUNNING);
+        $job = $this->makeJob(Job::STATUS_RUNNING);
         $service = new JobCompletionService();
         $service->complete($job, 0, hasChanges: true);
         $this->assertSame(1, $job->has_changes);
@@ -100,7 +100,7 @@ class JobCompletionServiceTest extends TestCase
 
     public function testHasChangesNotSetWhenFalse(): void
     {
-        $job     = $this->makeJob(Job::STATUS_RUNNING);
+        $job = $this->makeJob(Job::STATUS_RUNNING);
         $service = new JobCompletionService();
         $service->complete($job, 0, hasChanges: false);
         $this->assertSame(0, $job->has_changes);
@@ -134,25 +134,29 @@ class JobCompletionServiceTest extends TestCase
         $service->complete($this->makeJob(Job::STATUS_RUNNING), 1);
     }
 
-    public function testNotificationSentOnFailure(): void
+    public function testNotificationDispatcherCalledOnFailure(): void
     {
-        $notify = $this->getMockBuilder(NotificationService::class)
-            ->onlyMethods(['notifyJobFailed'])
+        $dispatcher = $this->getMockBuilder(NotificationDispatcher::class)
+            ->onlyMethods(['dispatch'])
             ->getMock();
-        $notify->expects($this->once())->method('notifyJobFailed');
-        \Yii::$app->set('notificationService', $notify);
+        $dispatcher->expects($this->once())
+            ->method('dispatch')
+            ->with(\app\models\NotificationTemplate::EVENT_JOB_FAILED, $this->anything());
+        \Yii::$app->set('notificationDispatcher', $dispatcher);
 
         $service = new JobCompletionService();
         $service->complete($this->makeJob(Job::STATUS_RUNNING), 1);
     }
 
-    public function testNotificationNotSentOnSuccess(): void
+    public function testNotificationDispatcherCalledOnSuccess(): void
     {
-        $notify = $this->getMockBuilder(NotificationService::class)
-            ->onlyMethods(['notifyJobFailed'])
+        $dispatcher = $this->getMockBuilder(NotificationDispatcher::class)
+            ->onlyMethods(['dispatch'])
             ->getMock();
-        $notify->expects($this->never())->method('notifyJobFailed');
-        \Yii::$app->set('notificationService', $notify);
+        $dispatcher->expects($this->once())
+            ->method('dispatch')
+            ->with(\app\models\NotificationTemplate::EVENT_JOB_SUCCEEDED, $this->anything());
+        \Yii::$app->set('notificationDispatcher', $dispatcher);
 
         $service = new JobCompletionService();
         $service->complete($this->makeJob(Job::STATUS_RUNNING), 0);
@@ -197,13 +201,15 @@ class JobCompletionServiceTest extends TestCase
         $service->completeTimedOut($this->makeJob(Job::STATUS_RUNNING));
     }
 
-    public function testCompleteTimedOutSendsFailureNotification(): void
+    public function testCompleteTimedOutDispatchesTimedOutNotification(): void
     {
-        $notify = $this->getMockBuilder(NotificationService::class)
-            ->onlyMethods(['notifyJobFailed'])
+        $dispatcher = $this->getMockBuilder(NotificationDispatcher::class)
+            ->onlyMethods(['dispatch'])
             ->getMock();
-        $notify->expects($this->once())->method('notifyJobFailed');
-        \Yii::$app->set('notificationService', $notify);
+        $dispatcher->expects($this->once())
+            ->method('dispatch')
+            ->with(\app\models\NotificationTemplate::EVENT_JOB_TIMED_OUT, $this->anything());
+        \Yii::$app->set('notificationDispatcher', $dispatcher);
 
         $service = new JobCompletionService();
         $service->completeTimedOut($this->makeJob(Job::STATUS_RUNNING));
@@ -223,17 +229,17 @@ class JobCompletionServiceTest extends TestCase
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
         $ref->setAccessible(true);
         $ref->setValue($job, [
-            'id'              => 1,
-            'status'          => $status,
-            'exit_code'       => null,
-            'has_changes'     => 0,
-            'finished_at'     => null,
+            'id' => 1,
+            'status' => $status,
+            'exit_code' => null,
+            'has_changes' => 0,
+            'finished_at' => null,
             'job_template_id' => 1,
-            'launched_by'     => 1,
-            'queued_at'       => null,
-            'started_at'      => time() - 5,
-            'created_at'      => null,
-            'updated_at'      => null,
+            'launched_by' => 1,
+            'queued_at' => null,
+            'started_at' => time() - 5,
+            'created_at' => null,
+            'updated_at' => null,
         ]);
         return $job;
     }

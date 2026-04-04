@@ -38,7 +38,17 @@ $this->title = 'Audit Entry #' . $entry->id;
                     </dd>
                     <dt class="col-4">Object</dt>
                     <dd class="col-8">
-                        <?= $entry->object_type ? Html::encode($entry->object_type) . ' #' . $entry->object_id : '—' ?>
+                        <?php if ($entry->object_type) : ?>
+                            <?= Html::encode($entry->object_type) ?> #<?= (int)$entry->object_id ?>
+                            <?php if ($entry->object_type === 'user' && $entry->object_id !== null) :
+                                $objUser = \app\models\User::findOne((int)$entry->object_id);
+                                if ($objUser !== null) : ?>
+                                    <span class="text-muted">(<?= Html::encode($objUser->username) ?>)</span>
+                                <?php endif;
+                            endif; ?>
+                        <?php else : ?>
+                            —
+                        <?php endif; ?>
                     </dd>
                     <dt class="col-4">IP</dt>
                     <dd class="col-8"><?= Html::encode($entry->ip_address ?? '—') ?></dd>
