@@ -145,8 +145,56 @@ class m000035_000000_seed_demo_project extends Migration
             [
                 'name'        => 'Demo — Create user',
                 'description' => 'Create a system user with optional sudo and SSH key. '
-                    . 'Required Extra Vars: {"system_user_name": "deploy", "system_user_sudo": true, "system_user_pubkey": "ssh-ed25519 AAAA..."}',
+                    . 'Username is required via the launch survey.',
                 'playbook'    => 'playbooks/create_user.yaml',
+                'verbosity'   => 0,
+                'become'      => 1,
+                'survey'      => self::createUserSurveyJson(),
+            ],
+            [
+                'name'        => 'Demo — Deploy .bashrc',
+                'description' => 'Deploy a managed .bashrc to one or more users with history, aliases, and environment exports. '
+                    . 'Configure via Extra Vars: bashrc_users, bashrc_aliases, bashrc_exports.',
+                'playbook'    => 'playbooks/bashrc.yaml',
+                'verbosity'   => 0,
+                'become'      => 1,
+            ],
+            [
+                'name'        => 'Demo — Common baseline',
+                'description' => 'Apply the common baseline: base package set, SSH authorized keys, apt cache update. '
+                    . 'Configure via Extra Vars: common_packages, common_ssh_keys.',
+                'playbook'    => 'playbooks/common.yaml',
+                'verbosity'   => 0,
+                'become'      => 1,
+            ],
+            [
+                'name'        => 'Demo — Manage /etc/hosts',
+                'description' => 'Write managed entries to /etc/hosts. '
+                    . 'Required Extra Vars: hostsfile_servers_mandatory (list of raw "IP  name alias" lines).',
+                'playbook'    => 'playbooks/hostsfile.yaml',
+                'verbosity'   => 0,
+                'become'      => 1,
+            ],
+            [
+                'name'        => 'Demo — Install 1Password CLI',
+                'description' => 'Install the 1Password command-line tool from the official repository.',
+                'playbook'    => 'playbooks/install_onepassword_cli.yaml',
+                'verbosity'   => 0,
+                'become'      => 1,
+            ],
+            [
+                'name'        => 'Demo — System maintenance',
+                'description' => 'Run routine maintenance: autoremove stale packages, autoclean the package cache. '
+                    . 'Safe to run regularly from a schedule.',
+                'playbook'    => 'playbooks/maintenance.yaml',
+                'verbosity'   => 0,
+                'become'      => 1,
+            ],
+            [
+                'name'        => 'Demo — Deploy MOTD',
+                'description' => 'Write /etc/motd with an optional header/footer around the system info block. '
+                    . 'Configure via Extra Vars: motd_header, motd_footer.',
+                'playbook'    => 'playbooks/motd.yaml',
                 'verbosity'   => 0,
                 'become'      => 1,
             ],
@@ -162,6 +210,7 @@ class m000035_000000_seed_demo_project extends Migration
                 'runner_group_id' => $runnerGroupId,
                 'playbook'        => $tpl['playbook'],
                 'extra_vars'      => null,
+                'survey_fields'   => $tpl['survey'] ?? null,
                 'verbosity'       => $tpl['verbosity'],
                 'forks'           => 5,
                 'become'          => $tpl['become'],
@@ -181,6 +230,42 @@ class m000035_000000_seed_demo_project extends Migration
 
         echo "    > Demo project, inventory, and " . count($templates) . " job templates created.\n";
         echo "    > Sync job queued — project will be cloned when the queue worker runs.\n";
+    }
+
+    /**
+     * Survey JSON for the "Create user" demo template.
+     *
+     * Forces the operator to type a username at launch time so the playbook
+     * never runs with an empty system_user_name.
+     */
+    public static function createUserSurveyJson(): string
+    {
+        return (string)json_encode([
+            [
+                'name' => 'system_user_name',
+                'label' => 'Username',
+                'type' => 'text',
+                'required' => true,
+                'default' => '',
+                'hint' => 'Login name for the new system user (e.g. "deploy").',
+            ],
+            [
+                'name' => 'system_user_sudo',
+                'label' => 'Grant sudo',
+                'type' => 'boolean',
+                'required' => false,
+                'default' => 'false',
+                'hint' => 'Add the user to the sudoers group with NOPASSWD.',
+            ],
+            [
+                'name' => 'system_user_pubkey',
+                'label' => 'SSH public key',
+                'type' => 'textarea',
+                'required' => false,
+                'default' => '',
+                'hint' => 'Optional. If set, installed into ~/.ssh/authorized_keys.',
+            ],
+        ]);
     }
 
     private function defaultRunnerGroupId(): ?int

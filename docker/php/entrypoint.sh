@@ -9,8 +9,10 @@ echo "[entrypoint] running composer install..."
 cd /var/www && flock /var/www/.composer.install.lock composer install --no-interaction --optimize-autoloader
 
 # Create runtime directories required by Yii2 and set permissions for www-data.
-# These are git-ignored and must exist on every fresh checkout.
-for dir in /var/www/runtime /var/www/web/assets; do
+# These are git-ignored and must exist on every fresh checkout. The projects,
+# artifacts, and logs subdirectories are required by the selftest playbook and
+# by ArtifactService / ProjectService before the first job runs.
+for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets; do
     if [ ! -d "$dir" ]; then
         echo "[entrypoint] creating $dir"
         mkdir -p "$dir"

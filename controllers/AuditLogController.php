@@ -52,25 +52,9 @@ class AuditLogController extends BaseController
 
         $users = User::find()->orderBy('username')->all();
 
-        // Resolve object names for rows whose object_type is "user" so the
-        // table can show the username instead of just "user #7".
         /** @var AuditLog[] $rows */
         $rows = $dataProvider->getModels();
-        $userObjectIds = [];
-        foreach ($rows as $row) {
-            if ($row->object_type === 'user' && $row->object_id !== null) {
-                $userObjectIds[] = (int)$row->object_id;
-            }
-        }
-        $objectUsernames = [];
-        if ($userObjectIds !== []) {
-            /** @var array<int, string> $objectUsernames */
-            $objectUsernames = User::find()
-                ->select(['username', 'id'])
-                ->where(['id' => array_unique($userObjectIds)])
-                ->indexBy('id')
-                ->column();
-        }
+        $objectUsernames = $this->resolveUserObjectNames($rows);
 
         return $this->render('index', [
             'dataProvider' => $dataProvider,
@@ -80,6 +64,33 @@ class AuditLogController extends BaseController
             'users' => $users,
             'objectUsernames' => $objectUsernames,
         ]);
+    }
+
+    /**
+     * Pre-fetch usernames for rows whose object_type is "user" so the table
+     * can show the username instead of just "user #7".
+     *
+     * @param AuditLog[] $rows
+     * @return array<int, string>
+     */
+    private function resolveUserObjectNames(array $rows): array
+    {
+        $userObjectIds = [];
+        foreach ($rows as $row) {
+            if ($row->object_type === 'user' && $row->object_id !== null) {
+                $userObjectIds[] = (int)$row->object_id;
+            }
+        }
+        if ($userObjectIds === []) {
+            return [];
+        }
+        /** @var array<int, string> $usernames */
+        $usernames = User::find()
+            ->select(['username', 'id'])
+            ->where(['id' => array_unique($userObjectIds)])
+            ->indexBy('id')
+            ->column();
+        return $usernames;
     }
 
     public function actionView(int $id): string
