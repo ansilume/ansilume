@@ -68,4 +68,45 @@ class SyncProjectJobTest extends DbTestCase
         $job = new SyncProjectJob(['projectId' => 42]);
         $this->assertSame(42, $job->projectId);
     }
+
+    public function testExecuteHappyPathRunsSyncAndLint(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        // Create a job template in the same project so runForTemplate is hit.
+        $this->createJobTemplate((int)$project->id, (int)$inventory->id, (int)$group->id, $user->id);
+
+        $originalProjectService = \Yii::$app->getComponents(true)['projectService'] ?? null;
+        $originalLintService = \Yii::$app->getComponents(true)['lintService'] ?? null;
+
+        $projectStub = new class extends \yii\base\Component {
+            public int $syncCalls = 0;
+            public function sync(\app\models\Project $p): void
+            {
+                $this->syncCalls++;
+            }
+        };
+        $lintStub = new class extends \yii\base\Component {
+            public int $projectCalls = 0;
+            public int $templateCalls = 0;
+            public function runForProject(\app\models\Project $p): void { $this->projectCalls++; }
+            public function runForTemplate(\app\models\JobTemplate $t): void { $this->templateCalls++; }
+        };
+        \Yii::$app->set('projectService', $projectStub);
+        \Yii::$app->set('lintService', $lintStub);
+
+        try {
+            $job = new SyncProjectJob(['projectId' => $project->id]);
+            $job->execute(null);
+
+            $this->assertSame(1, $projectStub->syncCalls);
+            $this->assertSame(1, $lintStub->projectCalls);
+            $this->assertSame(1, $lintStub->templateCalls);
+        } finally {
+            \Yii::$app->set('projectService', $originalProjectService);
+            \Yii::$app->set('lintService', $originalLintService);
+        }
+    }
 }

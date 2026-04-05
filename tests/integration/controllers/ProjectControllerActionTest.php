@@ -1,0 +1,410 @@
+<?php
+
+declare(strict_types=1);
+
+namespace app\tests\integration\controllers;
+
+use app\controllers\ProjectController;
+use app\models\AuditLog;
+use app\models\Credential;
+use app\models\Project;
+use app\services\ProjectService;
+use yii\data\ActiveDataProvider;
+use yii\web\ForbiddenHttpException;
+use yii\web\NotFoundHttpException;
+use yii\web\Response;
+
+/**
+ * Exercises ProjectController actions.
+ *
+ * Stubs ProjectService (to skip the real queueSync) and LintService (to skip
+ * the real lint shell-out). The logged-in test user is marked as superadmin
+ * so ProjectAccessChecker gives unrestricted access without requiring RBAC
+ * assignments, which aren't seeded in the test database.
+ */
+class ProjectControllerActionTest extends WebControllerTestCase
+{
+    /** @var list<array{string, \yii\base\Component}> */
+    private array $swappedServices = [];
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Stub ProjectService so queueSync doesn't push into the queue.
+        $this->swapService('projectService', new class extends ProjectService {
+            public int $queueSyncCalls = 0;
+            public function queueSync(Project $project): void
+            {
+                $this->queueSyncCalls++;
+            }
+            public function localPath(Project $project): string
+            {
+                return '/tmp/nonexistent-test-project';
+            }
+        });
+
+        // Stub LintService so runForProject doesn't shell out.
+        $this->swapService('lintService', new class extends \app\services\LintService {
+            public int $runCalls = 0;
+            public function runForProject(Project $project): void
+            {
+                $this->runCalls++;
+            }
+        });
+    }
+
+    protected function tearDown(): void
+    {
+        foreach ($this->swappedServices as [$id, $original]) {
+            \Yii::$app->set($id, $original);
+        }
+        $this->swappedServices = [];
+        parent::tearDown();
+    }
+
+    // ── actionIndex() ────────────────────────────────────────────────────────
+
+    public function testIndexRendersDataProviderAsSuperadmin(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $this->createProject($user->id);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionIndex();
+
+        $this->assertSame('rendered:index', $result);
+        $this->assertInstanceOf(ActiveDataProvider::class, $ctrl->capturedParams['dataProvider']);
+    }
+
+    // ── actionView() ─────────────────────────────────────────────────────────
+
+    public function testViewRendersManualProject(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_MANUAL;
+        $project->local_path = '/tmp/nonexistent-manual-project';
+        $project->save(false);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionView((int)$project->id);
+
+        $this->assertSame('rendered:view', $result);
+        $this->assertSame($project->id, $ctrl->capturedParams['model']->id);
+        // Nonexistent path → resolveLocalPath returns null → empty playbooks/tree
+        $this->assertSame([], $ctrl->capturedParams['playbooks']);
+        $this->assertSame([], $ctrl->capturedParams['tree']);
+    }
+
+    public function testViewRendersGitProject(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_GIT;
+        $project->save(false);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$project->id);
+
+        // Stubbed ProjectService->localPath returns a path that doesn't exist
+        // → resolveEffectivePath → null → empty lists.
+        $this->assertSame([], $ctrl->capturedParams['playbooks']);
+    }
+
+    public function testViewThrowsNotFound(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionView(9999999);
+    }
+
+    public function testViewForbiddenForUserWithoutAccess(): void
+    {
+        $owner = $this->createUser('owner');
+        $outsider = $this->createUser('outsider'); // not superadmin
+        $project = $this->createProject($owner->id);
+        $this->loginAs($outsider);
+
+        $ctrl = $this->makeController();
+        $this->expectException(ForbiddenHttpException::class);
+        $ctrl->actionView((int)$project->id);
+    }
+
+    // ── actionCreate() ───────────────────────────────────────────────────────
+
+    public function testCreateRendersFormOnGet(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionCreate();
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertInstanceOf(Project::class, $ctrl->capturedParams['model']);
+        $this->assertTrue($ctrl->capturedParams['model']->isNewRecord);
+        $this->assertArrayHasKey('scmCredentials', $ctrl->capturedParams);
+    }
+
+    public function testCreateGitProjectQueuesSync(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $this->setPost([
+            'Project' => [
+                'name' => 'test-git-project',
+                'scm_type' => Project::SCM_TYPE_GIT,
+                'scm_url' => 'https://example.com/test.git',
+                'scm_branch' => 'main',
+            ],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionCreate();
+
+        $this->assertInstanceOf(Response::class, $result);
+        $stored = Project::findOne(['name' => 'test-git-project']);
+        $this->assertNotNull($stored);
+        $this->assertSame($user->id, $stored->created_by);
+
+        /** @var object{queueSyncCalls: int} $svc */
+        $svc = \Yii::$app->get('projectService');
+        $this->assertSame(1, $svc->queueSyncCalls);
+
+        $audit = AuditLog::findOne(['action' => AuditLog::ACTION_PROJECT_CREATED, 'object_id' => $stored->id]);
+        $this->assertNotNull($audit);
+    }
+
+    public function testCreateManualProjectDoesNotQueueSync(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $this->setPost([
+            'Project' => [
+                'name' => 'test-manual-project',
+                'scm_type' => Project::SCM_TYPE_MANUAL,
+                'local_path' => '/tmp/example',
+            ],
+        ]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionCreate();
+
+        /** @var object{queueSyncCalls: int} $svc */
+        $svc = \Yii::$app->get('projectService');
+        $this->assertSame(0, $svc->queueSyncCalls);
+    }
+
+    public function testCreateInvalidInputRendersForm(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $this->setPost(['Project' => ['name' => '']]); // empty name is invalid
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionCreate();
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertTrue($ctrl->capturedParams['model']->hasErrors());
+    }
+
+    // ── actionUpdate() ───────────────────────────────────────────────────────
+
+    public function testUpdatePersistsChangesAndAudits(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_GIT;
+        $project->scm_url = 'https://example.com/old.git';
+        $project->save(false);
+
+        $this->setPost([
+            'Project' => [
+                'name' => 'updated-name',
+                'scm_type' => Project::SCM_TYPE_GIT,
+                'scm_url' => 'https://example.com/new.git',
+                'scm_branch' => 'main',
+            ],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        /** @var Project $reloaded */
+        $reloaded = Project::findOne($project->id);
+        $this->assertSame('updated-name', $reloaded->name);
+        $this->assertSame('https://example.com/new.git', $reloaded->scm_url);
+
+        $this->assertNotNull(AuditLog::findOne([
+            'action' => AuditLog::ACTION_PROJECT_UPDATED,
+            'object_id' => $project->id,
+        ]));
+    }
+
+    public function testUpdateRendersFormOnGet(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$project->id);
+
+        $this->assertSame('rendered:form', $result);
+    }
+
+    // ── actionDelete() ───────────────────────────────────────────────────────
+
+    public function testDeleteRemovesProjectWhenNoTemplates(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionDelete((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertNull(Project::findOne($project->id));
+        $this->assertNotNull(AuditLog::findOne([
+            'action' => AuditLog::ACTION_PROJECT_DELETED,
+            'object_id' => $project->id,
+        ]));
+    }
+
+    public function testDeleteRefusesWhenTemplatesExist(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $inv = $this->createInventory($user->id);
+        $this->createJobTemplate((int)$project->id, (int)$inv->id, (int)$group->id, $user->id);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionDelete((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        // Project must still exist.
+        $this->assertNotNull(Project::findOne($project->id));
+        // Flash must contain the refusal message.
+        $flashes = \Yii::$app->session->getAllFlashes();
+        $this->assertArrayHasKey('danger', $flashes);
+    }
+
+    // ── actionSync() ─────────────────────────────────────────────────────────
+
+    public function testSyncQueuesGitProject(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_GIT;
+        $project->save(false);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionSync((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        /** @var object{queueSyncCalls: int} $svc */
+        $svc = \Yii::$app->get('projectService');
+        $this->assertSame(1, $svc->queueSyncCalls);
+
+        $this->assertNotNull(AuditLog::findOne([
+            'action' => AuditLog::ACTION_PROJECT_SYNCED,
+            'object_id' => $project->id,
+        ]));
+    }
+
+    public function testSyncWarnsForNonGitProject(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_MANUAL;
+        $project->save(false);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionSync((int)$project->id);
+
+        /** @var object{queueSyncCalls: int} $svc */
+        $svc = \Yii::$app->get('projectService');
+        $this->assertSame(0, $svc->queueSyncCalls);
+        $this->assertArrayHasKey('warning', \Yii::$app->session->getAllFlashes());
+    }
+
+    // ── actionLint() ─────────────────────────────────────────────────────────
+
+    public function testLintDelegatesToService(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionLint((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        /** @var object{runCalls: int} $svc */
+        $svc = \Yii::$app->get('lintService');
+        $this->assertSame(1, $svc->runCalls);
+        $this->assertNotNull(AuditLog::findOne([
+            'action' => AuditLog::ACTION_PROJECT_LINTED,
+            'object_id' => $project->id,
+        ]));
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    private function createSuperadmin(string $suffix = ''): \app\models\User
+    {
+        $u = $this->createUser($suffix);
+        $u->is_superadmin = 1;
+        $u->save(false);
+        return $u;
+    }
+
+    private function swapService(string $id, \yii\base\Component $replacement): void
+    {
+        /** @var \yii\base\Component $original */
+        $original = \Yii::$app->get($id);
+        $this->swappedServices[] = [$id, $original];
+        \Yii::$app->set($id, $replacement);
+    }
+
+    private function makeController(): ProjectController
+    {
+        return new class ('project', \Yii::$app) extends ProjectController {
+            public string $capturedView = '';
+            /** @var array<string, mixed> */
+            public array $capturedParams = [];
+
+            public function render($view, $params = []): string
+            {
+                $this->capturedView = $view;
+                /** @var array<string, mixed> $params */
+                $this->capturedParams = $params;
+                return 'rendered:' . $view;
+            }
+
+            public function redirect($url, $statusCode = 302): \yii\web\Response
+            {
+                $r = new \yii\web\Response();
+                $r->content = 'redirected';
+                return $r;
+            }
+        };
+    }
+}

@@ -153,4 +153,33 @@ class WebhookChannelTest extends TestCase
         $decoded = json_decode((string)$channel->capturedPayload, true);
         $this->assertSame($vars, $decoded['variables']);
     }
+
+    public function testPostSucceedsAgainstLoopbackServer(): void
+    {
+        $server = new HttpLoopbackServer();
+        $baseUrl = $server->start(204, '');
+        try {
+            $nt = $this->makeTemplate(json_encode(['url' => $baseUrl, 'headers' => ['X-Foo' => 'bar']]) ?: '{}');
+            $channel = new WebhookChannel();
+            $channel->send($nt, 'Hello', 'World', ['k' => 'v']);
+            $this->assertTrue(true);
+        } finally {
+            $server->stop();
+        }
+    }
+
+    public function testPostRaisesOnNon2xxResponse(): void
+    {
+        $server = new HttpLoopbackServer();
+        $baseUrl = $server->start(502, 'bad gateway');
+        try {
+            $nt = $this->makeTemplate(json_encode(['url' => $baseUrl]) ?: '{}');
+            $channel = new WebhookChannel();
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('WebhookChannel: HTTP 502');
+            $channel->send($nt, 'Hello', 'World', []);
+        } finally {
+            $server->stop();
+        }
+    }
 }

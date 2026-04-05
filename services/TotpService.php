@@ -12,6 +12,8 @@ use yii\base\Exception;
 /**
  * Manages TOTP two-factor authentication: secret generation, QR URIs,
  * code verification, recovery codes, and encrypted secret storage.
+ *
+ * @property TotpRateLimiter $rateLimiter
  */
 class TotpService extends Component
 {
@@ -21,8 +23,39 @@ class TotpService extends Component
     /** Time window tolerance: accept codes ±1 period (30 s). */
     public int $window = 1;
 
-    /** @var TotpRateLimiter */
-    public TotpRateLimiter $rateLimiter;
+    /**
+     * Rate limiter instance. Accessed via Yii2's magic getter/setter so that
+     * nested array configuration from `config/web.php` (e.g. `rateLimiter =>
+     * ['class' => TotpRateLimiter::class]`) is resolved through the DI
+     * container instead of being blindly assigned to a typed property.
+     */
+    private ?TotpRateLimiter $_rateLimiter = null;
+
+    public function getRateLimiter(): TotpRateLimiter
+    {
+        if ($this->_rateLimiter === null) {
+            $this->_rateLimiter = new TotpRateLimiter();
+        }
+        return $this->_rateLimiter;
+    }
+
+    /**
+     * @param TotpRateLimiter|array<string, mixed> $value
+     */
+    public function setRateLimiter(TotpRateLimiter|array $value): void
+    {
+        if (is_array($value)) {
+            $class = is_string($value['class'] ?? null) ? $value['class'] : TotpRateLimiter::class;
+            unset($value['class']);
+            $instance = new $class();
+            foreach ($value as $k => $v) {
+                $instance->$k = $v;
+            }
+            /** @var TotpRateLimiter $instance */
+            $value = $instance;
+        }
+        $this->_rateLimiter = $value;
+    }
 
     // ── Secret management ────────────────────────────────────────────────────
 

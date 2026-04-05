@@ -248,6 +248,45 @@ class TotpServiceTest extends TestCase
         $this->assertFalse($this->service->rateLimiter->isLockedOut($userId));
     }
 
+    // ── Regression: nested array rateLimiter config from config/web.php ──────
+
+    /**
+     * Regression for `/profile/security` TypeError: Yii2 Component::__set was
+     * assigning the nested `['class' => TotpRateLimiter::class]` array straight
+     * to a typed `public TotpRateLimiter $rateLimiter` property. The fix moves
+     * the property behind a setter that resolves the config via the DI
+     * container. This test constructs TotpService with the *exact* shape used
+     * in config/web.php and asserts the resulting property is a real instance.
+     */
+    public function testRateLimiterNestedArrayConfigIsResolvedToInstance(): void
+    {
+        /** @var TotpService $service */
+        $service = \Yii::createObject([
+            'class' => TotpService::class,
+            'rateLimiter' => [
+                'class' => TotpRateLimiter::class,
+            ],
+        ]);
+
+        $this->assertInstanceOf(TotpRateLimiter::class, $service->rateLimiter);
+        // And it must be fully usable — no half-configured stub.
+        $this->assertFalse($service->rateLimiter->isLockedOut(987654));
+    }
+
+    public function testRateLimiterDefaultsToRealInstanceWhenNotConfigured(): void
+    {
+        $service = new TotpService();
+        $this->assertInstanceOf(TotpRateLimiter::class, $service->rateLimiter);
+    }
+
+    public function testRateLimiterAcceptsDirectInstanceAssignment(): void
+    {
+        $service = new TotpService();
+        $limiter = new TotpRateLimiter();
+        $service->rateLimiter = $limiter;
+        $this->assertSame($limiter, $service->rateLimiter);
+    }
+
     // ── Custom recovery code count ───────────────────────────────────────────
 
     public function testCustomRecoveryCodeCount(): void

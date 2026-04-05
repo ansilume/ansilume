@@ -136,4 +136,34 @@ class SlackChannelTest extends TestCase
         $channel->send($nt, 'Subject', 'Body', []);
         $this->assertTrue(true);
     }
+
+    public function testPostSucceedsAgainstLoopbackServer(): void
+    {
+        $server = new HttpLoopbackServer();
+        $baseUrl = $server->start(200, 'slack-ok');
+        try {
+            $nt = $this->makeTemplate(json_encode(['webhook_url' => $baseUrl]) ?: '{}');
+            $channel = new SlackChannel();
+            // No exception = success path covered (post() returns normally, info log written).
+            $channel->send($nt, 'Hello', 'World', []);
+            $this->assertTrue(true);
+        } finally {
+            $server->stop();
+        }
+    }
+
+    public function testPostRaisesOnNon2xxResponse(): void
+    {
+        $server = new HttpLoopbackServer();
+        $baseUrl = $server->start(500, 'boom');
+        try {
+            $nt = $this->makeTemplate(json_encode(['webhook_url' => $baseUrl]) ?: '{}');
+            $channel = new SlackChannel();
+            $this->expectException(\RuntimeException::class);
+            $this->expectExceptionMessage('SlackChannel: HTTP 500');
+            $channel->send($nt, 'Hello', 'World', []);
+        } finally {
+            $server->stop();
+        }
+    }
 }

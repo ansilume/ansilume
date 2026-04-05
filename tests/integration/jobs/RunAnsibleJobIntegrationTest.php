@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace app\tests\integration\jobs;
 
+use app\jobs\JobTimeoutException;
 use app\jobs\RunAnsibleJob;
 use app\models\Job;
+use app\models\JobLog;
 use app\models\JobTask;
 use app\services\JobCompletionService;
 use app\tests\integration\DbTestCase;
@@ -18,6 +20,34 @@ use app\tests\integration\DbTestCase;
  */
 class RunAnsibleJobIntegrationTest extends DbTestCase
 {
+    /** @var array<string, mixed> */
+    private array $swappedComponents = [];
+
+    protected function tearDown(): void
+    {
+        foreach ($this->swappedComponents as $id => $original) {
+            \Yii::$app->set($id, $original);
+        }
+        $this->swappedComponents = [];
+        parent::tearDown();
+    }
+
+    /**
+     * Snapshot a component's current definition and swap in a stub.
+     * tearDown() restores the original so later tests in the same process
+     * (notably JobClaimServiceIntegrationTest) see the bootstrap wiring.
+     *
+     * @param mixed $stub
+     */
+    private function swapComponent(string $id, $stub): void
+    {
+        $components = \Yii::$app->getComponents(true);
+        if (!array_key_exists($id, $this->swappedComponents)) {
+            $this->swappedComponents[$id] = $components[$id] ?? null;
+        }
+        \Yii::$app->set($id, $stub);
+    }
+
     // -------------------------------------------------------------------------
     // saveTasks (via JobCompletionService, called by RunAnsibleJob)
     // -------------------------------------------------------------------------
@@ -171,6 +201,315 @@ class RunAnsibleJobIntegrationTest extends DbTestCase
 
         $job->refresh();
         $this->assertSame(Job::STATUS_RUNNING, $job->status);
+    }
+
+    // -------------------------------------------------------------------------
+    // execute — full run with stubbed playbook + side-effect services
+    // -------------------------------------------------------------------------
+
+    public function testExecuteHappyPathTransitionsToRunningAndFinished(): void
+    {
+        $this->swapWebhookServiceWithStub();
+        $job = $this->makeJobWithStatus(Job::STATUS_QUEUED);
+
+        $runner = new class (['jobId' => $job->id]) extends RunAnsibleJob {
+            protected function runPlaybook(Job $job): int { return 0; }
+        };
+        $runner->execute(null);
+
+        $job->refresh();
+        // JobCompletionService sets succeeded when exitCode=0.
+        $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
+        $this->assertNotNull($job->started_at);
+        $this->assertNotNull($job->worker_id);
+    }
+
+    public function testExecuteCatchesTimeoutException(): void
+    {
+        $this->swapWebhookServiceWithStub();
+        $job = $this->makeJobWithStatus(Job::STATUS_QUEUED);
+
+        $runner = new class (['jobId' => $job->id]) extends RunAnsibleJob {
+            protected function runPlaybook(Job $job): int
+            {
+                throw new JobTimeoutException(5);
+            }
+        };
+        $runner->execute(null);
+
+        $job->refresh();
+        // Should have transitioned via completeTimedOut.
+        $this->assertNotSame(Job::STATUS_RUNNING, $job->status);
+        $this->assertNotSame(Job::STATUS_QUEUED, $job->status);
+
+        // appendLog wrote a stderr line mentioning the timeout.
+        $log = JobLog::find()->where(['job_id' => $job->id])->andWhere(['stream' => JobLog::STREAM_STDERR])->one();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString('timed out', $log->content);
+    }
+
+    public function testExecuteCatchesGenericThrowable(): void
+    {
+        $this->swapWebhookServiceWithStub();
+        $job = $this->makeJobWithStatus(Job::STATUS_QUEUED);
+
+        $runner = new class (['jobId' => $job->id]) extends RunAnsibleJob {
+            protected function runPlaybook(Job $job): int
+            {
+                throw new \RuntimeException('boom');
+            }
+        };
+        $runner->execute(null);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_FAILED, $job->status);
+
+        $log = JobLog::find()->where(['job_id' => $job->id])->andWhere(['stream' => JobLog::STREAM_STDERR])->one();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString('Runner error: boom', $log->content);
+    }
+
+    // -------------------------------------------------------------------------
+    // saveTaskResults (private) — via reflection
+    // -------------------------------------------------------------------------
+
+    public function testSaveTaskResultsNoOpWhenFileMissing(): void
+    {
+        $job = $this->makeRunningJob();
+        $runner = new RunAnsibleJob();
+
+        $ref = new \ReflectionMethod($runner, 'saveTaskResults');
+        $ref->setAccessible(true);
+        $ref->invoke($runner, $job, '/tmp/definitely-not-there-' . uniqid('', true) . '.ndjson');
+
+        $this->assertSame(0, (int)JobTask::find()->where(['job_id' => $job->id])->count());
+    }
+
+    public function testSaveTaskResultsParsesFileAndPersistsTasks(): void
+    {
+        $job = $this->makeRunningJob();
+        $runner = new RunAnsibleJob();
+
+        $file = sys_get_temp_dir() . '/ansilume_test_cb_' . uniqid('', true) . '.ndjson';
+        file_put_contents(
+            $file,
+            json_encode(['seq' => 1, 'name' => 'ping', 'host' => 'h1', 'status' => 'ok', 'changed' => false]) . "\n"
+        );
+
+        $ref = new \ReflectionMethod($runner, 'saveTaskResults');
+        $ref->setAccessible(true);
+        $ref->invoke($runner, $job, $file);
+
+        $this->assertSame(1, (int)JobTask::find()->where(['job_id' => $job->id])->count());
+        $this->assertFileDoesNotExist($file); // cleaned up in finally
+    }
+
+    // -------------------------------------------------------------------------
+    // writeInventoryTempFile (private)
+    // -------------------------------------------------------------------------
+
+    public function testWriteInventoryTempFileCreatesFileWithContent(): void
+    {
+        $runner = new RunAnsibleJob();
+        $ref = new \ReflectionMethod($runner, 'writeInventoryTempFile');
+        $ref->setAccessible(true);
+
+        /** @var string $path */
+        $path = $ref->invoke($runner, "localhost\n");
+        try {
+            $this->assertFileExists($path);
+            $this->assertSame("localhost\n", (string)file_get_contents($path));
+        } finally {
+            if (file_exists($path)) {
+                unlink($path);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // appendLog (private)
+    // -------------------------------------------------------------------------
+
+    public function testAppendLogPersistsEntry(): void
+    {
+        $job = $this->makeRunningJob();
+        $runner = new RunAnsibleJob();
+        $ref = new \ReflectionMethod($runner, 'appendLog');
+        $ref->setAccessible(true);
+        $ref->invoke($runner, $job, JobLog::STREAM_STDOUT, 'hello world', 1);
+
+        $log = JobLog::find()->where(['job_id' => $job->id])->one();
+        $this->assertNotNull($log);
+        $this->assertSame('hello world', $log->content);
+        $this->assertSame(JobLog::STREAM_STDOUT, $log->stream);
+    }
+
+    // -------------------------------------------------------------------------
+    // runPlaybook — via factory-method stubs
+    // -------------------------------------------------------------------------
+
+    public function testRunPlaybookInvokesProcessAndArtifactCollectorForStaticInventory(): void
+    {
+        $job = $this->makeRunningJob();
+        $this->swapJobClaimService([
+            'command' => ['ansible-playbook', '__INVENTORY_TMP__', 'site.yml'],
+            'project_path' => '/tmp/project',
+            'timeout_minutes' => 30,
+            'inventory_type' => 'static',
+            'inventory_content' => "localhost ansible_connection=local\n",
+            'credential' => null,
+        ]);
+
+        $runner = new class extends RunAnsibleJob {
+            /** @var array<int, mixed> */
+            public array $receivedCmd = [];
+            public bool $collectCalled = false;
+
+            protected function createAnsibleJobProcess(): \app\components\AnsibleJobProcess
+            {
+                return new class extends \app\components\AnsibleJobProcess {
+                    public function run(\app\models\Job $job, array $cmd, array $payload, array $env, int $timeoutMinutes): int
+                    {
+                        $GLOBALS['__rap_cmd'] = $cmd;
+                        return 0;
+                    }
+                };
+            }
+
+            protected function createArtifactCollector(): \app\components\ArtifactCollector
+            {
+                $self = $this;
+                return new class ($self) extends \app\components\ArtifactCollector {
+                    /** @var object */
+                    private $parent;
+                    public function __construct(object $parent) { $this->parent = $parent; }
+                    public function collect(\app\models\Job $job, array $env): void
+                    {
+                        $this->parent->collectCalled = true;
+                    }
+                };
+            }
+
+            protected function createCredentialInjector(): \app\components\CredentialInjector
+            {
+                return new class extends \app\components\CredentialInjector {
+                    public function inject(?array $credentialData): \app\components\CredentialInjectionResult
+                    {
+                        return \app\components\CredentialInjectionResult::empty();
+                    }
+                };
+            }
+        };
+
+        $ref = new \ReflectionMethod($runner, 'runPlaybook');
+        $ref->setAccessible(true);
+        $exit = $ref->invoke($runner, $job);
+
+        $this->assertSame(0, $exit);
+        $this->assertTrue($runner->collectCalled);
+        // Placeholder was replaced with an actual temp file path.
+        $cmd = $GLOBALS['__rap_cmd'] ?? [];
+        $this->assertNotContains('__INVENTORY_TMP__', $cmd);
+        // Path should look like a writable temp file and should be cleaned up.
+        $invPath = $cmd[1] ?? '';
+        $this->assertStringContainsString('ansilume_inv_', $invPath);
+        $this->assertFileDoesNotExist($invPath);
+        unset($GLOBALS['__rap_cmd']);
+    }
+
+    public function testRunPlaybookWrapsCommandInDockerWhenRunnerModeDocker(): void
+    {
+        $originalMode = $_ENV['RUNNER_MODE'] ?? null;
+        $_ENV['RUNNER_MODE'] = 'docker';
+        try {
+            $job = $this->makeRunningJob();
+            $this->swapJobClaimService([
+                'command' => ['ansible-playbook', 'site.yml'],
+                'project_path' => '/tmp/project',
+                'timeout_minutes' => 30,
+                'inventory_type' => 'dynamic',
+                'inventory_content' => '',
+                'credential' => null,
+            ]);
+
+            $runner = new class extends RunAnsibleJob {
+                protected function createAnsibleJobProcess(): \app\components\AnsibleJobProcess
+                {
+                    return new class extends \app\components\AnsibleJobProcess {
+                        public function run(\app\models\Job $job, array $cmd, array $payload, array $env, int $timeoutMinutes): int
+                        {
+                            $GLOBALS['__rap_cmd'] = $cmd;
+                            return 0;
+                        }
+                    };
+                }
+                protected function createArtifactCollector(): \app\components\ArtifactCollector
+                {
+                    return new class extends \app\components\ArtifactCollector {
+                        public function collect(\app\models\Job $job, array $env): void {}
+                    };
+                }
+                protected function createCredentialInjector(): \app\components\CredentialInjector
+                {
+                    return new class extends \app\components\CredentialInjector {
+                        public function inject(?array $credentialData): \app\components\CredentialInjectionResult
+                        {
+                            return \app\components\CredentialInjectionResult::empty();
+                        }
+                    };
+                }
+            };
+
+            $ref = new \ReflectionMethod($runner, 'runPlaybook');
+            $ref->setAccessible(true);
+            $ref->invoke($runner, $job);
+
+            $cmd = $GLOBALS['__rap_cmd'] ?? [];
+            $this->assertSame('docker', $cmd[0]);
+            $this->assertSame('run', $cmd[1]);
+            unset($GLOBALS['__rap_cmd']);
+        } finally {
+            if ($originalMode === null) {
+                unset($_ENV['RUNNER_MODE']);
+            } else {
+                $_ENV['RUNNER_MODE'] = $originalMode;
+            }
+        }
+    }
+
+    /**
+     * Replace jobClaimService so runPlaybook gets a deterministic payload.
+     *
+     * @param array<string, mixed> $payload
+     */
+    private function swapJobClaimService(array $payload): void
+    {
+        $this->swapComponent('jobClaimService', new class ($payload) extends \yii\base\Component {
+            /** @var array<string, mixed> */
+            private array $payload;
+            /** @param array<string, mixed> $payload */
+            public function __construct(array $payload)
+            {
+                parent::__construct();
+                $this->payload = $payload;
+            }
+            /** @return array<string, mixed> */
+            public function buildExecutionPayload(\app\models\Job $job): array
+            {
+                return $this->payload;
+            }
+        });
+    }
+
+    /**
+     * Replace webhookService with a silent stub so dispatch() inside
+     * transitionToRunning() doesn't try to hit real HTTP endpoints.
+     */
+    private function swapWebhookServiceWithStub(): void
+    {
+        $this->swapComponent('webhookService', new class extends \yii\base\Component {
+            public function dispatch(string $event, $payload): void {}
+        });
     }
 
     // -------------------------------------------------------------------------

@@ -81,6 +81,88 @@ class RunAnsibleJobTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
+    // ArtifactCollector::collect
+    // -------------------------------------------------------------------------
+
+    public function testCollectNoOpWhenEnvKeyMissing(): void
+    {
+        $job = $this->makeStubJob();
+        // No ANSILUME_ARTIFACT_DIR → early return, no service lookup.
+        $this->collector->collect($job, []);
+        $this->assertTrue(true);
+    }
+
+    public function testCollectNoOpWhenDirectoryDoesNotExist(): void
+    {
+        $job = $this->makeStubJob();
+        $this->collector->collect($job, ['ANSILUME_ARTIFACT_DIR' => '/tmp/nonexistent_' . uniqid('', true)]);
+        $this->assertTrue(true);
+    }
+
+    public function testCollectHappyPathInvokesServiceAndCleansUp(): void
+    {
+        $job = $this->makeStubJob();
+        $dir = sys_get_temp_dir() . '/ansilume_artifacts_' . uniqid('', true);
+        mkdir($dir);
+        file_put_contents($dir . '/result.json', '{"ok":true}');
+
+        $calls = new \stdClass();
+        $calls->count = 0;
+        \Yii::$app->set('artifactService', new class ($calls) extends \yii\base\Component {
+            public \stdClass $calls;
+            public function __construct(\stdClass $c) { parent::__construct(); $this->calls = $c; }
+            public function collectFromDirectory($job, string $dir): array
+            {
+                $this->calls->count++;
+                return ['artifact-1'];
+            }
+        });
+
+        try {
+            $this->collector->collect($job, ['ANSILUME_ARTIFACT_DIR' => $dir]);
+            $this->assertSame(1, $calls->count);
+            $this->assertDirectoryDoesNotExist($dir);
+        } finally {
+            \Yii::$app->set('artifactService', null);
+        }
+    }
+
+    public function testCollectSwallowsServiceException(): void
+    {
+        $job = $this->makeStubJob();
+        $dir = sys_get_temp_dir() . '/ansilume_artifacts_' . uniqid('', true);
+        mkdir($dir);
+
+        \Yii::$app->set('artifactService', new class extends \yii\base\Component {
+            public function collectFromDirectory($job, string $dir): array
+            {
+                throw new \RuntimeException('service blew up');
+            }
+        });
+
+        try {
+            // Must not throw; finally still cleans the directory.
+            $this->collector->collect($job, ['ANSILUME_ARTIFACT_DIR' => $dir]);
+            $this->assertDirectoryDoesNotExist($dir);
+        } finally {
+            \Yii::$app->set('artifactService', null);
+        }
+    }
+
+    private function makeStubJob(): \app\models\Job
+    {
+        $stub = $this->getMockBuilder(\app\models\Job::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods(['save'])
+            ->getMock();
+        $stub->method('save')->willReturn(true);
+        $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
+        $ref->setAccessible(true);
+        $ref->setValue($stub, ['id' => 42]);
+        return $stub;
+    }
+
+    // -------------------------------------------------------------------------
     // ArtifactCollector::cleanupDirectory
     // -------------------------------------------------------------------------
 

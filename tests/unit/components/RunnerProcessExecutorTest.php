@@ -114,6 +114,35 @@ class RunnerProcessExecutorTest extends TestCase
         $this->assertStringContainsString('/tmp', $combined);
     }
 
+    public function testRunKillsProcessOnTimeoutAndPostsTimeoutLog(): void
+    {
+        $logs = [];
+        $http = $this->createStubHttp($logs);
+        $controller = new SilentController('test', \Yii::$app);
+        $executor = new RunnerProcessExecutor($http, $controller);
+
+        // timeoutMinutes=0 → deadline == start_time, so the first loop iteration
+        // sees remaining <= 0 and triggers killTimedOutProcess + sendTimeoutLog.
+        // `sleep 10` keeps the child alive long enough for the loop to run.
+        [$exitCode, $sequence] = $executor->run(
+            99,
+            ['sh', '-c', 'sleep 10'],
+            [],
+            getenv() ?: [],
+            0,
+        );
+
+        $this->assertSame(-1, $exitCode);
+        $this->assertGreaterThanOrEqual(1, $sequence);
+
+        // sendTimeoutLog was invoked.
+        $timeoutLogs = array_filter(
+            $logs,
+            fn ($l) => str_contains($l['path'], '/logs') && str_contains((string)($l['body']['content'] ?? ''), 'exceeded timeout')
+        );
+        $this->assertNotEmpty($timeoutLogs);
+    }
+
     /**
      * Create a stub RunnerHttpClient that records all post() calls.
      *

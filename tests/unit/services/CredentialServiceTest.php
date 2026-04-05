@@ -80,6 +80,131 @@ class CredentialServiceTest extends TestCase
         $service->storeSecrets($credential, ['password' => 'x']);
     }
 
+    public function testDecryptRejectsInvalidBase64(): void
+    {
+        $credential = $this->makeCredential();
+        $credential->secret_data = '###not-base64###';
+        $this->expectException(\yii\base\Exception::class);
+        $this->service->getSecrets($credential);
+    }
+
+    public function testDecryptRejectsTooShortCiphertext(): void
+    {
+        $credential = $this->makeCredential();
+        // Valid base64 but shorter than 17 bytes (16 IV + ≥1 byte cipher).
+        $credential->secret_data = base64_encode('short');
+        $this->expectException(\yii\base\Exception::class);
+        $this->service->getSecrets($credential);
+    }
+
+    public function testDecryptRejectsTamperedCiphertext(): void
+    {
+        $credential = $this->makeCredential();
+        $this->service->storeSecrets($credential, ['password' => 'abc']);
+        // Flip a byte in the cipher portion to force openssl_decrypt() to fail.
+        $raw = base64_decode($credential->secret_data);
+        $raw[16] = $raw[16] === 'A' ? 'B' : 'A';
+        // Keep length aligned to block size by padding garbage bytes.
+        $credential->secret_data = base64_encode(substr($raw, 0, 16) . str_repeat('x', 16));
+        $this->expectException(\yii\base\Exception::class);
+        $this->service->getSecrets($credential);
+    }
+
+    public function testIsKeySecureEd25519(): void
+    {
+        $this->assertTrue($this->service->isKeySecure('ed25519', 256));
+    }
+
+    public function testIsKeySecureEd448(): void
+    {
+        $this->assertTrue($this->service->isKeySecure('ed448', 456));
+    }
+
+    public function testIsKeySecureEcdsa(): void
+    {
+        $this->assertFalse($this->service->isKeySecure('ecdsa', 256));
+        $this->assertTrue($this->service->isKeySecure('ecdsa', 384));
+        $this->assertTrue($this->service->isKeySecure('ecdsa', 521));
+    }
+
+    public function testIsKeySecureRsa(): void
+    {
+        $this->assertFalse($this->service->isKeySecure('rsa', 2048));
+        $this->assertTrue($this->service->isKeySecure('rsa', 4096));
+    }
+
+    public function testIsKeySecureDsa(): void
+    {
+        $this->assertFalse($this->service->isKeySecure('dsa', 1024));
+    }
+
+    public function testIsKeySecureUnknownAlgorithmReturnsNull(): void
+    {
+        $this->assertNull($this->service->isKeySecure('blowfish', 128));
+    }
+
+    public function testGenerateSshKeyPairProducesEd25519Pair(): void
+    {
+        if (!$this->sshKeygenAvailable()) {
+            $this->markTestSkipped('ssh-keygen not available in this environment');
+        }
+        $pair = $this->service->generateSshKeyPair();
+        $this->assertArrayHasKey('private_key', $pair);
+        $this->assertArrayHasKey('public_key', $pair);
+        $this->assertStringContainsString('OPENSSH PRIVATE KEY', $pair['private_key']);
+        $this->assertStringStartsWith('ssh-ed25519', $pair['public_key']);
+    }
+
+    public function testAnalyzePrivateKeyOnGeneratedKey(): void
+    {
+        if (!$this->sshKeygenAvailable()) {
+            $this->markTestSkipped('ssh-keygen not available in this environment');
+        }
+        $pair = $this->service->generateSshKeyPair();
+        $info = $this->service->analyzePrivateKey($pair['private_key']);
+        $this->assertStringStartsWith('ssh-ed25519', $info['public_key']);
+        $this->assertSame('ed25519', $info['algorithm']);
+        $this->assertSame(256, $info['bits']);
+        $this->assertTrue($info['key_secure']);
+    }
+
+    public function testAnalyzePrivateKeyHandlesCrlfLineEndings(): void
+    {
+        if (!$this->sshKeygenAvailable()) {
+            $this->markTestSkipped('ssh-keygen not available in this environment');
+        }
+        $pair = $this->service->generateSshKeyPair();
+        $crlf = str_replace("\n", "\r\n", $pair['private_key']);
+        $info = $this->service->analyzePrivateKey($crlf);
+        $this->assertSame('ed25519', $info['algorithm']);
+    }
+
+    public function testAnalyzePrivateKeyReturnsSafeFallbackOnGarbage(): void
+    {
+        $info = $this->service->analyzePrivateKey('not a real private key');
+        $this->assertSame('', $info['public_key']);
+        $this->assertSame('unknown', $info['algorithm']);
+        $this->assertSame(0, $info['bits']);
+        $this->assertNull($info['key_secure']);
+    }
+
+    private function sshKeygenAvailable(): bool
+    {
+        // Walk PATH manually instead of shelling out — avoids shell_exec
+        // (flagged by the repo's no-shell-exec audit) and has no side effects.
+        $pathEnv = (string)(getenv('PATH') ?: '');
+        foreach (explode(PATH_SEPARATOR, $pathEnv) as $dir) {
+            if ($dir === '') {
+                continue;
+            }
+            $candidate = rtrim($dir, '/') . '/ssh-keygen';
+            if (is_file($candidate) && is_executable($candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private function makeCredential(): Credential
     {
         // Partial stub — only secret_data field is used by the service.

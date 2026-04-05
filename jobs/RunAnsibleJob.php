@@ -107,7 +107,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      * (same code path as pull-based runners — single source of truth).
      * Returns the process exit code.
      */
-    private function runPlaybook(Job $job): int
+    protected function runPlaybook(Job $job): int
     {
         /** @var JobClaimService $claimService */
         $claimService = \Yii::$app->get('jobClaimService');
@@ -140,7 +140,7 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             );
         }
 
-        $credentialInjector = new CredentialInjector();
+        $credentialInjector = $this->createCredentialInjector();
         /** @var array{credential_type: string, username: string|null, secrets: array<string, string>}|null $credData */
         $credData = $payload['credential'];
         $injection = $credentialInjector->inject($credData);
@@ -148,12 +148,12 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         $env = array_merge($env, $injection->env);
 
         try {
-            $process = new AnsibleJobProcess();
+            $process = $this->createAnsibleJobProcess();
             $exitCode = $process->run($job, $cmd, $payload, $env, $timeoutMinutes);
 
             $this->saveTaskResults($job, $callbackFile);
 
-            $collector = new ArtifactCollector();
+            $collector = $this->createArtifactCollector();
             $collector->collect($job, $env);
 
             return $exitCode;
@@ -163,6 +163,21 @@ class RunAnsibleJob extends BaseObject implements JobInterface
                 \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
             }
         }
+    }
+
+    protected function createAnsibleJobProcess(): AnsibleJobProcess
+    {
+        return new AnsibleJobProcess();
+    }
+
+    protected function createArtifactCollector(): ArtifactCollector
+    {
+        return new ArtifactCollector();
+    }
+
+    protected function createCredentialInjector(): CredentialInjector
+    {
+        return new CredentialInjector();
     }
 
     private function writeInventoryTempFile(string $content): string

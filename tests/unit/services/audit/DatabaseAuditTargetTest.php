@@ -36,6 +36,26 @@ class DatabaseAuditTargetTest extends DbTestCase
         $this->assertSame('10.0.0.1', $record->ip_address);
     }
 
+    public function testSendLogsErrorWhenSaveFails(): void
+    {
+        $target = new DatabaseAuditTarget();
+        $before = (int)AuditLog::find()->count();
+
+        // Empty action fails the required-rule → save() returns false → error branch.
+        $target->send([
+            'action' => '',
+            'object_type' => null,
+            'object_id' => null,
+            'user_id' => null,
+            'metadata' => null,
+            'ip_address' => null,
+            'user_agent' => null,
+            'created_at' => time(),
+        ]);
+
+        $this->assertSame($before, (int)AuditLog::find()->count());
+    }
+
     public function testSendWithNullOptionalFields(): void
     {
         $target = new DatabaseAuditTarget();
