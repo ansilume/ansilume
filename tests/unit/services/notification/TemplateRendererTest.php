@@ -69,61 +69,39 @@ class TemplateRendererTest extends TestCase
         $this->assertSame('admin', $result);
     }
 
-    public function testBuildJobVariablesContainsAllKeys(): void
+    public function testBuildVariablesFlattensNestedPayload(): void
     {
-        $job = $this->makeJob();
+        $vars = $this->renderer->buildVariables([
+            'job' => ['id' => 42, 'status' => 'failed'],
+            'template' => ['name' => 'Deploy'],
+            'launched_by' => 'admin',
+        ]);
 
-        $vars = $this->renderer->buildJobVariables($job);
-
-        $this->assertArrayHasKey('job.id', $vars);
-        $this->assertArrayHasKey('job.status', $vars);
-        $this->assertArrayHasKey('job.exit_code', $vars);
-        $this->assertArrayHasKey('job.duration', $vars);
-        $this->assertArrayHasKey('job.url', $vars);
-        $this->assertArrayHasKey('template.name', $vars);
-        $this->assertArrayHasKey('project.name', $vars);
-        $this->assertArrayHasKey('launched_by', $vars);
+        $this->assertSame('42', $vars['job.id']);
+        $this->assertSame('failed', $vars['job.status']);
+        $this->assertSame('Deploy', $vars['template.name']);
+        $this->assertSame('admin', $vars['launched_by']);
         $this->assertArrayHasKey('timestamp', $vars);
+        $this->assertArrayHasKey('app.url', $vars);
     }
 
-    public function testBuildJobVariablesComputesDuration(): void
+    public function testBuildVariablesHandlesScalarsAndNull(): void
     {
-        $job = $this->makeJob(['started_at' => 1000, 'finished_at' => 1045]);
+        $vars = $this->renderer->buildVariables([
+            'job' => ['id' => 1, 'exit_code' => null, 'changed' => true],
+        ]);
 
-        $vars = $this->renderer->buildJobVariables($job);
-
-        $this->assertSame('45s', $vars['job.duration']);
+        $this->assertSame('1', $vars['job.id']);
+        $this->assertSame('', $vars['job.exit_code']);
+        $this->assertSame('1', $vars['job.changed']);
     }
 
-    public function testBuildJobVariablesWithNoDurationWhenNotFinished(): void
+    public function testBuildVariablesJsonEncodesObjects(): void
     {
-        $job = $this->makeJob(['started_at' => 1000, 'finished_at' => null]);
+        $vars = $this->renderer->buildVariables([
+            'ctx' => ['obj' => (object)['a' => 1]],
+        ]);
 
-        $vars = $this->renderer->buildJobVariables($job);
-
-        $this->assertSame('', $vars['job.duration']);
-    }
-
-    /**
-     * @param array<string, mixed> $extra
-     */
-    private function makeJob(array $extra = []): \app\models\Job
-    {
-        $job = $this->getMockBuilder(\app\models\Job::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods([])
-            ->getMock();
-        $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
-        $ref->setValue($job, array_merge([
-            'id' => 42,
-            'status' => 'succeeded',
-            'job_template_id' => 1,
-            'launched_by' => 1,
-            'exit_code' => 0,
-            'started_at' => 1000,
-            'finished_at' => 1120,
-        ], $extra));
-        return $job;
+        $this->assertSame('{"a":1}', $vars['ctx.obj']);
     }
 }

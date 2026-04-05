@@ -16,6 +16,8 @@ $this->title = $model->name;
     </ol>
 </nav>
 
+<?= $this->render('_localhost-warning', ['inventory' => $model]) ?>
+
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>

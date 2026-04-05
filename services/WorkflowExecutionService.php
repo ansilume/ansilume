@@ -6,6 +6,7 @@ namespace app\services;
 
 use app\models\AuditLog;
 use app\models\Job;
+use app\models\NotificationTemplate;
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
@@ -54,6 +55,8 @@ class WorkflowExecutionService extends Component
             $launchedBy,
             ['template_id' => $template->id, 'template_name' => $template->name]
         );
+
+        $this->dispatchNotification(NotificationTemplate::EVENT_WORKFLOW_LAUNCHED, $wfJob, $template);
 
         $this->executeStep($wfJob, $startStep, $overrides);
 
@@ -112,6 +115,24 @@ class WorkflowExecutionService extends Component
         }
 
         $succeeded = $job->status === Job::STATUS_SUCCEEDED;
+        $this->finalizeWorkflowStep($wjs, $job, $succeeded);
+
+        /** @var WorkflowJob|null $wfJob */
+        $wfJob = $wjs->workflowJob;
+        if ($wfJob === null || $wfJob->isFinished()) {
+            return;
+        }
+
+        $this->advanceAfterStep($wfJob, $wjs, $succeeded);
+    }
+
+    /**
+     * Persist the finished status, emit audit, and fire the step-failed
+     * notification. Extracted from onChildJobCompleted to keep the main
+     * control flow below PHPMD's complexity threshold.
+     */
+    private function finalizeWorkflowStep(WorkflowJobStep $wjs, Job $job, bool $succeeded): void
+    {
         $wjs->status = $succeeded
             ? WorkflowJobStep::STATUS_SUCCEEDED
             : WorkflowJobStep::STATUS_FAILED;
@@ -126,12 +147,24 @@ class WorkflowExecutionService extends Component
             ['status' => $wjs->status, 'job_id' => $job->id]
         );
 
-        /** @var WorkflowJob|null $wfJob */
-        $wfJob = $wjs->workflowJob;
-        if ($wfJob === null || $wfJob->isFinished()) {
+        if ($succeeded) {
             return;
         }
 
+        $wfJob = $wjs->workflowJob;
+        $this->dispatchNotification(
+            NotificationTemplate::EVENT_WORKFLOW_STEP_FAILED,
+            $wfJob,
+            $wfJob !== null ? $wfJob->workflowTemplate : null,
+            ['step' => ['id' => (string)$wjs->id, 'job_id' => (string)$job->id]]
+        );
+    }
+
+    /**
+     * Resolve the next step to run, or complete the workflow if there is none.
+     */
+    private function advanceAfterStep(WorkflowJob $wfJob, WorkflowJobStep $wjs, bool $succeeded): void
+    {
         /** @var WorkflowStep|null $step */
         $step = $wjs->workflowStep;
         if ($step === null) {
@@ -140,7 +173,6 @@ class WorkflowExecutionService extends Component
         }
 
         $nextStep = $this->resolveNextStep($step, $succeeded);
-
         if ($nextStep === null) {
             $finalStatus = $succeeded
                 ? WorkflowJob::STATUS_SUCCEEDED
@@ -149,13 +181,8 @@ class WorkflowExecutionService extends Component
             return;
         }
 
-        // Build extra vars from previous step output
         $extraVars = $this->buildStepExtraVars($wjs, $nextStep);
-        $overrides = [];
-        if ($extraVars !== []) {
-            $overrides['extra_vars'] = $extraVars;
-        }
-
+        $overrides = $extraVars !== [] ? ['extra_vars' => $extraVars] : [];
         $this->executeStep($wfJob, $nextStep, $overrides);
     }
 
@@ -224,6 +251,37 @@ class WorkflowExecutionService extends Component
             null,
             ['status' => $status]
         );
+
+        $event = match ($status) {
+            WorkflowJob::STATUS_SUCCEEDED => NotificationTemplate::EVENT_WORKFLOW_SUCCEEDED,
+            WorkflowJob::STATUS_CANCELED => NotificationTemplate::EVENT_WORKFLOW_CANCELED,
+            default => NotificationTemplate::EVENT_WORKFLOW_FAILED,
+        };
+        $this->dispatchNotification($event, $wfJob, $wfJob->workflowTemplate);
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     */
+    private function dispatchNotification(
+        string $event,
+        ?WorkflowJob $wfJob,
+        ?WorkflowTemplate $template,
+        array $extra = []
+    ): void {
+        if ($wfJob === null) {
+            return;
+        }
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+        $dispatcher->dispatch($event, array_merge([
+            'workflow' => [
+                'id' => (string)$wfJob->id,
+                'status' => (string)$wfJob->status,
+                'template_id' => (string)($template?->id ?? ''),
+                'template_name' => (string)($template?->name ?? ''),
+            ],
+        ], $extra));
     }
 
     private function resolveNextStep(WorkflowStep $step, bool $succeeded): ?WorkflowStep

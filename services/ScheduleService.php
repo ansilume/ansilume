@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\models\Job;
+use app\models\NotificationTemplate;
 use app\models\Schedule;
 use Cron\CronExpression;
 use yii\base\Component;
@@ -46,6 +47,17 @@ class ScheduleService extends Component
                     "Schedule #{$schedule->id} ({$schedule->name}) failed to launch: " . $e->getMessage(),
                     __CLASS__
                 );
+
+                /** @var NotificationDispatcher $dispatcher */
+                $dispatcher = \Yii::$app->get('notificationDispatcher');
+                $dispatcher->dispatch(NotificationTemplate::EVENT_SCHEDULE_FAILED_TO_LAUNCH, [
+                    'schedule' => [
+                        'id' => (string)$schedule->id,
+                        'name' => (string)$schedule->name,
+                        'cron' => (string)$schedule->cron_expression,
+                        'error' => $e->getMessage(),
+                    ],
+                ]);
             }
 
             // Always advance next_run_at, even if launch failed.

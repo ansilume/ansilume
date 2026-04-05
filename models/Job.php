@@ -29,7 +29,7 @@ use yii\db\ActiveRecord;
  * @property int         $created_at
  * @property int         $updated_at
  *
- * @property JobTemplate $jobTemplate
+ * @property JobTemplate|null $jobTemplate
  * @property User        $launcher
  * @property Runner|null          $runner
  * @property JobLog[]             $logs

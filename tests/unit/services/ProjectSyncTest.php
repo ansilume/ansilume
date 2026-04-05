@@ -63,6 +63,7 @@ class ProjectSyncTest extends TestCase
             'status'            => Project::STATUS_NEW,
             'last_synced_at'    => null,
             'last_sync_error'   => null,
+            'last_sync_event'   => null,
             'created_by'        => 1,
             'created_at'        => time(),
             'updated_at'        => time(),

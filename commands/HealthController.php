@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\models\NotificationTemplate;
+use app\models\Runner;
+use app\services\NotificationDispatcher;
 use yii\console\Controller;
 use yii\console\ExitCode;
 
@@ -66,6 +69,55 @@ class HealthController extends Controller
         }
 
         $this->stdout("[health] status: ok\n");
+        return ExitCode::OK;
+    }
+
+    /**
+     * Detect runner offline/recovered transitions and fire notification
+     * events exactly once per transition. Intended to run from cron every
+     * minute or two — idempotent across runs.
+     */
+    public function actionCheckRunners(): int
+    {
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+
+        /** @var Runner[] $runners */
+        $runners = Runner::find()->all();
+        $now = time();
+
+        foreach ($runners as $runner) {
+            $isOnline = $runner->isOnline();
+            $wasNotifiedOffline = $runner->offline_notified_at !== null;
+
+            if (!$isOnline && !$wasNotifiedOffline) {
+                $runner->offline_notified_at = $now;
+                $runner->save(false);
+                $dispatcher->dispatch(NotificationTemplate::EVENT_RUNNER_OFFLINE, [
+                    'runner' => [
+                        'id' => (string)$runner->id,
+                        'name' => (string)$runner->name,
+                        'last_seen_at' => (string)($runner->last_seen_at ?? ''),
+                    ],
+                ]);
+                $this->stdout("[health] runner #{$runner->id} ({$runner->name}): OFFLINE\n");
+                continue;
+            }
+
+            if ($isOnline && $wasNotifiedOffline) {
+                $runner->offline_notified_at = null;
+                $runner->save(false);
+                $dispatcher->dispatch(NotificationTemplate::EVENT_RUNNER_RECOVERED, [
+                    'runner' => [
+                        'id' => (string)$runner->id,
+                        'name' => (string)$runner->name,
+                        'last_seen_at' => (string)($runner->last_seen_at ?? ''),
+                    ],
+                ]);
+                $this->stdout("[health] runner #{$runner->id} ({$runner->name}): RECOVERED\n");
+            }
+        }
+
         return ExitCode::OK;
     }
 }

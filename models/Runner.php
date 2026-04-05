@@ -13,6 +13,7 @@ use yii\db\ActiveRecord;
  * @property string      $token_hash       SHA-256 of the raw token
  * @property string|null $description
  * @property int|null    $last_seen_at
+ * @property int|null    $offline_notified_at
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at

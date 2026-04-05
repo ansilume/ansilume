@@ -100,7 +100,7 @@ class NotificationTemplatesApiTest extends DbTestCase
     {
         $user = $this->createUser('api');
 
-        foreach (['email', 'slack', 'teams', 'webhook'] as $channel) {
+        foreach (['email', 'slack', 'teams', 'webhook', 'telegram', 'pagerduty'] as $channel) {
             $nt = new NotificationTemplate();
             $nt->name = "Test {$channel}";
             $nt->channel = $channel;
@@ -113,51 +113,15 @@ class NotificationTemplatesApiTest extends DbTestCase
         }
     }
 
-    public function testJobTemplateRelation(): void
+    public function testGlobalSubscriptionListensToEvent(): void
     {
         $user = $this->createUser('api');
-        $group = $this->createRunnerGroup($user->id);
-        $proj = $this->createProject($user->id);
-        $inv = $this->createInventory($user->id);
-        $jt = $this->createJobTemplate($proj->id, $inv->id, $group->id, $user->id);
         $nt = $this->createNotificationTemplate($user->id);
+        $nt->events = 'job.failed,workflow.failed';
+        $nt->save(false);
 
-        $link = new \app\models\JobTemplateNotification();
-        $link->job_template_id = $jt->id;
-        $link->notification_template_id = $nt->id;
-        $link->save(false);
-
-        $nt->refresh();
-        $linked = $nt->jobTemplates;
-        $this->assertCount(1, $linked);
-        $this->assertSame($jt->id, $linked[0]->id);
-
-        $jt->refresh();
-        $notifications = $jt->notificationTemplates;
-        $this->assertCount(1, $notifications);
-        $this->assertSame($nt->id, $notifications[0]->id);
-    }
-
-    public function testCascadeDeleteRemovesPivot(): void
-    {
-        $user = $this->createUser('api');
-        $group = $this->createRunnerGroup($user->id);
-        $proj = $this->createProject($user->id);
-        $inv = $this->createInventory($user->id);
-        $jt = $this->createJobTemplate($proj->id, $inv->id, $group->id, $user->id);
-        $nt = $this->createNotificationTemplate($user->id);
-
-        $link = new \app\models\JobTemplateNotification();
-        $link->job_template_id = $jt->id;
-        $link->notification_template_id = $nt->id;
-        $link->save(false);
-
-        $ntId = $nt->id;
-        $nt->delete();
-
-        $count = \app\models\JobTemplateNotification::find()
-            ->where(['notification_template_id' => $ntId])
-            ->count();
-        $this->assertSame(0, (int)$count);
+        $this->assertTrue($nt->listensTo(NotificationTemplate::EVENT_JOB_FAILED));
+        $this->assertTrue($nt->listensTo(NotificationTemplate::EVENT_WORKFLOW_FAILED));
+        $this->assertFalse($nt->listensTo(NotificationTemplate::EVENT_JOB_SUCCEEDED));
     }
 }

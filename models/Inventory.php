@@ -79,6 +79,39 @@ class Inventory extends ActiveRecord
         }
     }
 
+    /**
+     * True if this inventory contains a host that resolves to the runner itself.
+     *
+     * A "yes" means any playbook run here will mutate the runner container —
+     * installing packages, writing files, creating users, etc. — instead of a
+     * remote target. Views use this to render a prominent warning on launch
+     * and detail pages so operators do not accidentally brick their runner or
+     * leak files into the bind-mounted project directory.
+     *
+     * Matches the common ways localhost shows up in Ansible inventories:
+     *   - the bare hostname "localhost"
+     *   - loopback addresses 127.0.0.1 / ::1
+     *   - any host using ansible_connection=local
+     *
+     * Only static inventories are inspected — file-based and dynamic
+     * inventories have no content to scan, and we prefer a clean false over a
+     * speculative match.
+     */
+    public function targetsLocalhost(): bool
+    {
+        if ($this->inventory_type !== self::TYPE_STATIC || $this->content === null || $this->content === '') {
+            return false;
+        }
+        // Negative lookarounds excluding [\w.-] so we do not match inside a
+        // larger hostname (e.g. "my-localhost-dev.example.com") or a larger IP
+        // (e.g. "127.0.0.15"). \b alone is wrong here because `-` and `:` are
+        // not word characters.
+        return preg_match(
+            '/(?<![\w.\-])(?:localhost|127\.0\.0\.1|::1)(?![\w.\-])|ansible_connection\s*=\s*local(?![\w.\-])/i',
+            $this->content
+        ) === 1;
+    }
+
     public function getCreator(): \yii\db\ActiveQuery
     {
         return $this->hasOne(User::class, ['id' => 'created_by']);

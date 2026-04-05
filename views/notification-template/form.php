@@ -7,12 +7,23 @@ declare(strict_types=1);
 
 use app\models\NotificationTemplate;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->isNewRecord ? 'New Notification Template' : 'Edit: ' . $model->name;
+
+// Smart defaults: on a brand-new template, pre-check only the failure events
+// so operators subscribe to noise-free notifications by default. An existing
+// template shows whatever it had saved.
+$selectedEvents = $model->isNewRecord
+    ? NotificationTemplate::defaultFailureEvents()
+    : $model->getEventList();
+
+$failurePreset = NotificationTemplate::allFailureEvents();
+$allEvents = array_keys(NotificationTemplate::eventLabels());
 ?>
 <div class="row justify-content-center">
-<div class="col-lg-8">
+<div class="col-lg-9">
 
 <h2><?= Html::encode($this->title) ?></h2>
 
@@ -31,7 +42,7 @@ $this->title = $model->isNewRecord ? 'New Notification Template' : 'Edit: ' . $m
             <label class="form-label">Email Recipients</label>
             <input type="text" id="email-recipients" class="form-control font-monospace"
                    placeholder='["ops@example.com","alerts@example.com"]'>
-            <div class="form-text">JSON array of email addresses. Stored in the config field.</div>
+            <div class="form-text">JSON array of email addresses.</div>
         </div>
     </div>
 
@@ -62,37 +73,68 @@ $this->title = $model->isNewRecord ? 'New Notification Template' : 'Edit: ' . $m
         </div>
     </div>
 
+    <div id="config-telegram" class="channel-config" style="display:none">
+        <div class="card card-body bg-transparent border-secondary mb-3">
+            <label class="form-label">Bot Token</label>
+            <input type="text" id="telegram-bot-token" class="form-control font-monospace"
+                   placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ">
+            <label class="form-label mt-2">Chat ID</label>
+            <input type="text" id="telegram-chat-id" class="form-control font-monospace"
+                   placeholder="-1001234567890">
+            <div class="form-text">Create a bot via @BotFather and invite it to the target chat.</div>
+        </div>
+    </div>
+
+    <div id="config-pagerduty" class="channel-config" style="display:none">
+        <div class="card card-body bg-transparent border-secondary mb-3">
+            <label class="form-label">Routing Key (Integration Key)</label>
+            <input type="text" id="pagerduty-routing-key" class="form-control font-monospace"
+                   placeholder="R0UT1NGKEY1234567890">
+            <div class="form-text">From a PagerDuty Events API v2 integration on the target service. Severity follows the event type; success events automatically resolve the matching incident.</div>
+        </div>
+    </div>
+
     <?= $form->field($model, 'config')->hiddenInput(['id' => 'nt-config'])->label(false) ?>
 
     <h5 class="mt-3 text-muted">Events</h5>
-    <div class="row g-2 mb-3">
-        <?php foreach (NotificationTemplate::eventLabels() as $value => $label) : ?>
-            <div class="col-md-3">
-                <div class="form-check">
-                    <input class="form-check-input event-checkbox" type="checkbox"
-                           value="<?= Html::encode($value) ?>"
-                           id="event-<?= Html::encode($value) ?>"
-                           <?= in_array($value, $model->getEventList(), true) ? 'checked' : '' ?>>
-                    <label class="form-check-label" for="event-<?= Html::encode($value) ?>">
-                        <?= Html::encode($label) ?>
-                    </label>
-                </div>
-            </div>
-        <?php endforeach; ?>
+    <div class="mb-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="nt-preset-failures">Subscribe to all failures</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="nt-preset-all">Subscribe to everything</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" id="nt-preset-none">Clear all</button>
     </div>
+    <?php foreach (NotificationTemplate::eventGroups() as $groupKey => $group) : ?>
+        <div class="card card-body bg-transparent border-secondary mb-2">
+            <div class="fw-bold text-muted mb-2"><?= Html::encode($group['label']) ?></div>
+            <div class="row g-2">
+                <?php foreach ($group['events'] as $value => $label) : ?>
+                    <div class="col-md-4">
+                        <div class="form-check">
+                            <input class="form-check-input event-checkbox" type="checkbox"
+                                   value="<?= Html::encode($value) ?>"
+                                   id="event-<?= Html::encode($value) ?>"
+                                   <?= in_array($value, $selectedEvents, true) ? 'checked' : '' ?>>
+                            <label class="form-check-label" for="event-<?= Html::encode($value) ?>">
+                                <?= Html::encode($label) ?>
+                            </label>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    <?php endforeach; ?>
     <?= $form->field($model, 'events')->hiddenInput(['id' => 'nt-events'])->label(false) ?>
 
     <h5 class="mt-3 text-muted">Templates</h5>
     <?= $form->field($model, 'subject_template')->textInput([
         'maxlength' => 512,
-        'placeholder' => '[Ansilume] Job #{{ job.id }} {{ job.status }} — {{ template.name }}',
+        'placeholder' => '[Ansilume] {{ event }} — {{ template.name }}',
         'class' => 'form-control font-monospace',
-    ])->hint('Available variables: {{ job.id }}, {{ job.status }}, {{ job.exit_code }}, {{ job.duration }}, {{ job.url }}, {{ template.name }}, {{ project.name }}, {{ launched_by }}, {{ timestamp }}') ?>
+    ])->hint('Variables: {{ event }}, {{ severity }}, {{ job.id }}, {{ job.status }}, {{ job.url }}, {{ template.name }}, {{ project.name }}, {{ launched_by }}, {{ runner.name }}, {{ workflow.id }}, {{ approval.rule_name }}, {{ schedule.name }}, {{ timestamp }}') ?>
 
     <?= $form->field($model, 'body_template')->textarea([
         'rows' => 6,
         'class' => 'form-control font-monospace',
-        'placeholder' => "Job #{{ job.id }} finished with status {{ job.status }}.\n\nTemplate: {{ template.name }}\nProject: {{ project.name }}\nLaunched by: {{ launched_by }}",
+        'placeholder' => "Event: {{ event }} ({{ severity }})\nTemplate: {{ template.name }}\nProject: {{ project.name }}\nURL: {{ job.url }}",
     ]) ?>
 
     <div class="mt-4">
@@ -106,59 +148,78 @@ $this->title = $model->isNewRecord ? 'New Notification Template' : 'Edit: ' . $m
 </div>
 
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-    var channelSelect = document.getElementById('nt-channel');
-    var configInput = document.getElementById('nt-config');
-    var eventsInput = document.getElementById('nt-events');
-    var panels = document.querySelectorAll('.channel-config');
+(function () {
+    var failurePreset = <?= Json::htmlEncode($failurePreset) ?>;
+    var allEvents = <?= Json::htmlEncode($allEvents) ?>;
 
-    function showPanel() {
-        var ch = channelSelect.value;
-        panels.forEach(function (p) { p.style.display = 'none'; });
-        var target = document.getElementById('config-' + ch);
-        if (target) target.style.display = '';
-    }
+    document.addEventListener('DOMContentLoaded', function () {
+        var channelSelect = document.getElementById('nt-channel');
+        var configInput = document.getElementById('nt-config');
+        var eventsInput = document.getElementById('nt-events');
+        var panels = document.querySelectorAll('.channel-config');
 
-    function parseExistingConfig() {
-        try { return JSON.parse(configInput.value || '{}'); } catch (e) { return {}; }
-    }
-
-    // Populate helper inputs from existing config
-    var existing = parseExistingConfig();
-    if (existing.emails) document.getElementById('email-recipients').value = JSON.stringify(existing.emails);
-    if (existing.webhook_url) {
-        var ch = channelSelect.value;
-        if (ch === 'slack') document.getElementById('slack-webhook-url').value = existing.webhook_url;
-        else if (ch === 'teams') document.getElementById('teams-webhook-url').value = existing.webhook_url;
-        else if (ch === 'webhook') document.getElementById('webhook-url').value = existing.webhook_url;
-    }
-    if (existing.url) document.getElementById('webhook-url').value = existing.url;
-    if (existing.headers) document.getElementById('webhook-headers').value = JSON.stringify(existing.headers);
-
-    channelSelect.addEventListener('change', showPanel);
-    showPanel();
-
-    // Before submit: build config JSON and events CSV
-    document.getElementById('nt-submit').closest('form').addEventListener('submit', function () {
-        var ch = channelSelect.value;
-        var cfg = {};
-        if (ch === 'email') {
-            try { cfg.emails = JSON.parse(document.getElementById('email-recipients').value || '[]'); } catch (e) { cfg.emails = []; }
-        } else if (ch === 'slack') {
-            cfg.webhook_url = document.getElementById('slack-webhook-url').value;
-        } else if (ch === 'teams') {
-            cfg.webhook_url = document.getElementById('teams-webhook-url').value;
-        } else if (ch === 'webhook') {
-            cfg.url = document.getElementById('webhook-url').value;
-            try { cfg.headers = JSON.parse(document.getElementById('webhook-headers').value || '{}'); } catch (e) { cfg.headers = {}; }
+        function showPanel() {
+            var ch = channelSelect.value;
+            panels.forEach(function (p) { p.style.display = 'none'; });
+            var target = document.getElementById('config-' + ch);
+            if (target) target.style.display = '';
         }
-        configInput.value = JSON.stringify(cfg);
 
-        var events = [];
-        document.querySelectorAll('.event-checkbox:checked').forEach(function (cb) {
-            events.push(cb.value);
+        function parseExistingConfig() {
+            try { return JSON.parse(configInput.value || '{}'); } catch (e) { return {}; }
+        }
+
+        var existing = parseExistingConfig();
+        if (existing.emails) document.getElementById('email-recipients').value = JSON.stringify(existing.emails);
+        if (existing.webhook_url) {
+            var ch = channelSelect.value;
+            if (ch === 'slack') document.getElementById('slack-webhook-url').value = existing.webhook_url;
+            else if (ch === 'teams') document.getElementById('teams-webhook-url').value = existing.webhook_url;
+        }
+        if (existing.url) document.getElementById('webhook-url').value = existing.url;
+        if (existing.headers) document.getElementById('webhook-headers').value = JSON.stringify(existing.headers);
+        if (existing.bot_token) document.getElementById('telegram-bot-token').value = existing.bot_token;
+        if (existing.chat_id) document.getElementById('telegram-chat-id').value = existing.chat_id;
+        if (existing.routing_key) document.getElementById('pagerduty-routing-key').value = existing.routing_key;
+
+        channelSelect.addEventListener('change', showPanel);
+        showPanel();
+
+        function applyPreset(list) {
+            document.querySelectorAll('.event-checkbox').forEach(function (cb) {
+                cb.checked = list.indexOf(cb.value) !== -1;
+            });
+        }
+        document.getElementById('nt-preset-failures').addEventListener('click', function () { applyPreset(failurePreset); });
+        document.getElementById('nt-preset-all').addEventListener('click', function () { applyPreset(allEvents); });
+        document.getElementById('nt-preset-none').addEventListener('click', function () { applyPreset([]); });
+
+        document.getElementById('nt-submit').closest('form').addEventListener('submit', function () {
+            var ch = channelSelect.value;
+            var cfg = {};
+            if (ch === 'email') {
+                try { cfg.emails = JSON.parse(document.getElementById('email-recipients').value || '[]'); } catch (e) { cfg.emails = []; }
+            } else if (ch === 'slack') {
+                cfg.webhook_url = document.getElementById('slack-webhook-url').value;
+            } else if (ch === 'teams') {
+                cfg.webhook_url = document.getElementById('teams-webhook-url').value;
+            } else if (ch === 'webhook') {
+                cfg.url = document.getElementById('webhook-url').value;
+                try { cfg.headers = JSON.parse(document.getElementById('webhook-headers').value || '{}'); } catch (e) { cfg.headers = {}; }
+            } else if (ch === 'telegram') {
+                cfg.bot_token = document.getElementById('telegram-bot-token').value;
+                cfg.chat_id = document.getElementById('telegram-chat-id').value;
+            } else if (ch === 'pagerduty') {
+                cfg.routing_key = document.getElementById('pagerduty-routing-key').value;
+            }
+            configInput.value = JSON.stringify(cfg);
+
+            var events = [];
+            document.querySelectorAll('.event-checkbox:checked').forEach(function (cb) {
+                events.push(cb.value);
+            });
+            eventsInput.value = events.join(',');
         });
-        eventsInput.value = events.join(',');
     });
-});
+})();
 </script>

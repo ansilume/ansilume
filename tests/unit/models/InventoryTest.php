@@ -149,4 +149,102 @@ class InventoryTest extends TestCase
             $this->assertStringNotContainsString('YAML mapping', $msg);
         }
     }
+
+    /**
+     * @dataProvider localhostDetectionProvider
+     */
+    public function testTargetsLocalhost(string $type, ?string $content, bool $expected, string $reason): void
+    {
+        $inv = new Inventory();
+        $inv->inventory_type = $type;
+        $inv->content = $content;
+        $this->assertSame($expected, $inv->targetsLocalhost(), $reason);
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string|null, 2: bool, 3: string}>
+     */
+    public static function localhostDetectionProvider(): array
+    {
+        return [
+            'bare localhost in INI group' => [
+                Inventory::TYPE_STATIC,
+                "[local]\nlocalhost\n",
+                true,
+                'plain "localhost" as a hostname must match',
+            ],
+            'localhost with connection=local' => [
+                Inventory::TYPE_STATIC,
+                'localhost ansible_connection=local',
+                true,
+                'localhost with explicit connection must match',
+            ],
+            'remote host marked connection=local' => [
+                Inventory::TYPE_STATIC,
+                'deploybox ansible_connection=local',
+                true,
+                'any ansible_connection=local targets the runner regardless of host name',
+            ],
+            'loopback ipv4' => [
+                Inventory::TYPE_STATIC,
+                "[web]\n127.0.0.1\n",
+                true,
+                '127.0.0.1 is the runner loopback',
+            ],
+            'loopback ipv6' => [
+                Inventory::TYPE_STATIC,
+                "[web]\n::1\n",
+                true,
+                '::1 is the ipv6 runner loopback',
+            ],
+            'case insensitive localhost' => [
+                Inventory::TYPE_STATIC,
+                'LocalHost ansible_user=root',
+                true,
+                'matcher must be case-insensitive',
+            ],
+            'YAML format with localhost host' => [
+                Inventory::TYPE_STATIC,
+                "all:\n  hosts:\n    localhost: {}\n",
+                true,
+                'YAML inventories with localhost must match',
+            ],
+            'false positive guard: hyphenated name' => [
+                Inventory::TYPE_STATIC,
+                "[web]\nmy-localhost-dev.example.com\n",
+                false,
+                'word boundaries must prevent a match inside a hyphenated remote hostname',
+            ],
+            'pure remote hosts' => [
+                Inventory::TYPE_STATIC,
+                "[web]\n10.0.0.1\n192.168.1.5 ansible_user=root\n",
+                false,
+                'no localhost references means no warning',
+            ],
+            'empty string content' => [
+                Inventory::TYPE_STATIC,
+                '',
+                false,
+                'empty content must not match',
+            ],
+            'null content' => [
+                Inventory::TYPE_STATIC,
+                null,
+                false,
+                'null content must not match',
+            ],
+            'file inventory with localhost in content' => [
+                Inventory::TYPE_FILE,
+                'localhost',
+                false,
+                'file inventories are excluded — content is a path, not hosts',
+            ],
+            'dynamic inventory with localhost in content' => [
+                Inventory::TYPE_DYNAMIC,
+                'localhost',
+                false,
+                'dynamic inventories are excluded — content is a script hint, not hosts',
+            ],
+        ];
+    }
 }

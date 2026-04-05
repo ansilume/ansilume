@@ -11,7 +11,7 @@ use yii\db\ActiveRecord;
  * @property int         $id
  * @property string      $name
  * @property string|null $description
- * @property string      $channel          email, slack, teams, webhook
+ * @property string      $channel          email, slack, teams, webhook, telegram, pagerduty
  * @property string|null $config           JSON channel config
  * @property string|null $subject_template
  * @property string|null $body_template
@@ -21,19 +21,49 @@ use yii\db\ActiveRecord;
  * @property int         $updated_at
  *
  * @property User $creator
- * @property JobTemplate[] $jobTemplates
  */
 class NotificationTemplate extends ActiveRecord
 {
+    // -- Channels --------------------------------------------------------------
     public const CHANNEL_EMAIL = 'email';
     public const CHANNEL_SLACK = 'slack';
     public const CHANNEL_TEAMS = 'teams';
     public const CHANNEL_WEBHOOK = 'webhook';
+    public const CHANNEL_TELEGRAM = 'telegram';
+    public const CHANNEL_PAGERDUTY = 'pagerduty';
 
-    public const EVENT_JOB_STARTED = 'job.started';
+    // -- Event catalog ---------------------------------------------------------
+    // Jobs
+    public const EVENT_JOB_LAUNCHED = 'job.launched';
     public const EVENT_JOB_SUCCEEDED = 'job.succeeded';
     public const EVENT_JOB_FAILED = 'job.failed';
-    public const EVENT_JOB_TIMED_OUT = 'job.timed_out';
+    public const EVENT_JOB_CANCELED = 'job.canceled';
+
+    // Workflows
+    public const EVENT_WORKFLOW_LAUNCHED = 'workflow.launched';
+    public const EVENT_WORKFLOW_SUCCEEDED = 'workflow.succeeded';
+    public const EVENT_WORKFLOW_FAILED = 'workflow.failed';
+    public const EVENT_WORKFLOW_CANCELED = 'workflow.canceled';
+    public const EVENT_WORKFLOW_STEP_FAILED = 'workflow.step_failed';
+
+    // Approvals
+    public const EVENT_APPROVAL_REQUESTED = 'approval.requested';
+    public const EVENT_APPROVAL_APPROVED = 'approval.approved';
+    public const EVENT_APPROVAL_REJECTED = 'approval.rejected';
+
+    // Schedules
+    public const EVENT_SCHEDULE_FAILED_TO_LAUNCH = 'schedule.failed_to_launch';
+
+    // Runners
+    public const EVENT_RUNNER_OFFLINE = 'runner.offline';
+    public const EVENT_RUNNER_RECOVERED = 'runner.recovered';
+
+    // Projects
+    public const EVENT_PROJECT_SYNC_FAILED = 'project.sync_failed';
+    public const EVENT_PROJECT_SYNC_SUCCEEDED = 'project.sync_succeeded';
+
+    // Webhooks
+    public const EVENT_WEBHOOK_INVALID_TOKEN = 'webhook.invalid_token';
 
     public static function tableName(): string
     {
@@ -51,11 +81,12 @@ class NotificationTemplate extends ActiveRecord
             [['name', 'channel', 'events'], 'required'],
             [['name'], 'string', 'max' => 128],
             [['description', 'body_template'], 'string'],
-            [['channel'], 'in', 'range' => [self::CHANNEL_EMAIL, self::CHANNEL_SLACK, self::CHANNEL_TEAMS, self::CHANNEL_WEBHOOK]],
+            [['channel'], 'in', 'range' => array_keys(self::channelLabels())],
             [['config'], 'string'],
             [['config'], 'validateJson'],
             [['subject_template'], 'string', 'max' => 512],
-            [['events'], 'string', 'max' => 512],
+            [['events'], 'string', 'max' => 1024],
+            [['events'], 'validateEvents'],
             [['created_by'], 'integer'],
         ];
     }
@@ -70,6 +101,22 @@ class NotificationTemplate extends ActiveRecord
         }
     }
 
+    public function validateEvents(string $attribute): void
+    {
+        $list = $this->getEventList();
+        if ($list === []) {
+            $this->addError($attribute, 'Select at least one event.');
+            return;
+        }
+        $known = array_keys(self::eventLabels());
+        foreach ($list as $event) {
+            if (!in_array($event, $known, true)) {
+                $this->addError($attribute, 'Unknown event: ' . $event);
+                return;
+            }
+        }
+    }
+
     /**
      * @return array<string, string>
      */
@@ -80,6 +127,8 @@ class NotificationTemplate extends ActiveRecord
             self::CHANNEL_SLACK => 'Slack',
             self::CHANNEL_TEAMS => 'Microsoft Teams',
             self::CHANNEL_WEBHOOK => 'Webhook',
+            self::CHANNEL_TELEGRAM => 'Telegram',
+            self::CHANNEL_PAGERDUTY => 'PagerDuty',
         ];
     }
 
@@ -89,16 +138,144 @@ class NotificationTemplate extends ActiveRecord
     }
 
     /**
+     * Flat event => human label map (used for validation + simple lookups).
+     *
      * @return array<string, string>
      */
     public static function eventLabels(): array
     {
+        $flat = [];
+        foreach (self::eventGroups() as $group) {
+            foreach ($group['events'] as $event => $label) {
+                $flat[$event] = $label;
+            }
+        }
+        return $flat;
+    }
+
+    /**
+     * Events grouped by domain for UI rendering.
+     *
+     * @return array<string, array{label: string, events: array<string, string>}>
+     */
+    public static function eventGroups(): array
+    {
         return [
-            self::EVENT_JOB_STARTED => 'Job Started',
-            self::EVENT_JOB_SUCCEEDED => 'Job Succeeded',
-            self::EVENT_JOB_FAILED => 'Job Failed',
-            self::EVENT_JOB_TIMED_OUT => 'Job Timed Out',
+            'jobs' => [
+                'label' => 'Jobs',
+                'events' => [
+                    self::EVENT_JOB_LAUNCHED => 'Job launched',
+                    self::EVENT_JOB_SUCCEEDED => 'Job succeeded',
+                    self::EVENT_JOB_FAILED => 'Job failed',
+                    self::EVENT_JOB_CANCELED => 'Job canceled',
+                ],
+            ],
+            'workflows' => [
+                'label' => 'Workflows',
+                'events' => [
+                    self::EVENT_WORKFLOW_LAUNCHED => 'Workflow launched',
+                    self::EVENT_WORKFLOW_SUCCEEDED => 'Workflow succeeded',
+                    self::EVENT_WORKFLOW_FAILED => 'Workflow failed',
+                    self::EVENT_WORKFLOW_CANCELED => 'Workflow canceled',
+                    self::EVENT_WORKFLOW_STEP_FAILED => 'Workflow step failed',
+                ],
+            ],
+            'approvals' => [
+                'label' => 'Approvals',
+                'events' => [
+                    self::EVENT_APPROVAL_REQUESTED => 'Approval requested',
+                    self::EVENT_APPROVAL_APPROVED => 'Approval approved',
+                    self::EVENT_APPROVAL_REJECTED => 'Approval rejected',
+                ],
+            ],
+            'schedules' => [
+                'label' => 'Schedules',
+                'events' => [
+                    self::EVENT_SCHEDULE_FAILED_TO_LAUNCH => 'Schedule failed to launch',
+                ],
+            ],
+            'runners' => [
+                'label' => 'Runners',
+                'events' => [
+                    self::EVENT_RUNNER_OFFLINE => 'Runner went offline',
+                    self::EVENT_RUNNER_RECOVERED => 'Runner recovered',
+                ],
+            ],
+            'projects' => [
+                'label' => 'Projects',
+                'events' => [
+                    self::EVENT_PROJECT_SYNC_FAILED => 'Project sync failed',
+                    self::EVENT_PROJECT_SYNC_SUCCEEDED => 'Project sync succeeded',
+                ],
+            ],
+            'webhooks' => [
+                'label' => 'Webhooks',
+                'events' => [
+                    self::EVENT_WEBHOOK_INVALID_TOKEN => 'Webhook invalid token',
+                ],
+            ],
         ];
+    }
+
+    /**
+     * Smart default: only failure events get pre-checked on new templates.
+     *
+     * @return string[]
+     */
+    public static function defaultFailureEvents(): array
+    {
+        return [
+            self::EVENT_JOB_FAILED,
+            self::EVENT_WORKFLOW_FAILED,
+            self::EVENT_SCHEDULE_FAILED_TO_LAUNCH,
+            self::EVENT_PROJECT_SYNC_FAILED,
+            self::EVENT_RUNNER_OFFLINE,
+        ];
+    }
+
+    /**
+     * "Subscribe to all failures" preset for the form quick-button.
+     *
+     * @return string[]
+     */
+    public static function allFailureEvents(): array
+    {
+        return [
+            self::EVENT_JOB_FAILED,
+            self::EVENT_JOB_CANCELED,
+            self::EVENT_WORKFLOW_FAILED,
+            self::EVENT_WORKFLOW_CANCELED,
+            self::EVENT_WORKFLOW_STEP_FAILED,
+            self::EVENT_APPROVAL_REJECTED,
+            self::EVENT_SCHEDULE_FAILED_TO_LAUNCH,
+            self::EVENT_RUNNER_OFFLINE,
+            self::EVENT_PROJECT_SYNC_FAILED,
+            self::EVENT_WEBHOOK_INVALID_TOKEN,
+        ];
+    }
+
+    /**
+     * Severity hint used by PagerDuty (and any other severity-aware channel).
+     */
+    public static function eventSeverity(string $event): string
+    {
+        return match ($event) {
+            self::EVENT_JOB_FAILED,
+            self::EVENT_WORKFLOW_FAILED,
+            self::EVENT_SCHEDULE_FAILED_TO_LAUNCH,
+            self::EVENT_RUNNER_OFFLINE,
+            self::EVENT_PROJECT_SYNC_FAILED => 'critical',
+
+            self::EVENT_JOB_CANCELED,
+            self::EVENT_WORKFLOW_CANCELED,
+            self::EVENT_WORKFLOW_STEP_FAILED,
+            self::EVENT_APPROVAL_REJECTED,
+            self::EVENT_WEBHOOK_INVALID_TOKEN => 'error',
+
+            self::EVENT_APPROVAL_REQUESTED => 'warning',
+
+            default => 'info',
+        };
     }
 
     /**
@@ -117,7 +294,7 @@ class NotificationTemplate extends ActiveRecord
         if (empty($this->events)) {
             return [];
         }
-        return array_map('trim', explode(',', $this->events));
+        return array_values(array_filter(array_map('trim', explode(',', $this->events))));
     }
 
     /**
@@ -135,11 +312,5 @@ class NotificationTemplate extends ActiveRecord
     public function getCreator(): ActiveQuery
     {
         return $this->hasOne(User::class, ['id' => 'created_by']);
-    }
-
-    public function getJobTemplates(): ActiveQuery
-    {
-        return $this->hasMany(JobTemplate::class, ['id' => 'job_template_id'])
-            ->viaTable('{{%job_template_notification}}', ['notification_template_id' => 'id']);
     }
 }

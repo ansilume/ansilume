@@ -6,6 +6,7 @@ namespace app\services;
 
 use app\jobs\SyncProjectJob;
 use app\models\Credential;
+use app\models\NotificationTemplate;
 use app\models\Project;
 use yii\base\Component;
 
@@ -76,6 +77,7 @@ class ProjectService extends Component
     private function executeGitSync(Project $project, string $dest): void
     {
         $keyFile = null;
+        $threw = null;
         try {
             $env = $this->buildGitEnv($project, $keyFile);
             $this->cloneOrPull($project, $dest, $env);
@@ -86,11 +88,49 @@ class ProjectService extends Component
         } catch (\RuntimeException $e) {
             $project->status = Project::STATUS_ERROR;
             $project->last_sync_error = $e->getMessage();
-            throw $e;
+            $threw = $e;
         } finally {
             $project->save(false);
             $this->cleanupKeyFile($keyFile);
         }
+
+        $this->notifySyncTransition($project);
+
+        if ($threw !== null) {
+            throw $threw;
+        }
+    }
+
+    /**
+     * Fire project.sync_succeeded / project.sync_failed as a transition, not
+     * on every sync run — avoid flooding operators with identical success
+     * notifications when a sync is already stable.
+     */
+    private function notifySyncTransition(Project $project): void
+    {
+        $prev = $project->last_sync_event;
+        $next = $project->status === Project::STATUS_SYNCED ? 'synced' : 'failed';
+        if ($prev === $next) {
+            return;
+        }
+
+        $project->last_sync_event = $next;
+        $project->save(false);
+
+        $event = $next === 'failed'
+            ? NotificationTemplate::EVENT_PROJECT_SYNC_FAILED
+            : NotificationTemplate::EVENT_PROJECT_SYNC_SUCCEEDED;
+
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+        $dispatcher->dispatch($event, [
+            'project' => [
+                'id' => (string)$project->id,
+                'name' => (string)$project->name,
+                'status' => (string)$project->status,
+                'error' => (string)($project->last_sync_error ?? ''),
+            ],
+        ]);
     }
 
     /**

@@ -7,6 +7,8 @@ namespace app\services;
 use app\models\ApprovalRule;
 use app\models\Job;
 use app\models\JobTemplate;
+use app\models\NotificationTemplate;
+use app\services\notification\JobPayloadBuilder;
 use yii\base\Component;
 
 /**
@@ -70,6 +72,16 @@ class JobLaunchService extends Component
 
         if ($needsApproval) {
             $this->initiateApproval($job, $template);
+        } else {
+            // Only fire job.launched once the job is actually queued — a
+            // pending-approval job might never run, so notifying then would
+            // be a false signal.
+            /** @var NotificationDispatcher $dispatcher */
+            $dispatcher = \Yii::$app->get('notificationDispatcher');
+            $dispatcher->dispatch(
+                NotificationTemplate::EVENT_JOB_LAUNCHED,
+                JobPayloadBuilder::build($job)
+            );
         }
 
         return $job;

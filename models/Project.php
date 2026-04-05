@@ -18,6 +18,7 @@ use yii\db\ActiveRecord;
  * @property string      $status
  * @property int|null    $last_synced_at
  * @property string|null $last_sync_error
+ * @property string|null $last_sync_event
  * @property string|null $lint_output       Last ansible-lint output (full project)
  * @property int|null    $lint_at           Unix timestamp of last project lint run
  * @property int|null    $lint_exit_code    Exit code of last project lint run (0 = clean)

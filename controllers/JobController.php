@@ -11,9 +11,12 @@ use app\models\JobLog;
 use app\models\JobSearchForm;
 use app\models\JobTask;
 use app\models\JobTemplate;
+use app\models\NotificationTemplate;
 use app\models\RunnerGroup;
 use app\models\User;
 use app\services\JobLaunchService;
+use app\services\NotificationDispatcher;
+use app\services\notification\JobPayloadBuilder;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
@@ -103,6 +106,13 @@ class JobController extends BaseController
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_JOB_CANCELED, 'job', $job->id);
+
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+        $dispatcher->dispatch(
+            NotificationTemplate::EVENT_JOB_CANCELED,
+            JobPayloadBuilder::build($job)
+        );
         $this->session()->setFlash('success', "Job #{$job->id} canceled.");
         return $this->redirect(['view', 'id' => $id]);
     }

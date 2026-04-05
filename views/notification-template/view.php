@@ -64,16 +64,5 @@ $this->title = $model->name;
                 <td><?= Html::encode(date('Y-m-d H:i', (int)$model->created_at)) ?> by <?= Html::encode($model->creator?->username ?? '—') ?></td>
             </tr>
         </table>
-
-        <?php
-        $linked = $model->jobTemplates;
-        if (!empty($linked)) : ?>
-        <h5 class="mt-4">Linked Job Templates</h5>
-        <ul>
-            <?php foreach ($linked as $jt) : ?>
-                <li><?= Html::a(Html::encode($jt->name), ['/job-template/view', 'id' => $jt->id]) ?></li>
-            <?php endforeach; ?>
-        </ul>
-        <?php endif; ?>
     </div>
 </div>

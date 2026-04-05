@@ -77,7 +77,9 @@ class m000035_000000_seed_demo_project extends Migration
         if ($exists === 0) {
             $this->insert('{{%inventory}}', [
                 'name'           => self::INVENTORY_NAME,
-                'description'    => 'Localhost inventory for testing Demo playbooks on the runner host itself.',
+                'description'    => 'Localhost inventory for testing Demo playbooks against the runner container itself. '
+                    . 'WARNING: playbooks that install packages or write files will mutate the runner and can leak into '
+                    . 'the host repository via the /var/www bind mount. Use for read-only smoke tests (ping, gather facts) only.',
                 'inventory_type' => 'static',
                 'content'        => "[local]\nlocalhost ansible_connection=local\n",
                 'source_path'    => null,

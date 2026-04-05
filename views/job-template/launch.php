@@ -23,6 +23,10 @@ $hasSurvey = !empty($surveyFields);
 <div class="row justify-content-center">
 <div class="col-lg-7">
 
+<?php if ($template->inventory !== null) : ?>
+    <?= $this->render('/inventory/_localhost-warning', ['inventory' => $template->inventory]) ?>
+<?php endif; ?>
+
 <div class="card mb-3">
     <div class="card-header">Template Summary</div>
     <div class="card-body">

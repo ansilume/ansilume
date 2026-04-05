@@ -816,24 +816,45 @@ components:
 
     NotificationTemplate:
       type: object
+      description: >
+        Global notification subscription. Fires on any listed event across the
+        platform — no per-template pivot. Supported events (15):
+        job.launched, job.succeeded, job.failed, job.canceled,
+        workflow.launched, workflow.succeeded, workflow.failed, workflow.canceled, workflow.step_failed,
+        approval.requested, approval.approved, approval.rejected,
+        schedule.failed_to_launch, runner.offline, runner.recovered,
+        project.sync_failed, project.sync_succeeded, webhook.invalid_token.
       properties:
-        id:         { type: integer }
-        name:       { type: string }
-        channel:    { type: string, enum: [email, slack, teams, webhook, telegram] }
+        id:          { type: integer }
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        channel:     { type: string, enum: [email, slack, teams, webhook, telegram, pagerduty] }
         events:
-          type: string
-          description: 'Comma-separated list (e.g. "job.failed,job.succeeded")'
-        config:     { type: string, description: JSON string with channel-specific settings }
-        created_at: { type: integer }
-        updated_at: { type: integer }
+          type: array
+          items: { type: string }
+          description: Event names this template subscribes to.
+        config:
+          type: object
+          description: >
+            Channel-specific config. email → {emails:[]}, slack/teams → {webhook_url},
+            webhook → {url, headers?}, telegram → {bot_token, chat_id},
+            pagerduty → {routing_key}.
+        subject_template: { type: string, nullable: true }
+        body_template:    { type: string, nullable: true }
+        created_by:  { type: integer }
+        created_at:  { type: integer }
+        updated_at:  { type: integer }
     NotificationTemplateInput:
       type: object
       required: [name, channel, events]
       properties:
-        name:    { type: string, maxLength: 128 }
-        channel: { type: string, enum: [email, slack, teams, webhook, telegram] }
-        events:  { type: string }
-        config:  { type: string }
+        name:             { type: string, maxLength: 128 }
+        description:      { type: string, nullable: true }
+        channel:          { type: string, enum: [email, slack, teams, webhook, telegram, pagerduty] }
+        events:           { type: string, description: 'Comma-separated event names' }
+        config:           { type: string, description: 'JSON string with channel-specific settings' }
+        subject_template: { type: string, nullable: true, maxLength: 512 }
+        body_template:    { type: string, nullable: true }
     NotificationTemplateList:
       type: object
       properties:

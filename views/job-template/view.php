@@ -34,6 +34,10 @@ $this->title = $model->name;
     </div>
 </div>
 
+<?php if ($model->inventory !== null) : ?>
+    <?= $this->render('/inventory/_localhost-warning', ['inventory' => $model->inventory]) ?>
+<?php endif; ?>
+
 <div class="row g-3">
     <div class="col-lg-6">
         <div class="card">

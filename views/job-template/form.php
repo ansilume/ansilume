@@ -8,8 +8,6 @@ declare(strict_types=1);
 /** @var app\models\Inventory[] $inventories */
 /** @var app\models\Credential[] $credentials */
 /** @var app\models\RunnerGroup[] $runnerGroups */
-/** @var app\models\NotificationTemplate[] $notificationTemplates */
-/** @var int[] $selectedNotificationIds */
 
 use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
@@ -117,24 +115,6 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
 
     <h5 class="mt-3 text-muted">Survey Fields <span class="text-muted fw-normal small">(optional — prompts the user at launch time)</span></h5>
     <?= $this->render('_survey_editor', ['model' => $model]) ?>
-
-    <h5 class="mt-3 text-muted">Notifications</h5>
-    <?php if (!empty($notificationTemplates)) : ?>
-    <div class="mb-3">
-        <label class="form-label">Notification Templates</label>
-        <?= Html::listBox(
-            'notification_template_ids',
-            $selectedNotificationIds,
-            ArrayHelper::map($notificationTemplates, 'id', static function ($nt) {
-                return $nt->name . ' (' . \app\models\NotificationTemplate::channelLabel($nt->channel) . ')';
-            }),
-            ['multiple' => true, 'class' => 'form-select', 'size' => min(count($notificationTemplates), 5)]
-        ) ?>
-        <div class="form-text">Hold Ctrl/Cmd to select multiple. <?= Html::a('Manage templates', ['/notification-template/index']) ?>.</div>
-    </div>
-    <?php else : ?>
-    <p class="text-muted">No notification templates configured. <?= Html::a('Create one', ['/notification-template/create']) ?>.</p>
-    <?php endif; ?>
 
     <div class="mt-4">
         <?= Html::submitButton($model->isNewRecord ? 'Create Template' : 'Save Changes', ['class' => 'btn btn-primary']) ?>

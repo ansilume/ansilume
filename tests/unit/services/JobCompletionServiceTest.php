@@ -201,14 +201,14 @@ class JobCompletionServiceTest extends TestCase
         $service->completeTimedOut($this->makeJob(Job::STATUS_RUNNING));
     }
 
-    public function testCompleteTimedOutDispatchesTimedOutNotification(): void
+    public function testCompleteTimedOutDispatchesFailedNotification(): void
     {
         $dispatcher = $this->getMockBuilder(NotificationDispatcher::class)
             ->onlyMethods(['dispatch'])
             ->getMock();
         $dispatcher->expects($this->once())
             ->method('dispatch')
-            ->with(\app\models\NotificationTemplate::EVENT_JOB_TIMED_OUT, $this->anything());
+            ->with(\app\models\NotificationTemplate::EVENT_JOB_FAILED, $this->anything());
         \Yii::$app->set('notificationDispatcher', $dispatcher);
 
         $service = new JobCompletionService();

@@ -287,7 +287,7 @@ class E2eController extends Controller
         $nt->description = 'E2E test email notification';
         $nt->channel = 'email';
         $nt->events = 'job.succeeded,job.failed';
-        $nt->config = (string)json_encode(['recipients' => ['e2e@example.com']]);
+        $nt->config = (string)json_encode(['emails' => ['e2e@example.com']]);
         $nt->subject_template = 'Job {{job.status}}: {{job.name}}';
         $nt->body_template = 'Job {{job.name}} finished with status {{job.status}}.';
         $nt->created_by = $userId;

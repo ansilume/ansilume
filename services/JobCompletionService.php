@@ -11,6 +11,7 @@ use app\models\JobTask;
 use app\models\NotificationTemplate;
 use app\models\Webhook;
 use app\models\WorkflowJobStep;
+use app\services\notification\JobPayloadBuilder;
 use yii\base\Component;
 
 /**
@@ -89,10 +90,11 @@ class JobCompletionService extends Component
 
     private function dispatchNotifications(Job $job): void
     {
+        // Timed-out jobs surface as job.failed — operators do not want a
+        // separate subscription per failure flavor.
         $event = match ($job->status) {
             Job::STATUS_SUCCEEDED => NotificationTemplate::EVENT_JOB_SUCCEEDED,
-            Job::STATUS_FAILED => NotificationTemplate::EVENT_JOB_FAILED,
-            Job::STATUS_TIMED_OUT => NotificationTemplate::EVENT_JOB_TIMED_OUT,
+            Job::STATUS_FAILED, Job::STATUS_TIMED_OUT => NotificationTemplate::EVENT_JOB_FAILED,
             default => null,
         };
         if ($event === null) {
@@ -100,7 +102,7 @@ class JobCompletionService extends Component
         }
         /** @var NotificationDispatcher $dispatcher */
         $dispatcher = \Yii::$app->get('notificationDispatcher');
-        $dispatcher->dispatch($event, $job);
+        $dispatcher->dispatch($event, JobPayloadBuilder::build($job));
     }
 
     public function appendLog(Job $job, string $stream, string $content, int $sequence): void

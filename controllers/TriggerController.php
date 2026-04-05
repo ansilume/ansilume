@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\models\JobTemplate;
+use app\models\NotificationTemplate;
 use app\services\JobLaunchService;
+use app\services\NotificationDispatcher;
 use yii\filters\VerbFilter;
 use yii\web\Controller;
 use yii\web\NotFoundHttpException;
@@ -50,6 +52,16 @@ class TriggerController extends Controller
     {
         $template = JobTemplate::findByTriggerToken($token);
         if ($template === null) {
+            // Fire a notification so operators can spot leaked/stale tokens.
+            /** @var NotificationDispatcher $dispatcher */
+            $dispatcher = \Yii::$app->get('notificationDispatcher');
+            $dispatcher->dispatch(NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN, [
+                'trigger' => [
+                    'token_prefix' => substr($token, 0, 6),
+                    'ip' => (string)(\Yii::$app->request->userIP ?? ''),
+                    'user_agent' => substr((string)(\Yii::$app->request->userAgent ?? ''), 0, 200),
+                ],
+            ]);
             throw new NotFoundHttpException('Trigger not found.');
         }
 

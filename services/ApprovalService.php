@@ -9,6 +9,7 @@ use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
 use app\models\Job;
+use app\models\NotificationTemplate;
 use yii\base\Component;
 
 /**
@@ -44,6 +45,13 @@ class ApprovalService extends Component
             $request->id,
             null,
             ['job_id' => $job->id, 'rule_id' => $rule->id, 'rule_name' => $rule->name]
+        );
+
+        $this->dispatchApprovalNotification(
+            NotificationTemplate::EVENT_APPROVAL_REQUESTED,
+            $request,
+            $job,
+            $rule
         );
 
         return $request;
@@ -195,6 +203,12 @@ class ApprovalService extends Component
             $job = $request->job;
             if ($job !== null) {
                 $this->approveJob($job);
+                $this->dispatchApprovalNotification(
+                    NotificationTemplate::EVENT_APPROVAL_APPROVED,
+                    $request,
+                    $job,
+                    $rule
+                );
             }
             return;
         }
@@ -210,8 +224,37 @@ class ApprovalService extends Component
             $job = $request->job;
             if ($job !== null) {
                 $this->rejectJob($job);
+                $this->dispatchApprovalNotification(
+                    NotificationTemplate::EVENT_APPROVAL_REJECTED,
+                    $request,
+                    $job,
+                    $rule
+                );
             }
         }
+    }
+
+    private function dispatchApprovalNotification(
+        string $event,
+        ApprovalRequest $request,
+        Job $job,
+        ApprovalRule $rule
+    ): void {
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+        $dispatcher->dispatch($event, [
+            'approval' => [
+                'id' => (string)$request->id,
+                'status' => (string)$request->status,
+                'rule_id' => (string)$rule->id,
+                'rule_name' => (string)$rule->name,
+            ],
+            'job' => [
+                'id' => (string)$job->id,
+                'status' => (string)$job->status,
+                'template_id' => (string)($job->job_template_id ?? ''),
+            ],
+        ]);
     }
 
     private function approveJob(Job $job): void

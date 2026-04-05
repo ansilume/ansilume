@@ -5,17 +5,22 @@ declare(strict_types=1);
 namespace app\services\notification;
 
 /**
- * Simple mustache-like template renderer.
+ * Mustache-like template renderer used by notification channels.
  *
- * Replaces {{ variable.path }} placeholders with provided values.
- * Missing variables are replaced with an empty string.
+ * Replaces {{ variable.path }} placeholders with provided values. Missing
+ * variables are replaced with an empty string.
+ *
+ * Variables come from the dispatcher as a flat string map (e.g. 'job.id' =>
+ * '42'). The helper buildVariables() flattens an arbitrary payload tree into
+ * that shape so any producer can hand us structured context without thinking
+ * about keys.
  */
 class TemplateRenderer
 {
     /**
      * Render a template string with the given variables.
      *
-     * @param array<string, string> $variables Flat key-value map (e.g. 'job.id' => '42')
+     * @param array<string, string> $variables Flat dot-keyed map (e.g. 'job.id' => '42')
      */
     public function render(string $template, array $variables): string
     {
@@ -29,43 +34,50 @@ class TemplateRenderer
     }
 
     /**
-     * Build the standard variable map for a job notification.
+     * Flatten a nested payload into the dot-key map the template engine expects.
+     * Non-scalar leaves are JSON-encoded so templates can still reference them.
      *
+     * @param array<string, mixed> $payload
      * @return array<string, string>
      */
-    public function buildJobVariables(\app\models\Job $job): array
+    public function buildVariables(array $payload): array
     {
-        $template = $job->jobTemplate;
-        $project = $template !== null ? $template->project : null;
-        $launcher = $job->launcher;
-
-        $duration = '';
-        if ($job->started_at && $job->finished_at) {
-            $duration = (string)($job->finished_at - $job->started_at) . 's';
-        }
-
-        $baseUrl = '';
-        if (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
-            $baseUrl = \Yii::$app->request->hostInfo;
-        } elseif (!empty(\Yii::$app->params['appBaseUrl'])) {
-            $baseUrl = rtrim(\Yii::$app->params['appBaseUrl'], '/');
-        }
-        try {
-            $jobUrl = $baseUrl . \Yii::$app->urlManager->createUrl(['/job/view', 'id' => $job->id]);
-        } catch (\yii\base\InvalidConfigException $e) {
-            $jobUrl = $baseUrl . '/job/view?id=' . $job->id;
-        }
-
-        return [
-            'job.id' => (string)$job->id,
-            'job.status' => (string)$job->status,
-            'job.exit_code' => (string)($job->exit_code ?? ''),
-            'job.duration' => $duration,
-            'job.url' => $jobUrl,
-            'template.name' => (string)($template?->name ?? ''),
-            'project.name' => (string)($project?->name ?? ''),
-            'launched_by' => (string)($launcher?->username ?? ''),
+        $out = [
             'timestamp' => date('Y-m-d H:i:s T'),
+            'app.url' => $this->baseUrl(),
         ];
+        $this->flatten($payload, '', $out);
+        return $out;
+    }
+
+    /**
+     * @param array<string, mixed> $value
+     * @param array<string, string> $out
+     */
+    private function flatten(array $value, string $prefix, array &$out): void
+    {
+        foreach ($value as $key => $item) {
+            $path = $prefix === '' ? (string)$key : $prefix . '.' . $key;
+            if (is_array($item)) {
+                $this->flatten($item, $path, $out);
+                continue;
+            }
+            if (is_scalar($item) || $item === null) {
+                $out[$path] = (string)($item ?? '');
+                continue;
+            }
+            $out[$path] = (string)json_encode($item);
+        }
+    }
+
+    private function baseUrl(): string
+    {
+        if (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
+            return (string)\Yii::$app->request->hostInfo;
+        }
+        if (!empty(\Yii::$app->params['appBaseUrl'])) {
+            return rtrim((string)\Yii::$app->params['appBaseUrl'], '/');
+        }
+        return '';
     }
 }

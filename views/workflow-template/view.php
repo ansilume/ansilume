@@ -5,12 +5,36 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\WorkflowTemplate $model */
 
+use app\models\ApprovalRule;
+use app\models\JobTemplate;
 use app\models\WorkflowStep;
+use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->name;
 $steps = $model->steps;
+
+/** @var array<int, string> $jobTemplateOptions */
+$jobTemplateOptions = ArrayHelper::map(
+    JobTemplate::find()->orderBy('name')->all(),
+    'id',
+    'name'
+);
+
+/** @var array<int, string> $approvalRuleOptions */
+$approvalRuleOptions = ArrayHelper::map(
+    ApprovalRule::find()->orderBy('name')->all(),
+    'id',
+    'name'
+);
+
+// Map of step_id => "#order name" so operators see a human-readable label
+// when picking on_success / on_failure / on_always targets.
+$stepOptions = [];
+foreach ($steps as $s) {
+    $stepOptions[$s->id] = '#' . $s->step_order . ' ' . $s->name;
+}
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -82,8 +106,8 @@ $steps = $model->steps;
                                 —
                             <?php endif; ?>
                         </td>
-                        <td><?= $step->on_success_step_id ? Html::encode('Step #' . $step->on_success_step_id) : '—' ?></td>
-                        <td><?= $step->on_failure_step_id ? Html::encode('Step #' . $step->on_failure_step_id) : '—' ?></td>
+                        <td><?= $step->on_success_step_id ? Html::encode($stepOptions[$step->on_success_step_id] ?? '#' . $step->on_success_step_id) : '—' ?></td>
+                        <td><?= $step->on_failure_step_id ? Html::encode($stepOptions[$step->on_failure_step_id] ?? '#' . $step->on_failure_step_id) : '—' ?></td>
                         <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
                         <td>
                             <?= Html::beginForm(['remove-step', 'id' => $model->id], 'post') ?>
@@ -105,23 +129,18 @@ $steps = $model->steps;
                 'action' => ['add-step', 'id' => $model->id],
                 'id' => 'add-step-form',
             ]); ?>
-            <div class="row g-2 align-items-end">
-                <div class="col-md-3">
+            <div class="row g-2">
+                <div class="col-md-4">
                     <?= $form->field($step, 'name')->textInput([
                         'maxlength' => 128,
                         'placeholder' => 'Step name',
                     ]) ?>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-3">
                     <?= $form->field($step, 'step_type')->dropDownList(
-                        WorkflowStep::typeLabels()
+                        WorkflowStep::typeLabels(),
+                        ['id' => 'ws-step-type']
                     ) ?>
-                </div>
-                <div class="col-md-2">
-                    <?= $form->field($step, 'job_template_id')->textInput([
-                        'type' => 'number',
-                        'placeholder' => 'Template ID',
-                    ]) ?>
                 </div>
                 <div class="col-md-2">
                     <?= $form->field($step, 'step_order')->textInput([
@@ -129,13 +148,62 @@ $steps = $model->steps;
                         'value' => count($steps),
                     ]) ?>
                 </div>
-                <div class="col-md-2">
-                    <?= Html::submitButton('Add', [
-                        'class' => 'btn btn-primary mb-3',
-                    ]) ?>
+            </div>
+            <div class="row g-2" id="ws-target-job">
+                <div class="col-md-6">
+                    <?= $form->field($step, 'job_template_id')->dropDownList(
+                        $jobTemplateOptions,
+                        ['prompt' => '— select a job template —']
+                    )->label('Job Template') ?>
                 </div>
             </div>
+            <div class="row g-2" id="ws-target-approval" style="display:none">
+                <div class="col-md-6">
+                    <?= $form->field($step, 'approval_rule_id')->dropDownList(
+                        $approvalRuleOptions,
+                        ['prompt' => '— select an approval rule —']
+                    )->label('Approval Rule') ?>
+                </div>
+            </div>
+            <div class="row g-2">
+                <div class="col-md-4">
+                    <?= $form->field($step, 'on_success_step_id')->dropDownList(
+                        $stepOptions,
+                        ['prompt' => '— end workflow —']
+                    )->label('On Success → go to') ?>
+                </div>
+                <div class="col-md-4">
+                    <?= $form->field($step, 'on_failure_step_id')->dropDownList(
+                        $stepOptions,
+                        ['prompt' => '— end workflow —']
+                    )->label('On Failure → go to') ?>
+                </div>
+                <div class="col-md-4">
+                    <?= $form->field($step, 'on_always_step_id')->dropDownList(
+                        $stepOptions,
+                        ['prompt' => '— use success/failure above —']
+                    )->label('Always → go to (overrides success/failure)') ?>
+                </div>
+            </div>
+            <div class="mb-3">
+                <?= Html::submitButton('Add Step', ['class' => 'btn btn-primary']) ?>
+            </div>
             <?php ActiveForm::end(); ?>
+            <script>
+            (function () {
+                function syncTargets() {
+                    var type = document.getElementById('ws-step-type').value;
+                    document.getElementById('ws-target-job').style.display = type === 'job' ? '' : 'none';
+                    document.getElementById('ws-target-approval').style.display = type === 'approval' ? '' : 'none';
+                }
+                document.addEventListener('DOMContentLoaded', function () {
+                    var sel = document.getElementById('ws-step-type');
+                    if (!sel) { return; }
+                    sel.addEventListener('change', syncTargets);
+                    syncTargets();
+                });
+            })();
+            </script>
         <?php endif; ?>
     </div>
 </div>

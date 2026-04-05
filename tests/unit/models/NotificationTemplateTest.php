@@ -44,14 +44,19 @@ class NotificationTemplateTest extends TestCase
         $this->assertSame('slack', NotificationTemplate::CHANNEL_SLACK);
         $this->assertSame('teams', NotificationTemplate::CHANNEL_TEAMS);
         $this->assertSame('webhook', NotificationTemplate::CHANNEL_WEBHOOK);
+        $this->assertSame('telegram', NotificationTemplate::CHANNEL_TELEGRAM);
+        $this->assertSame('pagerduty', NotificationTemplate::CHANNEL_PAGERDUTY);
     }
 
     public function testEventConstants(): void
     {
-        $this->assertSame('job.started', NotificationTemplate::EVENT_JOB_STARTED);
+        $this->assertSame('job.launched', NotificationTemplate::EVENT_JOB_LAUNCHED);
         $this->assertSame('job.succeeded', NotificationTemplate::EVENT_JOB_SUCCEEDED);
         $this->assertSame('job.failed', NotificationTemplate::EVENT_JOB_FAILED);
-        $this->assertSame('job.timed_out', NotificationTemplate::EVENT_JOB_TIMED_OUT);
+        $this->assertSame('job.canceled', NotificationTemplate::EVENT_JOB_CANCELED);
+        $this->assertSame('workflow.failed', NotificationTemplate::EVENT_WORKFLOW_FAILED);
+        $this->assertSame('approval.requested', NotificationTemplate::EVENT_APPROVAL_REQUESTED);
+        $this->assertSame('runner.offline', NotificationTemplate::EVENT_RUNNER_OFFLINE);
     }
 
     public function testChannelLabels(): void
@@ -61,6 +66,8 @@ class NotificationTemplateTest extends TestCase
         $this->assertSame('Slack', $labels['slack']);
         $this->assertSame('Microsoft Teams', $labels['teams']);
         $this->assertSame('Webhook', $labels['webhook']);
+        $this->assertSame('Telegram', $labels['telegram']);
+        $this->assertSame('PagerDuty', $labels['pagerduty']);
     }
 
     public function testChannelLabelUnknown(): void
@@ -90,7 +97,7 @@ class NotificationTemplateTest extends TestCase
     public function testListensToNonMatchingEvent(): void
     {
         $m = $this->makeModel();
-        $this->assertFalse($m->listensTo('job.started'));
+        $this->assertFalse($m->listensTo('job.canceled'));
     }
 
     public function testGetParsedConfig(): void
@@ -115,7 +122,32 @@ class NotificationTemplateTest extends TestCase
     public function testEventLabels(): void
     {
         $labels = NotificationTemplate::eventLabels();
-        $this->assertCount(4, $labels);
-        $this->assertSame('Job Started', $labels['job.started']);
+        // 18 events across jobs (4), workflows (5), approvals (3), schedules (1),
+        // runners (2), projects (2), webhooks (1).
+        $this->assertCount(18, $labels);
+        $this->assertArrayHasKey('job.failed', $labels);
+        $this->assertArrayHasKey('workflow.succeeded', $labels);
+        $this->assertArrayHasKey('approval.requested', $labels);
+        $this->assertArrayHasKey('runner.offline', $labels);
+        $this->assertArrayHasKey('project.sync_failed', $labels);
+        $this->assertArrayHasKey('webhook.invalid_token', $labels);
+    }
+
+    public function testDefaultFailureEventsSubset(): void
+    {
+        $defaults = NotificationTemplate::defaultFailureEvents();
+        $this->assertContains(NotificationTemplate::EVENT_JOB_FAILED, $defaults);
+        $this->assertContains(NotificationTemplate::EVENT_WORKFLOW_FAILED, $defaults);
+        $this->assertContains(NotificationTemplate::EVENT_RUNNER_OFFLINE, $defaults);
+        $this->assertNotContains(NotificationTemplate::EVENT_JOB_SUCCEEDED, $defaults);
+    }
+
+    public function testEventSeverityMapping(): void
+    {
+        $this->assertSame('critical', NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_JOB_FAILED));
+        $this->assertSame('critical', NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_RUNNER_OFFLINE));
+        $this->assertSame('error', NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN));
+        $this->assertSame('warning', NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_APPROVAL_REQUESTED));
+        $this->assertSame('info', NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_JOB_SUCCEEDED));
     }
 }
