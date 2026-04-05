@@ -69,7 +69,7 @@ jobs:
         run: docker compose exec -T app php yii e2e/seed
 
       - name: Run Playwright E2E tests
-        run: docker compose --profile e2e run --rm playwright
+        run: docker compose --profile e2e run --rm --no-deps playwright
 
       - name: Teardown E2E data
         if: always()
