@@ -159,6 +159,15 @@ $this->title = 'Analytics';
         <li class="nav-item">
             <a class="nav-link" data-bs-toggle="tab" href="#tab-hosts">Host Health</a>
         </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-workflows">Workflows</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-approvals">Approvals</a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link" data-bs-toggle="tab" href="#tab-runners">Runners</a>
+        </li>
     </ul>
 
     <?php
@@ -354,6 +363,192 @@ $this->title = 'Analytics';
                         'Export CSV',
                         Url::to(
                             ['export', 'report' => 'host-health', 'format' => 'csv']
+                            + $query->toArray()
+                        ),
+                        ['class' => 'btn btn-outline-secondary btn-sm']
+                    ) ?>
+                <?php endif; ?>
+            <?php endif; ?>
+        </div>
+
+        <!-- Workflows -->
+        <div class="tab-pane" id="tab-workflows">
+            <?php $ws = $data['workflowSummary']; ?>
+            <div class="row mb-3">
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Total</div>
+                        <div class="fs-4 fw-bold"><?= Html::encode((string)$ws['total']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Succeeded</div>
+                        <div class="fs-4 fw-bold text-success"><?= Html::encode((string)$ws['succeeded']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Failed</div>
+                        <div class="fs-4 fw-bold text-danger"><?= Html::encode((string)$ws['failed']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Canceled</div>
+                        <div class="fs-4 fw-bold text-warning"><?= Html::encode((string)$ws['canceled']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Success Rate</div>
+                        <div class="fs-4 fw-bold"><?= Html::encode((string)$ws['success_rate']) ?>%</div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Avg Duration</div>
+                        <div class="fs-4 fw-bold"><?= Html::encode((string)$ws['avg_duration_seconds']) ?>s</div>
+                    </div></div>
+                </div>
+            </div>
+            <?php if (empty($data['workflowActivity'])) : ?>
+                <div class="text-muted">No workflow runs in this period.</div>
+            <?php else : ?>
+                <table class="table table-sm table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Workflow Template</th>
+                            <th>Total</th>
+                            <th>Succeeded</th>
+                            <th>Failed</th>
+                            <th>Success Rate</th>
+                            <th>Avg Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($data['workflowActivity'] as $row) : ?>
+                            <tr>
+                                <td><?= Html::encode((string)$row['template_name']) ?></td>
+                                <td><?= Html::encode((string)$row['total']) ?></td>
+                                <td class="text-success"><?= Html::encode((string)$row['succeeded']) ?></td>
+                                <td class="text-danger"><?= Html::encode((string)$row['failed']) ?></td>
+                                <td><?= Html::encode((string)$row['success_rate']) ?>%</td>
+                                <td><?= Html::encode((string)$row['avg_duration_seconds']) ?>s</td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php if (Yii::$app->user->can('analytics.export')) : ?>
+                    <?= Html::a(
+                        'Export CSV',
+                        Url::to(
+                            ['export', 'report' => 'workflow-activity', 'format' => 'csv']
+                            + $query->toArray()
+                        ),
+                        ['class' => 'btn btn-outline-secondary btn-sm']
+                    ) ?>
+                <?php endif; ?>
+            <?php endif; ?>
+        </div>
+
+        <!-- Approvals -->
+        <div class="tab-pane" id="tab-approvals">
+            <?php $as = $data['approvalSummary']; ?>
+            <div class="row mb-3">
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Total Requests</div>
+                        <div class="fs-4 fw-bold"><?= Html::encode((string)$as['total']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Approved</div>
+                        <div class="fs-4 fw-bold text-success"><?= Html::encode((string)$as['approved']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Rejected</div>
+                        <div class="fs-4 fw-bold text-danger"><?= Html::encode((string)$as['rejected']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Timed Out</div>
+                        <div class="fs-4 fw-bold text-warning"><?= Html::encode((string)$as['timed_out']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Approval Rate</div>
+                        <div class="fs-4 fw-bold"><?= Html::encode((string)$as['approval_rate']) ?>%</div>
+                    </div></div>
+                </div>
+                <div class="col-md-2">
+                    <div class="card text-center"><div class="card-body py-2">
+                        <div class="text-muted small">Avg Decision Time</div>
+                        <div class="fs-4 fw-bold"><?= Html::encode((string)$as['avg_decision_seconds']) ?>s</div>
+                    </div></div>
+                </div>
+            </div>
+            <?php if (Yii::$app->user->can('analytics.export')) : ?>
+                <?= Html::a(
+                    'Export CSV',
+                    Url::to(
+                        ['export', 'report' => 'approval-summary', 'format' => 'csv']
+                        + $query->toArray()
+                    ),
+                    ['class' => 'btn btn-outline-secondary btn-sm']
+                ) ?>
+            <?php endif; ?>
+        </div>
+
+        <!-- Runners -->
+        <div class="tab-pane" id="tab-runners">
+            <?php if (empty($data['runnerActivity'])) : ?>
+                <div class="text-muted">No runners registered.</div>
+            <?php else : ?>
+                <table class="table table-sm table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Runner</th>
+                            <th>Group</th>
+                            <th>Total Jobs</th>
+                            <th>Succeeded</th>
+                            <th>Failed</th>
+                            <th>Success Rate</th>
+                            <th>Avg Duration</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($data['runnerActivity'] as $row) : ?>
+                            <tr>
+                                <td><?= Html::encode((string)$row['runner_name']) ?></td>
+                                <td><?= Html::encode((string)$row['runner_group']) ?></td>
+                                <td><?= Html::encode((string)$row['total']) ?></td>
+                                <td class="text-success"><?= Html::encode((string)$row['succeeded']) ?></td>
+                                <td class="text-danger"><?= Html::encode((string)$row['failed']) ?></td>
+                                <td><?= Html::encode((string)$row['success_rate']) ?>%</td>
+                                <td><?= Html::encode((string)$row['avg_duration_seconds']) ?>s</td>
+                                <td>
+                                    <?php if ($row['last_seen_at'] !== null) : ?>
+                                        <?= Html::encode(date('Y-m-d H:i', (int)$row['last_seen_at'])) ?>
+                                    <?php else : ?>
+                                        <span class="text-muted">Never</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                <?php if (Yii::$app->user->can('analytics.export')) : ?>
+                    <?= Html::a(
+                        'Export CSV',
+                        Url::to(
+                            ['export', 'report' => 'runner-activity', 'format' => 'csv']
                             + $query->toArray()
                         ),
                         ['class' => 'btn btn-outline-secondary btn-sm']

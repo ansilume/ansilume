@@ -272,6 +272,222 @@ class AnalyticsService extends Component
     }
 
     /**
+     * Workflow execution summary: totals, success rate, avg duration.
+     *
+     * Workflows are not subject to project/template filters — only the
+     * date range applies, since workflows span multiple templates.
+     *
+     * @return array{total: int, succeeded: int, failed: int, canceled: int, running: int, success_rate: float, avg_duration_seconds: float}
+     */
+    public function workflowSummary(AnalyticsQuery $query): array
+    {
+        $db = $this->getDb();
+        $params = [];
+        $conditions = ['1=1'];
+        if ($query->date_from !== null) {
+            $conditions[] = 'created_at >= :date_from';
+            $params[':date_from'] = $query->dateFromTimestamp;
+        }
+        if ($query->date_to !== null) {
+            $conditions[] = 'created_at <= :date_to';
+            $params[':date_to'] = $query->dateToTimestamp;
+        }
+        if ($query->user_id !== null) {
+            $conditions[] = 'launched_by = :user_id';
+            $params[':user_id'] = $query->user_id;
+        }
+
+        $row = $db->createCommand(
+            'SELECT COUNT(*) AS total,'
+            . ' SUM(CASE WHEN status = :succeeded THEN 1 ELSE 0 END) AS succeeded,'
+            . ' SUM(CASE WHEN status = :failed THEN 1 ELSE 0 END) AS failed,'
+            . ' SUM(CASE WHEN status = :canceled THEN 1 ELSE 0 END) AS canceled,'
+            . ' SUM(CASE WHEN status = :running THEN 1 ELSE 0 END) AS running,'
+            . ' AVG(CASE WHEN finished_at IS NOT NULL AND started_at IS NOT NULL'
+            . '   THEN finished_at - started_at ELSE NULL END) AS avg_duration'
+            . ' FROM {{%workflow_job}}'
+            . ' WHERE ' . implode(' AND ', $conditions),
+            array_merge($params, [
+                ':succeeded' => 'succeeded',
+                ':failed' => 'failed',
+                ':canceled' => 'canceled',
+                ':running' => 'running',
+            ])
+        )->queryOne();
+
+        $total = (int)($row['total'] ?? 0);
+        $finished = $total - (int)($row['running'] ?? 0);
+        $succeeded = (int)($row['succeeded'] ?? 0);
+
+        return [
+            'total' => $total,
+            'succeeded' => $succeeded,
+            'failed' => (int)($row['failed'] ?? 0),
+            'canceled' => (int)($row['canceled'] ?? 0),
+            'running' => (int)($row['running'] ?? 0),
+            'success_rate' => $finished > 0 ? round($succeeded / $finished * 100, 2) : 0.0,
+            'avg_duration_seconds' => round((float)($row['avg_duration'] ?? 0), 1),
+        ];
+    }
+
+    /**
+     * Per-workflow-template reliability.
+     *
+     * @return array<int, array{template_id: int, template_name: string, total: int, succeeded: int, failed: int, success_rate: float, avg_duration_seconds: float}>
+     */
+    public function workflowActivity(AnalyticsQuery $query): array
+    {
+        $db = $this->getDb();
+        $params = [];
+        $conditions = ['1=1'];
+        if ($query->date_from !== null) {
+            $conditions[] = 'wj.created_at >= :date_from';
+            $params[':date_from'] = $query->dateFromTimestamp;
+        }
+        if ($query->date_to !== null) {
+            $conditions[] = 'wj.created_at <= :date_to';
+            $params[':date_to'] = $query->dateToTimestamp;
+        }
+
+        $rows = $db->createCommand(
+            'SELECT wj.workflow_template_id AS template_id,'
+            . ' wt.name AS template_name,'
+            . ' COUNT(*) AS total,'
+            . ' SUM(CASE WHEN wj.status = :succeeded THEN 1 ELSE 0 END) AS succeeded,'
+            . ' SUM(CASE WHEN wj.status = :failed THEN 1 ELSE 0 END) AS failed,'
+            . ' AVG(CASE WHEN wj.finished_at IS NOT NULL AND wj.started_at IS NOT NULL'
+            . '   THEN wj.finished_at - wj.started_at ELSE NULL END) AS avg_duration'
+            . ' FROM {{%workflow_job}} wj'
+            . ' INNER JOIN {{%workflow_template}} wt ON wt.id = wj.workflow_template_id'
+            . ' WHERE ' . implode(' AND ', $conditions)
+            . ' GROUP BY wj.workflow_template_id, wt.name'
+            . ' ORDER BY total DESC',
+            array_merge($params, [
+                ':succeeded' => 'succeeded',
+                ':failed' => 'failed',
+            ])
+        )->queryAll();
+
+        return array_map(function (array $r): array {
+            $total = (int)$r['total'];
+            $succeeded = (int)$r['succeeded'];
+            $failed = (int)$r['failed'];
+            $finished = $succeeded + $failed;
+            return [
+                'template_id' => (int)$r['template_id'],
+                'template_name' => (string)$r['template_name'],
+                'total' => $total,
+                'succeeded' => $succeeded,
+                'failed' => $failed,
+                'success_rate' => $finished > 0 ? round($succeeded / $finished * 100, 2) : 0.0,
+                'avg_duration_seconds' => round((float)($r['avg_duration'] ?? 0), 1),
+            ];
+        }, $rows);
+    }
+
+    /**
+     * Approval request stats: counts by outcome and median time-to-decision.
+     *
+     * @return array{total: int, approved: int, rejected: int, timed_out: int, pending: int, approval_rate: float, avg_decision_seconds: float}
+     */
+    public function approvalSummary(AnalyticsQuery $query): array
+    {
+        $db = $this->getDb();
+        $params = [];
+        $conditions = ['1=1'];
+        if ($query->date_from !== null) {
+            $conditions[] = 'requested_at >= :date_from';
+            $params[':date_from'] = $query->dateFromTimestamp;
+        }
+        if ($query->date_to !== null) {
+            $conditions[] = 'requested_at <= :date_to';
+            $params[':date_to'] = $query->dateToTimestamp;
+        }
+
+        $row = $db->createCommand(
+            'SELECT COUNT(*) AS total,'
+            . ' SUM(CASE WHEN status = :approved THEN 1 ELSE 0 END) AS approved,'
+            . ' SUM(CASE WHEN status = :rejected THEN 1 ELSE 0 END) AS rejected,'
+            . ' SUM(CASE WHEN status = :timed_out THEN 1 ELSE 0 END) AS timed_out,'
+            . ' SUM(CASE WHEN status = :pending THEN 1 ELSE 0 END) AS pending,'
+            . ' AVG(CASE WHEN resolved_at IS NOT NULL'
+            . '   THEN resolved_at - requested_at ELSE NULL END) AS avg_decision'
+            . ' FROM {{%approval_request}}'
+            . ' WHERE ' . implode(' AND ', $conditions),
+            array_merge($params, [
+                ':approved' => 'approved',
+                ':rejected' => 'rejected',
+                ':timed_out' => 'timed_out',
+                ':pending' => 'pending',
+            ])
+        )->queryOne();
+
+        $approved = (int)($row['approved'] ?? 0);
+        $rejected = (int)($row['rejected'] ?? 0);
+        $decided = $approved + $rejected;
+
+        return [
+            'total' => (int)($row['total'] ?? 0),
+            'approved' => $approved,
+            'rejected' => $rejected,
+            'timed_out' => (int)($row['timed_out'] ?? 0),
+            'pending' => (int)($row['pending'] ?? 0),
+            'approval_rate' => $decided > 0 ? round($approved / $decided * 100, 2) : 0.0,
+            'avg_decision_seconds' => round((float)($row['avg_decision'] ?? 0), 1),
+        ];
+    }
+
+    /**
+     * Per-runner activity: jobs executed, success rate, utilization.
+     *
+     * @return array<int, array{runner_id: int, runner_name: string, runner_group: string, total: int, succeeded: int, failed: int, success_rate: float, avg_duration_seconds: float, last_seen_at: int|null}>
+     */
+    public function runnerActivity(AnalyticsQuery $query): array
+    {
+        $db = $this->getDb();
+        $where = $this->buildWhere($query, 'j');
+
+        $rows = $db->createCommand(
+            'SELECT r.id AS runner_id,'
+            . ' r.name AS runner_name,'
+            . ' rg.name AS runner_group,'
+            . ' r.last_seen_at AS last_seen_at,'
+            . ' COUNT(j.id) AS total,'
+            . ' SUM(CASE WHEN j.status = :succeeded THEN 1 ELSE 0 END) AS succeeded,'
+            . ' SUM(CASE WHEN j.status IN (:failed, :error, :timed_out) THEN 1 ELSE 0 END) AS failed,'
+            . ' AVG(CASE WHEN j.finished_at IS NOT NULL AND j.started_at IS NOT NULL'
+            . '   THEN j.finished_at - j.started_at ELSE NULL END) AS avg_duration'
+            . ' FROM {{%runner}} r'
+            . ' LEFT JOIN {{%runner_group}} rg ON rg.id = r.runner_group_id'
+            . ' LEFT JOIN {{%job}} j ON j.runner_id = r.id AND (' . $where['sql'] . ')'
+            . ' GROUP BY r.id, r.name, rg.name, r.last_seen_at'
+            . ' ORDER BY total DESC, r.name ASC',
+            array_merge($where['params'], [
+                ':succeeded' => 'succeeded',
+                ':failed' => 'failed',
+                ':error' => 'error',
+                ':timed_out' => 'timed_out',
+            ])
+        )->queryAll();
+
+        return array_map(function (array $r): array {
+            $total = (int)$r['total'];
+            $succeeded = (int)$r['succeeded'];
+            return [
+                'runner_id' => (int)$r['runner_id'],
+                'runner_name' => (string)$r['runner_name'],
+                'runner_group' => (string)($r['runner_group'] ?? ''),
+                'total' => $total,
+                'succeeded' => $succeeded,
+                'failed' => (int)$r['failed'],
+                'success_rate' => $total > 0 ? round($succeeded / $total * 100, 2) : 0.0,
+                'avg_duration_seconds' => round((float)($r['avg_duration'] ?? 0), 1),
+                'last_seen_at' => $r['last_seen_at'] !== null ? (int)$r['last_seen_at'] : null,
+            ];
+        }, $rows);
+    }
+
+    /**
      * Build WHERE clause and params from an AnalyticsQuery.
      *
      * @return array{sql: string, params: array<string, mixed>}

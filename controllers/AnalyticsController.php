@@ -50,6 +50,10 @@ class AnalyticsController extends BaseController
                 'userActivity' => $service->userActivity($query),
                 'hostHealth' => $service->hostHealth($query),
                 'jobTrend' => $service->jobTrend($query),
+                'workflowSummary' => $service->workflowSummary($query),
+                'workflowActivity' => $service->workflowActivity($query),
+                'approvalSummary' => $service->approvalSummary($query),
+                'runnerActivity' => $service->runnerActivity($query),
             ];
         }
 
@@ -103,6 +107,10 @@ class AnalyticsController extends BaseController
             'user-activity' => $service->userActivity($query),
             'host-health' => $service->hostHealth($query),
             'job-trend' => $service->jobTrend($query),
+            'workflow-activity' => $service->workflowActivity($query),
+            'workflow-summary' => [$service->workflowSummary($query)],
+            'approval-summary' => [$service->approvalSummary($query)],
+            'runner-activity' => $service->runnerActivity($query),
             default => [$service->summary($query)],
         };
     }

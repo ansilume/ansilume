@@ -15,4 +15,13 @@ test.describe('API Tokens', () => {
     // Success flash + freshly generated token value is shown once, in a <code> block.
     await expect(page.locator('.alert-success code')).toBeVisible({ timeout: 5_000 });
   });
+
+  test('shows dev-mode API explorer links', async ({ page }) => {
+    await page.goto('/profile/tokens');
+    // E2E env runs with YII_DEBUG=1, so the dev banner is visible.
+    const banner = page.locator('#dev-api-explorer');
+    await expect(banner).toBeVisible();
+    await expect(banner.getByRole('link', { name: /OpenAPI spec/i })).toHaveAttribute('href', '/openapi.yaml');
+    await expect(banner.getByRole('link', { name: /Swagger UI/i })).toHaveAttribute('href', /:8088$/);
+  });
 });

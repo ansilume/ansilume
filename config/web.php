@@ -272,6 +272,10 @@ $config = [
                 ['pattern' => 'api/v1/analytics/user-activity', 'route' => 'api/v1/analytics/user-activity', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/analytics/host-health', 'route' => 'api/v1/analytics/host-health', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/analytics/job-trend', 'route' => 'api/v1/analytics/job-trend', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/workflow-summary', 'route' => 'api/v1/analytics/workflow-summary', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/workflow-activity', 'route' => 'api/v1/analytics/workflow-activity', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/approval-summary', 'route' => 'api/v1/analytics/approval-summary', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/analytics/runner-activity', 'route' => 'api/v1/analytics/runner-activity', 'verb' => 'GET'],
                 // Notification templates
                 'notification-template/<action>' => 'notification-template/<action>',
                 'notification-template/<action>/<id:\d+>' => 'notification-template/<action>',

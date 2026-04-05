@@ -50,7 +50,21 @@ tags:
   - name: Approvals
   - name: Workflow Templates
   - name: Workflow Jobs
+  - name: Analytics
   - name: Triggers
+
+# Shared query parameter list used by every analytics endpoint.
+# Defined once via a YAML anchor and referenced with `*` so we don't
+# repeat eight parameters ten times.
+x-analytics-filters: &analyticsFilters
+  - { in: query, name: date_from, required: false, schema: { type: string, format: date }, description: Inclusive start date (YYYY-MM-DD) }
+  - { in: query, name: date_to, required: false, schema: { type: string, format: date }, description: Inclusive end date (YYYY-MM-DD) }
+  - { in: query, name: project_id, required: false, schema: { type: integer, minimum: 1 } }
+  - { in: query, name: template_id, required: false, schema: { type: integer, minimum: 1 } }
+  - { in: query, name: user_id, required: false, schema: { type: integer, minimum: 1 } }
+  - { in: query, name: runner_group_id, required: false, schema: { type: integer, minimum: 1 } }
+  - { in: query, name: granularity, required: false, schema: { type: string, enum: [daily, weekly], default: daily } }
+  - { in: query, name: format, required: false, schema: { type: string, enum: [json, csv], default: json } }
 
 paths:
   # ─────────────────────────────── Projects ───────────────────────────────
@@ -544,6 +558,78 @@ paths:
         '200': { $ref: '#/components/responses/GenericResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  # ─────────────────────────── Analytics ─────────────────────────
+  /api/v1/analytics/summary:
+    get:
+      tags: [Analytics]
+      summary: Job execution summary (totals, success rate, MTTR)
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/template-reliability:
+    get:
+      tags: [Analytics]
+      summary: Per-template reliability (success rate, avg duration)
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/project-activity:
+    get:
+      tags: [Analytics]
+      summary: Per-project job activity
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/user-activity:
+    get:
+      tags: [Analytics]
+      summary: Per-user launch counts and success rate
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/host-health:
+    get:
+      tags: [Analytics]
+      summary: Aggregated ok/changed/failed/unreachable per host
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/job-trend:
+    get:
+      tags: [Analytics]
+      summary: Daily or weekly job counts by status
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/workflow-summary:
+    get:
+      tags: [Analytics]
+      summary: Workflow execution summary (totals, success rate, avg duration)
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/workflow-activity:
+    get:
+      tags: [Analytics]
+      summary: Per-workflow-template reliability
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/approval-summary:
+    get:
+      tags: [Analytics]
+      summary: Approval request outcomes and avg decision time
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+  /api/v1/analytics/runner-activity:
+    get:
+      tags: [Analytics]
+      summary: Per-runner job counts, success rate, and last-seen
+      parameters: *analyticsFilters
+      responses:
+        '200': { $ref: '#/components/responses/AnalyticsResult' }
+
   # ─────────────────────────── Triggers ───────────────────────────
   /trigger/{token}:
     post:
@@ -609,6 +695,34 @@ components:
     GenericResponse:
       description: Success
       content: { application/json: { schema: { type: object, properties: { data: { type: object } } } } }
+    AnalyticsResult:
+      description: |
+        Analytics report result. When `format=json` the body wraps the report
+        under `data.result` with the echoed filter set under `data.filters`.
+        When `format=csv` the body is raw CSV and `data` is null.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  filters:
+                    type: object
+                    description: Echo of the filter parameters that were applied
+                  result:
+                    description: |
+                      Report payload — shape depends on the endpoint. Summary
+                      endpoints return an object; list endpoints return an
+                      array of rows.
+                    oneOf:
+                      - { type: object }
+                      - { type: array, items: { type: object } }
+        text/csv:
+          schema:
+            type: string
+            description: CSV export (only when `format=csv`)
     InventoryResponse:
       description: Inventory
       content:

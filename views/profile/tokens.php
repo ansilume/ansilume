@@ -16,6 +16,28 @@ $this->title = 'API Tokens';
 <h2>API Tokens</h2>
 <p class="text-muted">Use Bearer tokens to authenticate API requests: <code>Authorization: Bearer &lt;token&gt;</code></p>
 
+<?php if (YII_DEBUG) : ?>
+    <?php
+    $host = (string)\Yii::$app->request->hostName;
+    $swaggerUrl = 'http://' . $host . ':8088';
+    ?>
+<div class="alert alert-info d-flex align-items-center flex-wrap" role="alert" id="dev-api-explorer">
+    <div class="me-auto">
+        <strong>Dev mode:</strong> Interactive API explorer is available.
+    </div>
+    <?= Html::a(
+        'OpenAPI spec',
+        '/openapi.yaml',
+        ['class' => 'btn btn-sm btn-outline-primary me-2', 'target' => '_blank', 'rel' => 'noopener']
+    ) ?>
+    <?= Html::a(
+        'Swagger UI',
+        $swaggerUrl,
+        ['class' => 'btn btn-sm btn-primary', 'target' => '_blank', 'rel' => 'noopener']
+    ) ?>
+</div>
+<?php endif; ?>
+
 <?php if ($newToken) : ?>
 <div class="alert alert-success">
     <strong>New token created.</strong> Copy it now — it will not be shown again.<br>

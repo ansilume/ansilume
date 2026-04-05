@@ -16,6 +16,10 @@ use app\services\AnalyticsService;
  * GET /api/v1/analytics/user-activity
  * GET /api/v1/analytics/host-health
  * GET /api/v1/analytics/job-trend
+ * GET /api/v1/analytics/workflow-summary
+ * GET /api/v1/analytics/workflow-activity
+ * GET /api/v1/analytics/approval-summary
+ * GET /api/v1/analytics/runner-activity
  *
  * All endpoints accept: date_from, date_to, project_id, template_id,
  * user_id, runner_group_id, granularity, format (json|csv).
@@ -68,6 +72,38 @@ class AnalyticsController extends BaseApiController
     public function actionJobTrend(): array
     {
         return $this->runReport('jobTrend');
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionWorkflowSummary(): array
+    {
+        return $this->runReport('workflowSummary');
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionWorkflowActivity(): array
+    {
+        return $this->runReport('workflowActivity');
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionApprovalSummary(): array
+    {
+        return $this->runReport('approvalSummary');
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionRunnerActivity(): array
+    {
+        return $this->runReport('runnerActivity');
     }
 
     /**

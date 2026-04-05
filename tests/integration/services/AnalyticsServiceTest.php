@@ -5,8 +5,11 @@ declare(strict_types=1);
 namespace app\tests\integration\services;
 
 use app\models\AnalyticsQuery;
+use app\models\ApprovalRequest;
 use app\models\Job;
 use app\models\JobHostSummary;
+use app\models\WorkflowJob;
+use app\models\WorkflowTemplate;
 use app\services\AnalyticsService;
 use app\tests\integration\DbTestCase;
 
@@ -319,5 +322,240 @@ class AnalyticsServiceTest extends DbTestCase
         $q = $this->makeQuery();
         $result = $this->service->summary($q);
         $this->assertSame(1, $result['total_jobs']);
+    }
+
+    // ─── workflow summary ───────────────────────────────────────────────
+
+    private function makeWorkflowJob(int $templateId, int $userId, string $status, int $duration = 60): WorkflowJob
+    {
+        $wj = new WorkflowJob();
+        $wj->workflow_template_id = $templateId;
+        $wj->launched_by = $userId;
+        $wj->status = $status;
+        $wj->started_at = time() - $duration;
+        $wj->finished_at = $status === WorkflowJob::STATUS_RUNNING ? null : time();
+        $wj->created_at = time();
+        $wj->updated_at = time();
+        $wj->save(false);
+        return $wj;
+    }
+
+    public function testWorkflowSummaryWithNoJobs(): void
+    {
+        $result = $this->service->workflowSummary($this->makeQuery());
+        $this->assertSame(0, $result['total']);
+        $this->assertSame(0.0, $result['success_rate']);
+        $this->assertSame(0.0, $result['avg_duration_seconds']);
+    }
+
+    public function testWorkflowSummaryCountsByStatus(): void
+    {
+        [$user] = $this->scaffold();
+        $wt = $this->createWorkflowTemplate($user->id);
+
+        $this->makeWorkflowJob($wt->id, $user->id, WorkflowJob::STATUS_SUCCEEDED, 30);
+        $this->makeWorkflowJob($wt->id, $user->id, WorkflowJob::STATUS_SUCCEEDED, 60);
+        $this->makeWorkflowJob($wt->id, $user->id, WorkflowJob::STATUS_FAILED, 90);
+        $this->makeWorkflowJob($wt->id, $user->id, WorkflowJob::STATUS_CANCELED, 10);
+        $this->makeWorkflowJob($wt->id, $user->id, WorkflowJob::STATUS_RUNNING);
+
+        $result = $this->service->workflowSummary($this->makeQuery());
+        $this->assertSame(5, $result['total']);
+        $this->assertSame(2, $result['succeeded']);
+        $this->assertSame(1, $result['failed']);
+        $this->assertSame(1, $result['canceled']);
+        $this->assertSame(1, $result['running']);
+        // success_rate over finished (total - running) = 2/4 = 50.0
+        $this->assertSame(50.0, $result['success_rate']);
+        $this->assertGreaterThan(0, $result['avg_duration_seconds']);
+    }
+
+    public function testWorkflowSummaryFilteredByUser(): void
+    {
+        [$user] = $this->scaffold();
+        $other = $this->createUser('analytics-other');
+        $wt = $this->createWorkflowTemplate($user->id);
+
+        $this->makeWorkflowJob($wt->id, $user->id, WorkflowJob::STATUS_SUCCEEDED);
+        $this->makeWorkflowJob($wt->id, $other->id, WorkflowJob::STATUS_SUCCEEDED);
+
+        $q = $this->makeQuery();
+        $q->user_id = $user->id;
+        $result = $this->service->workflowSummary($q);
+        $this->assertSame(1, $result['total']);
+    }
+
+    // ─── workflow activity ──────────────────────────────────────────────
+
+    public function testWorkflowActivityGroupsByTemplate(): void
+    {
+        [$user] = $this->scaffold();
+        $wt1 = $this->createWorkflowTemplate($user->id);
+        $wt2 = $this->createWorkflowTemplate($user->id);
+
+        $this->makeWorkflowJob($wt1->id, $user->id, WorkflowJob::STATUS_SUCCEEDED);
+        $this->makeWorkflowJob($wt1->id, $user->id, WorkflowJob::STATUS_SUCCEEDED);
+        $this->makeWorkflowJob($wt1->id, $user->id, WorkflowJob::STATUS_FAILED);
+        $this->makeWorkflowJob($wt2->id, $user->id, WorkflowJob::STATUS_SUCCEEDED);
+
+        $rows = $this->service->workflowActivity($this->makeQuery());
+        $this->assertCount(2, $rows);
+
+        $byTemplate = [];
+        foreach ($rows as $r) {
+            $byTemplate[$r['template_id']] = $r;
+        }
+        $this->assertSame(3, $byTemplate[$wt1->id]['total']);
+        $this->assertSame(2, $byTemplate[$wt1->id]['succeeded']);
+        $this->assertSame(1, $byTemplate[$wt1->id]['failed']);
+        // 2 succeeded / 3 finished = 66.67
+        $this->assertSame(66.67, $byTemplate[$wt1->id]['success_rate']);
+        $this->assertSame(1, $byTemplate[$wt2->id]['total']);
+        $this->assertSame(100.0, $byTemplate[$wt2->id]['success_rate']);
+    }
+
+    public function testWorkflowActivityEmpty(): void
+    {
+        $this->assertSame([], $this->service->workflowActivity($this->makeQuery()));
+    }
+
+    // ─── approval summary ───────────────────────────────────────────────
+
+    private function makeApprovalRequest(int $jobId, int $ruleId, string $status, int $decisionSeconds = 30): ApprovalRequest
+    {
+        $ar = new ApprovalRequest();
+        $ar->job_id = $jobId;
+        $ar->approval_rule_id = $ruleId;
+        $ar->status = $status;
+        $ar->requested_at = time() - $decisionSeconds;
+        $ar->resolved_at = $status === ApprovalRequest::STATUS_PENDING ? null : time();
+        $ar->save(false);
+        return $ar;
+    }
+
+    public function testApprovalSummaryWithNoRequests(): void
+    {
+        $result = $this->service->approvalSummary($this->makeQuery());
+        $this->assertSame(0, $result['total']);
+        $this->assertSame(0.0, $result['approval_rate']);
+        $this->assertSame(0.0, $result['avg_decision_seconds']);
+    }
+
+    public function testApprovalSummaryCountsByOutcome(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+        $rule = $this->createApprovalRule($user->id);
+
+        $jobs = [];
+        for ($i = 0; $i < 5; $i++) {
+            $jobs[] = $this->createJob($tpl->id, $user->id);
+        }
+
+        $this->makeApprovalRequest($jobs[0]->id, $rule->id, ApprovalRequest::STATUS_APPROVED, 10);
+        $this->makeApprovalRequest($jobs[1]->id, $rule->id, ApprovalRequest::STATUS_APPROVED, 20);
+        $this->makeApprovalRequest($jobs[2]->id, $rule->id, ApprovalRequest::STATUS_REJECTED, 30);
+        $this->makeApprovalRequest($jobs[3]->id, $rule->id, ApprovalRequest::STATUS_TIMED_OUT, 600);
+        $this->makeApprovalRequest($jobs[4]->id, $rule->id, ApprovalRequest::STATUS_PENDING);
+
+        $result = $this->service->approvalSummary($this->makeQuery());
+        $this->assertSame(5, $result['total']);
+        $this->assertSame(2, $result['approved']);
+        $this->assertSame(1, $result['rejected']);
+        $this->assertSame(1, $result['timed_out']);
+        $this->assertSame(1, $result['pending']);
+        // 2 approved / 3 decided (approved + rejected) = 66.67
+        $this->assertSame(66.67, $result['approval_rate']);
+        $this->assertGreaterThan(0, $result['avg_decision_seconds']);
+    }
+
+    // ─── runner activity ────────────────────────────────────────────────
+
+    public function testRunnerActivityGroupsByRunner(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+        $group = $this->createRunnerGroup($user->id);
+        $runner1 = $this->createRunner($group->id, $user->id);
+        $runner2 = $this->createRunner($group->id, $user->id);
+
+        $j1 = $this->createJob($tpl->id, $user->id);
+        $j1->runner_id = $runner1->id;
+        $this->finishJob($j1, 'succeeded', 30);
+
+        $j2 = $this->createJob($tpl->id, $user->id);
+        $j2->runner_id = $runner1->id;
+        $this->finishJob($j2, 'failed', 60);
+
+        $j3 = $this->createJob($tpl->id, $user->id);
+        $j3->runner_id = $runner2->id;
+        $this->finishJob($j3, 'succeeded', 45);
+
+        $rows = $this->service->runnerActivity($this->makeQuery());
+
+        $byRunner = [];
+        foreach ($rows as $r) {
+            $byRunner[$r['runner_id']] = $r;
+        }
+
+        $this->assertArrayHasKey($runner1->id, $byRunner);
+        $this->assertSame(2, $byRunner[$runner1->id]['total']);
+        $this->assertSame(1, $byRunner[$runner1->id]['succeeded']);
+        $this->assertSame(1, $byRunner[$runner1->id]['failed']);
+        $this->assertSame(50.0, $byRunner[$runner1->id]['success_rate']);
+        $this->assertGreaterThan(0, $byRunner[$runner1->id]['avg_duration_seconds']);
+
+        $this->assertArrayHasKey($runner2->id, $byRunner);
+        $this->assertSame(1, $byRunner[$runner2->id]['total']);
+        $this->assertSame(100.0, $byRunner[$runner2->id]['success_rate']);
+    }
+
+    public function testRunnerActivityIncludesIdleRunners(): void
+    {
+        [$user] = $this->scaffold();
+        $group = $this->createRunnerGroup($user->id);
+        $runner = $this->createRunner($group->id, $user->id);
+        $runner->last_seen_at = time() - 120;
+        $runner->save(false);
+
+        $rows = $this->service->runnerActivity($this->makeQuery());
+
+        $found = null;
+        foreach ($rows as $r) {
+            if ($r['runner_id'] === $runner->id) {
+                $found = $r;
+                break;
+            }
+        }
+        $this->assertNotNull($found);
+        $this->assertSame(0, $found['total']);
+        $this->assertSame(0.0, $found['success_rate']);
+        $this->assertNotNull($found['last_seen_at']);
+    }
+
+    public function testRunnerActivityExcludesRunningJobs(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+        $group = $this->createRunnerGroup($user->id);
+        $runner = $this->createRunner($group->id, $user->id);
+
+        $j1 = $this->createJob($tpl->id, $user->id);
+        $j1->runner_id = $runner->id;
+        $this->finishJob($j1, 'succeeded');
+
+        // Running job attached to same runner — must not be counted
+        $j2 = $this->createJob($tpl->id, $user->id, Job::STATUS_RUNNING);
+        $j2->runner_id = $runner->id;
+        $j2->save(false);
+
+        $rows = $this->service->runnerActivity($this->makeQuery());
+
+        $found = null;
+        foreach ($rows as $r) {
+            if ($r['runner_id'] === $runner->id) {
+                $found = $r;
+                break;
+            }
+        }
+        $this->assertNotNull($found);
+        $this->assertSame(1, $found['total']);
     }
 }
