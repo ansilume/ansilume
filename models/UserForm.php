@@ -81,15 +81,46 @@ class UserForm extends Model
     }
 
     /**
+     * Dynamic list of assignable roles. Built from the RBAC auth manager so
+     * custom roles created via the role management UI appear automatically.
+     * The three built-in roles always come first in a fixed order; any
+     * additional custom roles follow alphabetically.
+     *
      * @return array<string, string>
      */
     public static function roleOptions(): array
     {
-        return [
+        $builtinLabels = [
             'viewer' => 'Viewer (read-only)',
             'operator' => 'Operator (launch + manage)',
             'admin' => 'Admin (full access)',
         ];
+
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        $roles = $auth->getRoles();
+
+        $options = [];
+        foreach ($builtinLabels as $name => $label) {
+            if (isset($roles[$name])) {
+                $options[$name] = $label;
+            }
+        }
+
+        $custom = [];
+        foreach ($roles as $name => $role) {
+            if (isset($builtinLabels[$name])) {
+                continue;
+            }
+            /** @var \yii\rbac\Role $role */
+            $label = $role->description !== null && $role->description !== ''
+                ? $name . ' — ' . $role->description
+                : $name;
+            $custom[$name] = $label;
+        }
+        ksort($custom);
+
+        return $options + $custom;
     }
 
     /**

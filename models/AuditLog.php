@@ -132,6 +132,11 @@ class AuditLog extends ActiveRecord
     public const ACTION_MFA_ENABLED = 'mfa.enabled';
     public const ACTION_MFA_DISABLED = 'mfa.disabled';
 
+    // -- Role (RBAC) actions ---------------------------------------------------
+    public const ACTION_ROLE_CREATED = 'role.created';
+    public const ACTION_ROLE_UPDATED = 'role.updated';
+    public const ACTION_ROLE_DELETED = 'role.deleted';
+
     public static function tableName(): string
     {
         return '{{%audit_log}}';

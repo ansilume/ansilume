@@ -33,6 +33,9 @@ return [
         'scheduleService' => [
             'class' => 'app\services\ScheduleService',
         ],
+        'roleService' => [
+            'class' => 'app\services\RoleService',
+        ],
         'notificationDispatcher' => [
             'class' => 'app\services\NotificationDispatcher',
         ],

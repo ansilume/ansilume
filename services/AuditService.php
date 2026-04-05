@@ -92,6 +92,9 @@ class AuditService extends Component
     public const ACTION_PASSWORD_RESET_COMPLETED = AuditLog::ACTION_PASSWORD_RESET_COMPLETED;
     public const ACTION_MFA_ENABLED = AuditLog::ACTION_MFA_ENABLED;
     public const ACTION_MFA_DISABLED = AuditLog::ACTION_MFA_DISABLED;
+    public const ACTION_ROLE_CREATED = AuditLog::ACTION_ROLE_CREATED;
+    public const ACTION_ROLE_UPDATED = AuditLog::ACTION_ROLE_UPDATED;
+    public const ACTION_ROLE_DELETED = AuditLog::ACTION_ROLE_DELETED;
 
     /**
      * @var AuditTargetInterface[] Dispatch targets. Populated in init() from

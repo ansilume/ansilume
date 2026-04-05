@@ -150,6 +150,30 @@ class E2eController extends Controller
         $workflowTemplateId = $this->seedWorkflowTemplate($userId);
         $this->seedWorkflowStep($workflowTemplateId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
+        $this->seedCustomRole();
+    }
+
+    private function seedCustomRole(): void
+    {
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        $name = self::PREFIX . 'custom-role';
+        if ($auth->getRole($name) !== null) {
+            $this->stdout("  Custom role '{$name}' already exists.\n");
+            return;
+        }
+
+        $role = $auth->createRole($name);
+        $role->description = 'E2E custom role';
+        $auth->add($role);
+
+        foreach (['project.view', 'job.view', 'analytics.view'] as $permName) {
+            $perm = $auth->getPermission($permName);
+            if ($perm !== null) {
+                $auth->addChild($role, $perm);
+            }
+        }
+        $this->stdout("  Created custom role '{$name}'.\n");
     }
 
     private function seedRunnerGroup(int $userId): int
@@ -461,6 +485,19 @@ class E2eController extends Controller
         }
 
         $this->deleteByPrefix(RunnerGroup::class, 'name');
+        $this->teardownCustomRoles();
+    }
+
+    private function teardownCustomRoles(): void
+    {
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        foreach ($auth->getRoles() as $role) {
+            if (str_starts_with($role->name, self::PREFIX)) {
+                $auth->remove($role);
+                $this->stdout("  Deleted custom role '{$role->name}'.\n");
+            }
+        }
     }
 
     private function teardownUsers(): void

@@ -91,6 +91,9 @@ return [
         'scheduleService' => [
             'class' => 'app\services\ScheduleService',
         ],
+        'roleService' => [
+            'class' => 'app\services\RoleService',
+        ],
         'projectAccessChecker' => [
             'class' => 'app\services\ProjectAccessChecker',
         ],

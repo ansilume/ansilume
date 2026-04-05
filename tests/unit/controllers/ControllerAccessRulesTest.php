@@ -10,6 +10,7 @@ use app\controllers\AuditLogController;
 use app\controllers\CredentialController;
 use app\controllers\JobTemplateController;
 use app\controllers\ProjectController;
+use app\controllers\RoleController;
 use app\controllers\WorkflowJobController;
 use app\controllers\WorkflowTemplateController;
 use PHPUnit\Framework\TestCase;
@@ -357,5 +358,40 @@ class ControllerAccessRulesTest extends TestCase
     {
         $verbs = $this->getVerbRules(WorkflowJobController::class);
         $this->assertActionIsPostOnly($verbs, 'cancel');
+    }
+
+    // -------------------------------------------------------------------------
+    // RoleController
+    // -------------------------------------------------------------------------
+
+    public function testRoleViewRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(RoleController::class);
+        $this->assertActionRequiresRole($rules, 'index', 'role.view');
+        $this->assertActionRequiresRole($rules, 'view', 'role.view');
+    }
+
+    public function testRoleCreateRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(RoleController::class);
+        $this->assertActionRequiresRole($rules, 'create', 'role.create');
+    }
+
+    public function testRoleUpdateRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(RoleController::class);
+        $this->assertActionRequiresRole($rules, 'update', 'role.update');
+    }
+
+    public function testRoleDeleteRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(RoleController::class);
+        $this->assertActionRequiresRole($rules, 'delete', 'role.delete');
+    }
+
+    public function testRoleDeleteIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(RoleController::class);
+        $this->assertActionIsPostOnly($verbs, 'delete');
     }
 }

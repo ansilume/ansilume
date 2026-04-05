@@ -173,6 +173,9 @@ $active = fn (string $prefix): string =>
     <nav class="nav flex-column">
         <a class="nav-link<?= $active('user') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/user/index']) ?>">Users</a>
         <a class="nav-link<?= $active('team') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/team/index']) ?>">Teams</a>
+            <?php if (\Yii::$app->user?->can('role.view')) : ?>
+        <a class="nav-link<?= $active('role') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/role/index']) ?>">Roles</a>
+            <?php endif; ?>
         <a class="nav-link<?= $active('audit-log') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/audit-log/index']) ?>">Audit Log</a>
         <a class="nav-link<?= $active('webhook') // xss-ok: hardcoded CSS class?>"   href="<?= Url::to(['/webhook/index']) ?>">Webhooks</a>
     </nav>

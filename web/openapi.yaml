@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Ansilume REST API
-  version: "1.5.0"
+  version: "1.9.0"
   description: |
     REST API v1 for the Ansilume automation platform.
 
@@ -52,6 +52,7 @@ tags:
   - name: Workflow Jobs
   - name: Analytics
   - name: Triggers
+  - name: Roles
 
 # Shared query parameter list used by every analytics endpoint.
 # Defined once via a YAML anchor and referenced with `*` so we don't
@@ -651,6 +652,120 @@ paths:
         '404':
           description: Unknown token
 
+  # ────────────────────────────── Roles ──────────────────────────────
+  /api/v1/roles:
+    get:
+      tags: [Roles]
+      summary: List all RBAC roles (system + custom)
+      responses:
+        '200':
+          description: List of roles with summary counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/RoleSummary' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Roles]
+      summary: Create a custom role
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoleInput' }
+            example:
+              name: reader-plus
+              description: Read-only access with analytics
+              permissions: [project.view, job.view, analytics.view]
+      responses:
+        '201':
+          description: Role created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Role' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/roles/{name}:
+    parameters:
+      - in: path
+        name: name
+        required: true
+        schema: { type: string, pattern: '^[a-z][a-z0-9_-]*$' }
+    get:
+      tags: [Roles]
+      summary: Get a role with direct + effective permissions
+      responses:
+        '200':
+          description: Role detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Role' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Roles]
+      summary: Update a role's description and direct permissions
+      description: |
+        System roles (viewer/operator/admin) can have their permissions edited
+        but not their name. The name field in the body is ignored for them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoleInput' }
+      responses:
+        '200':
+          description: Updated role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Role' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Roles]
+      summary: Delete a custom role
+      description: |
+        System roles cannot be deleted — returns 422. Users holding the role
+        are left with no role and must be reassigned manually.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/permissions:
+    get:
+      tags: [Roles]
+      summary: List all known permissions grouped by domain
+      description: |
+        Returns the full permission catalog used by the role management UI.
+        Useful for building custom role editors.
+      responses:
+        '200':
+          description: Grouped permission catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/PermissionGroup' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -980,3 +1095,62 @@ components:
       properties:
         data: { type: array, items: { type: object } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    RoleSummary:
+      type: object
+      properties:
+        name: { type: string, example: operator }
+        description: { type: string, example: "Launch + manage" }
+        is_system: { type: boolean, example: true }
+        permission_count: { type: integer, example: 15 }
+        user_count: { type: integer, example: 3 }
+
+    Role:
+      type: object
+      properties:
+        name: { type: string, example: reader-plus }
+        description: { type: string, example: "Read-only access with analytics" }
+        is_system: { type: boolean, example: false }
+        direct_permissions:
+          type: array
+          items: { type: string }
+          example: [project.view, job.view, analytics.view]
+        effective_permissions:
+          type: array
+          items: { type: string }
+          description: All permissions granted, recursively walking child roles (system roles only).
+          example: [project.view, job.view, analytics.view]
+        user_ids:
+          type: array
+          items: { type: integer }
+          example: [12, 34]
+
+    RoleInput:
+      type: object
+      required: [name, permissions]
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]{2,39}$'
+          example: reader-plus
+        description:
+          type: string
+          maxLength: 255
+          example: "Read-only access with analytics"
+        permissions:
+          type: array
+          items: { type: string }
+          example: [project.view, job.view, analytics.view]
+
+    PermissionGroup:
+      type: object
+      properties:
+        domain: { type: string, example: project }
+        label: { type: string, example: Projects }
+        permissions:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, example: project.view }
+              label: { type: string, example: "View projects" }

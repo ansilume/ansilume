@@ -27,6 +27,19 @@ test.describe('Users CRUD', () => {
     await expectFlash(page, 'success');
   });
 
+  test('role dropdown includes seeded custom role', async ({ page }) => {
+    // Proves UserForm::roleOptions() is dynamic — the e2e-custom-role
+    // seeded by E2eController must appear alongside the built-in roles.
+    await page.goto('/user/create');
+    const values = await page.locator('#userform-role option').evaluateAll(
+      (els) => els.map((el) => (el as HTMLOptionElement).value),
+    );
+    expect(values).toContain('viewer');
+    expect(values).toContain('operator');
+    expect(values).toContain('admin');
+    expect(values).toContain('e2e-custom-role');
+  });
+
   test('duplicate username fails validation', async ({ page }) => {
     await page.goto('/user/create');
     await fillForm(page, 'userform', {

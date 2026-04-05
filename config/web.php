@@ -23,6 +23,7 @@ $config = [
         'api/v1/approvals' => 'app\controllers\api\v1\ApprovalsController',
         'api/v1/workflow-templates' => 'app\controllers\api\v1\WorkflowTemplatesController',
         'api/v1/workflow-jobs' => 'app\controllers\api\v1\WorkflowJobsController',
+        'api/v1/roles' => 'app\controllers\api\v1\RolesController',
         'runner-api' => 'app\controllers\api\runner\JobsController',
         'runner-register' => 'app\controllers\api\runner\RegisterController',
     ],
@@ -142,6 +143,9 @@ $config = [
         'scheduleService' => [
             'class' => 'app\services\ScheduleService',
         ],
+        'roleService' => [
+            'class' => 'app\services\RoleService',
+        ],
         'projectAccessChecker' => [
             'class' => 'app\services\ProjectAccessChecker',
         ],
@@ -227,6 +231,13 @@ $config = [
                 ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/delete', 'verb' => 'DELETE'],
                 ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/create', 'verb' => 'POST'],
+                // Roles API
+                ['pattern' => 'api/v1/roles/<name:[a-z][a-z0-9_-]*>', 'route' => 'api/v1/roles/view', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/roles/<name:[a-z][a-z0-9_-]*>', 'route' => 'api/v1/roles/update', 'verb' => 'PUT'],
+                ['pattern' => 'api/v1/roles/<name:[a-z][a-z0-9_-]*>', 'route' => 'api/v1/roles/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/roles', 'route' => 'api/v1/roles/index', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/roles', 'route' => 'api/v1/roles/create', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/permissions', 'route' => 'api/v1/roles/permissions', 'verb' => 'GET'],
                 // Workflow jobs API
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/cancel', 'route' => 'api/v1/workflow-jobs/cancel', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>', 'route' => 'api/v1/workflow-jobs/view', 'verb' => 'GET'],
@@ -253,6 +264,12 @@ $config = [
                 'metrics' => 'metrics/index',
                 // Inbound trigger
                 ['pattern' => 'trigger/<token:[a-f0-9]{64}>', 'route' => 'trigger/fire', 'verb' => 'POST'],
+                // Roles (name-keyed, not id-keyed)
+                ['pattern' => 'role', 'route' => 'role/index', 'verb' => 'GET'],
+                ['pattern' => 'role/create', 'route' => 'role/create'],
+                ['pattern' => 'role/view/<name:[a-z][a-z0-9_-]*>', 'route' => 'role/view'],
+                ['pattern' => 'role/update/<name:[a-z][a-z0-9_-]*>', 'route' => 'role/update'],
+                ['pattern' => 'role/delete/<name:[a-z][a-z0-9_-]*>', 'route' => 'role/delete', 'verb' => 'POST'],
                 // Teams
                 'team/add-member/<id:\d+>' => 'team/add-member',
                 'team/remove-member/<id:\d+>/<userId:\d+>' => 'team/remove-member',
