@@ -8,7 +8,7 @@ test.describe('Sidebar Navigation', () => {
     await expect(sidebar).toBeVisible();
 
     // Admin should see key navigation items
-    for (const item of ['Template', 'Project', 'Inventor', 'Credential', 'Schedule', 'Team', 'User']) {
+    for (const item of ['Jobs', 'Schedule', 'Runner', 'Job Templates', 'Inventories', 'Projects', 'Credentials', 'Workflow Templates', 'Users', 'Teams', 'Notifications', 'Analytics', 'Audit Log']) {
       await expect(sidebar.locator(`a:has-text("${item}")`).first()).toBeVisible();
     }
   });

@@ -127,72 +127,59 @@ $active = fn (string $prefix): string =>
         <a class="nav-link<?= $route === 'site/index' ? ' active' : '' ?>" href="<?= Url::to(['/']) ?>">Dashboard</a>
     </nav>
 
-    <span class="nav-section">Automation</span>
+    <span class="nav-section">Operations</span>
     <nav class="nav flex-column">
-        <a class="nav-link<?= $active('project') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/project/index']) ?>">Projects</a>
-        <a class="nav-link<?= $active('inventory') // xss-ok: hardcoded CSS class?>"    href="<?= Url::to(['/inventory/index']) ?>">Inventories</a>
-        <a class="nav-link<?= $active('credential') // xss-ok: hardcoded CSS class?>"   href="<?= Url::to(['/credential/index']) ?>">Credentials</a>
-        <a class="nav-link<?= $active('job-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/job-template/index']) ?>">Templates</a>
+        <a class="nav-link<?= $active('job') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/job/index']) ?>">Jobs</a>
+        <?php if (\Yii::$app->user?->can('job.launch')) : ?>
+        <a class="nav-link<?= $active('schedule') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/schedule/index']) ?>">Schedules</a>
+        <?php endif; ?>
+        <a class="nav-link<?= $active('analytics') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/analytics/index']) ?>">Analytics</a>
     </nav>
 
-    <span class="nav-section">Notifications</span>
+    <span class="nav-section">Automation</span>
     <nav class="nav flex-column">
-        <a class="nav-link<?= $active('notification-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/notification-template/index']) ?>">Templates</a>
+        <a class="nav-link<?= $active('project') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/project/index']) ?>">Projects</a>
+        <a class="nav-link<?= $active('inventory') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/inventory/index']) ?>">Inventories</a>
+        <a class="nav-link<?= $active('credential') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/credential/index']) ?>">Credentials</a>
+        <a class="nav-link<?= $active('job-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/job-template/index']) ?>">Job Templates</a>
+        <a class="nav-link<?= $active('notification-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/notification-template/index']) ?>">Notifications</a>
     </nav>
 
     <span class="nav-section">Workflows</span>
     <nav class="nav flex-column">
-        <a class="nav-link<?= $active('workflow-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-template/index']) ?>">Templates</a>
+        <a class="nav-link<?= $active('workflow-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-template/index']) ?>">Workflow Templates</a>
         <a class="nav-link<?= $active('workflow-job') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-job/index']) ?>">Executions</a>
+        <a class="nav-link<?= $active('approval-rule') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval-rule/index']) ?>">Approval Rules</a>
+        <a class="nav-link<?= $active('approval') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval/index']) ?>">Approval Requests</a>
     </nav>
 
-    <span class="nav-section">Approvals</span>
-    <nav class="nav flex-column">
-        <a class="nav-link<?= $active('approval-rule') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval-rule/index']) ?>">Rules</a>
-        <a class="nav-link<?= $active('approval') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval/index']) ?>">Requests</a>
-    </nav>
-
-    <span class="nav-section">Reporting</span>
-    <nav class="nav flex-column">
-        <a class="nav-link<?= $active('analytics') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/analytics/index']) ?>">Analytics</a>
-    </nav>
-
-    <span class="nav-section">Operations</span>
-    <nav class="nav flex-column">
-        <a class="nav-link<?= $active('job') // xss-ok: hardcoded CSS class?>"          href="<?= Url::to(['/job/index']) ?>">Jobs</a>
-        <?php if (\Yii::$app->user?->can('job.launch')) : ?>
-        <a class="nav-link<?= $active('schedule') // xss-ok: hardcoded CSS class?>"     href="<?= Url::to(['/schedule/index']) ?>">Schedules</a>
-        <?php endif; ?>
-        <?php if (\Yii::$app->user?->can('runner-group.view')) : ?>
-        <a class="nav-link<?= $active('runner-group') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/runner-group/index']) ?>">Runners</a>
-        <?php endif; ?>
-    </nav>
-
-        <?php if (\Yii::$app->user?->can('user.view')) : ?>
-    <span class="nav-section">Admin</span>
-    <nav class="nav flex-column">
-        <a class="nav-link<?= $active('user') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/user/index']) ?>">Users</a>
-        <a class="nav-link<?= $active('team') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/team/index']) ?>">Teams</a>
-            <?php if (\Yii::$app->user?->can('role.view')) : ?>
-        <a class="nav-link<?= $active('role') // xss-ok: hardcoded CSS class?>"      href="<?= Url::to(['/role/index']) ?>">Roles</a>
-            <?php endif; ?>
-        <a class="nav-link<?= $active('audit-log') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/audit-log/index']) ?>">Audit Log</a>
-        <a class="nav-link<?= $active('webhook') // xss-ok: hardcoded CSS class?>"   href="<?= Url::to(['/webhook/index']) ?>">Webhooks</a>
-    </nav>
-        <?php endif; ?>
-
+        <?php $identity = \Yii::$app->user?->identity; ?>
+        <?php $currentUser = $identity instanceof \app\models\User ? $identity : null; ?>
     <div class="sidebar-footer" title="Ansilume <?= Html::encode(\Yii::$app->params['version']) ?>">
-        <div class="d-flex align-items-center gap-2 mb-1">
-            <?php $identity = \Yii::$app->user?->identity; ?>
-            <?php $currentUser = $identity instanceof \app\models\User ? $identity : null; ?>
-            <span class="text-white" style="font-size:.85rem"><?= Html::encode($currentUser?->username) ?></span>
-            <?php if ($currentUser?->is_superadmin) : ?>
-                <span class="badge text-bg-warning" style="font-size:.6rem">SA</span>
+        <?php if (\Yii::$app->user?->can('user.view')) : ?>
+            <?php $sa = $currentUser?->is_superadmin
+                ? ' <span class="badge text-bg-warning" style="font-size:.55rem;vertical-align:middle">SA</span>'
+                : ''; ?>
+        <span class="nav-section" style="padding-left:0">Admin<?= $sa // xss-ok: hardcoded HTML badge?></span>
+        <nav class="nav flex-column">
+            <a class="nav-link<?= $active('user') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/user/index']) ?>">Users</a>
+            <a class="nav-link<?= $active('team') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/team/index']) ?>">Teams</a>
+            <?php if (\Yii::$app->user?->can('role.view')) : ?>
+            <a class="nav-link<?= $active('role') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/role/index']) ?>">Roles</a>
             <?php endif; ?>
-        </div>
+            <?php if (\Yii::$app->user?->can('runner-group.view')) : ?>
+            <a class="nav-link<?= $active('runner-group') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/runner-group/index']) ?>">Runners</a>
+            <?php endif; ?>
+            <a class="nav-link<?= $active('webhook') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/webhook/index']) ?>">Webhooks</a>
+            <a class="nav-link<?= $active('audit-log') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/audit-log/index']) ?>">Audit Log</a>
+        </nav>
+        <?php endif; ?>
+        <nav class="nav flex-column">
+            <a class="nav-link" href="<?= Url::to(['/profile/tokens']) ?>">API Tokens</a>
+        </nav>
+        <div style="border-top: 1px solid rgba(255,255,255,.07); margin: .5rem 0;"></div>
         <nav class="nav flex-column">
             <a class="nav-link" href="<?= Url::to(['/profile/security']) ?>">Security</a>
-            <a class="nav-link" href="<?= Url::to(['/profile/tokens']) ?>">API Tokens</a>
             <form method="post" action="<?= Url::to(['/site/logout']) ?>" style="display:contents">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="nav-link" style="background:none;border:none;width:100%;text-align:left;cursor:pointer;">Logout</button>
