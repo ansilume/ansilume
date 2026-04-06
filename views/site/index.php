@@ -153,7 +153,7 @@ $this->title = 'Dashboard';
                     <td><?= Html::a('#' . $job->id, Url::to(['/job/view', 'id' => $job->id])) ?></td>
                     <td><?= Html::encode($job->jobTemplate->name ?? '—') ?></td>
                     <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
-                    <td><code class="small"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></code></td>
+                    <td><span class="small text-muted"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></span></td>
                     <td><?= $job->started_at ? date('H:i:s', $job->started_at) : '—' ?></td>
                     <td><?= $job->started_at ? gmdate('H:i:s', time() - $job->started_at) : '—' ?></td>
                 </tr>
@@ -192,7 +192,7 @@ $this->title = 'Dashboard';
                             <?php endif; ?>
                         </td>
                         <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
-                        <td><code class="small"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></code></td>
+                        <td><span class="small text-muted"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></span></td>
                         <td class="text-nowrap"><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
                         <td class="text-nowrap">
                             <?php
