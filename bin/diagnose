@@ -98,11 +98,11 @@ section "Configuration (.env)"
 if [ -f .env ]; then
     ok ".env file exists"
 
-    # Check for CHANGE-ME defaults
-    changeme_count=$(grep -c 'CHANGE-ME' .env 2>/dev/null || true)
+    # Check for CHANGE-ME defaults (skip comment lines)
+    changeme_count=$(grep -v '^\s*#' .env 2>/dev/null | grep -c 'CHANGE-ME' || true)
     if [ "$changeme_count" -gt 0 ]; then
         fail "${changeme_count} variable(s) still set to CHANGE-ME"
-        grep 'CHANGE-ME' .env | sed 's/=.*/=CHANGE-ME/' | while read -r line; do
+        grep -v '^\s*#' .env | grep 'CHANGE-ME' | sed 's/=.*/=CHANGE-ME/' | while read -r line; do
             info "  → ${line}"
         done
     else
@@ -187,7 +187,7 @@ for container in $(docker compose ps -q 2>/dev/null); do
 
     # Show last health check log if unhealthy
     if [ "$health" = "unhealthy" ]; then
-        last_output=$(docker inspect --format '{{if .State.Health}}{{(index .State.Health.Log (len .State.Health.Log | printf "%d" | xargs -I{} expr {} - 1)).Output}}{{end}}' "$container" 2>/dev/null || true)
+        last_output=$(docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' "$container" 2>/dev/null | tail -1 || true)
         if [ -n "$last_output" ]; then
             info "    Last healthcheck output: $(echo "$last_output" | head -3 | redact)"
         fi
@@ -214,25 +214,29 @@ app_container=$(docker compose ps -q app 2>/dev/null | head -1)
 nginx_container=$(docker compose ps -q nginx 2>/dev/null | head -1)
 
 if [ -n "$app_container" ]; then
+    # Read DB and Redis host from .env (fall back to container defaults)
+    db_host=$(grep -v '^\s*#' .env 2>/dev/null | grep '^DB_HOST=' | head -1 | cut -d= -f2-)
+    db_host=${db_host:-db}
+    redis_host=$(grep -v '^\s*#' .env 2>/dev/null | grep '^REDIS_HOST=' | head -1 | cut -d= -f2-)
+    redis_host=${redis_host:-redis}
+    redis_port=$(grep -v '^\s*#' .env 2>/dev/null | grep '^REDIS_PORT=' | head -1 | cut -d= -f2-)
+    redis_port=${redis_port:-6379}
+
     # App → DB
-    if docker exec "$app_container" php -r "try { new PDO('mysql:host=db;dbname=ansilume', 'ansilume', 'test'); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | grep -q "ok"; then
-        ok "app → db: reachable"
+    db_err=$(docker exec "$app_container" php -r "try { new PDO('mysql:host=${db_host}', 'x', 'x'); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | head -1)
+    if echo "$db_err" | grep -qi "ok\|access denied"; then
+        ok "app → db (${db_host}): reachable"
+    elif echo "$db_err" | grep -qi "refused\|timed out\|no such host\|getaddrinfo"; then
+        fail "app → db (${db_host}): connection failed — ${db_err}"
     else
-        db_err=$(docker exec "$app_container" php -r "try { new PDO('mysql:host=db', 'x', 'x'); } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | head -1)
-        if echo "$db_err" | grep -qi "access denied"; then
-            ok "app → db: reachable (auth checked separately)"
-        elif echo "$db_err" | grep -qi "refused\|timed out\|no such host"; then
-            fail "app → db: connection failed — ${db_err}"
-        else
-            warn "app → db: uncertain — ${db_err}"
-        fi
+        warn "app → db (${db_host}): uncertain — ${db_err}"
     fi
 
     # App → Redis
-    if docker exec "$app_container" php -r "try { \$r = new Redis(); \$r->connect('redis', 6379, 2); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | grep -q "ok"; then
-        ok "app → redis: reachable"
+    if docker exec "$app_container" php -r "try { \$r = new Redis(); \$r->connect('${redis_host}', ${redis_port}, 2); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | grep -q "ok"; then
+        ok "app → redis (${redis_host}:${redis_port}): reachable"
     else
-        warn "app → redis: may not be reachable (Redis extension check)"
+        warn "app → redis (${redis_host}:${redis_port}): may not be reachable"
     fi
 
     # Health check from inside app
@@ -343,12 +347,18 @@ section "Diagnosis Summary"
 
 all_ok=true
 
-# Check critical containers
-for svc in db redis app nginx; do
+# Build list of expected services from compose config
+expected_services=$(docker compose config --services 2>/dev/null || echo "app nginx redis")
+
+for svc in $expected_services; do
     container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
     if [ -z "$container_id" ]; then
-        fail "${svc}: NOT RUNNING"
-        all_ok=false
+        # Distinguish critical from optional
+        case "$svc" in
+            app|nginx)  fail "${svc}: NOT RUNNING (critical)"; all_ok=false ;;
+            runner-*)   warn "${svc}: not running (may be blocked by dependency)" ;;
+            *)          warn "${svc}: not running" ;;
+        esac
         continue
     fi
     state=$(docker inspect --format '{{.State.Status}}' "$container_id" 2>/dev/null)
@@ -368,8 +378,27 @@ for svc in db redis app nginx; do
 done
 
 echo ""
+
+# Known issue detection
+nginx_id=$(docker compose ps -q nginx 2>/dev/null | head -1)
+runner_id=$(docker compose ps -q runner-1 2>/dev/null | head -1)
+if [ -n "$nginx_id" ] && [ -z "$runner_id" ]; then
+    nginx_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$nginx_id" 2>/dev/null)
+    if [ "$nginx_health" = "unhealthy" ]; then
+        echo ""
+        printf "  ${YELLOW}${BOLD}Likely cause: Nginx healthcheck deadlock${NC}\n"
+        info "  Nginx is unhealthy → runner-1 cannot start (depends_on: service_healthy)"
+        info "  → runner never registers → /health reports degraded → nginx stays unhealthy"
+        info ""
+        info "  Workaround: restart the stack so Nginx's start_period gives the runner time:"
+        info "    docker compose down && docker compose up -d"
+        info ""
+        info "  Permanent fix: update to the latest version which has a relaxed healthcheck."
+    fi
+fi
+
 if [ "$all_ok" = true ]; then
-    printf "${GREEN}${BOLD}All critical services are healthy.${NC}\n"
+    printf "${GREEN}${BOLD}All services are healthy.${NC}\n"
 else
     printf "${YELLOW}${BOLD}Issues detected. Share this output with developers:${NC}\n"
     printf "  ./bin/diagnose > ansilume-diag.txt 2>&1\n"
