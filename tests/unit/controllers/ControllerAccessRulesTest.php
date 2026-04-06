@@ -360,6 +360,18 @@ class ControllerAccessRulesTest extends TestCase
         $this->assertActionIsPostOnly($verbs, 'cancel');
     }
 
+    public function testWorkflowJobResumeRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(WorkflowJobController::class);
+        $this->assertActionRequiresRole($rules, 'resume', 'workflow.launch');
+    }
+
+    public function testWorkflowJobResumeIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(WorkflowJobController::class);
+        $this->assertActionIsPostOnly($verbs, 'resume');
+    }
+
     // -------------------------------------------------------------------------
     // RoleController
     // -------------------------------------------------------------------------

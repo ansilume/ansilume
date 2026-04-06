@@ -558,6 +558,19 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/GenericResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/workflow-jobs/{id}/resume:
+    post:
+      tags: [Workflow Jobs]
+      summary: Resume a paused workflow step
+      description: >
+        Advances the workflow past the currently paused step. The pause step
+        is marked as succeeded and the engine proceeds to the next step.
+        Returns 422 if the workflow is already finished or has no paused step.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/GenericResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ─────────────────────────── Analytics ─────────────────────────
   /api/v1/analytics/summary:

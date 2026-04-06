@@ -187,6 +187,59 @@ class WorkflowExecutionService extends Component
     }
 
     /**
+     * Resume a paused workflow step. The pause step is marked as succeeded
+     * and the workflow advances to the next step.
+     */
+    public function resume(WorkflowJob $wfJob, int $userId): void
+    {
+        if ($wfJob->isFinished()) {
+            throw new \RuntimeException('Workflow is already finished.');
+        }
+
+        $pauseStep = $this->findRunningPauseStep($wfJob);
+        if ($pauseStep === null) {
+            throw new \RuntimeException('No paused step to resume.');
+        }
+
+        $pauseStep->status = WorkflowJobStep::STATUS_SUCCEEDED;
+        $pauseStep->finished_at = time();
+        $pauseStep->save(false);
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_WORKFLOW_STEP_RESUMED,
+            'workflow_job_step',
+            $pauseStep->id,
+            $userId,
+            ['step_name' => $pauseStep->workflowStep?->name ?? '']
+        );
+
+        $this->advanceAfterStep($wfJob, $pauseStep, true);
+    }
+
+    /**
+     * Find the currently running pause step, if any.
+     */
+    private function findRunningPauseStep(WorkflowJob $wfJob): ?WorkflowJobStep
+    {
+        /** @var WorkflowJobStep[] $running */
+        $running = WorkflowJobStep::find()
+            ->where([
+                'workflow_job_id' => $wfJob->id,
+                'status' => WorkflowJobStep::STATUS_RUNNING,
+            ])
+            ->all();
+
+        foreach ($running as $wjs) {
+            $step = $wjs->workflowStep;
+            if ($step !== null && $step->step_type === WorkflowStep::TYPE_PAUSE) {
+                return $wjs;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Cancel a running workflow.
      */
     public function cancel(WorkflowJob $wfJob, int $userId): void
@@ -288,19 +341,39 @@ class WorkflowExecutionService extends Component
     {
         // on_always takes priority
         if ($step->on_always_step_id !== null) {
-            /** @var WorkflowStep|null $s */
-            $s = WorkflowStep::findOne($step->on_always_step_id);
-            return $s;
+            return $this->resolveStepId($step, (int)$step->on_always_step_id);
         }
 
         $nextId = $succeeded ? $step->on_success_step_id : $step->on_failure_step_id;
-        if ($nextId === null) {
+        return $this->resolveStepId($step, $nextId);
+    }
+
+    /**
+     * Resolve a step reference: explicit ID, END_WORKFLOW sentinel, or
+     * NULL (default = next step by step_order within the same workflow).
+     */
+    private function resolveStepId(WorkflowStep $current, ?int $stepId): ?WorkflowStep
+    {
+        // Sentinel 0 = explicit end
+        if ($stepId === WorkflowStep::END_WORKFLOW) {
             return null;
         }
 
-        /** @var WorkflowStep|null $s */
-        $s = WorkflowStep::findOne($nextId);
-        return $s;
+        // Explicit step ID
+        if ($stepId !== null) {
+            /** @var WorkflowStep|null $s */
+            $s = WorkflowStep::findOne($stepId);
+            return $s;
+        }
+
+        // NULL = advance to next step by step_order
+        /** @var WorkflowStep|null $next */
+        $next = WorkflowStep::find()
+            ->where(['workflow_template_id' => $current->workflow_template_id])
+            ->andWhere(['>', 'step_order', $current->step_order])
+            ->orderBy(['step_order' => SORT_ASC])
+            ->one();
+        return $next;
     }
 
     /**

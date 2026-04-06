@@ -52,8 +52,34 @@ $this->title = $model->name;
             </tr>
             <?php endif; ?>
             <tr>
-                <th>Config</th>
-                <td><pre class="mb-0 font-monospace" style="white-space:pre-wrap"><?= Html::encode((string)$model->approver_config) ?></pre></td>
+                <th>Approver</th>
+                <td><?php
+                    $cfg = $model->getParsedConfig();
+                switch ($model->approver_type) {
+                    case ApprovalRule::APPROVER_TYPE_ROLE:
+                        echo 'Role: <strong>' . Html::encode((string)($cfg['role'] ?? '—')) . '</strong>';
+                        break;
+                    case ApprovalRule::APPROVER_TYPE_TEAM:
+                        $teamId = $cfg['team_id'] ?? null;
+                        $team = $teamId !== null ? \app\models\Team::findOne((int)$teamId) : null;
+                        echo 'Team: <strong>' . ($team !== null ? Html::encode($team->name) : '#' . Html::encode((string)$teamId)) . '</strong>';
+                        break;
+                    case ApprovalRule::APPROVER_TYPE_USERS:
+                        $userIds = $cfg['user_ids'] ?? [];
+                        if (is_array($userIds) && $userIds !== []) {
+                            $names = \app\models\User::find()
+                                ->where(['id' => $userIds])
+                                ->select('username')
+                                ->column();
+                            echo 'Users: <strong>' . Html::encode(implode(', ', $names)) . '</strong>';
+                        } else {
+                            echo 'Users: <em class="text-muted">none configured</em>';
+                        }
+                        break;
+                    default:
+                        echo Html::encode((string)$model->approver_config);
+                }
+                ?></td>
             </tr>
             <tr>
                 <th>Created</th>

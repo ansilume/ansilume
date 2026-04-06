@@ -366,6 +366,166 @@ class ProjectControllerActionTest extends WebControllerTestCase
         ]));
     }
 
+    // ── actionUpdate() — additional branches ────────────────────────────────
+
+    public function testUpdateManualProjectDoesNotQueueSync(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_MANUAL;
+        $project->local_path = '/tmp/some-path';
+        $project->save(false);
+
+        $this->setPost([
+            'Project' => [
+                'name' => 'manual-updated',
+                'scm_type' => Project::SCM_TYPE_MANUAL,
+                'local_path' => '/tmp/other-path',
+            ],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        /** @var object{queueSyncCalls: int} $svc */
+        $svc = \Yii::$app->get('projectService');
+        $this->assertSame(0, $svc->queueSyncCalls);
+        $this->assertArrayHasKey('success', \Yii::$app->session->getAllFlashes());
+    }
+
+    public function testUpdateForbiddenForUserWithoutAccess(): void
+    {
+        $owner = $this->createUser('upd-owner');
+        $outsider = $this->createUser('upd-outsider');
+        $project = $this->createProject($owner->id);
+        $this->loginAs($outsider);
+
+        $ctrl = $this->makeController();
+        $this->expectException(ForbiddenHttpException::class);
+        $ctrl->actionUpdate((int)$project->id);
+    }
+
+    public function testUpdateThrowsNotFound(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionUpdate(9999999);
+    }
+
+    // ── actionDelete() — additional branches ─────────────────────────────────
+
+    public function testDeleteForbiddenForUserWithoutAccess(): void
+    {
+        $owner = $this->createUser('del-owner');
+        $outsider = $this->createUser('del-outsider');
+        $project = $this->createProject($owner->id);
+        $this->loginAs($outsider);
+
+        $ctrl = $this->makeController();
+        $this->expectException(ForbiddenHttpException::class);
+        $ctrl->actionDelete((int)$project->id);
+    }
+
+    public function testDeleteThrowsNotFound(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionDelete(9999999);
+    }
+
+    // ── actionSync() — additional branches ───────────────────────────────────
+
+    public function testSyncForbiddenForUserWithoutAccess(): void
+    {
+        $owner = $this->createUser('sync-owner');
+        $outsider = $this->createUser('sync-outsider');
+        $project = $this->createProject($owner->id);
+        $this->loginAs($outsider);
+
+        $ctrl = $this->makeController();
+        $this->expectException(ForbiddenHttpException::class);
+        $ctrl->actionSync((int)$project->id);
+    }
+
+    public function testSyncThrowsNotFound(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionSync(9999999);
+    }
+
+    // ── actionLint() — additional branches ───────────────────────────────────
+
+    public function testLintForbiddenForUserWithoutAccess(): void
+    {
+        $owner = $this->createUser('lint-owner');
+        $outsider = $this->createUser('lint-outsider');
+        $project = $this->createProject($owner->id);
+        $this->loginAs($outsider);
+
+        $ctrl = $this->makeController();
+        $this->expectException(ForbiddenHttpException::class);
+        $ctrl->actionLint((int)$project->id);
+    }
+
+    public function testLintThrowsNotFound(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionLint(9999999);
+    }
+
+    // ── resolveLocalPath — existing directory branches ───────────────────────
+
+    public function testViewManualProjectWithExistingDirectory(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_MANUAL;
+        $project->local_path = '/tmp';
+        $project->save(false);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$project->id);
+
+        // /tmp exists and is a directory, so resolveLocalPath returns it.
+        // The scanner runs on /tmp and finds files — we just verify it doesn't crash.
+        $this->assertIsArray($ctrl->capturedParams['playbooks']);
+        $this->assertIsArray($ctrl->capturedParams['tree']);
+    }
+
+    public function testViewManualProjectWithYiiAliasPath(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_MANUAL;
+        $project->local_path = '@runtime';
+        $project->save(false);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$project->id);
+
+        // @runtime resolves via Yii::getAlias and the directory exists.
+        $this->assertIsArray($ctrl->capturedParams['playbooks']);
+        $this->assertIsArray($ctrl->capturedParams['tree']);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private function createSuperadmin(string $suffix = ''): \app\models\User

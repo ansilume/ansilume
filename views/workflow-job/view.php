@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
+use app\models\WorkflowStep;
 use yii\helpers\Html;
 
 $this->title = 'Workflow Job #' . $model->id;
@@ -16,9 +17,30 @@ $steps = $model->stepExecutions;
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2><?= Html::encode($this->title) ?></h2>
     <div>
+        <?php
+        // Check if there is a currently running pause step
+        $hasPausedStep = false;
+        if (!$model->isFinished()) {
+            foreach ($steps as $wjs) {
+                if (
+                    $wjs->status === WorkflowJobStep::STATUS_RUNNING
+                    && $wjs->workflowStep?->step_type === WorkflowStep::TYPE_PAUSE
+                ) {
+                    $hasPausedStep = true;
+                    break;
+                }
+            }
+        }
+        ?>
+        <?php if ($hasPausedStep && Yii::$app->user->can('workflow.launch')) : ?>
+            <?= Html::a('Resume', ['resume', 'id' => $model->id], [
+                'class' => 'btn btn-success btn-sm',
+                'data' => ['confirm' => 'Resume this workflow?', 'method' => 'post'],
+            ]) ?>
+        <?php endif; ?>
         <?php if (!$model->isFinished() && Yii::$app->user->can('workflow.cancel')) : ?>
             <?= Html::a('Cancel', ['cancel', 'id' => $model->id], [
-                'class' => 'btn btn-outline-danger btn-sm',
+                'class' => 'btn btn-outline-danger btn-sm ms-1',
                 'data' => ['confirm' => 'Cancel this workflow?', 'method' => 'post'],
             ]) ?>
         <?php endif; ?>

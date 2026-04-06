@@ -127,10 +127,32 @@ class WorkflowTemplateController extends BaseController
         $step = new WorkflowStep();
         $step->workflow_template_id = $model->id;
 
-        if ($step->load((array)\Yii::$app->request->post()) && $step->save()) {
-            $this->session()->setFlash('success', "Step \"{$step->name}\" added.");
+        if ($step->load((array)\Yii::$app->request->post())) {
+            // Preserve the END_WORKFLOW sentinel (0): Yii's load() may set
+            // empty-string prompt values to null, which is correct ("next step").
+            // A submitted "0" means "end workflow" and must stay as integer 0.
+            $this->applyBranchFields($step);
+            if ($step->save()) {
+                $this->session()->setFlash('success', "Step \"{$step->name}\" added.");
+            }
         }
         return $this->redirect(['view', 'id' => $id]);
+    }
+
+    /**
+     * Ensure on_success/on_failure/on_always correctly distinguish between
+     * NULL (next step) and 0 (end workflow) from submitted form data.
+     */
+    private function applyBranchFields(WorkflowStep $step): void
+    {
+        $post = (array)\Yii::$app->request->post('WorkflowStep', []);
+        foreach (['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'] as $field) {
+            if (!array_key_exists($field, $post) || $post[$field] === '') {
+                $step->$field = null;
+            } else {
+                $step->$field = (int)$post[$field];
+            }
+        }
     }
 
     public function actionRemoveStep(int $id): Response

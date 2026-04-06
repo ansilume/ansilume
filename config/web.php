@@ -240,6 +240,7 @@ $config = [
                 ['pattern' => 'api/v1/permissions', 'route' => 'api/v1/roles/permissions', 'verb' => 'GET'],
                 // Workflow jobs API
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/cancel', 'route' => 'api/v1/workflow-jobs/cancel', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/resume', 'route' => 'api/v1/workflow-jobs/resume', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>', 'route' => 'api/v1/workflow-jobs/view', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/workflow-jobs', 'route' => 'api/v1/workflow-jobs/index', 'verb' => 'GET'],
                 // Runner pull API

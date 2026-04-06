@@ -19,6 +19,7 @@ class WorkflowJobController extends BaseController
         return [
             ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['workflow.view']],
             ['actions' => ['cancel'], 'allow' => true, 'roles' => ['workflow.cancel']],
+            ['actions' => ['resume'], 'allow' => true, 'roles' => ['workflow.launch']],
         ];
     }
 
@@ -27,7 +28,7 @@ class WorkflowJobController extends BaseController
      */
     protected function verbRules(): array
     {
-        return ['cancel' => ['POST']];
+        return ['cancel' => ['POST'], 'resume' => ['POST']];
     }
 
     public function actionIndex(): string
@@ -56,6 +57,22 @@ class WorkflowJobController extends BaseController
         $service->cancel($model, (int)\Yii::$app->user->id);
 
         $this->session()->setFlash('success', 'Workflow canceled.');
+        return $this->redirect(['view', 'id' => $id]);
+    }
+
+    public function actionResume(int $id): Response
+    {
+        $model = $this->findModel($id);
+
+        /** @var \app\services\WorkflowExecutionService $service */
+        $service = \Yii::$app->get('workflowExecutionService');
+        try {
+            $service->resume($model, (int)\Yii::$app->user->id);
+            $this->session()->setFlash('success', 'Paused step resumed.');
+        } catch (\RuntimeException $e) {
+            $this->session()->setFlash('danger', $e->getMessage());
+        }
+
         return $this->redirect(['view', 'id' => $id]);
     }
 

@@ -418,6 +418,146 @@ class WorkflowExecutionServiceTest extends DbTestCase
         $this->assertSame(WorkflowJobStep::STATUS_FAILED, $wjs->status);
     }
 
+    // ── Resume (pause step) ────────────────────────────────────────────────
+
+    public function testResumeAdvancesPauseStep(): void
+    {
+        [$user, $jt] = $this->scaffoldTemplate();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $pauseStep = $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_PAUSE);
+        $jobStep = $this->createWorkflowStep($wt->id, 1, WorkflowStep::TYPE_JOB, $jt->id);
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        // Pause step should be running
+        $wjs = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $pauseStep->id]);
+        $this->assertNotNull($wjs);
+        $this->assertSame(WorkflowJobStep::STATUS_RUNNING, $wjs->status);
+
+        // Resume
+        $this->service()->resume($wfJob, $user->id);
+
+        // Pause step succeeded, job step running
+        $wjs->refresh();
+        $this->assertSame(WorkflowJobStep::STATUS_SUCCEEDED, $wjs->status);
+        $this->assertNotNull($wjs->finished_at);
+
+        $wjs2 = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $jobStep->id]);
+        $this->assertNotNull($wjs2);
+        $this->assertSame(WorkflowJobStep::STATUS_RUNNING, $wjs2->status);
+    }
+
+    public function testResumeThrowsForFinishedWorkflow(): void
+    {
+        $user = $this->createUser('wf_resume_fin');
+        $wt = $this->createWorkflowTemplate($user->id);
+        $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_PAUSE);
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+        $this->service()->cancel($wfJob, $user->id);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('already finished');
+        $this->service()->resume($wfJob, $user->id);
+    }
+
+    public function testResumeThrowsWhenNoPausedStep(): void
+    {
+        [$user, $jt] = $this->scaffoldTemplate();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_JOB, $jt->id);
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('No paused step');
+        $this->service()->resume($wfJob, $user->id);
+    }
+
+    // ── Next-step-by-order default ───────────────────────────────────────
+
+    public function testNullOnSuccessAdvancesToNextStepByOrder(): void
+    {
+        [$user, $jt] = $this->scaffoldTemplate();
+        $wt = $this->createWorkflowTemplate($user->id);
+        // on_success_step_id = NULL (default "next step")
+        $step1 = $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_JOB, $jt->id);
+        $step2 = $this->createWorkflowStep($wt->id, 1, WorkflowStep::TYPE_JOB, $jt->id);
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        $wjs1 = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $step1->id]);
+        $this->assertNotNull($wjs1);
+        /** @var Job $childJob */
+        $childJob = Job::findOne($wjs1->job_id);
+        $childJob->status = Job::STATUS_SUCCEEDED;
+        $childJob->finished_at = time();
+        $childJob->save(false);
+
+        $this->service()->onChildJobCompleted($childJob);
+
+        // Should auto-advance to step2 by step_order
+        $wjs2 = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $step2->id]);
+        $this->assertNotNull($wjs2, 'Should auto-advance to next step when on_success is NULL');
+        $this->assertSame(WorkflowJobStep::STATUS_RUNNING, $wjs2->status);
+    }
+
+    public function testEndWorkflowSentinelStopsExecution(): void
+    {
+        [$user, $jt] = $this->scaffoldTemplate();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $step1 = $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_JOB, $jt->id);
+        $step2 = $this->createWorkflowStep($wt->id, 1, WorkflowStep::TYPE_JOB, $jt->id);
+        // Explicitly end workflow on success — should NOT advance to step2
+        $step1->on_success_step_id = WorkflowStep::END_WORKFLOW;
+        $step1->save(false);
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        $wjs1 = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $step1->id]);
+        $this->assertNotNull($wjs1);
+        /** @var Job $childJob */
+        $childJob = Job::findOne($wjs1->job_id);
+        $childJob->status = Job::STATUS_SUCCEEDED;
+        $childJob->finished_at = time();
+        $childJob->save(false);
+
+        $this->service()->onChildJobCompleted($childJob);
+
+        // Workflow should be completed, step2 should NOT be created
+        $wfJob->refresh();
+        $this->assertSame(WorkflowJob::STATUS_SUCCEEDED, $wfJob->status);
+
+        $wjs2 = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $step2->id]);
+        $this->assertNull($wjs2, 'END_WORKFLOW sentinel should stop execution');
+    }
+
+    public function testNullOnFailureAdvancesToNextStepByOrder(): void
+    {
+        [$user, $jt] = $this->scaffoldTemplate();
+        $wt = $this->createWorkflowTemplate($user->id);
+        // on_failure_step_id = NULL (default "next step")
+        $step1 = $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_JOB, $jt->id);
+        $step2 = $this->createWorkflowStep($wt->id, 1, WorkflowStep::TYPE_JOB, $jt->id);
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        $wjs1 = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $step1->id]);
+        $this->assertNotNull($wjs1);
+        /** @var Job $childJob */
+        $childJob = Job::findOne($wjs1->job_id);
+        $childJob->status = Job::STATUS_FAILED;
+        $childJob->finished_at = time();
+        $childJob->exit_code = 1;
+        $childJob->save(false);
+
+        $this->service()->onChildJobCompleted($childJob);
+
+        // Should auto-advance to step2 even on failure (NULL = next step)
+        $wjs2 = WorkflowJobStep::findOne(['workflow_job_id' => $wfJob->id, 'workflow_step_id' => $step2->id]);
+        $this->assertNotNull($wjs2, 'Should auto-advance on failure when on_failure is NULL');
+    }
+
     public function testCompleteWorkflowSetsFinishedAt(): void
     {
         [$user, $jt] = $this->scaffoldTemplate();

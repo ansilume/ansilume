@@ -63,6 +63,25 @@ class WorkflowJobsController extends BaseApiController
     }
 
     /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionResume(int $id): array
+    {
+        $model = $this->findModel($id);
+
+        try {
+            /** @var WorkflowExecutionService $service */
+            $service = \Yii::$app->get('workflowExecutionService');
+            $service->resume($model, (int)\Yii::$app->user->id);
+        } catch (\RuntimeException $e) {
+            return $this->error($e->getMessage(), 422);
+        }
+
+        $model->refresh();
+        return $this->success($this->serialize($model));
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function serialize(WorkflowJob $m): array

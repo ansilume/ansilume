@@ -6,7 +6,10 @@ namespace app\controllers;
 
 use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\models\Team;
+use app\models\User;
 use yii\data\ActiveDataProvider;
+use yii\helpers\ArrayHelper;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
@@ -68,7 +71,7 @@ class ApprovalRuleController extends BaseController
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', $this->formParams($model));
     }
 
     public function actionUpdate(int $id): Response|string
@@ -85,7 +88,7 @@ class ApprovalRuleController extends BaseController
             $this->session()->setFlash('success', "Approval rule \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', $this->formParams($model));
     }
 
     public function actionDelete(int $id): Response
@@ -102,6 +105,42 @@ class ApprovalRuleController extends BaseController
         );
         $this->session()->setFlash('success', "Approval rule \"{$name}\" deleted.");
         return $this->redirect(['index']);
+    }
+
+    /**
+     * @return array{model: ApprovalRule, roles: array<string, string>, teams: array<int, string>, users: array<int, string>}
+     */
+    private function formParams(ApprovalRule $model): array
+    {
+        $auth = \Yii::$app->authManager;
+        $roleNames = [];
+        if ($auth !== null) {
+            foreach ($auth->getRoles() as $role) {
+                $roleNames[$role->name] = $role->name;
+            }
+            ksort($roleNames);
+        }
+
+        /** @var array<int, string> $teams */
+        $teams = ArrayHelper::map(
+            Team::find()->orderBy('name')->all(),
+            'id',
+            'name'
+        );
+
+        /** @var array<int, string> $users */
+        $users = ArrayHelper::map(
+            User::find()->where(['status' => User::STATUS_ACTIVE])->orderBy('username')->all(),
+            'id',
+            'username'
+        );
+
+        return [
+            'model' => $model,
+            'roles' => $roleNames,
+            'teams' => $teams,
+            'users' => $users,
+        ];
     }
 
     private function findModel(int $id): ApprovalRule

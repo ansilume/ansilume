@@ -106,8 +106,24 @@ foreach ($steps as $s) {
                                 —
                             <?php endif; ?>
                         </td>
-                        <td><?= $step->on_success_step_id ? Html::encode($stepOptions[$step->on_success_step_id] ?? '#' . $step->on_success_step_id) : '—' ?></td>
-                        <td><?= $step->on_failure_step_id ? Html::encode($stepOptions[$step->on_failure_step_id] ?? '#' . $step->on_failure_step_id) : '—' ?></td>
+                        <td><?php
+                        if ($step->on_success_step_id === WorkflowStep::END_WORKFLOW) {
+                            echo '<span class="text-muted">end workflow</span>';
+                        } elseif ($step->on_success_step_id !== null) {
+                            echo Html::encode($stepOptions[$step->on_success_step_id] ?? '#' . $step->on_success_step_id);
+                        } else {
+                            echo '<span class="text-muted">→ next step</span>';
+                        }
+                        ?></td>
+                        <td><?php
+                        if ($step->on_failure_step_id === WorkflowStep::END_WORKFLOW) {
+                            echo '<span class="text-muted">end workflow</span>';
+                        } elseif ($step->on_failure_step_id !== null) {
+                            echo Html::encode($stepOptions[$step->on_failure_step_id] ?? '#' . $step->on_failure_step_id);
+                        } else {
+                            echo '<span class="text-muted">→ next step</span>';
+                        }
+                        ?></td>
                         <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
                         <td>
                             <?= Html::beginForm(['remove-step', 'id' => $model->id], 'post') ?>
@@ -165,17 +181,21 @@ foreach ($steps as $s) {
                     )->label('Approval Rule') ?>
                 </div>
             </div>
+            <?php
+            // Build options with "next step" (NULL) as default and "end workflow" (-1) as explicit choice
+            $branchOptions = [WorkflowStep::END_WORKFLOW => '— end workflow —'] + $stepOptions;
+            ?>
             <div class="row g-2">
                 <div class="col-md-4">
                     <?= $form->field($step, 'on_success_step_id')->dropDownList(
-                        $stepOptions,
-                        ['prompt' => '— end workflow —']
+                        $branchOptions,
+                        ['prompt' => '— next step (default) —']
                     )->label('On Success → go to') ?>
                 </div>
                 <div class="col-md-4">
                     <?= $form->field($step, 'on_failure_step_id')->dropDownList(
-                        $stepOptions,
-                        ['prompt' => '— end workflow —']
+                        $branchOptions,
+                        ['prompt' => '— next step (default) —']
                     )->label('On Failure → go to') ?>
                 </div>
                 <div class="col-md-4">

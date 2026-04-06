@@ -150,4 +150,115 @@ class NotificationTemplateTest extends TestCase
         $this->assertSame('warning', NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_APPROVAL_REQUESTED));
         $this->assertSame('info', NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_JOB_SUCCEEDED));
     }
+
+    // -- Channel config validation ------------------------------------------------
+
+    public function testTelegramRequiresBotTokenAndChatId(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_TELEGRAM,
+            'config' => '{}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertTrue($m->hasErrors('config'));
+        $errors = $m->getErrors('config');
+        $this->assertCount(2, $errors);
+        $this->assertStringContainsString('bot_token', $errors[0]);
+        $this->assertStringContainsString('chat_id', $errors[1]);
+    }
+
+    public function testTelegramValidWithBothFields(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_TELEGRAM,
+            'config' => '{"bot_token":"123:abc","chat_id":"-100"}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertFalse($m->hasErrors('config'));
+    }
+
+    public function testSlackRequiresWebhookUrl(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_SLACK,
+            'config' => '{}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertTrue($m->hasErrors('config'));
+        $this->assertStringContainsString('webhook_url', $m->getFirstError('config') ?? '');
+    }
+
+    public function testTeamsRequiresWebhookUrl(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_TEAMS,
+            'config' => '{}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertTrue($m->hasErrors('config'));
+        $this->assertStringContainsString('webhook_url', $m->getFirstError('config') ?? '');
+    }
+
+    public function testWebhookRequiresUrl(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_WEBHOOK,
+            'config' => '{}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertTrue($m->hasErrors('config'));
+        $this->assertStringContainsString('url', $m->getFirstError('config') ?? '');
+    }
+
+    public function testPagerdutyRequiresRoutingKey(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_PAGERDUTY,
+            'config' => '{}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertTrue($m->hasErrors('config'));
+        $this->assertStringContainsString('routing_key', $m->getFirstError('config') ?? '');
+    }
+
+    public function testEmailRequiresEmails(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_EMAIL,
+            'config' => '{}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertTrue($m->hasErrors('config'));
+        $this->assertStringContainsString('emails', $m->getFirstError('config') ?? '');
+    }
+
+    public function testEmailValidWithRecipients(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_EMAIL,
+            'config' => '{"emails":["a@b.com"]}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertFalse($m->hasErrors('config'));
+    }
+
+    public function testWebhookValidWithUrl(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_WEBHOOK,
+            'config' => '{"url":"https://example.com/hook"}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertFalse($m->hasErrors('config'));
+    }
+
+    public function testPagerdutyValidWithRoutingKey(): void
+    {
+        $m = $this->makeModel([
+            'channel' => NotificationTemplate::CHANNEL_PAGERDUTY,
+            'config' => '{"routing_key":"abc123"}',
+        ]);
+        $m->validateChannelConfig('config');
+        $this->assertFalse($m->hasErrors('config'));
+    }
 }

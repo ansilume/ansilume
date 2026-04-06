@@ -19,6 +19,17 @@ $selectedEvents = $model->isNewRecord
     ? NotificationTemplate::defaultFailureEvents()
     : $model->getEventList();
 
+// Pre-fill subject and body with sensible defaults so users can edit from there.
+$defaultSubject = '[Ansilume] {{ event }} — {{ template.name }}';
+$defaultBody = "Event: {{ event }} ({{ severity }})\nTemplate: {{ template.name }}\nProject: {{ project.name }}\nURL: {{ job.url }}";
+
+if ($model->isNewRecord && empty($model->subject_template)) {
+    $model->subject_template = $defaultSubject;
+}
+if ($model->isNewRecord && empty($model->body_template)) {
+    $model->body_template = $defaultBody;
+}
+
 $failurePreset = NotificationTemplate::allFailureEvents();
 $allEvents = array_keys(NotificationTemplate::eventLabels());
 ?>
@@ -39,8 +50,9 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
 
     <div id="config-email" class="channel-config">
         <div class="card card-body bg-transparent border-secondary mb-3">
-            <label class="form-label">Email Recipients</label>
-            <input type="text" id="email-recipients" class="form-control font-monospace"
+            <label class="form-label">Email Recipients <span class="text-danger">*</span></label>
+            <input type="text" id="email-recipients" class="form-control font-monospace channel-required"
+                   data-channel="email"
                    placeholder='["ops@example.com","alerts@example.com"]'>
             <div class="form-text">JSON array of email addresses.</div>
         </div>
@@ -48,24 +60,27 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
 
     <div id="config-slack" class="channel-config" style="display:none">
         <div class="card card-body bg-transparent border-secondary mb-3">
-            <label class="form-label">Slack Webhook URL</label>
-            <input type="text" id="slack-webhook-url" class="form-control font-monospace"
+            <label class="form-label">Slack Webhook URL <span class="text-danger">*</span></label>
+            <input type="text" id="slack-webhook-url" class="form-control font-monospace channel-required"
+                   data-channel="slack"
                    placeholder="https://hooks.slack.com/services/...">
         </div>
     </div>
 
     <div id="config-teams" class="channel-config" style="display:none">
         <div class="card card-body bg-transparent border-secondary mb-3">
-            <label class="form-label">Teams Webhook URL</label>
-            <input type="text" id="teams-webhook-url" class="form-control font-monospace"
+            <label class="form-label">Teams Webhook URL <span class="text-danger">*</span></label>
+            <input type="text" id="teams-webhook-url" class="form-control font-monospace channel-required"
+                   data-channel="teams"
                    placeholder="https://outlook.office.com/webhook/...">
         </div>
     </div>
 
     <div id="config-webhook" class="channel-config" style="display:none">
         <div class="card card-body bg-transparent border-secondary mb-3">
-            <label class="form-label">Webhook URL</label>
-            <input type="text" id="webhook-url" class="form-control font-monospace"
+            <label class="form-label">Webhook URL <span class="text-danger">*</span></label>
+            <input type="text" id="webhook-url" class="form-control font-monospace channel-required"
+                   data-channel="webhook"
                    placeholder="https://example.com/hook">
             <label class="form-label mt-2">Custom Headers (JSON)</label>
             <input type="text" id="webhook-headers" class="form-control font-monospace"
@@ -75,11 +90,13 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
 
     <div id="config-telegram" class="channel-config" style="display:none">
         <div class="card card-body bg-transparent border-secondary mb-3">
-            <label class="form-label">Bot Token</label>
-            <input type="text" id="telegram-bot-token" class="form-control font-monospace"
+            <label class="form-label">Bot Token <span class="text-danger">*</span></label>
+            <input type="text" id="telegram-bot-token" class="form-control font-monospace channel-required"
+                   data-channel="telegram"
                    placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ">
-            <label class="form-label mt-2">Chat ID</label>
-            <input type="text" id="telegram-chat-id" class="form-control font-monospace"
+            <label class="form-label mt-2">Chat ID <span class="text-danger">*</span></label>
+            <input type="text" id="telegram-chat-id" class="form-control font-monospace channel-required"
+                   data-channel="telegram"
                    placeholder="-1001234567890">
             <div class="form-text">Create a bot via @BotFather and invite it to the target chat.</div>
         </div>
@@ -87,8 +104,9 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
 
     <div id="config-pagerduty" class="channel-config" style="display:none">
         <div class="card card-body bg-transparent border-secondary mb-3">
-            <label class="form-label">Routing Key (Integration Key)</label>
-            <input type="text" id="pagerduty-routing-key" class="form-control font-monospace"
+            <label class="form-label">Routing Key (Integration Key) <span class="text-danger">*</span></label>
+            <input type="text" id="pagerduty-routing-key" class="form-control font-monospace channel-required"
+                   data-channel="pagerduty"
                    placeholder="R0UT1NGKEY1234567890">
             <div class="form-text">From a PagerDuty Events API v2 integration on the target service. Severity follows the event type; success events automatically resolve the matching incident.</div>
         </div>
@@ -127,14 +145,12 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
     <h5 class="mt-3 text-muted">Templates</h5>
     <?= $form->field($model, 'subject_template')->textInput([
         'maxlength' => 512,
-        'placeholder' => '[Ansilume] {{ event }} — {{ template.name }}',
         'class' => 'form-control font-monospace',
     ])->hint('Variables: {{ event }}, {{ severity }}, {{ job.id }}, {{ job.status }}, {{ job.url }}, {{ template.name }}, {{ project.name }}, {{ launched_by }}, {{ runner.name }}, {{ workflow.id }}, {{ approval.rule_name }}, {{ schedule.name }}, {{ timestamp }}') ?>
 
     <?= $form->field($model, 'body_template')->textarea([
         'rows' => 6,
         'class' => 'form-control font-monospace',
-        'placeholder' => "Event: {{ event }} ({{ severity }})\nTemplate: {{ template.name }}\nProject: {{ project.name }}\nURL: {{ job.url }}",
     ]) ?>
 
     <div class="mt-4">

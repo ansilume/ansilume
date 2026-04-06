@@ -84,6 +84,7 @@ class NotificationTemplate extends ActiveRecord
             [['channel'], 'in', 'range' => array_keys(self::channelLabels())],
             [['config'], 'string'],
             [['config'], 'validateJson'],
+            [['config'], 'validateChannelConfig'],
             [['subject_template'], 'string', 'max' => 512],
             [['events'], 'string', 'max' => 1024],
             [['events'], 'validateEvents'],
@@ -115,6 +116,42 @@ class NotificationTemplate extends ActiveRecord
                 return;
             }
         }
+    }
+
+    /**
+     * Validate that channel-specific required config fields are present.
+     */
+    public function validateChannelConfig(string $attribute): void
+    {
+        $cfg = $this->getParsedConfig();
+        $missing = $this->missingChannelConfigFields($cfg);
+        foreach ($missing as $field) {
+            $this->addError($attribute, "{$field} is required for {$this->channelLabel($this->channel)}.");
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $cfg
+     * @return string[]
+     */
+    private function missingChannelConfigFields(array $cfg): array
+    {
+        $required = match ($this->channel) {
+            self::CHANNEL_TELEGRAM => ['bot_token', 'chat_id'],
+            self::CHANNEL_SLACK => ['webhook_url'],
+            self::CHANNEL_TEAMS => ['webhook_url'],
+            self::CHANNEL_WEBHOOK => ['url'],
+            self::CHANNEL_PAGERDUTY => ['routing_key'],
+            self::CHANNEL_EMAIL => ['emails'],
+            default => [],
+        };
+        $missing = [];
+        foreach ($required as $field) {
+            if (empty($cfg[$field])) {
+                $missing[] = $field;
+            }
+        }
+        return $missing;
     }
 
     /**

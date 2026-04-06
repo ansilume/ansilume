@@ -23,12 +23,43 @@ test.describe('Approval Rules CRUD', () => {
       name: 'e2e-crud-approval-rule',
       description: 'Created by E2E test',
     });
-    const typeSelect = page.locator('#approvalrule-approver_type');
-    if (await typeSelect.isVisible()) {
-      await typeSelect.selectOption('role');
-    }
+    // Select approver type and configure via the UI selector
+    await page.locator('#approver-type').selectOption('role');
+    await expect(page.locator('#config-role')).toBeVisible();
+    await page.locator('#approver-role').selectOption('admin');
     await submitForm(page);
     await expectFlash(page, 'success');
+  });
+
+  test('approver config panels toggle by type', async ({ page }) => {
+    await page.goto('/approval-rule/create');
+
+    // Default is "role" — role panel visible, others hidden
+    await expect(page.locator('#config-role')).toBeVisible();
+    await expect(page.locator('#config-team')).toBeHidden();
+    await expect(page.locator('#config-users')).toBeHidden();
+
+    // Switch to "team"
+    await page.locator('#approver-type').selectOption('team');
+    await expect(page.locator('#config-role')).toBeHidden();
+    await expect(page.locator('#config-team')).toBeVisible();
+    await expect(page.locator('#config-users')).toBeHidden();
+
+    // Switch to "users"
+    await page.locator('#approver-type').selectOption('users');
+    await expect(page.locator('#config-role')).toBeHidden();
+    await expect(page.locator('#config-team')).toBeHidden();
+    await expect(page.locator('#config-users')).toBeVisible();
+  });
+
+  test('view shows human-readable approver config', async ({ page }) => {
+    await page.goto('/approval-rule/index');
+    const row = page.locator('table.table tbody tr', { hasText: 'e2e-approval-rule' });
+    if (await row.isVisible({ timeout: 3_000 }).catch(() => false)) {
+      await row.locator('a').first().click();
+      // Should show "Role: admin" instead of raw JSON
+      await expect(page.locator('body')).toContainText('Role:');
+    }
   });
 
   test('update approval rule', async ({ page }) => {

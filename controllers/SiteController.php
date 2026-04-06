@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\models\ApprovalRequest;
 use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobHostSummary;
@@ -14,8 +15,11 @@ use app\models\PasswordResetRequestForm;
 use app\models\Project;
 use app\models\Runner;
 use app\models\RunnerGroup;
+use app\models\Schedule;
 use app\models\TotpVerifyForm;
 use app\models\User;
+use app\models\WorkflowJob;
+use app\models\WorkflowTemplate;
 use yii\web\BadRequestHttpException;
 use yii\web\Response;
 
@@ -41,22 +45,10 @@ class SiteController extends BaseController
     {
         $today = (int)mktime(0, 0, 0, (int)date('n'), (int)date('j'), (int)date('Y'));
         $week = (int)strtotime('-6 days', $today);
+        $yesterday = $today - 86400;
 
-        $stats = [
-            'projects' => Project::find()->count(),
-            'queued' => Job::find()->where(['status' => Job::STATUS_QUEUED])->count(),
-            'running' => Job::find()->where(['status' => Job::STATUS_RUNNING])->count(),
-            'jobs_today' => Job::find()->where(['>=', 'created_at', $today])->count(),
-        ];
-
-        // Status breakdown for the last 7 days
-        $statusCounts = [];
-        foreach (Job::statuses() as $status) {
-            $statusCounts[$status] = (int)Job::find()
-                ->where(['status' => $status])
-                ->andWhere(['>=', 'created_at', $week])
-                ->count();
-        }
+        $stats = $this->buildStatCards($today);
+        $statusCounts = $this->buildStatusCounts($week);
 
         $recentJobs = Job::find()
             ->with(['jobTemplate', 'launcher'])
@@ -75,9 +67,50 @@ class SiteController extends BaseController
             ->orderBy('name')
             ->all();
 
+        $workflowTemplates = WorkflowTemplate::find()
+            ->select(['id', 'name'])
+            ->orderBy('name')
+            ->all();
+
         $cutoff = time() - RunnerGroup::STALE_AFTER;
         $totalRunners = (int)Runner::find()->count();
         $onlineRunners = (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count();
+
+        $pendingApprovals = ApprovalRequest::find()
+            ->with(['approvalRule', 'job.jobTemplate'])
+            ->where(['status' => ApprovalRequest::STATUS_PENDING])
+            ->orderBy(['requested_at' => SORT_DESC])
+            ->limit(5)
+            ->all();
+
+        $runningWorkflows = WorkflowJob::find()
+            ->with(['workflowTemplate', 'launcher', 'currentStep'])
+            ->where(['status' => WorkflowJob::STATUS_RUNNING])
+            ->orderBy(['id' => SORT_DESC])
+            ->all();
+
+        $upcomingSchedules = Schedule::find()
+            ->with(['jobTemplate'])
+            ->where(['enabled' => true])
+            ->andWhere(['>', 'next_run_at', 0])
+            ->orderBy(['next_run_at' => SORT_ASC])
+            ->limit(5)
+            ->all();
+
+        $failedJobs = Job::find()
+            ->with(['jobTemplate', 'launcher'])
+            ->where(['status' => Job::STATUS_FAILED])
+            ->andWhere(['>=', 'finished_at', $yesterday])
+            ->orderBy(['finished_at' => SORT_DESC])
+            ->limit(5)
+            ->all();
+
+        $syncErrors = Project::find()
+            ->where(['status' => Project::STATUS_ERROR])
+            ->orderBy(['updated_at' => SORT_DESC])
+            ->all();
+
+        $hasSchedules = Schedule::find()->where(['enabled' => true])->exists();
 
         return $this->render('index', [
             'stats' => $stats,
@@ -85,9 +118,50 @@ class SiteController extends BaseController
             'recentJobs' => $recentJobs,
             'runningJobs' => $runningJobs,
             'templates' => $templates,
+            'workflowTemplates' => $workflowTemplates,
             'onlineRunners' => $onlineRunners,
             'totalRunners' => $totalRunners,
+            'pendingApprovals' => $pendingApprovals,
+            'runningWorkflows' => $runningWorkflows,
+            'upcomingSchedules' => $upcomingSchedules,
+            'failedJobs' => $failedJobs,
+            'syncErrors' => $syncErrors,
+            'hasSchedules' => $hasSchedules,
         ]);
+    }
+
+    /**
+     * @return array{jobs_today: int, jobs_today_failed: int, queued: int, running: int, pending_approvals: int}
+     */
+    private function buildStatCards(int $today): array
+    {
+        return [
+            'jobs_today' => (int)Job::find()->where(['>=', 'created_at', $today])->count(),
+            'jobs_today_failed' => (int)Job::find()
+                ->where(['>=', 'created_at', $today])
+                ->andWhere(['status' => Job::STATUS_FAILED])
+                ->count(),
+            'queued' => (int)Job::find()->where(['status' => Job::STATUS_QUEUED])->count(),
+            'running' => (int)Job::find()->where(['status' => Job::STATUS_RUNNING])->count(),
+            'pending_approvals' => (int)ApprovalRequest::find()
+                ->where(['status' => ApprovalRequest::STATUS_PENDING])
+                ->count(),
+        ];
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function buildStatusCounts(int $week): array
+    {
+        $statusCounts = [];
+        foreach (Job::statuses() as $status) {
+            $statusCounts[$status] = (int)Job::find()
+                ->where(['status' => $status])
+                ->andWhere(['>=', 'created_at', $week])
+                ->count();
+        }
+        return $statusCounts;
     }
 
     /**

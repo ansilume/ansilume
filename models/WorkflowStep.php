@@ -35,6 +35,16 @@ class WorkflowStep extends ActiveRecord
     public const TYPE_APPROVAL = 'approval';
     public const TYPE_PAUSE = 'pause';
 
+    /**
+     * Sentinel value stored in on_success_step_id / on_failure_step_id
+     * to mean "end the workflow here" rather than advancing to the next
+     * step by step_order (which is the default when the column is NULL).
+     *
+     * Uses 0 because the column is unsigned and no real step has id=0.
+     * NULL means "auto-advance to the next step by step_order".
+     */
+    public const END_WORKFLOW = 0;
+
     public static function tableName(): string
     {
         return '{{%workflow_step}}';
@@ -53,7 +63,7 @@ class WorkflowStep extends ActiveRecord
             [['step_type'], 'in', 'range' => [self::TYPE_JOB, self::TYPE_APPROVAL, self::TYPE_PAUSE]],
             [['step_order'], 'integer', 'min' => 0],
             [['workflow_template_id', 'job_template_id', 'approval_rule_id'], 'integer'],
-            [['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'], 'integer'],
+            [['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'], 'integer', 'min' => 0],
             [['extra_vars_template'], 'string'],
             [['extra_vars_template'], 'validateJson'],
         ];

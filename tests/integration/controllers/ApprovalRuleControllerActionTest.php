@@ -63,6 +63,14 @@ class ApprovalRuleControllerActionTest extends WebControllerTestCase
         $this->assertSame(1, $model->required_approvals);
         $this->assertSame(ApprovalRule::TIMEOUT_ACTION_REJECT, $model->timeout_action);
         $this->assertSame(ApprovalRule::APPROVER_TYPE_ROLE, $model->approver_type);
+
+        // Form params include approver selector data
+        $this->assertArrayHasKey('roles', $ctrl->capturedParams);
+        $this->assertArrayHasKey('teams', $ctrl->capturedParams);
+        $this->assertArrayHasKey('users', $ctrl->capturedParams);
+        $this->assertIsArray($ctrl->capturedParams['roles']);
+        $this->assertIsArray($ctrl->capturedParams['teams']);
+        $this->assertIsArray($ctrl->capturedParams['users']);
     }
 
     public function testCreatePersistsAndAudits(): void
