@@ -20,6 +20,14 @@ $this->title = 'Runner Groups';
     <?php endif; ?>
 </div>
 
+<div class="alert alert-info d-flex align-items-start gap-2 mb-3">
+    <span class="fs-5">&#9432;</span>
+    <div>
+        Runners register themselves against a group using the group token.
+        See the <a href="https://github.com/ansilume/ansilume/blob/main/docs/runners.md" target="_blank" rel="noopener">Runner setup docs</a> for how to install and connect a new runner.
+    </div>
+</div>
+
 <?php if (empty($groups)) : ?>
     <div class="card">
         <div class="card-body text-muted">

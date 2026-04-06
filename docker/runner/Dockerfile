@@ -39,8 +39,9 @@ COPY . /var/www/
 # Composer dependencies from stage 1
 COPY --from=composer /build/vendor /var/www/vendor
 
-# Runtime directory for token cache
-RUN mkdir -p /var/www/runtime && chown -R www-data:www-data /var/www/runtime
+# Runtime directories: token cache + Ansible tmp (www-data home is /var/www)
+RUN mkdir -p /var/www/runtime /var/www/.ansible/tmp \
+    && chown -R www-data:www-data /var/www/runtime /var/www/.ansible
 
 COPY docker/runner/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
