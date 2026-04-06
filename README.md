@@ -38,21 +38,44 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 
 ## Features
 
-- **Async execution** — jobs run in isolated worker processes, never in web requests
-- **Full audit trail** — every launch, change, and access event is recorded
-- **Role-based access** — `viewer`, `operator`, `admin` roles with team-scoped project access
-- **Secure credential storage** — AES-256-CBC encrypted at rest, never exposed in logs or HTML
-- **Two-factor authentication** — optional TOTP 2FA per user (Google Authenticator, Authy, 1Password, …) with recovery codes
-- **Pull-based runners** — lightweight runner agents poll for work and self-register via bootstrap token
-- **Scheduled jobs** — cron-based scheduling with next/last run tracking
-- **Inbound webhooks** — trigger template executions from external systems
-- **Live job output** — streaming stdout/stderr with per-task play recap
-- **Git-backed projects** — sync playbooks from remote repositories
-- **Lint integration** — automatic ansible-lint on project sync
-- **Email notifications** — configurable success/failure alerts per job template with cross-client HTML email templates
-- **Password reset** — self-service password reset via email
-- **Monitoring endpoints** — [Prometheus and JSON metrics](docs/monitoring.md) for jobs, tasks, hosts, runners, and infrastructure health
-- **Production deployment** — [Ansible role](docs/deployment.md) for automated production installation
+### Execution
+- **Async, isolated execution** — jobs run in queue workers and runner agents, never in the web request thread
+- **Live job output** — streaming stdout/stderr with ANSI colors, per-task progress, and full play recap per host
+- **Job artifacts & host summaries** — structured results captured via a custom Ansible callback plugin
+- **Job templates** — reusable launch configs with extra vars, verbosity, become, forks, limits, tags, and survey fields for launch-time input
+- **Workflows** — chain multiple templates with on-success / on-failure / always branches and manual approval gates
+- **Pull-based runners** — lightweight agents self-register via bootstrap token; isolate execution from the control plane
+- **Runner groups** — logical grouping with per-group tokens, health tracking, and a selftest playbook
+- **Cancel & timeout** — in-flight jobs can be canceled; configurable per-template execution timeouts
+
+### Inventory, projects & credentials
+- **Git-backed projects** — sync playbooks from remote repositories, or manage content manually
+- **Automatic ansible-lint** — lint results recorded on every project sync
+- **Inventories** — static, file-based, and dynamic inventories parsed through real `ansible-inventory`
+- **Credentials** — SSH key, username/password, vault secret, and token types, all AES-256-CBC encrypted at rest
+- **SSH key tools** — in-UI ed25519 key generation with algorithm/strength analysis for uploaded keys
+
+### Automation & integrations
+- **Scheduled jobs** — cron-based scheduling with next/last-run tracking and catch-up protection
+- **Inbound webhooks** — trigger templates from external systems with per-webhook tokens
+- **Notifications v2** — email, Slack, Webhook, Telegram, and PagerDuty channels with a shared event catalog
+- **REST API (v1)** — every feature exposed as an API; the UI is just one client
+- **OpenAPI 3.1 spec** — canonical `web/openapi.yaml` + bundled Swagger UI at `:8088` for interactive exploration
+- **Analytics dashboard** — job, workflow, approval, and runner statistics with time-window filters
+
+### Access control & auditability
+- **Custom role management** — built-in `viewer` / `operator` / `admin` plus user-defined roles with domain-grouped permission editor
+- **Team-scoped access** — projects, inventories, credentials, and templates scoped per team
+- **Two-factor authentication** — optional TOTP 2FA per user (Google Authenticator, Authy, 1Password, …) with bcrypt-hashed recovery codes and rate-limited verification
+- **Password reset** — self-service reset via signed email link
+- **Full audit trail** — every launch, configuration change, credential access, and permission edit recorded against an actor
+- **Approval workflows** — gate sensitive steps behind named approval rules with per-rule approver lists
+
+### Operations
+- **Monitoring endpoints** — [Prometheus and JSON metrics](docs/monitoring.md) for jobs, tasks, hosts, runners, queues, and infrastructure health
+- **Health dashboard** — at-a-glance status of database, Redis, queue, runners, and migrations
+- **Production deployment** — [Ansible role](docs/deployment.md) for automated install, upgrades, and rollbacks
+- **Docker-native** — reproducible dev and prod stacks via `docker compose`, prebuilt images on ghcr.io
 
 ---
 
