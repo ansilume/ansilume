@@ -210,8 +210,8 @@ done
 section "Network Connectivity"
 
 # Check if containers can reach each other
-app_container=$(docker compose ps -q app 2>/dev/null | head -1)
-nginx_container=$(docker compose ps -q nginx 2>/dev/null | head -1)
+app_container=$(docker compose ps -q app 2>/dev/null | head -1 || true)
+nginx_container=$(docker compose ps -q nginx 2>/dev/null | head -1 || true)
 
 if [ -n "$app_container" ]; then
     # Read DB and Redis host from .env (fall back to container defaults)
@@ -242,9 +242,12 @@ if [ -n "$app_container" ]; then
     # Health check from inside app
     info ""
     info "App health check:"
-    docker exec "$app_container" php /var/www/yii health/check 2>&1 | redact | while read -r line; do
-        info "  ${line}"
-    done
+    health_output=$(docker exec "$app_container" php /var/www/yii health/check 2>&1 || true)
+    if [ -n "$health_output" ]; then
+        echo "$health_output" | redact | while read -r line; do
+            info "  ${line}"
+        done
+    fi
 fi
 
 if [ -n "$nginx_container" ]; then
@@ -269,16 +272,21 @@ fi
 section "Recent Logs (last 30 lines per container)"
 
 for svc in db redis app nginx queue-worker schedule-runner runner-1; do
-    container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
+    container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1 || true)
     if [ -z "$container_id" ]; then
         warn "${svc}: not running"
         continue
     fi
 
     printf "\n  ${BOLD}── %s ──${NC}\n" "$svc"
-    docker logs --tail 30 "$container_id" 2>&1 | redact | while read -r line; do
-        printf "    %s\n" "$line"
-    done
+    log_output=$(docker logs --tail 30 "$container_id" 2>&1 || true)
+    if [ -n "$log_output" ]; then
+        echo "$log_output" | redact | while read -r line; do
+            printf "    %s\n" "$line"
+        done
+    else
+        info "(no log output)"
+    fi
 done
 
 # ── 9. Migration status ─────────────────────────────────────────────────────
@@ -351,7 +359,7 @@ all_ok=true
 expected_services=$(docker compose config --services 2>/dev/null || echo "app nginx redis")
 
 for svc in $expected_services; do
-    container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
+    container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1 || true)
     if [ -z "$container_id" ]; then
         # Distinguish critical from optional
         case "$svc" in
@@ -380,8 +388,8 @@ done
 echo ""
 
 # Known issue detection
-nginx_id=$(docker compose ps -q nginx 2>/dev/null | head -1)
-runner_id=$(docker compose ps -q runner-1 2>/dev/null | head -1)
+nginx_id=$(docker compose ps -q nginx 2>/dev/null | head -1 || true)
+runner_id=$(docker compose ps -q runner-1 2>/dev/null | head -1 || true)
 if [ -n "$nginx_id" ] && [ -z "$runner_id" ]; then
     nginx_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$nginx_id" 2>/dev/null)
     if [ "$nginx_health" = "unhealthy" ]; then

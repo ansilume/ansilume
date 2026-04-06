@@ -18,14 +18,15 @@ class HealthControllerActionTest extends WebControllerTestCase
         $this->assertArrayHasKey('contentNegotiator', $behaviors);
     }
 
-    public function testIndexReturnsDegradedWhenNoRunners(): void
+    public function testIndexReturnsOkWhenNoRunners(): void
     {
-        // Fresh test DB: no runners, no schedules → runner check fails.
+        // Fresh test DB: no runners, no schedules → advisory checks fail but
+        // critical checks (db, redis, migrations) pass → status is "ok" / 200.
         $ctrl = new HealthController('health', \Yii::$app);
         $result = $ctrl->actionIndex();
 
-        $this->assertSame('degraded', $result['status']);
-        $this->assertSame(503, \Yii::$app->response->statusCode);
+        $this->assertSame('ok', $result['status']);
+        $this->assertSame(200, \Yii::$app->response->statusCode);
         $this->assertArrayHasKey('database', $result['checks']);
         $this->assertTrue($result['checks']['database']['ok']);
         $this->assertArrayHasKey('redis', $result['checks']);

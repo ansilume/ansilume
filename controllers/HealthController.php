@@ -42,14 +42,16 @@ class HealthController extends Controller
      */
     public function actionIndex(): array
     {
-        $checks = $this->runChecks();
-        $healthy = !in_array(false, array_column($checks, 'ok'), true);
+        $critical = $this->criticalChecks();
+        $advisory = $this->advisoryChecks();
+
+        $healthy = !in_array(false, array_column($critical, 'ok'), true);
 
         $this->setHttpStatus($healthy ? 200 : 503);
 
         return [
             'status' => $healthy ? 'ok' : 'degraded',
-            'checks' => $checks,
+            'checks' => array_merge($critical, $advisory),
             'runners' => $this->runnerSummary(),
             'schedules' => $this->scheduleSummary(),
             'queue' => $this->queueSummary(),
@@ -57,14 +59,27 @@ class HealthController extends Controller
     }
 
     /**
+     * Checks that determine HTTP 200 vs 503.
+     *
      * @return array<string, array<string, mixed>>
      */
-    protected function runChecks(): array
+    protected function criticalChecks(): array
     {
         return [
             'database' => $this->checkDatabase(),
             'redis' => $this->checkRedis(),
             'migrations' => $this->checkMigrations(),
+        ];
+    }
+
+    /**
+     * Informational checks — reported but do not cause 503.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    protected function advisoryChecks(): array
+    {
+        return [
             'runners' => $this->checkRunners(),
             'scheduler' => $this->checkScheduler(),
         ];

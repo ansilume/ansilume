@@ -9,6 +9,7 @@ use app\controllers\ApprovalRuleController;
 use app\controllers\AuditLogController;
 use app\controllers\CredentialController;
 use app\controllers\JobTemplateController;
+use app\controllers\ProfileController;
 use app\controllers\ProjectController;
 use app\controllers\RoleController;
 use app\controllers\WorkflowJobController;
@@ -405,5 +406,22 @@ class ControllerAccessRulesTest extends TestCase
     {
         $verbs = $this->getVerbRules(RoleController::class);
         $this->assertActionIsPostOnly($verbs, 'delete');
+    }
+
+    // ── ProfileController ────────────────────────────────────────────────────
+
+    public function testProfileActionsRequireLogin(): void
+    {
+        $rules = $this->getAccessRules(ProfileController::class);
+        $this->assertActionRequiresRole($rules, 'security', '@');
+        $this->assertActionRequiresRole($rules, 'change-password', '@');
+        $this->assertActionRequiresRole($rules, 'tokens', '@');
+        $this->assertActionRequiresRole($rules, 'setup-totp', '@');
+    }
+
+    public function testChangePasswordIsPostOnly(): void
+    {
+        $verbs = $this->getVerbRules(ProfileController::class);
+        $this->assertActionIsPostOnly($verbs, 'change-password');
     }
 }

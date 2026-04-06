@@ -8,6 +8,9 @@
 #   # edit .env — set secrets and passwords
 #   docker compose up -d
 #   docker compose exec app php yii setup/admin admin admin@example.com yourpassword
+#
+# Troubleshooting:
+#   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 
 services:
   app:
@@ -39,7 +42,7 @@ services:
       app:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health 2>/dev/null | grep -q '\"status\":\"ok\"'"]
+      test: ["CMD-SHELL", "wget -qSO /dev/null http://127.0.0.1/health 2>&1 | grep -q 'HTTP/'"]
       interval: 15s
       timeout: 5s
       retries: 3

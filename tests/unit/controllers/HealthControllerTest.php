@@ -110,19 +110,16 @@ class HealthControllerTest extends TestCase
 
     // ── runChecks() structure ──────────────────────────────────────────────
 
-    public function testRunChecksIncludesAllKeys(): void
+    public function testChecksIncludesAllKeys(): void
     {
         $ctrl = $this->makeController(['total' => 1, 'online' => 1, 'offline' => 0]);
-        $ref  = new \ReflectionMethod($ctrl, 'runChecks');
-        $ref->setAccessible(true);
+        $response = $ctrl->actionIndex();
 
-        $checks = $ref->invoke($ctrl);
-
-        $this->assertArrayHasKey('database', $checks);
-        $this->assertArrayHasKey('redis', $checks);
-        $this->assertArrayHasKey('migrations', $checks);
-        $this->assertArrayHasKey('runners', $checks);
-        $this->assertArrayHasKey('scheduler', $checks);
+        $this->assertArrayHasKey('database', $response['checks']);
+        $this->assertArrayHasKey('redis', $response['checks']);
+        $this->assertArrayHasKey('migrations', $response['checks']);
+        $this->assertArrayHasKey('runners', $response['checks']);
+        $this->assertArrayHasKey('scheduler', $response['checks']);
     }
 
     // ── Full action — HTTP status ──────────────────────────────────────────
@@ -136,23 +133,25 @@ class HealthControllerTest extends TestCase
         $this->assertSame(200, $ctrl->capturedStatus);
     }
 
-    public function testActionIndexReturnsDegradedWhenNoRunnersOnline(): void
+    public function testActionIndexReturnsOkWhenNoRunnersOnline(): void
     {
+        // Runners are advisory — offline runners do not cause 503.
         $ctrl = $this->makeController(['total' => 2, 'online' => 0, 'offline' => 2]);
         $response = $ctrl->actionIndex();
 
-        $this->assertSame('degraded', $response['status']);
-        $this->assertSame(503, $ctrl->capturedStatus);
+        $this->assertSame('ok', $response['status']);
+        $this->assertSame(200, $ctrl->capturedStatus);
         $this->assertFalse($response['checks']['runners']['ok']);
     }
 
-    public function testActionIndexReturnsDegradedWhenNoRunnersRegistered(): void
+    public function testActionIndexReturnsOkWhenNoRunnersRegistered(): void
     {
+        // Runners are advisory — no runners does not cause 503.
         $ctrl = $this->makeController(['total' => 0, 'online' => 0, 'offline' => 0]);
         $response = $ctrl->actionIndex();
 
-        $this->assertSame('degraded', $response['status']);
-        $this->assertSame(503, $ctrl->capturedStatus);
+        $this->assertSame('ok', $response['status']);
+        $this->assertSame(200, $ctrl->capturedStatus);
     }
 
     // ── Response structure ─────────────────────────────────────────────────
@@ -247,16 +246,17 @@ class HealthControllerTest extends TestCase
         $this->assertSame(2, $result['overdue']);
     }
 
-    public function testActionIndexReturnsDegradedWhenSchedulerOverdue(): void
+    public function testActionIndexReturnsOkWhenSchedulerOverdue(): void
     {
+        // Scheduler is advisory — overdue schedules do not cause 503.
         $ctrl = $this->makeController(
             ['total' => 2, 'online' => 2, 'offline' => 0],
             ['enabled' => 1, 'overdue' => 1],
         );
         $response = $ctrl->actionIndex();
 
-        $this->assertSame('degraded', $response['status']);
-        $this->assertSame(503, $ctrl->capturedStatus);
+        $this->assertSame('ok', $response['status']);
+        $this->assertSame(200, $ctrl->capturedStatus);
         $this->assertFalse($response['checks']['scheduler']['ok']);
     }
 }

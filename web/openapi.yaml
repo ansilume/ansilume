@@ -53,6 +53,7 @@ tags:
   - name: Analytics
   - name: Triggers
   - name: Roles
+  - name: Profile
 
 # Shared query parameter list used by every analytics endpoint.
 # Defined once via a YAML anchor and referenced with `*` so we don't
@@ -779,6 +780,46 @@ paths:
                     items: { $ref: '#/components/schemas/PermissionGroup' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
+  /api/v1/profile/change-password:
+    post:
+      tags: [Profile]
+      summary: Change the authenticated user's password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordInput'
+            example:
+              current_password: "currentpass123"
+              new_password: "newpass12345"
+              new_password_confirm: "newpass12345"
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      message: { type: string, example: "Password changed." }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422':
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      message: { type: string }
+                      fields: { type: object, additionalProperties: { type: string } }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -802,6 +843,9 @@ components:
   responses:
     NotFound:
       description: Resource not found
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    Unauthorized:
+      description: Authentication required (missing or invalid token)
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
     Forbidden:
       description: Caller lacks the required permission
@@ -909,6 +953,13 @@ components:
               data: { $ref: '#/components/schemas/NotificationTemplate' }
 
   schemas:
+    ChangePasswordInput:
+      type: object
+      required: [current_password, new_password, new_password_confirm]
+      properties:
+        current_password: { type: string, description: "User's current password" }
+        new_password: { type: string, minLength: 8, maxLength: 72, description: "New password (8-72 characters)" }
+        new_password_confirm: { type: string, description: "Must match new_password" }
     ErrorResponse:
       type: object
       properties:

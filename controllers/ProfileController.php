@@ -6,6 +6,7 @@ namespace app\controllers;
 
 use app\models\ApiToken;
 use app\models\AuditLog;
+use app\models\ChangePasswordForm;
 use app\models\TotpDisableForm;
 use app\models\TotpSetupForm;
 use app\models\User;
@@ -26,7 +27,8 @@ class ProfileController extends BaseController
         return [
             ['actions' => [
                 'tokens', 'create-token', 'delete-token',
-                'security', 'setup-totp', 'enable-totp', 'disable-totp',
+                'security', 'change-password',
+                'setup-totp', 'enable-totp', 'disable-totp',
             ], 'allow' => true, 'roles' => ['@']],
         ];
     }
@@ -39,6 +41,7 @@ class ProfileController extends BaseController
         return [
             'create-token' => ['POST'],
             'delete-token' => ['POST'],
+            'change-password' => ['POST'],
             'enable-totp' => ['POST'],
         ];
     }
@@ -89,6 +92,30 @@ class ProfileController extends BaseController
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_API_TOKEN_DELETED, 'api_token', $id, null, ['name' => $tokenName]);
         $this->session()->setFlash('success', "Token \"{$tokenName}\" revoked.");
         return $this->redirect(['tokens']);
+    }
+
+    // ── Change Password ───────────────────────────────────────────────────────
+
+    public function actionChangePassword(): Response
+    {
+        /** @var User $user */
+        $user = \Yii::$app->user->identity;
+
+        $model = new ChangePasswordForm($user);
+        if ($model->load((array)\Yii::$app->request->post()) && $model->changePassword()) {
+            \Yii::$app->get('auditService')->log(
+                AuditLog::ACTION_PASSWORD_CHANGED,
+                'user',
+                $user->id
+            );
+            $this->session()->setFlash('success', 'Your password has been changed.');
+        } else {
+            $errors = $model->getFirstErrors();
+            $msg = !empty($errors) ? reset($errors) : 'Failed to change password.';
+            $this->session()->setFlash('danger', (string)$msg);
+        }
+
+        return $this->redirect(['security']);
     }
 
     // ── Security / TOTP 2FA ──────────────────────────────────────────────────

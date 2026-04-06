@@ -24,6 +24,7 @@ $config = [
         'api/v1/workflow-templates' => 'app\controllers\api\v1\WorkflowTemplatesController',
         'api/v1/workflow-jobs' => 'app\controllers\api\v1\WorkflowJobsController',
         'api/v1/roles' => 'app\controllers\api\v1\RolesController',
+        'api/v1/profile' => 'app\controllers\api\v1\ProfileController',
         'runner-api' => 'app\controllers\api\runner\JobsController',
         'runner-register' => 'app\controllers\api\runner\RegisterController',
     ],
@@ -238,6 +239,7 @@ $config = [
                 ['pattern' => 'api/v1/roles', 'route' => 'api/v1/roles/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/roles', 'route' => 'api/v1/roles/create', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/permissions', 'route' => 'api/v1/roles/permissions', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/profile/change-password', 'route' => 'api/v1/profile/change-password', 'verb' => 'POST'],
                 // Workflow jobs API
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/cancel', 'route' => 'api/v1/workflow-jobs/cancel', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/resume', 'route' => 'api/v1/workflow-jobs/resume', 'verb' => 'POST'],

@@ -8,13 +8,50 @@ declare(strict_types=1);
 /** @var int $remainingCodes */
 
 use yii\helpers\Html;
-use yii\helpers\Url;
 
 $this->title = 'Security';
 ?>
 <div class="row justify-content-center">
 <div class="col-lg-8">
     <h2>Security</h2>
+
+    <div class="card mb-4">
+        <div class="card-body">
+            <h5 class="card-title mb-3">Change Password</h5>
+            <?= Html::beginForm(['change-password'], 'post') ?>
+                <div class="mb-3">
+                    <?= Html::label('Current Password', 'current_password', ['class' => 'form-label']) ?>
+                    <?= Html::passwordInput('ChangePasswordForm[current_password]', '', [
+                        'class' => 'form-control',
+                        'id' => 'current_password',
+                        'required' => true,
+                        'autocomplete' => 'current-password',
+                    ]) ?>
+                </div>
+                <div class="mb-3">
+                    <?= Html::label('New Password', 'new_password', ['class' => 'form-label']) ?>
+                    <?= Html::passwordInput('ChangePasswordForm[new_password]', '', [
+                        'class' => 'form-control',
+                        'id' => 'new_password',
+                        'required' => true,
+                        'minlength' => 8,
+                        'autocomplete' => 'new-password',
+                    ]) ?>
+                    <div class="form-text">Minimum 8 characters.</div>
+                </div>
+                <div class="mb-3">
+                    <?= Html::label('Confirm New Password', 'new_password_confirm', ['class' => 'form-label']) ?>
+                    <?= Html::passwordInput('ChangePasswordForm[new_password_confirm]', '', [
+                        'class' => 'form-control',
+                        'id' => 'new_password_confirm',
+                        'required' => true,
+                        'autocomplete' => 'new-password',
+                    ]) ?>
+                </div>
+                <?= Html::submitButton('Change Password', ['class' => 'btn btn-primary']) ?>
+            <?= Html::endForm() ?>
+        </div>
+    </div>
 
     <div class="card mb-4">
         <div class="card-body">
