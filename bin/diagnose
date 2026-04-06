@@ -1,0 +1,378 @@
+#!/usr/bin/env bash
+# ============================================================================
+# Ansilume Stack Diagnostics
+#
+# Collects system, container, and application state to help debug startup
+# problems. All secrets, passwords, and tokens are redacted automatically.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
+#   # — or —
+#   ./bin/diagnose
+#   # — or, to save output —
+#   ./bin/diagnose > ansilume-diag.txt 2>&1
+#
+# The output is safe to share with developers — no credentials are included.
+# ============================================================================
+
+set -euo pipefail
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+section() { printf "\n${CYAN}═══ %s ═══${NC}\n\n" "$1"; }
+ok()      { printf "  ${GREEN}✓${NC} %s\n" "$1"; }
+warn()    { printf "  ${YELLOW}⚠${NC} %s\n" "$1"; }
+fail()    { printf "  ${RED}✗${NC} %s\n" "$1"; }
+info()    { printf "  %s\n" "$1"; }
+
+# Redact values that look like secrets from a key=value stream.
+# Matches: PASSWORD, SECRET, KEY, TOKEN (case-insensitive).
+redact() {
+    sed -E 's/(PASSWORD|SECRET|KEY|TOKEN)([=:][[:space:]]*)([^[:space:]]+)/\1\2***REDACTED***/gi'
+}
+
+# ── Preamble ─────────────────────────────────────────────────────────────────
+
+printf "${BOLD}Ansilume Stack Diagnostics${NC}\n"
+printf "Generated: %s\n" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+printf "Hostname:  %s\n" "$(hostname 2>/dev/null || echo unknown)"
+
+# ── 1. Host environment ─────────────────────────────────────────────────────
+
+section "Host Environment"
+
+info "OS:     $(uname -srm)"
+if [ -f /etc/os-release ]; then
+    info "Distro: $(. /etc/os-release && echo "${PRETTY_NAME:-unknown}")"
+fi
+info "Kernel: $(uname -r)"
+info "Uptime: $(uptime -p 2>/dev/null || uptime)"
+
+# Memory
+if command -v free >/dev/null 2>&1; then
+    total_mb=$(free -m | awk '/^Mem:/ {print $2}')
+    avail_mb=$(free -m | awk '/^Mem:/ {print $7}')
+    info "Memory: ${avail_mb}MB available / ${total_mb}MB total"
+    if [ "$avail_mb" -lt 256 ]; then
+        fail "Very low available memory (${avail_mb}MB) — containers may OOM"
+    fi
+fi
+
+# Disk
+if command -v df >/dev/null 2>&1; then
+    disk_avail=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}')
+    disk_use=$(df -h . 2>/dev/null | awk 'NR==2 {print $5}')
+    info "Disk:   ${disk_avail} available (${disk_use} used)"
+fi
+
+# ── 2. Docker ────────────────────────────────────────────────────────────────
+
+section "Docker"
+
+if ! command -v docker >/dev/null 2>&1; then
+    fail "docker command not found"
+    exit 1
+fi
+
+docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
+info "Docker version: ${docker_version}"
+
+if docker compose version >/dev/null 2>&1; then
+    compose_version=$(docker compose version --short 2>/dev/null || echo "unknown")
+    ok "Docker Compose: ${compose_version}"
+else
+    fail "docker compose not available"
+fi
+
+# ── 3. Configuration (.env) ──────────────────────────────────────────────────
+
+section "Configuration (.env)"
+
+if [ -f .env ]; then
+    ok ".env file exists"
+
+    # Check for CHANGE-ME defaults
+    changeme_count=$(grep -c 'CHANGE-ME' .env 2>/dev/null || true)
+    if [ "$changeme_count" -gt 0 ]; then
+        fail "${changeme_count} variable(s) still set to CHANGE-ME"
+        grep 'CHANGE-ME' .env | sed 's/=.*/=CHANGE-ME/' | while read -r line; do
+            info "  → ${line}"
+        done
+    else
+        ok "No CHANGE-ME defaults remaining"
+    fi
+
+    # Check required variables exist (not their values)
+    for var in DB_PASSWORD DB_HOST COOKIE_VALIDATION_KEY APP_SECRET_KEY RUNNER_BOOTSTRAP_SECRET; do
+        if grep -q "^${var}=" .env 2>/dev/null; then
+            val=$(grep "^${var}=" .env | head -1 | cut -d= -f2-)
+            if [ -z "$val" ] || [ "$val" = "CHANGE-ME" ]; then
+                fail "${var} is empty or default"
+            else
+                ok "${var} is set"
+            fi
+        else
+            fail "${var} is missing from .env"
+        fi
+    done
+
+    # Show non-secret config values
+    info ""
+    info "Non-secret configuration:"
+    grep -E '^(APP_ENV|YII_ENV|YII_DEBUG|NGINX_PORT|DB_NAME|DB_USER|DB_HOST|REDIS_HOST|REDIS_PORT|REDIS_DB|RUNNER_MODE|SMTP_HOST|SMTP_PORT)=' .env 2>/dev/null | while read -r line; do
+        info "  ${line}"
+    done
+else
+    fail ".env file not found"
+    info "Create it with: cp .env.prod.example .env"
+fi
+
+# ── 4. Docker Compose file ───────────────────────────────────────────────────
+
+section "Docker Compose File"
+
+compose_file=""
+for f in docker-compose.yml docker-compose.yaml docker-compose.prebuilt.yml; do
+    if [ -f "$f" ]; then
+        compose_file="$f"
+        break
+    fi
+done
+
+if [ -n "$compose_file" ]; then
+    ok "Found: ${compose_file}"
+    services=$(docker compose config --services 2>/dev/null | sort)
+    info "Services defined: $(echo "$services" | tr '\n' ' ')"
+else
+    fail "No docker-compose file found"
+fi
+
+# ── 5. Container status ─────────────────────────────────────────────────────
+
+section "Container Status"
+
+# Use a format that shows the key info
+docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Health}}' 2>/dev/null || \
+    docker compose ps 2>/dev/null || \
+    warn "Could not list containers"
+
+echo ""
+
+# Detailed health for each container
+for container in $(docker compose ps -q 2>/dev/null); do
+    name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | sed 's|^/||')
+    state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container" 2>/dev/null)
+    restarts=$(docker inspect --format '{{.RestartCount}}' "$container" 2>/dev/null)
+
+    status_icon="✓"
+    color="$GREEN"
+    if [ "$state" != "running" ]; then
+        status_icon="✗"; color="$RED"
+    elif [ "$health" = "unhealthy" ]; then
+        status_icon="⚠"; color="$YELLOW"
+    elif [ "$health" = "starting" ]; then
+        status_icon="…"; color="$YELLOW"
+    fi
+
+    printf "  ${color}${status_icon}${NC} %-30s state=%-10s health=%-12s restarts=%s\n" \
+        "$name" "$state" "$health" "$restarts"
+
+    # Show last health check log if unhealthy
+    if [ "$health" = "unhealthy" ]; then
+        last_output=$(docker inspect --format '{{if .State.Health}}{{(index .State.Health.Log (len .State.Health.Log | printf "%d" | xargs -I{} expr {} - 1)).Output}}{{end}}' "$container" 2>/dev/null || true)
+        if [ -n "$last_output" ]; then
+            info "    Last healthcheck output: $(echo "$last_output" | head -3 | redact)"
+        fi
+    fi
+done
+
+# ── 6. Image versions ───────────────────────────────────────────────────────
+
+section "Image Versions"
+
+for container in $(docker compose ps -q 2>/dev/null); do
+    name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | sed 's|^/||')
+    image=$(docker inspect --format '{{.Config.Image}}' "$container" 2>/dev/null)
+    created=$(docker inspect --format '{{.Created}}' "$container" 2>/dev/null | cut -d. -f1)
+    info "$(printf '%-30s %s  (created: %s)' "$name" "$image" "$created")"
+done
+
+# ── 7. Network connectivity ─────────────────────────────────────────────────
+
+section "Network Connectivity"
+
+# Check if containers can reach each other
+app_container=$(docker compose ps -q app 2>/dev/null | head -1)
+nginx_container=$(docker compose ps -q nginx 2>/dev/null | head -1)
+
+if [ -n "$app_container" ]; then
+    # App → DB
+    if docker exec "$app_container" php -r "try { new PDO('mysql:host=db;dbname=ansilume', 'ansilume', 'test'); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | grep -q "ok"; then
+        ok "app → db: reachable"
+    else
+        db_err=$(docker exec "$app_container" php -r "try { new PDO('mysql:host=db', 'x', 'x'); } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | head -1)
+        if echo "$db_err" | grep -qi "access denied"; then
+            ok "app → db: reachable (auth checked separately)"
+        elif echo "$db_err" | grep -qi "refused\|timed out\|no such host"; then
+            fail "app → db: connection failed — ${db_err}"
+        else
+            warn "app → db: uncertain — ${db_err}"
+        fi
+    fi
+
+    # App → Redis
+    if docker exec "$app_container" php -r "try { \$r = new Redis(); \$r->connect('redis', 6379, 2); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | grep -q "ok"; then
+        ok "app → redis: reachable"
+    else
+        warn "app → redis: may not be reachable (Redis extension check)"
+    fi
+
+    # Health check from inside app
+    info ""
+    info "App health check:"
+    docker exec "$app_container" php /var/www/yii health/check 2>&1 | redact | while read -r line; do
+        info "  ${line}"
+    done
+fi
+
+if [ -n "$nginx_container" ]; then
+    # Nginx → App (FastCGI)
+    if docker exec "$nginx_container" sh -c "nc -zw2 app 9000 2>/dev/null" 2>/dev/null; then
+        ok "nginx → app:9000 (FastCGI): reachable"
+    else
+        fail "nginx → app:9000 (FastCGI): not reachable"
+    fi
+
+    # Nginx self-test
+    http_status=$(docker exec "$nginx_container" sh -c "wget -qSO /dev/null http://127.0.0.1/ 2>&1 | head -1" 2>/dev/null || true)
+    if [ -n "$http_status" ]; then
+        info "nginx self-test: ${http_status}"
+    else
+        warn "nginx self-test: no response"
+    fi
+fi
+
+# ── 8. Container logs (last 30 lines each) ───────────────────────────────────
+
+section "Recent Logs (last 30 lines per container)"
+
+for svc in db redis app nginx queue-worker schedule-runner runner-1; do
+    container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
+    if [ -z "$container_id" ]; then
+        warn "${svc}: not running"
+        continue
+    fi
+
+    printf "\n  ${BOLD}── %s ──${NC}\n" "$svc"
+    docker logs --tail 30 "$container_id" 2>&1 | redact | while read -r line; do
+        printf "    %s\n" "$line"
+    done
+done
+
+# ── 9. Migration status ─────────────────────────────────────────────────────
+
+section "Migration Status"
+
+if [ -n "$app_container" ]; then
+    migration_output=$(docker exec "$app_container" php /var/www/yii migrate/history 10 2>&1 || true)
+    if echo "$migration_output" | grep -qi "error\|exception\|fail"; then
+        fail "Migration check failed"
+        echo "$migration_output" | redact | head -10 | while read -r line; do
+            info "  ${line}"
+        done
+    else
+        ok "Last 10 applied migrations:"
+        echo "$migration_output" | tail -12 | while read -r line; do
+            info "  ${line}"
+        done
+    fi
+else
+    warn "App container not running — cannot check migrations"
+fi
+
+# ── 10. Port conflicts ──────────────────────────────────────────────────────
+
+section "Port Conflicts"
+
+nginx_port=$(grep '^NGINX_PORT=' .env 2>/dev/null | cut -d= -f2- || echo "8080")
+nginx_port=${nginx_port:-8080}
+
+if command -v ss >/dev/null 2>&1; then
+    listeners=$(ss -tlnp 2>/dev/null | grep ":${nginx_port} " | grep -v docker || true)
+    if [ -n "$listeners" ]; then
+        fail "Port ${nginx_port} is also used by another process:"
+        echo "$listeners" | while read -r line; do
+            info "  ${line}"
+        done
+    else
+        ok "Port ${nginx_port} has no conflicts outside Docker"
+    fi
+elif command -v netstat >/dev/null 2>&1; then
+    listeners=$(netstat -tlnp 2>/dev/null | grep ":${nginx_port} " | grep -v docker || true)
+    if [ -n "$listeners" ]; then
+        fail "Port ${nginx_port} is also used by another process"
+    else
+        ok "Port ${nginx_port} has no conflicts outside Docker"
+    fi
+fi
+
+# ── 11. Docker network ──────────────────────────────────────────────────────
+
+section "Docker Networks"
+
+docker network ls --filter name=ansilume --format 'table {{.Name}}\t{{.Driver}}\t{{.Scope}}' 2>/dev/null || \
+    warn "Could not list Docker networks"
+
+# ── 12. Disk usage ──────────────────────────────────────────────────────────
+
+section "Docker Disk Usage"
+
+docker system df 2>/dev/null || warn "Could not get Docker disk usage"
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+
+section "Diagnosis Summary"
+
+all_ok=true
+
+# Check critical containers
+for svc in db redis app nginx; do
+    container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
+    if [ -z "$container_id" ]; then
+        fail "${svc}: NOT RUNNING"
+        all_ok=false
+        continue
+    fi
+    state=$(docker inspect --format '{{.State.Status}}' "$container_id" 2>/dev/null)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null)
+
+    if [ "$state" != "running" ]; then
+        fail "${svc}: stopped (state=${state})"
+        all_ok=false
+    elif [ "$health" = "unhealthy" ]; then
+        warn "${svc}: running but unhealthy"
+        all_ok=false
+    elif [ "$health" = "starting" ]; then
+        warn "${svc}: still starting up"
+    else
+        ok "${svc}: healthy"
+    fi
+done
+
+echo ""
+if [ "$all_ok" = true ]; then
+    printf "${GREEN}${BOLD}All critical services are healthy.${NC}\n"
+else
+    printf "${YELLOW}${BOLD}Issues detected. Share this output with developers:${NC}\n"
+    printf "  ./bin/diagnose > ansilume-diag.txt 2>&1\n"
+fi
+
+printf "\n${CYAN}End of diagnostics.${NC}\n"
