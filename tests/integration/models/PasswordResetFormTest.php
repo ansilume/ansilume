@@ -23,6 +23,7 @@ class PasswordResetFormTest extends DbTestCase
         $user = $this->createUser();
         $user->generatePasswordResetToken();
         $user->save(false);
+        $this->assertNotNull($user->password_reset_token);
 
         $form = new PasswordResetForm($user->password_reset_token);
         $this->assertSame($user->id, $form->getUser()->id);
@@ -33,6 +34,7 @@ class PasswordResetFormTest extends DbTestCase
         $user = $this->createUser();
         $user->generatePasswordResetToken();
         $user->save(false);
+        $this->assertNotNull($user->password_reset_token);
 
         $form = new PasswordResetForm($user->password_reset_token);
         $this->assertFalse($form->validate());
@@ -45,6 +47,7 @@ class PasswordResetFormTest extends DbTestCase
         $user = $this->createUser();
         $user->generatePasswordResetToken();
         $user->save(false);
+        $this->assertNotNull($user->password_reset_token);
 
         $form = new PasswordResetForm($user->password_reset_token);
         $form->password = 'short';
@@ -58,6 +61,7 @@ class PasswordResetFormTest extends DbTestCase
         $user = $this->createUser();
         $user->generatePasswordResetToken();
         $user->save(false);
+        $this->assertNotNull($user->password_reset_token);
 
         $form = new PasswordResetForm($user->password_reset_token);
         $form->password = 'password123';
@@ -71,6 +75,7 @@ class PasswordResetFormTest extends DbTestCase
         $user = $this->createUser();
         $user->generatePasswordResetToken();
         $user->save(false);
+        $this->assertNotNull($user->password_reset_token);
         $originalHash = $user->password_hash;
 
         $form = new PasswordResetForm($user->password_reset_token);
@@ -80,6 +85,7 @@ class PasswordResetFormTest extends DbTestCase
         $this->assertTrue($form->resetPassword());
 
         $reloaded = User::findOne($user->id);
+        $this->assertNotNull($reloaded);
         $this->assertNotSame($originalHash, $reloaded->password_hash);
         $this->assertEmpty($reloaded->password_reset_token);
         $this->assertTrue(\Yii::$app->security->validatePassword('new-strong-password', $reloaded->password_hash));
@@ -90,6 +96,7 @@ class PasswordResetFormTest extends DbTestCase
         $user = $this->createUser();
         $user->generatePasswordResetToken();
         $user->save(false);
+        $this->assertNotNull($user->password_reset_token);
 
         $form = new PasswordResetForm($user->password_reset_token);
         $this->assertInstanceOf(User::class, $form->getUser());

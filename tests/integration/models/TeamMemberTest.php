@@ -24,6 +24,7 @@ class TeamMemberTest extends DbTestCase
 
         $this->assertNotNull($member->id);
         $reloaded = TeamMember::findOne($member->id);
+        $this->assertNotNull($reloaded);
         $this->assertSame($team->id, $reloaded->team_id);
         $this->assertSame($user->id, $reloaded->user_id);
     }

@@ -38,7 +38,9 @@ class UserFormIntegrationTest extends DbTestCase
         $form = $this->makeValidForm();
         $form->save();
 
-        $this->assertSame($form->username, $form->getUser()->username);
+        $user = $form->getUser();
+        $this->assertNotNull($user);
+        $this->assertSame($form->username, $user->username);
     }
 
     public function testSaveFailsWhenPasswordMissingForNewUser(): void

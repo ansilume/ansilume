@@ -287,4 +287,217 @@ class ApprovalServiceTest extends DbTestCase
         $this->assertTrue($this->service()->canUserApprove($request, $approver->id));
         $this->assertFalse($this->service()->canUserApprove($request, $user->id));
     }
+
+    // -- processTimeouts: additional coverage -------------------------------
+
+    public function testProcessTimeoutsReturnsZeroWhenNoExpiredRequests(): void
+    {
+        $count = $this->service()->processTimeouts();
+        $this->assertSame(0, $count);
+    }
+
+    public function testProcessTimeoutsSkipsRequestsWithoutExpiresAt(): void
+    {
+        $job = $this->scaffoldJob();
+        $rule = $this->createApprovalRule($job->launched_by);
+        // No timeout_minutes set, so expires_at is null
+        $this->service()->createRequest($job, $rule);
+
+        $count = $this->service()->processTimeouts();
+        $this->assertSame(0, $count);
+    }
+
+    public function testProcessTimeoutsHandlesMultipleExpiredRequests(): void
+    {
+        $job1 = $this->scaffoldJob();
+        $job2 = $this->scaffoldJob();
+
+        $rule = $this->createApprovalRule($job1->launched_by);
+        $rule->timeout_minutes = 1;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->save(false);
+
+        $request1 = $this->service()->createRequest($job1, $rule);
+        $request1->expires_at = time() - 60;
+        $request1->save(false);
+
+        $request2 = $this->service()->createRequest($job2, $rule);
+        $request2->expires_at = time() - 60;
+        $request2->save(false);
+
+        $count = $this->service()->processTimeouts();
+        $this->assertSame(2, $count);
+
+        $request1->refresh();
+        $request2->refresh();
+        $this->assertSame(ApprovalRequest::STATUS_TIMED_OUT, $request1->status);
+        $this->assertSame(ApprovalRequest::STATUS_TIMED_OUT, $request2->status);
+    }
+
+    public function testProcessTimeoutsWritesAuditLog(): void
+    {
+        $job = $this->scaffoldJob();
+        $rule = $this->createApprovalRule($job->launched_by);
+        $rule->timeout_minutes = 1;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->save(false);
+
+        $request = $this->service()->createRequest($job, $rule);
+        $request->expires_at = time() - 60;
+        $request->save(false);
+
+        $before = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_TIMED_OUT])
+            ->count();
+
+        $this->service()->processTimeouts();
+
+        $after = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_TIMED_OUT])
+            ->count();
+        $this->assertSame((int)$before + 1, (int)$after);
+    }
+
+    // -- evaluateThreshold: auto-reject branch ----------------------------
+
+    public function testAutoRejectWhenRemainingApprovalsCannotMeetThreshold(): void
+    {
+        $job = $this->scaffoldJob();
+        $user1 = $this->createUser('voter1');
+        $user2 = $this->createUser('voter2');
+        // Require 2 approvals but only 2 eligible users
+        $rule = $this->createApprovalRule(
+            $job->launched_by,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            json_encode(['user_ids' => [$user1->id, $user2->id]]) ?: '{}',
+            2
+        );
+
+        $request = $this->service()->createRequest($job, $rule);
+
+        // First user rejects — now only 1 eligible remains, but 2 required
+        $this->service()->recordDecision($request, $user1->id, 'rejected');
+
+        $request->refresh();
+        $this->assertSame(ApprovalRequest::STATUS_REJECTED, $request->status);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_REJECTED, $job->status);
+    }
+
+    public function testThresholdNotMetYetKeepsStatusPending(): void
+    {
+        $job = $this->scaffoldJob();
+        $user1 = $this->createUser('voter1b');
+        $user2 = $this->createUser('voter2b');
+        $user3 = $this->createUser('voter3b');
+        // Require 2 approvals, 3 eligible users
+        $rule = $this->createApprovalRule(
+            $job->launched_by,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            json_encode(['user_ids' => [$user1->id, $user2->id, $user3->id]]) ?: '{}',
+            2
+        );
+
+        $request = $this->service()->createRequest($job, $rule);
+        $this->service()->recordDecision($request, $user1->id, 'approved');
+
+        $request->refresh();
+        // Only 1 of 2 required approvals — still pending
+        $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
+    }
+
+    // -- createRequest: additional coverage ---------------------------------
+
+    public function testCreateRequestWithoutTimeoutLeavesExpiresAtNull(): void
+    {
+        $job = $this->scaffoldJob();
+        $rule = $this->createApprovalRule($job->launched_by);
+        // No timeout_minutes set
+
+        $request = $this->service()->createRequest($job, $rule);
+        $this->assertNull($request->expires_at);
+    }
+
+    public function testCreateRequestWritesAuditLog(): void
+    {
+        $job = $this->scaffoldJob();
+        $rule = $this->createApprovalRule($job->launched_by);
+
+        $before = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_REQUESTED])
+            ->count();
+
+        $this->service()->createRequest($job, $rule);
+
+        $after = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_REQUESTED])
+            ->count();
+        $this->assertSame((int)$before + 1, (int)$after);
+    }
+
+    // -- recordDecision: additional coverage --------------------------------
+
+    public function testRecordDecisionWritesAuditLog(): void
+    {
+        $job = $this->scaffoldJob();
+        $user = $this->createUser('audit-voter');
+        $user2 = $this->createUser('audit-voter2');
+        $rule = $this->createApprovalRule(
+            $job->launched_by,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            json_encode(['user_ids' => [$user->id, $user2->id]]) ?: '{}',
+            2
+        );
+
+        $request = $this->service()->createRequest($job, $rule);
+
+        $before = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_DECIDED])
+            ->count();
+
+        $this->service()->recordDecision($request, $user->id, 'approved');
+
+        $after = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_DECIDED])
+            ->count();
+        $this->assertSame((int)$before + 1, (int)$after);
+    }
+
+    public function testRecordDecisionWithComment(): void
+    {
+        $job = $this->scaffoldJob();
+        $user = $this->createUser('comment-voter');
+        $user2 = $this->createUser('comment-voter2');
+        $rule = $this->createApprovalRule(
+            $job->launched_by,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            json_encode(['user_ids' => [$user->id, $user2->id]]) ?: '{}',
+            2
+        );
+
+        $request = $this->service()->createRequest($job, $rule);
+        $decision = $this->service()->recordDecision($request, $user->id, 'rejected', 'Not ready');
+
+        $this->assertSame('rejected', $decision->decision);
+        $this->assertSame('Not ready', $decision->comment);
+    }
+
+    public function testRecordDecisionWithNullComment(): void
+    {
+        $job = $this->scaffoldJob();
+        $user = $this->createUser('null-comment');
+        $user2 = $this->createUser('null-comment2');
+        $rule = $this->createApprovalRule(
+            $job->launched_by,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            json_encode(['user_ids' => [$user->id, $user2->id]]) ?: '{}',
+            2
+        );
+
+        $request = $this->service()->createRequest($job, $rule);
+        $decision = $this->service()->recordDecision($request, $user->id, 'approved');
+
+        $this->assertNull($decision->comment);
+    }
 }

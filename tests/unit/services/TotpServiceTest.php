@@ -298,6 +298,136 @@ class TotpServiceTest extends TestCase
         $this->assertCount(5, $result['hashed']);
     }
 
+    // ── Rate limiting: additional branch coverage ───────────────────────────
+
+    public function testIsLockedOutReturnsFalseWhenCacheReturnsFalse(): void
+    {
+        // Fresh user ID with no cache entry — cache->get returns false
+        $limiter = new TotpRateLimiter();
+        $this->assertFalse($limiter->isLockedOut(11111));
+    }
+
+    public function testIsLockedOutReturnsFalseWhenCacheReturnsNonArray(): void
+    {
+        // Manually set a non-array value in the cache to test the is_array guard
+        /** @var \yii\caching\CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        $key = 'totp_rate_limit_22222';
+        $cache->set($key, 'not-an-array', 300);
+
+        $limiter = new TotpRateLimiter();
+        $this->assertFalse($limiter->isLockedOut(22222));
+
+        $cache->delete($key);
+    }
+
+    public function testIsLockedOutReturnsFalseWhenAttemptsAreBelowMax(): void
+    {
+        $limiter = new TotpRateLimiter();
+        $userId = 33333;
+
+        // Record 4 attempts (below max of 5)
+        for ($i = 0; $i < 4; $i++) {
+            $limiter->recordFailedAttempt($userId);
+        }
+
+        $this->assertFalse($limiter->isLockedOut($userId));
+        $limiter->clearRateLimit($userId);
+    }
+
+    public function testRecordFailedAttemptWhenCacheReturnsNonArray(): void
+    {
+        // Set a non-array value in cache to test the is_array($raw) false branch
+        /** @var \yii\caching\CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        $userId = 44444;
+        $key = 'totp_rate_limit_' . $userId;
+        $cache->set($key, 'corrupt-data', 300);
+
+        $limiter = new TotpRateLimiter();
+        $remaining = $limiter->recordFailedAttempt($userId);
+
+        // Should treat as fresh: attempts = 0 + 1 = 1, remaining = 5 - 1 = 4
+        $this->assertSame(4, $remaining);
+
+        $limiter->clearRateLimit($userId);
+    }
+
+    public function testRecordFailedAttemptWhenCacheReturnsFalse(): void
+    {
+        // Fresh user ID — cache returns false (no existing key)
+        $limiter = new TotpRateLimiter();
+        $userId = 55555;
+
+        $remaining = $limiter->recordFailedAttempt($userId);
+        $this->assertSame(4, $remaining);
+
+        $limiter->clearRateLimit($userId);
+    }
+
+    public function testRecordFailedAttemptReturnsZeroWhenMaxReached(): void
+    {
+        $limiter = new TotpRateLimiter();
+        $userId = 60606;
+        $remaining = 0;
+
+        for ($i = 0; $i < 5; $i++) {
+            $remaining = $limiter->recordFailedAttempt($userId);
+        }
+
+        $this->assertSame(0, $remaining);
+        $limiter->clearRateLimit($userId);
+    }
+
+    public function testRecordFailedAttemptReturnsZeroWhenOverMax(): void
+    {
+        $limiter = new TotpRateLimiter();
+        $userId = 70707;
+
+        for ($i = 0; $i < 6; $i++) {
+            $limiter->recordFailedAttempt($userId);
+        }
+
+        // 6 attempts > maxAttempts (5), so remaining = max(0, 5 - 6) = 0
+        $remaining = $limiter->recordFailedAttempt($userId);
+        $this->assertSame(0, $remaining);
+
+        $limiter->clearRateLimit($userId);
+    }
+
+    public function testClearRateLimitAfterPartialAttempts(): void
+    {
+        $limiter = new TotpRateLimiter();
+        $userId = 80808;
+
+        $limiter->recordFailedAttempt($userId);
+        $limiter->recordFailedAttempt($userId);
+
+        $limiter->clearRateLimit($userId);
+
+        // After clearing, the next attempt should start fresh
+        $remaining = $limiter->recordFailedAttempt($userId);
+        $this->assertSame(4, $remaining);
+
+        $limiter->clearRateLimit($userId);
+    }
+
+    public function testIsLockedOutReturnsFalseWhenDataMissesAttemptsKey(): void
+    {
+        /** @var \yii\caching\CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        $userId = 90909;
+        $key = 'totp_rate_limit_' . $userId;
+        // Set an array without the 'attempts' key
+        $cache->set($key, ['other_key' => 'value'], 300);
+
+        $limiter = new TotpRateLimiter();
+        // (int)(null ?? 0) = 0, which is < 5, so not locked out
+        $this->assertFalse($limiter->isLockedOut($userId));
+
+        $cache->delete($key);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private function createUserStub(string $username = 'test', string $email = 'test@example.com'): \app\models\User

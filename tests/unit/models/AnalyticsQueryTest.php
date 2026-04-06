@@ -9,47 +9,36 @@ use PHPUnit\Framework\TestCase;
 
 class AnalyticsQueryTest extends TestCase
 {
-    public function testDefaultGranularity(): void
-    {
-        $q = new AnalyticsQuery();
-        $this->assertSame(AnalyticsQuery::GRANULARITY_DAILY, $q->granularity);
-    }
-
-    public function testValidGranularityValues(): void
-    {
-        $q = new AnalyticsQuery();
-        $q->granularity = 'daily';
-        $this->assertTrue($q->validate(['granularity']));
-
-        $q->granularity = 'weekly';
-        $this->assertTrue($q->validate(['granularity']));
-    }
-
-    public function testInvalidGranularityRejected(): void
-    {
-        $q = new AnalyticsQuery();
-        $q->granularity = 'hourly';
-        $this->assertFalse($q->validate(['granularity']));
-    }
-
-    public function testValidDateRange(): void
+    public function testValidInputPassesValidation(): void
     {
         $q = new AnalyticsQuery();
         $q->date_from = '2026-01-01';
         $q->date_to = '2026-01-31';
+        $q->project_id = 1;
+        $q->template_id = 2;
+        $q->user_id = 3;
+        $q->runner_group_id = 4;
+        $q->granularity = AnalyticsQuery::GRANULARITY_WEEKLY;
         $this->assertTrue($q->validate());
     }
 
-    public function testDateRangeExceeds365DaysRejected(): void
+    public function testInvalidDateFormatFailsValidation(): void
     {
         $q = new AnalyticsQuery();
-        $q->date_from = '2025-01-01';
-        $q->date_to = '2026-02-01';
+        $q->date_from = 'not-a-date';
         $this->assertFalse($q->validate());
-        $this->assertTrue($q->hasErrors('date_to'));
+        $this->assertTrue($q->hasErrors('date_from'));
     }
 
-    public function testEndDateBeforeStartDateRejected(): void
+    public function testInvalidGranularityFails(): void
+    {
+        $q = new AnalyticsQuery();
+        $q->granularity = 'hourly';
+        $this->assertFalse($q->validate());
+        $this->assertTrue($q->hasErrors('granularity'));
+    }
+
+    public function testValidateDateRangeToBeforeFrom(): void
     {
         $q = new AnalyticsQuery();
         $q->date_from = '2026-03-15';
@@ -58,18 +47,51 @@ class AnalyticsQueryTest extends TestCase
         $this->assertTrue($q->hasErrors('date_to'));
     }
 
-    public function testApplyDefaultsSets30Days(): void
+    public function testValidateDateRangeExceeds365Days(): void
+    {
+        $q = new AnalyticsQuery();
+        $q->date_from = '2025-01-01';
+        $q->date_to = '2026-02-01';
+        $this->assertFalse($q->validate());
+        $this->assertTrue($q->hasErrors('date_to'));
+    }
+
+    public function testValidateDateRangeSkipsWhenNullDates(): void
+    {
+        $q = new AnalyticsQuery();
+        // Both null — validateDateRange should short-circuit
+        $this->assertTrue($q->validate());
+    }
+
+    public function testValidateDateRangeSkipsWhenInvalidDates(): void
+    {
+        $q = new AnalyticsQuery();
+        // Set dates that pass format validation but would fail strtotime
+        // We can't easily make strtotime return false for a valid Y-m-d string,
+        // so test the branch where one date is null
+        $q->date_from = '2026-01-01';
+        $q->date_to = null;
+        $this->assertTrue($q->validate());
+
+        $q2 = new AnalyticsQuery();
+        $q2->date_from = null;
+        $q2->date_to = '2026-01-31';
+        $this->assertTrue($q2->validate());
+    }
+
+    public function testApplyDefaultsSetsLast30Days(): void
     {
         $q = new AnalyticsQuery();
         $this->assertNull($q->date_from);
         $this->assertNull($q->date_to);
 
         $q->applyDefaults();
+
         $this->assertSame(date('Y-m-d', strtotime('-30 days')), $q->date_from);
         $this->assertSame(date('Y-m-d'), $q->date_to);
     }
 
-    public function testApplyDefaultsDoesNotOverrideExisting(): void
+    public function testApplyDefaultsDoesNotOverwriteExisting(): void
     {
         $q = new AnalyticsQuery();
         $q->date_from = '2026-01-01';
@@ -79,76 +101,54 @@ class AnalyticsQueryTest extends TestCase
         $this->assertSame('2026-01-15', $q->date_to);
     }
 
-    public function testDateFromTimestamp(): void
+    public function testGetDateFromTimestampReturnsUnixTimestamp(): void
     {
         $q = new AnalyticsQuery();
         $q->date_from = '2026-03-01';
-        $this->assertSame(strtotime('2026-03-01'), $q->dateFromTimestamp);
+        $expected = strtotime('2026-03-01');
+        $this->assertSame($expected, $q->dateFromTimestamp);
     }
 
-    public function testDateToTimestampIncludesEndOfDay(): void
-    {
-        $q = new AnalyticsQuery();
-        $q->date_to = '2026-03-01';
-        $this->assertSame(strtotime('2026-03-01 23:59:59'), $q->dateToTimestamp);
-    }
-
-    public function testNullDatesReturnZeroTimestamp(): void
+    public function testGetDateFromTimestampReturnsZeroWhenNull(): void
     {
         $q = new AnalyticsQuery();
         $this->assertSame(0, $q->dateFromTimestamp);
+    }
+
+    public function testGetDateToTimestampReturnsEndOfDay(): void
+    {
+        $q = new AnalyticsQuery();
+        $q->date_to = '2026-03-01';
+        $expected = strtotime('2026-03-01 23:59:59');
+        $this->assertSame($expected, $q->dateToTimestamp);
+    }
+
+    public function testGetDateToTimestampReturnsZeroWhenNull(): void
+    {
+        $q = new AnalyticsQuery();
         $this->assertSame(0, $q->dateToTimestamp);
     }
 
-    public function testToArrayReturnsAllFields(): void
+    public function testToArray(): void
     {
         $q = new AnalyticsQuery();
         $q->date_from = '2026-01-01';
         $q->date_to = '2026-01-31';
         $q->project_id = 5;
-        $q->granularity = 'weekly';
+        $q->template_id = 10;
+        $q->user_id = 3;
+        $q->runner_group_id = 7;
+        $q->granularity = AnalyticsQuery::GRANULARITY_WEEKLY;
 
         $arr = $q->toArray();
+
         $this->assertSame('2026-01-01', $arr['date_from']);
         $this->assertSame('2026-01-31', $arr['date_to']);
         $this->assertSame(5, $arr['project_id']);
+        $this->assertSame(10, $arr['template_id']);
+        $this->assertSame(3, $arr['user_id']);
+        $this->assertSame(7, $arr['runner_group_id']);
         $this->assertSame('weekly', $arr['granularity']);
-        $this->assertNull($arr['template_id']);
-        $this->assertNull($arr['user_id']);
-    }
-
-    public function testIntegerFieldsAcceptNull(): void
-    {
-        $q = new AnalyticsQuery();
-        $q->project_id = null;
-        $q->template_id = null;
-        $q->user_id = null;
-        $q->runner_group_id = null;
-        $q->applyDefaults();
-        $this->assertTrue($q->validate());
-    }
-
-    public function testValidIntegerFields(): void
-    {
-        $q = new AnalyticsQuery();
-        $q->project_id = 1;
-        $q->template_id = 2;
-        $q->user_id = 3;
-        $q->runner_group_id = 4;
-        $q->applyDefaults();
-        $this->assertTrue($q->validate());
-    }
-
-    public function testGranularityConstants(): void
-    {
-        $this->assertSame('daily', AnalyticsQuery::GRANULARITY_DAILY);
-        $this->assertSame('weekly', AnalyticsQuery::GRANULARITY_WEEKLY);
-    }
-
-    public function testNullDatesPassValidation(): void
-    {
-        $q = new AnalyticsQuery();
-        // Both null — validateDateRange should short-circuit
-        $this->assertTrue($q->validate());
+        $this->assertCount(7, $arr);
     }
 }

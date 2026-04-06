@@ -51,6 +51,7 @@ class JobTemplateSoftDeleteTest extends DbTestCase
 
         $found = JobTemplate::findWithDeleted()->where(['id' => $id])->one();
         $this->assertNotNull($found);
+        $this->assertInstanceOf(JobTemplate::class, $found);
         $this->assertTrue($found->isDeleted());
     }
 

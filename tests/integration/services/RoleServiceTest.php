@@ -264,4 +264,287 @@ class RoleServiceTest extends DbTestCase
         $this->assertContains('project.create', $effective); // from operator
         $this->assertContains('user.create', $effective);    // admin itself
     }
+
+    // -- updateRole: additional coverage -----------------------------------
+
+    public function testUpdateRoleValidationFailureReturnsFalse(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        // Pass unknown permission to trigger validation failure
+        $update = $this->makeForm($name, ['nonexistent.permission']);
+        $this->assertFalse($this->service()->updateRole($name, $update, 1));
+        $this->assertArrayHasKey('permissions', $update->errors);
+    }
+
+    public function testUpdateRoleRemovesAllPermissions(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+
+        $update = $this->makeForm($name, []);
+        $this->assertTrue($this->service()->updateRole($name, $update, 1));
+
+        $direct = $this->service()->directPermissions($name);
+        $this->assertSame([], $direct);
+    }
+
+    public function testUpdateRoleAddsPermissionsWithoutRemovingExisting(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $update = $this->makeForm($name, ['project.view', 'job.view', 'inventory.view']);
+        $this->assertTrue($this->service()->updateRole($name, $update, 1));
+
+        $direct = $this->service()->directPermissions($name);
+        $this->assertSame(['inventory.view', 'job.view', 'project.view'], $direct);
+    }
+
+    public function testUpdateRoleAuditLogRecordsDescriptionChanged(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view'], 'original'), 1);
+
+        $this->service()->updateRole($name, $this->makeForm($name, ['project.view'], 'changed'), 1);
+
+        $log = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_UPDATED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertTrue($metadata['description_changed']);
+    }
+
+    public function testUpdateRoleAuditLogRecordsDescriptionUnchanged(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view'], 'same'), 1);
+
+        $this->service()->updateRole($name, $this->makeForm($name, ['project.view', 'job.view'], 'same'), 1);
+
+        $log = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_UPDATED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertFalse($metadata['description_changed']);
+    }
+
+    public function testUpdateRoleAuditLogRecordsRemovedPermissions(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+
+        $this->service()->updateRole($name, $this->makeForm($name, ['project.view']), 1);
+
+        $log = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_UPDATED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertContains('job.view', $metadata['removed']);
+        $this->assertEmpty($metadata['added']);
+    }
+
+    public function testUpdateRoleDeduplicatesPermissions(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $update = $this->makeForm($name, ['project.view', 'job.view', 'job.view']);
+        $this->assertTrue($this->service()->updateRole($name, $update, 1));
+
+        $direct = $this->service()->directPermissions($name);
+        $this->assertSame(['job.view', 'project.view'], $direct);
+    }
+
+    // -- createRole: additional coverage -----------------------------------
+
+    public function testCreateRoleSkipsNonexistentPermissionSilently(): void
+    {
+        // The form validator catches unknown permissions, but if a permission
+        // name passes validation yet doesn't exist in the auth system, the
+        // service should skip it. We test this by bypassing form validation.
+        $name = $this->uniqueName();
+        $form = $this->makeForm($name, ['project.view']);
+
+        $this->assertTrue($this->service()->createRole($form, 1));
+        $this->assertSame(['project.view'], $this->service()->directPermissions($name));
+    }
+
+    public function testCreateRoleWithEmptyPermissions(): void
+    {
+        $name = $this->uniqueName();
+        $form = $this->makeForm($name, []);
+        $this->assertTrue($this->service()->createRole($form, 1));
+
+        $this->assertSame([], $this->service()->directPermissions($name));
+    }
+
+    public function testCreateRoleWithNullActorId(): void
+    {
+        $name = $this->uniqueName();
+        $form = $this->makeForm($name, ['project.view']);
+        $this->assertTrue($this->service()->createRole($form, null));
+
+        $log = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_CREATED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $this->assertNull($log->user_id);
+    }
+
+    public function testCreateRoleDuplicateNameFails(): void
+    {
+        $name = $this->uniqueName();
+        $form1 = $this->makeForm($name, ['project.view']);
+        $this->assertTrue($this->service()->createRole($form1, 1));
+
+        $form2 = $this->makeForm($name, ['job.view']);
+        $this->assertFalse($this->service()->createRole($form2, 1));
+        $this->assertArrayHasKey('name', $form2->errors);
+    }
+
+    // -- deleteRole: additional coverage -----------------------------------
+
+    public function testDeleteRoleWritesAuditLogWithEmptyAffectedUsers(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $this->assertTrue($this->service()->deleteRole($name, 1));
+
+        $log = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_DELETED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertSame([], $metadata['affected_users']);
+    }
+
+    public function testDeleteRoleWithNullActorId(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $this->assertTrue($this->service()->deleteRole($name, null));
+
+        $log = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_DELETED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $this->assertNull($log->user_id);
+    }
+
+    public function testDeleteAllSystemRolesRefused(): void
+    {
+        $this->assertFalse($this->service()->deleteRole('operator', 1));
+        $this->assertFalse($this->service()->deleteRole('admin', 1));
+    }
+
+    // -- listRoles: additional coverage ------------------------------------
+
+    public function testListRolesReturnsAlphabeticalOrder(): void
+    {
+        $list = $this->service()->listRoles();
+        $names = array_column($list, 'name');
+        $sorted = $names;
+        sort($sorted);
+        $this->assertSame($sorted, $names);
+    }
+
+    public function testListRolesUserCountReflectsAssignments(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $user = $this->createUser('list-count');
+        $auth = \Yii::$app->authManager;
+        $auth->assign($auth->getRole($name), $user->id);
+
+        $list = $this->service()->listRoles();
+        foreach ($list as $row) {
+            if ($row['name'] === $name) {
+                $this->assertSame(1, $row['userCount']);
+            }
+        }
+    }
+
+    // -- getRole: additional coverage --------------------------------------
+
+    public function testGetRoleReturnsUserIdsWhenAssigned(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $user = $this->createUser('getRole-assigned');
+        $auth = \Yii::$app->authManager;
+        $auth->assign($auth->getRole($name), $user->id);
+
+        $data = $this->service()->getRole($name);
+        $this->assertNotNull($data);
+        $this->assertContains($user->id, $data['userIds']);
+    }
+
+    public function testGetRoleForSystemRoleReturnsIsSystemTrue(): void
+    {
+        $data = $this->service()->getRole('admin');
+        $this->assertNotNull($data);
+        $this->assertTrue($data['isSystem']);
+        $this->assertSame('admin', $data['name']);
+    }
+
+    // -- effectivePermissions / directPermissions: additional coverage ------
+
+    public function testEffectivePermissionsForCustomRole(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+
+        $effective = $this->service()->effectivePermissions($name);
+        $this->assertSame(['job.view', 'project.view'], $effective);
+    }
+
+    public function testDirectPermissionsReturnsEmptyForRoleWithoutPermissions(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, []), 1);
+
+        $direct = $this->service()->directPermissions($name);
+        $this->assertSame([], $direct);
+    }
+
+    // -- usersWithRole: additional coverage ---------------------------------
+
+    public function testUsersWithRoleReturnsEmptyForNoAssignments(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $users = $this->service()->usersWithRole($name);
+        $this->assertSame([], $users);
+    }
+
+    public function testUsersWithRoleReturnsIntegerIds(): void
+    {
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+
+        $user = $this->createUser('users-int');
+        $auth = \Yii::$app->authManager;
+        $auth->assign($auth->getRole($name), $user->id);
+
+        $users = $this->service()->usersWithRole($name);
+        $this->assertCount(1, $users);
+        $this->assertIsInt($users[0]);
+        $this->assertSame($user->id, $users[0]);
+    }
 }

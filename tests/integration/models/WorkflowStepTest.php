@@ -158,6 +158,7 @@ class WorkflowStepTest extends DbTestCase
         $s1->save(false);
 
         $reloaded = WorkflowStep::findOne($s1->id);
+        $this->assertNotNull($reloaded);
         $this->assertInstanceOf(WorkflowStep::class, $reloaded->onSuccessStep);
         $this->assertSame($s2->id, $reloaded->onSuccessStep->id);
     }
@@ -172,6 +173,7 @@ class WorkflowStepTest extends DbTestCase
         $s1->save(false);
 
         $reloaded = WorkflowStep::findOne($s1->id);
+        $this->assertNotNull($reloaded);
         $this->assertInstanceOf(WorkflowStep::class, $reloaded->onFailureStep);
         $this->assertSame($s2->id, $reloaded->onFailureStep->id);
     }
@@ -186,6 +188,7 @@ class WorkflowStepTest extends DbTestCase
         $s1->save(false);
 
         $reloaded = WorkflowStep::findOne($s1->id);
+        $this->assertNotNull($reloaded);
         $this->assertInstanceOf(WorkflowStep::class, $reloaded->onAlwaysStep);
         $this->assertSame($s2->id, $reloaded->onAlwaysStep->id);
     }

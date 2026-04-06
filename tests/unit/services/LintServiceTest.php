@@ -290,4 +290,143 @@ class LintServiceTest extends TestCase
             rmdir($dir);
         }
     }
+
+    // -------------------------------------------------------------------------
+    // runForProject — git project workspace not found
+    // -------------------------------------------------------------------------
+
+    public function testRunForProjectStoresGitWorkspaceNotFoundMessage(): void
+    {
+        // Create a service subclass that also stubs resolveProjectPath for git
+        $svc = new class extends LintService {
+            public array $stored         = [];
+            public array $storedProjects = [];
+
+            protected function isAvailable(): bool
+            {
+                return true;
+            }
+
+            protected function execute(?string $playbook, string $cwd): array
+            {
+                return ['ok', 0];
+            }
+
+            protected function resolveProjectPath(Project $project): ?string
+            {
+                // Simulate git project with a resolved but non-existent path
+                return '/tmp/ansilume_nonexistent_workspace_' . uniqid('', true);
+            }
+
+            protected function store(JobTemplate $template, ?int $exitCode, string $output): void
+            {
+                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output];
+            }
+
+            protected function storeProject(Project $project, ?int $exitCode, string $output): void
+            {
+                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output];
+            }
+        };
+
+        $project = $this->makeProject(Project::SCM_TYPE_GIT, null);
+        $svc->runForProject($project);
+
+        $this->assertCount(1, $svc->storedProjects);
+        $this->assertNull($svc->storedProjects[0]['exitCode']);
+        $this->assertStringContainsString('sync the project first', $svc->storedProjects[0]['output']);
+    }
+
+    // -------------------------------------------------------------------------
+    // runForTemplate — empty execute output gets "(no output)"
+    // -------------------------------------------------------------------------
+
+    public function testRunForTemplateStoresNoOutputFallbackWhenExecuteReturnsEmpty(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_test_' . uniqid('', true);
+        mkdir($dir);
+        file_put_contents($dir . '/site.yml', "---\n- hosts: all\n");
+
+        try {
+            $svc      = $this->makeService(available: true, execOutput: '', execExit: 0);
+            $project  = $this->makeProject(Project::SCM_TYPE_MANUAL, $dir);
+            $template = $this->makeTemplate(['playbook' => 'site.yml'], $project);
+
+            $svc->runForTemplate($template);
+
+            $this->assertCount(1, $svc->stored);
+            $this->assertSame(0, $svc->stored[0]['exitCode']);
+            $this->assertSame('(no output)', $svc->stored[0]['output']);
+        } finally {
+            unlink($dir . '/site.yml');
+            rmdir($dir);
+        }
+    }
+
+    public function testRunForProjectStoresNoOutputFallbackWhenExecuteReturnsEmpty(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_proj_' . uniqid('', true);
+        mkdir($dir);
+
+        try {
+            $svc     = $this->makeService(available: true, execOutput: '', execExit: 0);
+            $project = $this->makeProject(Project::SCM_TYPE_MANUAL, $dir);
+
+            $svc->runForProject($project);
+
+            $this->assertCount(1, $svc->storedProjects);
+            $this->assertSame(0, $svc->storedProjects[0]['exitCode']);
+            $this->assertSame('(no output)', $svc->storedProjects[0]['output']);
+        } finally {
+            rmdir($dir);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // runForTemplate — git project "sync first" message
+    // -------------------------------------------------------------------------
+
+    public function testRunForTemplateStoresGitWorkspaceNotFoundMessage(): void
+    {
+        // Use a subclass that stubs resolveProjectPath to return a non-existent dir
+        // to hit the git "sync the project first" branch in runForTemplate
+        $svc = new class extends LintService {
+            public array $stored         = [];
+            public array $storedProjects = [];
+
+            protected function isAvailable(): bool
+            {
+                return true;
+            }
+
+            protected function execute(?string $playbook, string $cwd): array
+            {
+                return ['ok', 0];
+            }
+
+            protected function resolveProjectPath(Project $project): ?string
+            {
+                return '/tmp/ansilume_nonexistent_ws_' . uniqid('', true);
+            }
+
+            protected function store(JobTemplate $template, ?int $exitCode, string $output): void
+            {
+                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output];
+            }
+
+            protected function storeProject(Project $project, ?int $exitCode, string $output): void
+            {
+                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output];
+            }
+        };
+
+        $project  = $this->makeProject(Project::SCM_TYPE_GIT, null);
+        $template = $this->makeTemplate(['playbook' => 'site.yml'], $project);
+
+        $svc->runForTemplate($template);
+
+        $this->assertCount(1, $svc->stored);
+        $this->assertNull($svc->stored[0]['exitCode']);
+        $this->assertStringContainsString('sync the project first', $svc->stored[0]['output']);
+    }
 }

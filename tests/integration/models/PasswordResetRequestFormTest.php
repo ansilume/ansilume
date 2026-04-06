@@ -44,11 +44,15 @@ class PasswordResetRequestFormTest extends DbTestCase
         \Yii::$app->set('mailer', new class extends \yii\base\Component implements \yii\mail\MailerInterface {
             public int $sendCount = 0;
             public bool $shouldReturn = true;
+            /**
+             * @param string|array<string, string>|null $view
+             * @param array<string, mixed> $params
+             */
             public function compose($view = null, array $params = []): \yii\mail\MessageInterface
             {
                 $mailer = $this;
                 return new class ($mailer) extends \yii\base\BaseObject implements \yii\mail\MessageInterface {
-                    /** @var object{sendCount: int, shouldReturn: bool} */
+                    /** @var object */
                     public object $mailer;
                     public function __construct(object $mailer)
                     {
@@ -57,33 +61,51 @@ class PasswordResetRequestFormTest extends DbTestCase
                     }
                     public function getCharset(): string { return 'utf-8'; }
                     public function setCharset($charset): self { return $this; }
-                    public function getFrom() { return null; }
+                    /** @return string */
+                    public function getFrom() { return ''; }
+                    /** @param string|array<string, string> $from */
                     public function setFrom($from): self { return $this; }
-                    public function getTo() { return null; }
+                    /** @return string */
+                    public function getTo() { return ''; }
+                    /** @param string|array<string, string> $to */
                     public function setTo($to): self { return $this; }
-                    public function getReplyTo() { return null; }
+                    /** @return string */
+                    public function getReplyTo() { return ''; }
+                    /** @param string|array<string, string> $replyTo */
                     public function setReplyTo($replyTo): self { return $this; }
-                    public function getCc() { return null; }
+                    /** @return string */
+                    public function getCc() { return ''; }
+                    /** @param string|array<string, string> $cc */
                     public function setCc($cc): self { return $this; }
-                    public function getBcc() { return null; }
+                    /** @return string */
+                    public function getBcc() { return ''; }
+                    /** @param string|array<string, string> $bcc */
                     public function setBcc($bcc): self { return $this; }
                     public function getSubject() { return ''; }
                     public function setSubject($subject): self { return $this; }
                     public function setTextBody($text): self { return $this; }
                     public function setHtmlBody($html): self { return $this; }
+                    /** @param array<string, string> $options */
                     public function attach($fileName, array $options = []): self { return $this; }
+                    /** @param array<string, string> $options */
                     public function attachContent($content, array $options = []): self { return $this; }
+                    /** @param array<string, string> $options */
                     public function embed($fileName, array $options = []): string { return ''; }
+                    /** @param array<string, string> $options */
                     public function embedContent($content, array $options = []): string { return ''; }
                     public function send(\yii\mail\MailerInterface $mailer = null): bool
                     {
-                        $this->mailer->sendCount++;
-                        return $this->mailer->shouldReturn;
+                        $m = $this->mailer;
+                        /** @phpstan-ignore-next-line */
+                        $m->sendCount++;
+                        /** @phpstan-ignore-next-line */
+                        return $m->shouldReturn;
                     }
                     public function toString(): string { return ''; }
                 };
             }
             public function send($message): bool { return true; }
+            /** @param array<int, \yii\mail\MessageInterface> $messages */
             public function sendMultiple(array $messages): int { return count($messages); }
         });
     }
@@ -140,6 +162,7 @@ class PasswordResetRequestFormTest extends DbTestCase
         $this->assertTrue($form->sendResetEmail());
 
         $reloaded = User::findOne($user->id);
+        $this->assertNotNull($reloaded);
         $this->assertNotEmpty($reloaded->password_reset_token);
 
         /** @var object{sendCount: int} $mailer */
@@ -159,6 +182,7 @@ class PasswordResetRequestFormTest extends DbTestCase
         $this->assertTrue($form->sendResetEmail());
 
         $reloaded = User::findOne($user->id);
+        $this->assertNotNull($reloaded);
         // The still-valid token is reused, not rotated.
         $this->assertSame($originalToken, $reloaded->password_reset_token);
     }
@@ -183,11 +207,16 @@ class PasswordResetRequestFormTest extends DbTestCase
         // Swap in a mailer that throws on compose — sendResetEmail must
         // still return true (silently log the failure).
         \Yii::$app->set('mailer', new class extends \yii\base\Component implements \yii\mail\MailerInterface {
+            /**
+             * @param string|array<string, string>|null $view
+             * @param array<string, mixed> $params
+             */
             public function compose($view = null, array $params = []): \yii\mail\MessageInterface
             {
                 throw new \RuntimeException('simulated mailer failure');
             }
             public function send($message): bool { return false; }
+            /** @param array<int, \yii\mail\MessageInterface> $messages */
             public function sendMultiple(array $messages): int { return 0; }
         });
 

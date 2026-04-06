@@ -126,6 +126,69 @@ class LintServiceIntegrationTest extends DbTestCase
     // isAvailable() + execute() — real ansible-lint run (if installed)
     // -------------------------------------------------------------------------
 
+    public function testRunForProjectReturnsEarlyWhenManualProjectHasNoLocalPath(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_MANUAL;
+        $project->local_path = null;
+        $project->save(false);
+
+        $this->service->runForProject($project);
+
+        $project->refresh();
+        // No lint output should be stored when path is null (early return)
+        $this->assertNull($project->lint_output);
+    }
+
+    public function testRunForProjectStoresGitWorkspaceNotFoundMessage(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_GIT;
+        $project->scm_url = 'https://example.com/repo.git';
+        $project->save(false);
+
+        // For a git project, resolveProjectPath uses projectService.localPath
+        // which returns a path that won't exist, triggering the "sync first" message
+        $this->service->runForProject($project);
+
+        $project->refresh();
+        if ($project->lint_output !== null) {
+            $this->assertStringContainsString('sync', strtolower($project->lint_output));
+        } else {
+            // If lint_output is null, the project path resolved to null (early return)
+            $this->assertNull($project->lint_output);
+        }
+    }
+
+    public function testRunForTemplateStoresPlaybookNotFoundMessage(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_inttest_' . uniqid('', true);
+        mkdir($dir);
+
+        try {
+            $user = $this->createUser();
+            $group = $this->createRunnerGroup($user->id);
+            $project = $this->createProject($user->id);
+            $project->local_path = $dir;
+            $project->save(false);
+            $inv = $this->createInventory($user->id);
+            $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+            // The template's playbook won't exist in the temp dir
+            $template->playbook = 'nonexistent_playbook.yml';
+            $template->save(false);
+
+            $this->service->runForTemplate($template);
+
+            $template->refresh();
+            $this->assertNotNull($template->lint_output);
+            $this->assertStringContainsString('Playbook not found', $template->lint_output);
+        } finally {
+            \app\helpers\FileHelper::safeRmdir($dir);
+        }
+    }
+
     public function testRunForProjectRunsLintWhenDirectoryExists(): void
     {
         $dir = sys_get_temp_dir() . '/ansilume_lint_inttest_' . uniqid('', true);

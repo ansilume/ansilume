@@ -203,6 +203,222 @@ class JobClaimServiceIntegrationTest extends DbTestCase
     }
 
     // -------------------------------------------------------------------------
+    // buildExecutionPayload() — extra_vars, limit, tags, etc.
+    // -------------------------------------------------------------------------
+
+    public function testBuildExecutionPayloadIncludesExtraVars(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+        $template->extra_vars = '{"env":"prod"}';
+        $template->save(false);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertNotNull($payload['extra_vars']);
+        $this->assertStringContainsString('env', $payload['extra_vars']);
+    }
+
+    public function testBuildExecutionPayloadWithLimitAndTags(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+        $template->limit = 'webservers';
+        $template->tags = 'deploy';
+        $template->skip_tags = 'debug';
+        $template->save(false);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertSame('webservers', $payload['limit']);
+        $this->assertSame('deploy', $payload['tags']);
+        $this->assertSame('debug', $payload['skip_tags']);
+    }
+
+    public function testBuildExecutionPayloadDefaultValues(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertSame(0, $payload['verbosity']);
+        $this->assertSame(5, $payload['forks']);
+        $this->assertFalse($payload['become']);
+        $this->assertSame('sudo', $payload['become_method']);
+        $this->assertSame('root', $payload['become_user']);
+        $this->assertFalse($payload['check_mode']);
+        $this->assertNull($payload['extra_vars']);
+        $this->assertNull($payload['limit']);
+        $this->assertNull($payload['tags']);
+        $this->assertNull($payload['skip_tags']);
+    }
+
+    public function testBuildExecutionPayloadWithBecomeEnabled(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+        $template->become = true;
+        $template->become_method = 'su';
+        $template->become_user = 'deploy';
+        $template->save(false);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertTrue($payload['become']);
+        $this->assertSame('su', $payload['become_method']);
+        $this->assertSame('deploy', $payload['become_user']);
+    }
+
+    public function testBuildExecutionPayloadStoresExecutionCommand(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $job->refresh();
+        $this->assertNotNull($job->execution_command);
+        $this->assertStringContainsString('ansible-playbook', $job->execution_command);
+        $this->assertIsArray($payload['command']);
+        $this->assertSame('ansible-playbook', $payload['command'][0]);
+    }
+
+    public function testBuildExecutionPayloadResolvesProjectPath(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertNotEmpty($payload['project_path']);
+        $this->assertStringContainsString('site.yml', $payload['playbook_path']);
+    }
+
+    public function testBuildExecutionPayloadWithCheckMode(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+        // Manually set check_mode in runner_payload to exercise the branch
+        $rawPayload = json_decode($job->runner_payload ?? '{}', true) ?: [];
+        $rawPayload['check_mode'] = true;
+        $job->runner_payload = json_encode($rawPayload);
+        $job->save(false);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertTrue($payload['check_mode']);
+    }
+
+    public function testBuildExecutionPayloadWithVerbosity(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+        $template->verbosity = 3;
+        $template->save(false);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertSame(3, $payload['verbosity']);
+    }
+
+    // -------------------------------------------------------------------------
+    // claim() — additional coverage
+    // -------------------------------------------------------------------------
+
+    public function testClaimSetsWorkerIdToRunnerName(): void
+    {
+        [$group, $runner] = $this->makeQueuedJob();
+
+        $claimed = $this->service->claim($group, $runner);
+
+        $this->assertNotNull($claimed);
+        $this->assertSame($runner->name, $claimed->worker_id);
+    }
+
+    public function testClaimWritesAuditLog(): void
+    {
+        [$group, $runner] = $this->makeQueuedJob();
+
+        $before = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_JOB_STARTED])
+            ->count();
+
+        $this->service->claim($group, $runner);
+
+        $after = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_JOB_STARTED])
+            ->count();
+        $this->assertSame((int)$before + 1, (int)$after);
+    }
+
+    public function testClaimPicksOldestQueuedJobFirst(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $runner = $this->createRunner($group->id, $user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $job1 = $this->createJob($template->id, $user->id);
+        $job2 = $this->createJob($template->id, $user->id);
+
+        $claimed = $this->service->claim($group, $runner);
+
+        $this->assertNotNull($claimed);
+        $this->assertSame($job1->id, $claimed->id);
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 

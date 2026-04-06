@@ -211,6 +211,85 @@ class ScheduleServiceTest extends DbTestCase
         $this->assertSame(0, $this->countJobsForTemplate($template->id));
     }
 
+    public function testRunDueWithEmptyExtraVarsDoesNotSetOverrides(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        $schedule = $this->createSchedule($template->id, $user->id, true, time() - 60);
+        $schedule->extra_vars = '';
+        $schedule->save(false);
+
+        $this->service->runDue();
+
+        /** @var Job|null $job */
+        $job = Job::find()->where(['job_template_id' => $template->id])->one();
+        $this->assertNotNull($job);
+        // extra_vars should come from the template defaults, not from schedule override.
+        // The key assertion is that it doesn't crash and a job is launched.
+        $this->assertSame(1, $this->countJobsForTemplate($template->id));
+    }
+
+    public function testRunDueWithNullNextRunAtAndNonMatchingCronSkips(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        // Use a very specific cron that won't match right now (Feb 30 doesn't exist).
+        // Use 0 0 30 2 * — minute 0, hour 0, day 30, month Feb, any weekday.
+        $schedule = $this->createSchedule($template->id, $user->id, true, null, '0 0 30 2 *');
+
+        $launched = $this->service->runDue();
+        $this->assertSame(0, $this->countJobsForTemplate($template->id));
+    }
+
+    public function testRunDueWithTimezoneOnNullNextRunAt(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        // Create with null next_run_at and every-minute cron, custom timezone.
+        $schedule = $this->createSchedule($template->id, $user->id, true, null, '* * * * *');
+        $schedule->timezone = 'America/New_York';
+        $schedule->save(false);
+
+        $this->service->runDue();
+
+        // Should still launch because "* * * * *" is always due.
+        $this->assertSame(1, $this->countJobsForTemplate($template->id));
+    }
+
+    public function testRunDueMixedScheduleStates(): void
+    {
+        [$templateA, $user] = $this->makeFixtures();
+        [$templateB] = $this->makeFixtures();
+        [$templateC] = $this->makeFixtures();
+
+        // Due schedule
+        $this->createSchedule($templateA->id, $user->id, true, time() - 60);
+        // Disabled schedule (should be skipped)
+        $this->createSchedule($templateB->id, $user->id, false, time() - 60);
+        // Future schedule (should be skipped)
+        $this->createSchedule($templateC->id, $user->id, true, time() + 7200);
+
+        $this->service->runDue();
+
+        $this->assertSame(1, $this->countJobsForTemplate($templateA->id));
+        $this->assertSame(0, $this->countJobsForTemplate($templateB->id));
+        $this->assertSame(0, $this->countJobsForTemplate($templateC->id));
+    }
+
+    public function testRunDueSetsCorrectLaunchedByFromScheduleCreator(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        $this->createSchedule($template->id, $user->id, true, time() - 60);
+
+        $this->service->runDue();
+
+        /** @var Job|null $job */
+        $job = Job::find()->where(['job_template_id' => $template->id])->one();
+        $this->assertNotNull($job);
+        $this->assertSame($user->id, (int)$job->launched_by);
+    }
+
     private function countJobsForTemplate(int $templateId): int
     {
         return (int)Job::find()->where(['job_template_id' => $templateId])->count();

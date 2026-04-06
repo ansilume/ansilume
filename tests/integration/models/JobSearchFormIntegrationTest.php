@@ -147,6 +147,9 @@ class JobSearchFormIntegrationTest extends DbTestCase
 
     // -------------------------------------------------------------------------
 
+    /**
+     * @return array{0: \app\models\JobTemplate, 1: \app\models\User}
+     */
     private function makeFixtures(): array
     {
         $user     = $this->createUser();

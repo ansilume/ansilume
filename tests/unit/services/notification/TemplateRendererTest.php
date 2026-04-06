@@ -104,4 +104,99 @@ class TemplateRendererTest extends TestCase
 
         $this->assertSame('{"a":1}', $vars['ctx.obj']);
     }
+
+    // -- baseUrl() coverage via buildVariables -----------------------------------
+
+    public function testBaseUrlFallsBackToParam(): void
+    {
+        $origParams = \Yii::$app->params;
+        \Yii::$app->params['appBaseUrl'] = 'https://ansilume.example.com/';
+
+        try {
+            $vars = $this->renderer->buildVariables([]);
+            // rtrim strips trailing slash
+            $this->assertSame('https://ansilume.example.com', $vars['app.url']);
+        } finally {
+            \Yii::$app->params = $origParams;
+        }
+    }
+
+    public function testBaseUrlReturnsEmptyWhenNothingConfigured(): void
+    {
+        $origParams = \Yii::$app->params;
+        unset(\Yii::$app->params['appBaseUrl']);
+
+        try {
+            $vars = $this->renderer->buildVariables([]);
+            $this->assertSame('', $vars['app.url']);
+        } finally {
+            \Yii::$app->params = $origParams;
+        }
+    }
+
+    public function testBuildVariablesIncludesTimestamp(): void
+    {
+        $vars = $this->renderer->buildVariables([]);
+        $this->assertArrayHasKey('timestamp', $vars);
+        // Timestamp should be a date-like string
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/', $vars['timestamp']);
+    }
+
+    public function testBuildVariablesHandlesBooleanFalse(): void
+    {
+        $vars = $this->renderer->buildVariables([
+            'flag' => ['enabled' => false],
+        ]);
+        $this->assertSame('', $vars['flag.enabled']);
+    }
+
+    public function testBuildVariablesHandlesFloatValues(): void
+    {
+        $vars = $this->renderer->buildVariables([
+            'metric' => ['duration' => 3.14],
+        ]);
+        $this->assertSame('3.14', $vars['metric.duration']);
+    }
+
+    public function testBuildVariablesDeeplyNestedArray(): void
+    {
+        $vars = $this->renderer->buildVariables([
+            'a' => ['b' => ['c' => ['d' => 'deep']]],
+        ]);
+        $this->assertSame('deep', $vars['a.b.c.d']);
+    }
+
+    public function testRenderAndBuildVariablesEndToEnd(): void
+    {
+        $vars = $this->renderer->buildVariables([
+            'job' => ['id' => 7, 'status' => 'failed'],
+        ]);
+        $result = $this->renderer->render(
+            'Job #{{ job.id }} {{ job.status }} at {{ timestamp }}',
+            $vars
+        );
+        $this->assertStringContainsString('Job #7 failed at', $result);
+    }
+
+    public function testBaseUrlEmptyWhenParamIsEmptyString(): void
+    {
+        $origParams = \Yii::$app->params;
+        \Yii::$app->params['appBaseUrl'] = '';
+
+        try {
+            $vars = $this->renderer->buildVariables([]);
+            $this->assertSame('', $vars['app.url']);
+        } finally {
+            \Yii::$app->params = $origParams;
+        }
+    }
+
+    public function testBuildVariablesNumericKeys(): void
+    {
+        $vars = $this->renderer->buildVariables([
+            'items' => ['0' => 'first', '1' => 'second'],
+        ]);
+        $this->assertSame('first', $vars['items.0']);
+        $this->assertSame('second', $vars['items.1']);
+    }
 }
