@@ -310,7 +310,42 @@ else
     warn "App container not running — cannot check migrations"
 fi
 
-# ── 10. Port conflicts ──────────────────────────────────────────────────────
+# ── 10. Runner — project sync capability ────────────────────────────────────
+
+section "Runner — Project Sync"
+
+runner_svcs=$(docker compose config --services 2>/dev/null | grep '^runner' || true)
+
+if [ -z "$runner_svcs" ]; then
+    warn "No runner services defined in compose file"
+else
+    for runner_svc in $runner_svcs; do
+        runner_cid=$(docker compose ps -q "$runner_svc" 2>/dev/null | head -1 || true)
+        if [ -z "$runner_cid" ]; then
+            warn "${runner_svc}: not running"
+            continue
+        fi
+
+        # Check git is installed in the runner container.
+        if docker exec "$runner_cid" git --version >/dev/null 2>&1; then
+            git_ver=$(docker exec "$runner_cid" git --version 2>/dev/null || echo "unknown")
+            ok "${runner_svc}: git available (${git_ver})"
+        else
+            fail "${runner_svc}: git not found — runner cannot sync git projects (upgrade to latest runner image)"
+        fi
+
+        # Check how many projects have been synced locally.
+        proj_count=$(docker exec "$runner_cid" sh -c \
+            'ls /var/www/runtime/projects/ 2>/dev/null | wc -l' 2>/dev/null | tr -d '[:space:]' || echo "0")
+        if [ "${proj_count:-0}" -gt 0 ]; then
+            ok "${runner_svc}: ${proj_count} project(s) synced in runtime/projects/"
+        else
+            info "${runner_svc}: no projects synced yet (first git-backed job will trigger a clone)"
+        fi
+    done
+fi
+
+# ── 11. Port conflicts ──────────────────────────────────────────────────────
 
 section "Port Conflicts"
 
@@ -336,14 +371,14 @@ elif command -v netstat >/dev/null 2>&1; then
     fi
 fi
 
-# ── 11. Docker network ──────────────────────────────────────────────────────
+# ── 12. Docker network ──────────────────────────────────────────────────────
 
 section "Docker Networks"
 
 docker network ls --filter name=ansilume --format 'table {{.Name}}\t{{.Driver}}\t{{.Scope}}' 2>/dev/null || \
     warn "Could not list Docker networks"
 
-# ── 12. Disk usage ──────────────────────────────────────────────────────────
+# ── 13. Disk usage ──────────────────────────────────────────────────────────
 
 section "Docker Disk Usage"
 

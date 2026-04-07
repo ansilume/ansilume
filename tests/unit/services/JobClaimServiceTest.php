@@ -19,25 +19,37 @@ use yii\db\BaseActiveRecord;
  */
 class JobClaimServiceTest extends TestCase
 {
-    /** Default no-DB service: returns a fixed project path, static localhost inventory, and optional credential */
+    /**
+     * Default no-DB service: returns a fixed project path, static localhost inventory, and optional credential.
+     *
+     * @param array{scm_type: string, scm_url: string|null, scm_branch: string|null}|null $scm
+     */
     private function makeService(
         string $projectPath = '/var/projects/default',
         ?array $inventory = null,
         ?array $credential = null,
+        ?array $scm = null,
     ): JobClaimService {
         $inv = $inventory ?? ['type' => 'static', 'content' => "localhost\n", 'path' => null];
+        $scmData = $scm ?? ['scm_type' => 'manual', 'scm_url' => null, 'scm_branch' => null];
 
-        return new class ($projectPath, $inv, $credential) extends JobClaimService {
+        return new class ($projectPath, $inv, $credential, $scmData) extends JobClaimService {
             public function __construct(
                 private readonly string $projectPath,
                 private readonly array $inv,
                 private readonly ?array $cred,
+                private readonly array $scmData,
             ) {
             }
 
             protected function resolveProjectPath(array $payload): string
             {
                 return $this->projectPath;
+            }
+
+            protected function resolveProjectScm(array $payload): array
+            {
+                return $this->scmData;
             }
 
             protected function resolveInventory(array $payload): array
@@ -235,6 +247,38 @@ class JobClaimServiceTest extends TestCase
         $payload = $service->buildExecutionPayload($job);
 
         $this->assertContains('__INVENTORY_TMP__', $payload['command']);
+    }
+
+    public function testPayloadContainsScmFieldsForGitProject(): void
+    {
+        $job = $this->makeJob(1, []);
+        $service = $this->makeService(scm: [
+            'scm_type' => 'git',
+            'scm_url' => 'https://github.com/example/repo.git',
+            'scm_branch' => 'main',
+        ]);
+
+        $payload = $service->buildExecutionPayload($job);
+
+        $this->assertSame('git', $payload['scm_type']);
+        $this->assertSame('https://github.com/example/repo.git', $payload['scm_url']);
+        $this->assertSame('main', $payload['scm_branch']);
+    }
+
+    public function testPayloadContainsScmFieldsForManualProject(): void
+    {
+        $job = $this->makeJob(1, []);
+        $service = $this->makeService(scm: [
+            'scm_type' => 'manual',
+            'scm_url' => null,
+            'scm_branch' => null,
+        ]);
+
+        $payload = $service->buildExecutionPayload($job);
+
+        $this->assertSame('manual', $payload['scm_type']);
+        $this->assertNull($payload['scm_url']);
+        $this->assertNull($payload['scm_branch']);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

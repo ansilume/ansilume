@@ -163,6 +163,16 @@ class RunnerController extends Controller
      */
     private function executeJob(int $jobId, array $payload): void
     {
+        // Sync project from git before execution.
+        // In standalone / prebuilt deployments the runner has its own filesystem
+        // and the server's queue-worker cannot clone repos into it. The runner
+        // must pull the project itself using the scm metadata from the payload.
+        $syncError = $this->syncProject($payload);
+        if ($syncError !== null) {
+            $this->failJob($jobId, $syncError);
+            return;
+        }
+
         $callbackFile = sys_get_temp_dir() . '/ansilume_tasks_' . $jobId . '_' . uniqid('', true) . '.ndjson';
         /** @var array<int, string> $cmdFromServer */
         $cmdFromServer = is_array($payload['command'] ?? null) ? $payload['command'] : [];
@@ -258,5 +268,77 @@ class RunnerController extends Controller
         $path = sys_get_temp_dir() . '/ansilume_inv_' . uniqid('', true) . '.yml';
         file_put_contents($path, $content);
         return $path;
+    }
+
+    /**
+     * Clone or pull the project from git if the payload carries SCM metadata.
+     * Returns null on success or when no sync is needed; returns an error
+     * message string on failure so the caller can fail the job cleanly.
+     *
+     * @param array<string, mixed> $payload
+     */
+    protected function syncProject(array $payload): ?string
+    {
+        $scmType = (string)($payload['scm_type'] ?? '');
+        $scmUrl = (string)($payload['scm_url'] ?? '');
+        $scmBranch = (string)($payload['scm_branch'] ?? 'main');
+        $projectPath = (string)($payload['project_path'] ?? '');
+
+        if ($scmType !== 'git' || $scmUrl === '' || $projectPath === '') {
+            return null;
+        }
+
+        if (is_dir($projectPath . '/.git')) {
+            $cmd = ['git', '-C', $projectPath, 'pull', '--ff-only', 'origin', $scmBranch];
+        } else {
+            $cmd = ['git', 'clone', '--depth', '1', '--branch', $scmBranch, $scmUrl, $projectPath];
+        }
+
+        $this->stdout("Syncing project: {$scmUrl} (branch: {$scmBranch}) → {$projectPath}\n");
+
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['pipe', 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $proc = proc_open($cmd, $descriptors, $pipes);
+        if ($proc === false) {
+            return "Failed to start git process.\n";
+        }
+
+        fclose($pipes[0]);
+        $stdout = (string)stream_get_contents($pipes[1]);
+        $stderr = (string)stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($proc);
+
+        if ($exitCode !== 0) {
+            return sprintf(
+                "Git sync failed (exit %d):\n%s%s",
+                $exitCode,
+                $stdout,
+                $stderr
+            );
+        }
+
+        return null;
+    }
+
+    /**
+     * Send an error log chunk and mark the job as failed via the runner API.
+     */
+    private function failJob(int $jobId, string $errorMessage): void
+    {
+        $this->http()->post("/api/runner/v1/jobs/{$jobId}/logs", [
+            'stream' => 'stderr',
+            'content' => $errorMessage,
+            'sequence' => 0,
+        ]);
+        $this->http()->post("/api/runner/v1/jobs/{$jobId}/complete", [
+            'exit_code' => 1,
+            'has_changes' => false,
+        ]);
     }
 }

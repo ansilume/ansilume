@@ -84,7 +84,7 @@ class JobClaimService extends Component
      * Resolves IDs to actual paths/content so the runner needs no DB access.
      * Also builds and stores the canonical execution command on the job record.
      *
-     * @return array{job_id: int, project_path: string, playbook_path: string, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null, command: array<int, string>}
+     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null, command: array<int, string>}
      */
     public function buildExecutionPayload(Job $job): array
     {
@@ -95,11 +95,15 @@ class JobClaimService extends Component
         $playbookPath = rtrim($projectPath, '/') . '/' . ltrim((string)($raw['playbook'] ?? 'site.yml'), '/');
 
         $inventory = $this->resolveInventory($raw);
+        $scm = $this->resolveProjectScm($raw);
 
         $payload = [
             'job_id' => $job->id,
             'project_path' => $projectPath,
             'playbook_path' => $playbookPath,
+            'scm_type' => $scm['scm_type'],
+            'scm_url' => $scm['scm_url'],
+            'scm_branch' => $scm['scm_branch'],
             'inventory_type' => $inventory['type'],
             'inventory_content' => $inventory['content'], // for static
             'inventory_path' => $inventory['path'], // for file-based
@@ -172,6 +176,21 @@ class JobClaimService extends Component
         /** @var Project|null $project */
         $project = Project::findOne($payload['project_id'] ?? 0);
         return $project?->local_path ?? '/tmp/ansilume/projects';
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array{scm_type: string, scm_url: string|null, scm_branch: string|null}
+     */
+    protected function resolveProjectScm(array $payload): array
+    {
+        /** @var Project|null $project */
+        $project = Project::findOne($payload['project_id'] ?? 0);
+        return [
+            'scm_type' => $project?->scm_type ?? Project::SCM_TYPE_MANUAL,
+            'scm_url' => $project?->scm_url,
+            'scm_branch' => $project?->scm_branch,
+        ];
     }
 
     /**

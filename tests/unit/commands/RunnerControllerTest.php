@@ -206,6 +206,157 @@ class RunnerControllerTest extends TestCase
 }
 
 // ---------------------------------------------------------------------------
+// syncProject() unit tests — uses a real tmpdir git repo to test clone/pull.
+// ---------------------------------------------------------------------------
+
+/**
+ * Tests for RunnerController::syncProject() via a testable subclass.
+ * Uses real filesystem git operations so git must be available in the test env.
+ */
+class RunnerControllerSyncProjectTest extends TestCase
+{
+    private string $tmpDir = '';
+
+    protected function setUp(): void
+    {
+        $this->tmpDir = sys_get_temp_dir() . '/ansilume_test_' . uniqid('', true);
+        mkdir($this->tmpDir, 0755, true);
+    }
+
+    protected function tearDown(): void
+    {
+        if (is_dir($this->tmpDir)) {
+            exec('rm -rf ' . escapeshellarg($this->tmpDir));
+        }
+    }
+
+    private function makeSyncableController(): RunnerController
+    {
+        return new class ('runner', \Yii::$app) extends RunnerController {
+            /** Expose syncProject for testing. */
+            public function callSyncProject(array $payload): ?string
+            {
+                return $this->syncProject($payload);
+            }
+
+            public function stdout($string): int
+            {
+                return 0;
+            }
+        };
+    }
+
+    private function makeLocalBareRepo(): string
+    {
+        $bare = $this->tmpDir . '/bare.git';
+        mkdir($bare, 0755, true);
+        exec('git init --bare ' . escapeshellarg($bare) . ' -q');
+
+        // Create an initial commit via a temp clone.
+        $work = $this->tmpDir . '/work';
+        exec('git clone --quiet ' . escapeshellarg($bare) . ' ' . escapeshellarg($work));
+        file_put_contents($work . '/README.md', 'test');
+        exec('git -C ' . escapeshellarg($work) . ' config user.email test@test.com');
+        exec('git -C ' . escapeshellarg($work) . ' config user.name Test');
+        exec('git -C ' . escapeshellarg($work) . ' add README.md');
+        exec('git -C ' . escapeshellarg($work) . ' commit -q -m init');
+        exec('git -C ' . escapeshellarg($work) . ' push -q origin HEAD:main');
+        exec('rm -rf ' . escapeshellarg($work));
+
+        return $bare;
+    }
+
+    public function testSkipsWhenScmTypeIsManual(): void
+    {
+        $ctrl = $this->makeSyncableController();
+        $result = $ctrl->callSyncProject([
+            'scm_type' => 'manual',
+            'scm_url' => 'https://github.com/example/repo.git',
+            'project_path' => '/some/path',
+        ]);
+
+        $this->assertNull($result);
+    }
+
+    public function testSkipsWhenScmUrlIsEmpty(): void
+    {
+        $ctrl = $this->makeSyncableController();
+        $result = $ctrl->callSyncProject([
+            'scm_type' => 'git',
+            'scm_url' => '',
+            'project_path' => '/some/path',
+        ]);
+
+        $this->assertNull($result);
+    }
+
+    public function testSkipsWhenProjectPathIsEmpty(): void
+    {
+        $ctrl = $this->makeSyncableController();
+        $result = $ctrl->callSyncProject([
+            'scm_type' => 'git',
+            'scm_url' => 'https://github.com/example/repo.git',
+            'project_path' => '',
+        ]);
+
+        $this->assertNull($result);
+    }
+
+    public function testClonesRepoWhenProjectPathDoesNotExist(): void
+    {
+        $bare = $this->makeLocalBareRepo();
+        $dest = $this->tmpDir . '/cloned';
+
+        $ctrl = $this->makeSyncableController();
+        $result = $ctrl->callSyncProject([
+            'scm_type' => 'git',
+            'scm_url' => $bare,
+            'scm_branch' => 'main',
+            'project_path' => $dest,
+        ]);
+
+        $this->assertNull($result, 'Expected successful clone but got: ' . ($result ?? 'null'));
+        $this->assertDirectoryExists($dest);
+        $this->assertFileExists($dest . '/README.md');
+    }
+
+    public function testPullsWhenProjectAlreadyCloned(): void
+    {
+        $bare = $this->makeLocalBareRepo();
+        $dest = $this->tmpDir . '/cloned';
+
+        // Initial clone.
+        exec('git clone --quiet --branch main ' . escapeshellarg($bare) . ' ' . escapeshellarg($dest));
+
+        $ctrl = $this->makeSyncableController();
+        $result = $ctrl->callSyncProject([
+            'scm_type' => 'git',
+            'scm_url' => $bare,
+            'scm_branch' => 'main',
+            'project_path' => $dest,
+        ]);
+
+        $this->assertNull($result, 'Expected successful pull but got: ' . ($result ?? 'null'));
+    }
+
+    public function testReturnsErrorStringOnInvalidUrl(): void
+    {
+        $dest = $this->tmpDir . '/cloned';
+
+        $ctrl = $this->makeSyncableController();
+        $result = $ctrl->callSyncProject([
+            'scm_type' => 'git',
+            'scm_url' => 'https://invalid.example.invalid/no-such-repo.git',
+            'scm_branch' => 'main',
+            'project_path' => $dest,
+        ]);
+
+        $this->assertNotNull($result);
+        $this->assertStringContainsString('Git sync failed', $result);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Stub collaborators — defined in the same file for test isolation.
 // ---------------------------------------------------------------------------
 
