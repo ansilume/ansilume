@@ -1,5 +1,27 @@
 # Troubleshooting
 
+## Diagnostics script
+
+Before digging into specific issues, run the diagnostics script. It collects system state, container health, image versions, connectivity, migration status, and recent logs — all in one go, with secrets automatically redacted.
+
+```bash
+./bin/diagnose
+# or remotely, without cloning the repo:
+curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
+```
+
+To save the output for sharing:
+
+```bash
+./bin/diagnose > ansilume-diag.txt 2>&1
+```
+
+The output is safe to share — no credentials or tokens are included.
+
+**Stuck and can't figure it out?** Open an issue at [github.com/ansilume/ansilume/issues](https://github.com/ansilume/ansilume/issues) and paste the diagnostics output. It gives us everything we need to help.
+
+---
+
 ## Container startup race conditions
 
 When multiple containers (app, runner-1, runner-2, ...) start simultaneously on a shared source volume, concurrent writes can cause problems. Ansilume guards against this with file locks (`flock`) in the entrypoint.
