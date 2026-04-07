@@ -42,6 +42,19 @@ test.describe('Dashboard', () => {
     await expect(page.locator('.card', { hasText: 'Recent Jobs' })).toBeVisible();
   });
 
+  /**
+   * Regression: "Running Now" link must use ?status=running, not
+   * ?JobSearchForm[status]=running — the search form loads with empty
+   * prefix so nested keys are silently ignored (GitHub #7).
+   */
+  test('running now link uses correct filter param', async ({ page }) => {
+    await page.goto('/site/index');
+    const link = page.getByRole('link', { name: 'Running Now' });
+    const href = await link.getAttribute('href');
+    expect(href).toContain('status=running');
+    expect(href).not.toContain('JobSearchForm');
+  });
+
   test('has navigation elements', async ({ page }) => {
     await page.goto('/site/index');
     await expect(page.locator('#sidebar, nav, .navbar').first()).toBeVisible();

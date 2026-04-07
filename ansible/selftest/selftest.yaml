@@ -16,8 +16,8 @@
     selftest_dir: /var/www/ansible/selftest
     tmp_dir: /tmp
 
-    # Internal service endpoints
-    app_health_url: "http://app:80/health"
+    # Internal service endpoints (nginx fronts the app container)
+    app_health_url: "http://nginx:80/health"
 
   tasks:
     # ==================================================================
@@ -272,39 +272,6 @@
     - name: Show Redis DNS result
       ansible.builtin.debug:
         msg: "{{ 'Redis host resolved: ' ~ dns_redis.stdout if dns_redis.rc == 0 else 'WARNING: Cannot resolve redis host (expected outside Docker network)' }}"
-
-    # ==================================================================
-    # Write / read test (demonstrates a change)
-    # ==================================================================
-
-    - name: Write a temp file (demonstrates a change)
-      ansible.builtin.copy:
-        content: "selftest ran at {{ ansible_date_time.iso8601 }}\n"
-        dest: /tmp/ansilume_selftest.txt
-        mode: '0644'
-
-    - name: Read back the temp file
-      ansible.builtin.slurp:
-        src: /tmp/ansilume_selftest.txt
-      register: selftest_file
-
-    - name: Show file content
-      ansible.builtin.debug:
-        msg: "{{ selftest_file.content | b64decode | trim }}"
-
-    - name: Clean up temp file
-      ansible.builtin.file:
-        path: /tmp/ansilume_selftest.txt
-        state: absent
-
-    # ==================================================================
-    # Skipped task (tests task status handling in callback)
-    # ==================================================================
-
-    - name: Simulate a skipped task
-      ansible.builtin.debug:
-        msg: "This task is skipped intentionally"
-      when: false
 
     # ==================================================================
     # Summary

@@ -114,14 +114,9 @@ class JobTemplateController extends BaseController
         return $this->redirect(['index']);
     }
 
-    public function actionLaunch(int $id = 0): Response|string
+    public function actionLaunch(): Response|string
     {
-        // Allow id to arrive as a POST body param (quick-launch from dashboard).
-        if ($id === 0) {
-            /** @var int|string $postedId */
-            $postedId = \Yii::$app->request->post('id', 0);
-            $id = (int)$postedId;
-        }
+        $id = (int)(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0));
         $template = $this->findModel($id);
         /** @var array<string, mixed> $overrides */
         $overrides = (array)\Yii::$app->request->post('overrides', []);

@@ -109,16 +109,21 @@ class WorkflowTemplateController extends BaseController
         return $this->redirect(['index']);
     }
 
-    public function actionLaunch(int $id): Response
+    public function actionLaunch(): Response
     {
+        $id = (int)(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0));
         $model = $this->findModel($id);
 
-        /** @var \app\services\WorkflowExecutionService $service */
-        $service = \Yii::$app->get('workflowExecutionService');
-        $wfJob = $service->launch($model, (int)\Yii::$app->user->id);
-
-        $this->session()->setFlash('success', "Workflow \"{$model->name}\" launched.");
-        return $this->redirect(['/workflow-job/view', 'id' => $wfJob->id]);
+        try {
+            /** @var \app\services\WorkflowExecutionService $service */
+            $service = \Yii::$app->get('workflowExecutionService');
+            $wfJob = $service->launch($model, (int)\Yii::$app->user->id);
+            $this->session()->setFlash('success', "Workflow \"{$model->name}\" launched.");
+            return $this->redirect(['/workflow-job/view', 'id' => $wfJob->id]);
+        } catch (\RuntimeException $e) {
+            $this->session()->setFlash('danger', 'Launch failed: ' . $e->getMessage());
+            return $this->redirect(['/workflow-template/view', 'id' => $id]);
+        }
     }
 
     public function actionAddStep(int $id): Response

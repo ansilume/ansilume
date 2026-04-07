@@ -129,6 +129,28 @@ class AnalyticsQueryTest extends TestCase
         $this->assertSame(0, $q->dateToTimestamp);
     }
 
+    /**
+     * Regression: empty-string dropdown values ("All") must not cause a
+     * TypeError when assigned to the integer filter properties (GitHub #8).
+     */
+    public function testEmptyStringFilterFieldsNormalisedToNull(): void
+    {
+        $q = new AnalyticsQuery();
+        // Simulate Yii2 setAttributes from GET params with empty "All" selections
+        $q->setAttributes([
+            'project_id' => '',
+            'template_id' => '',
+            'user_id' => '',
+            'runner_group_id' => '',
+        ]);
+
+        $this->assertTrue($q->validate(), 'Validation must pass with empty filter strings');
+        $this->assertNull($q->project_id);
+        $this->assertNull($q->template_id);
+        $this->assertNull($q->user_id);
+        $this->assertNull($q->runner_group_id);
+    }
+
     public function testToArray(): void
     {
         $q = new AnalyticsQuery();

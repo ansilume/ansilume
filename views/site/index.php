@@ -61,7 +61,7 @@ $this->title = 'Dashboard';
         <div class="card <?= $stats['running'] > 0 ? 'text-bg-primary' : 'text-bg-secondary' ?> h-100">
             <div class="card-body">
                 <div class="fs-2 fw-bold"><?= $stats['running'] // xss-ok: integer?></div>
-                <div><?= Html::a('Running Now', Url::to(['/job/index', 'JobSearchForm[status]' => Job::STATUS_RUNNING]), ['class' => 'text-white text-decoration-none']) ?></div>
+                <div><?= Html::a('Running Now', Url::to(['/job/index', 'status' => Job::STATUS_RUNNING]), ['class' => 'text-white text-decoration-none']) ?></div>
             </div>
         </div>
     </div>
@@ -339,7 +339,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
 <div class="card mb-3 border-danger">
     <div class="card-header text-bg-danger d-flex justify-content-between align-items-center">
         <strong>Failed Jobs (last 24h)</strong>
-        <?= Html::a('All Failed', Url::to(['/job/index', 'JobSearchForm[status]' => Job::STATUS_FAILED]), ['class' => 'btn btn-sm btn-outline-light']) ?>
+        <?= Html::a('All Failed', Url::to(['/job/index', 'status' => Job::STATUS_FAILED]), ['class' => 'btn btn-sm btn-outline-light']) ?>
     </div>
     <div class="card-body p-0">
         <table class="table table-sm table-hover mb-0">

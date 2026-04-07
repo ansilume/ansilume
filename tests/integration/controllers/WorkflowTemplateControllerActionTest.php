@@ -25,9 +25,13 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
 
         $this->swapService('workflowExecutionService', new class extends WorkflowExecutionService {
             public int $launchCalls = 0;
+            public bool $throwOnLaunch = false;
             public function launch(WorkflowTemplate $template, int $launchedBy, array $overrides = []): WorkflowJob
             {
                 $this->launchCalls++;
+                if ($this->throwOnLaunch) {
+                    throw new \RuntimeException('Workflow template has no steps.');
+                }
                 $j = new WorkflowJob();
                 $j->workflow_template_id = $template->id;
                 $j->launched_by = $launchedBy;
@@ -210,14 +214,17 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
 
     // ── actionLaunch() ───────────────────────────────────────────────────────
 
-    public function testLaunchDelegatesToService(): void
+    public function testLaunchDelegatesToServiceViaGet(): void
     {
         $user = $this->createUser();
         $this->loginAs($user);
         $wf = $this->createWorkflowTemplate($user->id);
 
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost([]);
+
         $ctrl = $this->makeController();
-        $result = $ctrl->actionLaunch((int)$wf->id);
+        $result = $ctrl->actionLaunch();
 
         $this->assertInstanceOf(Response::class, $result);
         /** @var object{launchCalls: int} $svc */
@@ -225,13 +232,62 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->assertSame(1, $svc->launchCalls);
     }
 
+    /**
+     * Regression: dashboard quick-launch form sends id via POST body,
+     * not as a GET parameter (GitHub #9).
+     */
+    public function testLaunchAcceptsIdFromPostBody(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+
+        $this->setQueryParams([]);
+        $this->setPost(['id' => (string)$wf->id]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionLaunch();
+
+        $this->assertInstanceOf(Response::class, $result);
+        /** @var object{launchCalls: int} $svc */
+        $svc = \Yii::$app->get('workflowExecutionService');
+        $this->assertSame(1, $svc->launchCalls);
+    }
+
+    /**
+     * Regression: RuntimeException (e.g. "no steps") must produce a flash
+     * message, not an unhandled error page (GitHub #9).
+     */
+    public function testLaunchHandlesRuntimeException(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+
+        /** @var object{throwOnLaunch: bool} $svc */
+        $svc = \Yii::$app->get('workflowExecutionService');
+        $svc->throwOnLaunch = true;
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost([]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionLaunch();
+
+        $this->assertInstanceOf(Response::class, $result);
+        $flashes = \Yii::$app->session->getAllFlashes();
+        $this->assertArrayHasKey('danger', $flashes);
+        $this->assertStringContainsString('no steps', $flashes['danger']);
+    }
+
     public function testLaunchThrowsNotFound(): void
     {
         $user = $this->createUser();
         $this->loginAs($user);
+        $this->setQueryParams(['id' => '9999999']);
         $ctrl = $this->makeController();
         $this->expectException(NotFoundHttpException::class);
-        $ctrl->actionLaunch(9999999);
+        $ctrl->actionLaunch();
     }
 
     // ── actionAddStep() / actionRemoveStep() ─────────────────────────────────

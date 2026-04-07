@@ -21,15 +21,20 @@ class AnalyticsQuery extends Model
 
     public ?string $date_from = null;
     public ?string $date_to = null;
-    public ?int $project_id = null;
-    public ?int $template_id = null;
-    public ?int $user_id = null;
-    public ?int $runner_group_id = null;
+    /** @var int|null */
+    public mixed $project_id = null;
+    /** @var int|null */
+    public mixed $template_id = null;
+    /** @var int|null */
+    public mixed $user_id = null;
+    /** @var int|null */
+    public mixed $runner_group_id = null;
     public string $granularity = self::GRANULARITY_DAILY;
 
     public function rules(): array
     {
         return [
+            [['project_id', 'template_id', 'user_id', 'runner_group_id'], 'default', 'value' => null],
             [['date_from', 'date_to'], 'date', 'format' => 'php:Y-m-d'],
             [['project_id', 'template_id', 'user_id', 'runner_group_id'], 'integer'],
             ['granularity', 'in', 'range' => [self::GRANULARITY_DAILY, self::GRANULARITY_WEEKLY]],

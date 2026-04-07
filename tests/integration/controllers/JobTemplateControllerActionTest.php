@@ -290,8 +290,10 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->loginAs($user);
         $tpl = $this->makeTemplate($user->id);
 
+        $this->setQueryParams(['id' => (string)$tpl->id]);
+
         $ctrl = $this->makeController();
-        $result = $ctrl->actionLaunch((int)$tpl->id);
+        $result = $ctrl->actionLaunch();
 
         $this->assertSame('rendered:launch', $result);
         $this->assertSame($tpl->id, $ctrl->capturedParams['template']->id);
@@ -303,13 +305,14 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->loginAs($user);
         $tpl = $this->makeTemplate($user->id);
 
+        $this->setQueryParams(['id' => (string)$tpl->id]);
         $this->setPost([
             'overrides' => ['limit' => 'localhost'],
             'survey' => ['env' => 'staging'],
         ]);
 
         $ctrl = $this->makeController();
-        $result = $ctrl->actionLaunch((int)$tpl->id);
+        $result = $ctrl->actionLaunch();
 
         $this->assertInstanceOf(Response::class, $result);
         /** @var object{launchCalls: int} $svc */
@@ -317,16 +320,21 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertSame(1, $svc->launchCalls);
     }
 
+    /**
+     * Regression: dashboard quick-launch form sends id via POST body,
+     * not as a GET parameter (GitHub #9).
+     */
     public function testLaunchAcceptsIdFromPostBody(): void
     {
         $user = $this->createUser();
         $this->loginAs($user);
         $tpl = $this->makeTemplate($user->id);
 
+        $this->setQueryParams([]);
         $this->setPost(['id' => (string)$tpl->id]);
 
         $ctrl = $this->makeController();
-        $result = $ctrl->actionLaunch(0);
+        $result = $ctrl->actionLaunch();
 
         $this->assertInstanceOf(Response::class, $result);
         /** @var object{launchCalls: int} $svc */
@@ -344,10 +352,11 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $svc = \Yii::$app->get('jobLaunchService');
         $svc->throwOnLaunch = true;
 
+        $this->setQueryParams(['id' => (string)$tpl->id]);
         $this->setPost([]);
 
         $ctrl = $this->makeController();
-        $result = $ctrl->actionLaunch((int)$tpl->id);
+        $result = $ctrl->actionLaunch();
 
         // Falls through to render('launch') after catching the exception.
         $this->assertSame('rendered:launch', $result);
@@ -359,9 +368,10 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
     {
         $user = $this->createUser();
         $this->loginAs($user);
+        $this->setQueryParams(['id' => '9999999']);
         $ctrl = $this->makeController();
         $this->expectException(NotFoundHttpException::class);
-        $ctrl->actionLaunch(9999999);
+        $ctrl->actionLaunch();
     }
 
     // ── actionGenerateTriggerToken() / actionRevokeTriggerToken() ───────────
