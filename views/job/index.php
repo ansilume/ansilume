@@ -79,11 +79,19 @@ $this->title = 'Jobs';
                 <input type="date" name="date_to" class="form-control form-control-sm"
                        value="<?= Html::encode($searchForm->date_to ?? '') ?>">
             </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-1">Changes</label>
+                <select name="has_changes" class="form-select form-select-sm">
+                    <option value="">— Any —</option>
+                    <option value="1" <?= $searchForm->has_changes === '1' ? 'selected' : '' ?>>With changes</option>
+                    <option value="0" <?= $searchForm->has_changes === '0' ? 'selected' : '' ?>>No changes</option>
+                </select>
+            </div>
             <div class="col-md-1">
                 <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
             </div>
         </div>
-        <?php if ($searchForm->status || $searchForm->template_id || $searchForm->launched_by || $searchForm->runner_group_id || $searchForm->date_from || $searchForm->date_to) : ?>
+        <?php if ($searchForm->status || $searchForm->template_id || $searchForm->launched_by || $searchForm->runner_group_id || $searchForm->date_from || $searchForm->date_to || $searchForm->has_changes !== null && $searchForm->has_changes !== '') : ?>
             <div class="mt-1">
                 <?= Html::a('Clear filters', ['index'], ['class' => 'small text-muted']) ?>
             </div>

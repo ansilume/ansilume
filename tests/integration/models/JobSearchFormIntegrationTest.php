@@ -123,6 +123,40 @@ class JobSearchFormIntegrationTest extends DbTestCase
         }
     }
 
+    public function testSearchFiltersJobsWithChanges(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+        $jobWithChanges    = $this->createJob($template->id, $user->id, Job::STATUS_SUCCEEDED);
+        $jobNoChanges      = $this->createJob($template->id, $user->id, Job::STATUS_SUCCEEDED);
+
+        $jobWithChanges->has_changes = 1;
+        $jobWithChanges->save(false);
+
+        $form     = new JobSearchForm();
+        $provider = $form->search(['has_changes' => '1']);
+
+        $ids = array_column($provider->getModels(), 'id');
+        $this->assertContains($jobWithChanges->id, $ids);
+        $this->assertNotContains($jobNoChanges->id, $ids);
+    }
+
+    public function testSearchFiltersJobsWithoutChanges(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+        $jobWithChanges    = $this->createJob($template->id, $user->id, Job::STATUS_SUCCEEDED);
+        $jobNoChanges      = $this->createJob($template->id, $user->id, Job::STATUS_SUCCEEDED);
+
+        $jobWithChanges->has_changes = 1;
+        $jobWithChanges->save(false);
+
+        $form     = new JobSearchForm();
+        $provider = $form->search(['has_changes' => '0']);
+
+        $ids = array_column($provider->getModels(), 'id');
+        $this->assertContains($jobNoChanges->id, $ids);
+        $this->assertNotContains($jobWithChanges->id, $ids);
+    }
+
     public function testSearchWithEmptyStringParamsDoesNotThrow(): void
     {
         $form   = new JobSearchForm();
@@ -133,6 +167,7 @@ class JobSearchFormIntegrationTest extends DbTestCase
             'runner_group_id' => '',
             'date_from'       => '',
             'date_to'         => '',
+            'has_changes'     => '',
         ]);
         $this->assertInstanceOf(ActiveDataProvider::class, $result);
     }

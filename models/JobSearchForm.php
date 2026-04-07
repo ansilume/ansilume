@@ -18,6 +18,7 @@ class JobSearchForm extends Model
     public ?string $runner_group_id = null;
     public ?string $date_from = null;
     public ?string $date_to = null;
+    public ?string $has_changes = null;
 
     public function rules(): array
     {
@@ -25,6 +26,7 @@ class JobSearchForm extends Model
             [['status'], 'in', 'range' => array_merge([''], Job::statuses())],
             [['template_id', 'launched_by', 'runner_group_id'], 'integer'],
             [['date_from', 'date_to'], 'date', 'format' => 'php:Y-m-d'],
+            [['has_changes'], 'in', 'range' => ['', '1', '0']],
         ];
     }
 
@@ -67,6 +69,9 @@ class JobSearchForm extends Model
             if ($ts !== false) {
                 $query->andWhere(['<=', 'created_at', $ts]);
             }
+        }
+        if ($this->has_changes !== null && $this->has_changes !== '') {
+            $query->andWhere(['has_changes' => (int)$this->has_changes]);
         }
 
         return new ActiveDataProvider([

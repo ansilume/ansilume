@@ -111,6 +111,24 @@ class JobSearchFormTest extends TestCase
         $this->assertTrue($form->hasErrors('runner_group_id'));
     }
 
+    public function testHasChangesAcceptsOneAndZero(): void
+    {
+        foreach (['1', '0', ''] as $value) {
+            $form = new JobSearchForm();
+            $form->has_changes = $value;
+            $form->validate(['has_changes']);
+            $this->assertFalse($form->hasErrors('has_changes'), "has_changes '{$value}' should be valid");
+        }
+    }
+
+    public function testHasChangesRejectsInvalidValues(): void
+    {
+        $form = new JobSearchForm();
+        $form->has_changes = 'yes';
+        $form->validate(['has_changes']);
+        $this->assertTrue($form->hasErrors('has_changes'));
+    }
+
     /**
      * Regression: empty strings from GET params must not cause TypeError on ?string properties.
      */
@@ -124,6 +142,7 @@ class JobSearchFormTest extends TestCase
             'runner_group_id' => '',
             'date_from'       => '',
             'date_to'         => '',
+            'has_changes'     => '',
         ], '');
         $form->validate();
         $this->assertFalse($form->hasErrors());
