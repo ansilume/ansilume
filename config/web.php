@@ -336,6 +336,20 @@ $config = [
     'params' => $params,
 ];
 
+// Configure LinkPager globally for Bootstrap 5 (Yii2 defaults to Bootstrap 3 classes).
+\Yii::$container->set(\yii\widgets\LinkPager::class, [
+    'options' => ['class' => 'pagination mt-3'],
+    'pageCssClass' => 'page-item',
+    'linkOptions' => ['class' => 'page-link'],
+    'activePageCssClass' => 'active',
+    'disabledPageCssClass' => 'disabled',
+    'disabledListItemSubTagOptions' => ['tag' => 'a', 'class' => 'page-link'],
+    'prevPageLabel' => '‹',
+    'nextPageLabel' => '›',
+    'firstPageLabel' => false,
+    'lastPageLabel' => false,
+]);
+
 if (YII_ENV_DEV) {
     $config['bootstrap'][] = 'debug';
     $config['modules']['debug'] = [
