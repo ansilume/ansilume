@@ -69,6 +69,7 @@ class JobSearchForm extends Model
         ]);
     }
 
+    /** @param ActiveQuery<Job> $query */
     private function applyDateFilters(ActiveQuery $query): void
     {
         if (!empty($this->date_from)) {
