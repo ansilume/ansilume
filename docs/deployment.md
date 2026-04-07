@@ -179,27 +179,4 @@ The role pulls the new version, rebuilds containers, and runs migrations automat
 
 ## Troubleshooting
 
-If the stack fails to start, run the built-in diagnostics script:
-
-```bash
-# From the ansilume directory
-./bin/diagnose
-
-# Or without cloning the repo
-curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
-
-# Save output to share with developers (credentials are redacted automatically)
-./bin/diagnose > ansilume-diag.txt 2>&1
-```
-
-The script checks:
-
-- Host resources (memory, disk)
-- Docker and Docker Compose versions
-- `.env` configuration (missing or default values)
-- Container status, health, and restart counts
-- Network connectivity between containers (app→db, app→redis, nginx→app)
-- App health endpoint (database, Redis, migrations)
-- Migration status
-- Port conflicts
-- Recent container logs (last 30 lines, secrets redacted)
+See [troubleshooting.md](troubleshooting.md) for common issues and the diagnostics script.

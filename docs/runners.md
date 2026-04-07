@@ -239,15 +239,17 @@ No inbound rules are needed for runner operation.
 ### On the Ansilume server
 
 The runner API endpoints are under `/api/runner/v1/*`. If you want to restrict
-access to known runner IPs:
+access to known runner IPs, add an `allow`/`deny` block to the nginx location
+for that path — for example in a reverse proxy in front of the Ansilume nginx
+container:
 
 ```nginx
-# nginx example — restrict runner API to specific IPs
+# External reverse proxy — allow only known runner IPs
 location /api/runner/v1/ {
     allow 10.0.0.0/8;
     allow 192.168.1.0/24;
     deny all;
-    proxy_pass http://app:9000;
+    proxy_pass http://localhost:8080;
 }
 ```
 
