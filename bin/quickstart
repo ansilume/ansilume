@@ -195,15 +195,16 @@ info "This account will have full superadmin access."
 printf "\n"
 ask       "Admin username" "admin"             ADMIN_USER
 ask       "Admin email"    "admin@example.com" ADMIN_EMAIL
-ask_secret "Admin password"                    ADMIN_PASSWORD
-
-if [ -z "$ADMIN_PASSWORD" ]; then
-    ADMIN_PASSWORD="$(gen_secret | head -c 20)"
-    warn "No password entered — generated: ${ADMIN_PASSWORD}"
-    info "Note this down before continuing."
-    printf "\n"
-    ask "Press Enter to continue" "" _PAUSE
-fi
+while true; do
+    ask_secret "Admin password (min. 5 characters)" ADMIN_PASSWORD
+    if [ -z "$ADMIN_PASSWORD" ]; then
+        fail "Password cannot be empty. Please enter at least 5 characters."
+    elif [ "${#ADMIN_PASSWORD}" -lt 5 ]; then
+        fail "Password too short (${#ADMIN_PASSWORD} chars). Please enter at least 5 characters."
+    else
+        break
+    fi
+done
 
 # ── 7. Prepare files ─────────────────────────────────────────────────────────
 
