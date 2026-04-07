@@ -160,7 +160,6 @@ printf "\n"
 ask "Choose" "1" DB_MODE
 
 if [ "$DB_MODE" = "2" ]; then
-    EXTERNAL_DB=true
     printf "\n"
     ask "Database host"          ""         DB_HOST
     ask "Database port"          "3306"     DB_PORT
@@ -170,7 +169,6 @@ if [ "$DB_MODE" = "2" ]; then
     DB_ROOT_PASSWORD=""
     ok "External database: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 else
-    EXTERNAL_DB=false
     DB_HOST="db"
     DB_PORT="3306"
     DB_NAME="ansilume"
@@ -329,18 +327,24 @@ fi
 section "Database setup"
 
 info "Running migrations..."
-$COMPOSE_CMD $COMPOSE_ARGS exec -T app php yii migrate --interactive=0 2>&1 | tail -5 | while read -r line; do
-    info "  $line"
-done
+MIGRATE_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app php yii migrate --interactive=0 2>&1) || {
+    fail "Migration failed"
+    echo "$MIGRATE_OUT" | tail -10 | while IFS= read -r line; do info "  $line"; done
+    die "Fix the database issue and re-run the quickstart."
+}
+echo "$MIGRATE_OUT" | tail -5 | while IFS= read -r line; do info "  $line"; done
 ok "Migrations applied"
 
 # ── 12. Create admin user ─────────────────────────────────────────────────────
 
 info "Creating admin user..."
-$COMPOSE_CMD $COMPOSE_ARGS exec -T app \
-    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" 2>&1 | while read -r line; do
-    info "  $line"
-done
+ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
+    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" 2>&1) || {
+    fail "Admin user creation failed"
+    echo "$ADMIN_OUT" | while IFS= read -r line; do info "  $line"; done
+    die "Check the output above and re-run the quickstart."
+}
+echo "$ADMIN_OUT" | while IFS= read -r line; do info "  $line"; done
 ok "Admin user created"
 
 # ── 13. Done ──────────────────────────────────────────────────────────────────

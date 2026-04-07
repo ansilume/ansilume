@@ -115,6 +115,80 @@ else
 fi
 
 # =============================================================================
+# 1b. Shell script checks (syntax, shebang, permissions, shellcheck)
+# =============================================================================
+section "Shell script checks"
+
+SHELL_SCRIPTS=$(git ls-files -- '*.sh' 'bin/*' | grep -v vendor/)
+SHELL_ERRORS=0
+
+# ── Shebang ─────────────────────────────────────────────────────────────────
+for script in $SHELL_SCRIPTS; do
+    firstline=$(head -1 "$script")
+    case "$firstline" in
+        '#!'*) ;;
+        *)
+            fail "Missing shebang: $script"
+            SHELL_ERRORS=$((SHELL_ERRORS+1))
+            ;;
+    esac
+done
+
+# ── Syntax ───────────────────────────────────────────────────────────────────
+for script in $SHELL_SCRIPTS; do
+    shebang=$(head -1 "$script")
+    case "$shebang" in
+        *bash*)  checker="bash" ;;
+        *sh*)    checker="sh"   ;;
+        *)       continue       ;;
+    esac
+    output=$($checker -n "$script" 2>&1)
+    if [[ $? -ne 0 ]]; then
+        fail "Syntax error ($checker): $script"
+        echo "     $output"
+        SHELL_ERRORS=$((SHELL_ERRORS+1))
+    fi
+done
+
+# ── Executable bit (bin/ scripts must be executable) ─────────────────────────
+for script in $SHELL_SCRIPTS; do
+    case "$script" in
+        bin/*)
+            if [[ ! -x "$script" ]]; then
+                fail "Not executable: $script"
+                SHELL_ERRORS=$((SHELL_ERRORS+1))
+            fi
+            ;;
+    esac
+done
+
+# ── ShellCheck (optional — skip if not installed) ────────────────────────────
+if command -v shellcheck >/dev/null 2>&1; then
+    SC_ERRORS=0
+    for script in $SHELL_SCRIPTS; do
+        sc_output=$(shellcheck -S warning "$script" 2>&1)
+        if [[ $? -ne 0 ]]; then
+            fail "ShellCheck warnings: $script"
+            echo "$sc_output" | head -20 | sed 's/^/     /'
+            SC_ERRORS=$((SC_ERRORS+1))
+        fi
+    done
+    if [[ $SC_ERRORS -eq 0 ]]; then
+        ok "ShellCheck passed"
+    else
+        SHELL_ERRORS=$((SHELL_ERRORS+SC_ERRORS))
+    fi
+else
+    skip "ShellCheck (not installed — apt install shellcheck to enable)"
+fi
+
+if [[ $SHELL_ERRORS -eq 0 ]]; then
+    ok "All shell scripts pass checks ($(echo "$SHELL_SCRIPTS" | wc -w) scripts)"
+else
+    fail "$SHELL_ERRORS shell script issue(s) found"
+fi
+
+# =============================================================================
 # 2. strict_types declaration
 # =============================================================================
 section "strict_types declarations"
