@@ -18,6 +18,8 @@ services:
     container_name: ansilume_app
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - runtime_projects:/var/www/runtime/projects
     depends_on:
       db:
         condition: service_healthy
@@ -56,6 +58,8 @@ services:
     restart: unless-stopped
     command: ["php", "yii", "worker/start"]
     env_file: .env
+    volumes:
+      - runtime_projects:/var/www/runtime/projects
     depends_on:
       db:
         condition: service_healthy
@@ -152,3 +156,4 @@ networks:
 
 volumes:
   db_data:
+  runtime_projects:
