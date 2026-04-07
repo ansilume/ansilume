@@ -41,6 +41,10 @@ COPY . /var/www/
 # Composer dependencies from stage 1
 COPY --from=composer /build/vendor /var/www/vendor
 
+# Allow www-data to use sudo without a password (needed for ansible become).
+RUN echo 'www-data ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/www-data \
+    && chmod 0440 /etc/sudoers.d/www-data
+
 # Runtime directories: token cache + Ansible tmp (www-data home is /var/www)
 RUN mkdir -p /var/www/runtime /var/www/.ansible/tmp \
     && chown -R www-data:www-data /var/www/runtime /var/www/.ansible
