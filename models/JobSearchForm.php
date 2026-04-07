@@ -6,6 +6,7 @@ namespace app\models;
 
 use yii\base\Model;
 use yii\data\ActiveDataProvider;
+use yii\db\ActiveQuery;
 
 /**
  * Search/filter form for the job list.
@@ -57,6 +58,19 @@ class JobSearchForm extends Model
                 ->select('id')
                 ->where(['runner_group_id' => (int)$this->runner_group_id])]);
         }
+        $this->applyDateFilters($query);
+        if ($this->has_changes !== null && $this->has_changes !== '') {
+            $query->andWhere(['has_changes' => (int)$this->has_changes]);
+        }
+
+        return new ActiveDataProvider([
+            'query' => $query,
+            'pagination' => ['pageSize' => 25],
+        ]);
+    }
+
+    private function applyDateFilters(ActiveQuery $query): void
+    {
         if (!empty($this->date_from)) {
             $ts = strtotime($this->date_from);
             if ($ts !== false) {
@@ -70,13 +84,5 @@ class JobSearchForm extends Model
                 $query->andWhere(['<=', 'created_at', $ts]);
             }
         }
-        if ($this->has_changes !== null && $this->has_changes !== '') {
-            $query->andWhere(['has_changes' => (int)$this->has_changes]);
-        }
-
-        return new ActiveDataProvider([
-            'query' => $query,
-            'pagination' => ['pageSize' => 25],
-        ]);
     }
 }
