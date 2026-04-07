@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     openssh-client \
+    sudo \
     ansible \
     python3-pip \
     libzip-dev \
