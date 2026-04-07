@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Ansilume Quickstart
+#
+# Interactive installer. Supports prebuilt images and building from source.
+#
+# Usage (one-liner):
+#   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quickstart | bash
+#
+# Or run locally:
+#   ./bin/quickstart
+# =============================================================================
+
+set -euo pipefail
+
+# ── Colours ──────────────────────────────────────────────────────────────────
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+ok()      { printf "  ${GREEN}✓${NC} %s\n" "$1"; }
+warn()    { printf "  ${YELLOW}⚠${NC} %s\n" "$1"; }
+fail()    { printf "  ${RED}✗${NC} %s\n" "$1"; }
+info()    { printf "  %s\n" "$1"; }
+section() { printf "\n${CYAN}${BOLD}── %s ──${NC}\n\n" "$1"; }
+die()     { printf "\n${RED}${BOLD}Error: %s${NC}\n\n" "$1" >&2; exit 1; }
+
+# Read from /dev/tty so the script works when piped through curl | bash.
+ask() {
+    local prompt="$1"
+    local default="${2:-}"
+    local var_name="$3"
+    local response
+
+    if [ -n "$default" ]; then
+        printf "  %s [%s]: " "$prompt" "$default" >/dev/tty
+    else
+        printf "  %s: " "$prompt" >/dev/tty
+    fi
+
+    read -r response </dev/tty
+    if [ -z "$response" ] && [ -n "$default" ]; then
+        response="$default"
+    fi
+    eval "$var_name=\"\$response\""
+}
+
+ask_secret() {
+    local prompt="$1"
+    local var_name="$2"
+    local response
+
+    printf "  %s: " "$prompt" >/dev/tty
+    read -rs response </dev/tty
+    printf "\n" >/dev/tty
+    eval "$var_name=\"\$response\""
+}
+
+gen_secret() {
+    openssl rand -hex 32 2>/dev/null || LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64
+}
+
+# ── Header ───────────────────────────────────────────────────────────────────
+
+printf "\n${CYAN}${BOLD}"
+printf "  ╔═══════════════════════════════════════╗\n"
+printf "  ║       Ansilume Quickstart Setup       ║\n"
+printf "  ╚═══════════════════════════════════════╝\n"
+printf "${NC}\n"
+info "This script will configure and start Ansilume on this machine."
+info "It only asks for the essentials — everything else uses sensible defaults."
+printf "\n"
+
+# ── 1. Prerequisites ─────────────────────────────────────────────────────────
+
+section "Checking prerequisites"
+
+if ! command -v docker >/dev/null 2>&1; then
+    fail "Docker not found."
+    info ""
+    info "Install Docker: https://docs.docker.com/engine/install/"
+    exit 1
+fi
+ok "Docker: $(docker --version | head -1)"
+
+if docker compose version >/dev/null 2>&1; then
+    ok "Docker Compose: $(docker compose version --short 2>/dev/null || echo 'v2')"
+    COMPOSE_CMD="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+    ok "Docker Compose (standalone): $(docker-compose --version | head -1)"
+    COMPOSE_CMD="docker-compose"
+else
+    fail "Docker Compose not found."
+    info ""
+    info "Install Docker Compose: https://docs.docker.com/compose/install/"
+    exit 1
+fi
+
+if ! command -v openssl >/dev/null 2>&1; then
+    warn "openssl not found — secrets will use /dev/urandom fallback"
+fi
+
+# ── 2. Deployment mode ───────────────────────────────────────────────────────
+
+section "Deployment mode"
+
+printf "  ${BOLD}[1]${NC} Prebuilt images  — pull from ghcr.io, no source code needed ${GREEN}(recommended)${NC}\n"
+printf "  ${BOLD}[2]${NC} Build from source — clone the git repository and build locally\n"
+printf "\n"
+ask "Choose" "1" DEPLOY_MODE
+
+if [ "$DEPLOY_MODE" = "2" ]; then
+    if ! command -v git >/dev/null 2>&1; then
+        die "git is required for source mode but was not found."
+    fi
+    ok "git: $(git --version)"
+    SOURCE_MODE=true
+else
+    SOURCE_MODE=false
+fi
+
+# ── 3. Install directory ─────────────────────────────────────────────────────
+
+section "Install location"
+
+if [ "$SOURCE_MODE" = "true" ]; then
+    info "The repository will be cloned into the chosen directory."
+else
+    info "Configuration files will be created in the chosen directory."
+fi
+printf "\n"
+ask "Directory" "./ansilume" INSTALL_DIR
+
+# Resolve to absolute path.
+INSTALL_DIR="$(mkdir -p "$INSTALL_DIR" && cd "$INSTALL_DIR" && pwd)"
+ok "Install directory: ${INSTALL_DIR}"
+
+# Abort if .env already exists (avoid clobbering a live install).
+if [ -f "${INSTALL_DIR}/.env" ]; then
+    printf "\n"
+    warn ".env already exists in ${INSTALL_DIR}"
+    ask "Overwrite existing installation?" "no" OVERWRITE
+    case "$OVERWRITE" in
+        y|Y|yes|YES) : ;;
+        *) die "Aborted to protect existing installation." ;;
+    esac
+fi
+
+# ── 4. Database ──────────────────────────────────────────────────────────────
+
+section "Database"
+
+printf "  ${BOLD}[1]${NC} New MariaDB container — managed by Docker Compose ${GREEN}(recommended)${NC}\n"
+printf "  ${BOLD}[2]${NC} External database     — connect to an existing MySQL/MariaDB server\n"
+printf "\n"
+ask "Choose" "1" DB_MODE
+
+if [ "$DB_MODE" = "2" ]; then
+    EXTERNAL_DB=true
+    printf "\n"
+    ask "Database host"          ""         DB_HOST
+    ask "Database port"          "3306"     DB_PORT
+    ask "Database name"          "ansilume" DB_NAME
+    ask "Database user"          "ansilume" DB_USER
+    ask_secret "Database password"          DB_PASSWORD
+    DB_ROOT_PASSWORD=""
+    ok "External database: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+else
+    EXTERNAL_DB=false
+    DB_HOST="db"
+    DB_PORT="3306"
+    DB_NAME="ansilume"
+    DB_USER="ansilume"
+    DB_PASSWORD="$(gen_secret | head -c 32)"
+    DB_ROOT_PASSWORD="$(gen_secret | head -c 32)"
+    ok "MariaDB container will be created (credentials auto-generated)"
+fi
+
+# ── 5. HTTP port ─────────────────────────────────────────────────────────────
+
+section "Network"
+
+ask "HTTP port" "8080" NGINX_PORT
+ok "Ansilume will be available at http://localhost:${NGINX_PORT}"
+
+# ── 6. Admin account ─────────────────────────────────────────────────────────
+
+section "Admin account"
+
+info "This account will have full superadmin access."
+printf "\n"
+ask       "Admin username" "admin"             ADMIN_USER
+ask       "Admin email"    "admin@example.com" ADMIN_EMAIL
+ask_secret "Admin password"                    ADMIN_PASSWORD
+
+if [ -z "$ADMIN_PASSWORD" ]; then
+    ADMIN_PASSWORD="$(gen_secret | head -c 20)"
+    warn "No password entered — generated: ${ADMIN_PASSWORD}"
+    info "Note this down before continuing."
+    printf "\n"
+    ask "Press Enter to continue" "" _PAUSE
+fi
+
+# ── 7. Prepare files ─────────────────────────────────────────────────────────
+
+section "Preparing files"
+
+cd "$INSTALL_DIR"
+
+if [ "$SOURCE_MODE" = "true" ]; then
+    if [ -d ".git" ]; then
+        info "Git repository already present — pulling latest changes."
+        git pull --ff-only
+        ok "Repository up to date"
+    else
+        info "Cloning ansilume/ansilume from GitHub..."
+        git clone https://github.com/ansilume/ansilume.git .
+        ok "Repository cloned"
+    fi
+    COMPOSE_FILE="docker-compose.prebuilt.yml"
+else
+    # Download the prebuilt compose file if not already present.
+    COMPOSE_FILE="docker-compose.yml"
+    if [ ! -f "$COMPOSE_FILE" ]; then
+        info "Downloading docker-compose.yml..."
+        curl -fsSL \
+            "https://raw.githubusercontent.com/ansilume/ansilume/main/docker-compose.prebuilt.yml" \
+            -o "$COMPOSE_FILE"
+        ok "docker-compose.yml downloaded"
+    else
+        ok "docker-compose.yml already present"
+    fi
+fi
+
+# ── 8. Generate .env ─────────────────────────────────────────────────────────
+
+info "Generating .env..."
+
+COOKIE_KEY="$(gen_secret)"
+APP_SECRET="$(gen_secret)"
+RUNNER_SECRET="$(gen_secret)"
+
+cat > .env <<EOF
+# Ansilume — generated by quickstart on $(date -u '+%Y-%m-%d %H:%M UTC')
+
+APP_ENV=production
+YII_ENV=prod
+YII_DEBUG=0
+
+NGINX_PORT=${NGINX_PORT}
+
+DB_HOST=${DB_HOST}
+DB_PORT=${DB_PORT}
+DB_NAME=${DB_NAME}
+DB_USER=${DB_USER}
+DB_PASSWORD=${DB_PASSWORD}
+DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=0
+
+COOKIE_VALIDATION_KEY=${COOKIE_KEY}
+APP_SECRET_KEY=${APP_SECRET}
+RUNNER_BOOTSTRAP_SECRET=${RUNNER_SECRET}
+EOF
+
+ok ".env written"
+
+# ── 9. Start containers ───────────────────────────────────────────────────────
+
+section "Starting containers"
+
+if [ "$COMPOSE_FILE" != "docker-compose.yml" ]; then
+    COMPOSE_ARGS="-f ${COMPOSE_FILE}"
+else
+    COMPOSE_ARGS=""
+fi
+
+info "Pulling images and starting services..."
+$COMPOSE_CMD $COMPOSE_ARGS up -d --pull always 2>&1 | grep -E "Pull|Start|Create|error" | while read -r line; do
+    info "  $line"
+done || true
+
+ok "Containers started"
+
+# ── 10. Wait for app to be healthy ───────────────────────────────────────────
+
+section "Waiting for application"
+
+info "Waiting for the app container to become healthy (up to 3 minutes)..."
+
+APP_CONTAINER=$($COMPOSE_CMD $COMPOSE_ARGS ps -q app 2>/dev/null | head -1 || true)
+TIMEOUT=180
+ELAPSED=0
+
+while [ $ELAPSED -lt $TIMEOUT ]; do
+    HEALTH=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$APP_CONTAINER" 2>/dev/null || echo "unknown")
+    STATE=$(docker inspect --format '{{.State.Status}}' "$APP_CONTAINER" 2>/dev/null || echo "unknown")
+
+    if [ "$HEALTH" = "healthy" ]; then
+        ok "App container is healthy"
+        break
+    fi
+
+    if [ "$STATE" != "running" ]; then
+        fail "App container is not running (state: ${STATE})"
+        info ""
+        info "Check logs with: $COMPOSE_CMD logs app"
+        exit 1
+    fi
+
+    printf "  Waiting... (%ds / %ds)\r" "$ELAPSED" "$TIMEOUT"
+    sleep 5
+    ELAPSED=$((ELAPSED + 5))
+done
+
+if [ $ELAPSED -ge $TIMEOUT ]; then
+    warn "Timed out waiting for healthy status — proceeding anyway"
+fi
+
+# ── 11. Run migrations ────────────────────────────────────────────────────────
+
+section "Database setup"
+
+info "Running migrations..."
+$COMPOSE_CMD $COMPOSE_ARGS exec -T app php yii migrate --interactive=0 2>&1 | tail -5 | while read -r line; do
+    info "  $line"
+done
+ok "Migrations applied"
+
+# ── 12. Create admin user ─────────────────────────────────────────────────────
+
+info "Creating admin user..."
+$COMPOSE_CMD $COMPOSE_ARGS exec -T app \
+    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" 2>&1 | while read -r line; do
+    info "  $line"
+done
+ok "Admin user created"
+
+# ── 13. Done ──────────────────────────────────────────────────────────────────
+
+printf "\n${GREEN}${BOLD}"
+printf "  ╔═══════════════════════════════════════╗\n"
+printf "  ║         Ansilume is ready!            ║\n"
+printf "  ╚═══════════════════════════════════════╝\n"
+printf "${NC}\n"
+ok "URL:      http://localhost:${NGINX_PORT}"
+ok "Username: ${ADMIN_USER}"
+ok "Email:    ${ADMIN_EMAIL}"
+printf "\n"
+info "Useful commands:"
+info "  $COMPOSE_CMD logs -f          — follow container logs"
+info "  $COMPOSE_CMD ps               — show container status"
+info "  $COMPOSE_CMD down             — stop all containers"
+info "  ./bin/diagnose                — run diagnostics"
+printf "\n"
+info "Docs: https://github.com/ansilume/ansilume/tree/main/docs"
+printf "\n"

@@ -28,6 +28,18 @@
 
 ---
 
+## Get started
+
+**Requires:** Docker + Docker Compose
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quickstart | bash
+```
+
+The installer asks a few questions (deployment mode, database, port, admin credentials) and handles everything else automatically. → [Full installation guide](docs/installation.md)
+
+---
+
 ## Overview
 
 Ansilume /ˈæn.sɪ.luːm/ is a **production-ready, self-hostable automation control plane** built for infrastructure teams. It gives you a reliable web interface to manage and execute Ansible workloads — with full auditability, role-based access control, and zero execution in the web request lifecycle.
@@ -102,67 +114,6 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 
 ---
 
-## Quick Start
-
-**Prerequisites:** Docker + Docker Compose
-
-### Prebuilt images (recommended for homelab / production)
-
-No git required — pull directly from the GitHub Container Registry.
-
-```bash
-# 1. Download the compose file and a production .env template
-curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/docker-compose.prebuilt.yml -o docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/.env.prod.example -o .env
-
-# 2. Generate secrets and set passwords
-sed -i \
-  -e "s|COOKIE_VALIDATION_KEY=CHANGE-ME|COOKIE_VALIDATION_KEY=$(openssl rand -hex 32)|" \
-  -e "s|APP_SECRET_KEY=CHANGE-ME|APP_SECRET_KEY=$(openssl rand -hex 32)|" \
-  -e "s|RUNNER_BOOTSTRAP_SECRET=CHANGE-ME|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
-  -e "s|DB_ROOT_PASSWORD=CHANGE-ME|DB_ROOT_PASSWORD=$(openssl rand -hex 16)|" \
-  -e "s|DB_PASSWORD=CHANGE-ME|DB_PASSWORD=$(openssl rand -hex 16)|" \
-  .env
-
-# 3. Start
-docker compose up -d
-
-# 4. Create the first admin user
-docker compose exec app php yii setup/admin admin admin@example.com yourpassword
-```
-
-Open **http://localhost:8080** and log in.
-
-> Migrations run automatically on startup. No manual steps required.
-
-### Build from source (development / CI)
-
-```bash
-git clone https://github.com/ansilume/ansilume.git
-cd ansilume
-
-cp .env.example .env
-
-# Generate random secrets automatically
-sed -i \
-  -e "s|^COOKIE_VALIDATION_KEY=.*|COOKIE_VALIDATION_KEY=$(openssl rand -hex 32)|" \
-  -e "s|^APP_SECRET_KEY=.*|APP_SECRET_KEY=$(openssl rand -hex 32)|" \
-  -e "s|^RUNNER_BOOTSTRAP_SECRET=.*|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
-  .env
-
-# Linux: export host UID if it differs from 1000
-# export UID GID
-
-docker compose up -d --build
-
-# Create the first admin user
-docker compose exec app php yii setup/admin admin admin@example.com yourpassword
-```
-
-Open **http://localhost:8080** and log in.
-
----
-
 ## Architecture
 
 ```
@@ -183,79 +134,7 @@ Browser → Nginx → PHP-FPM (Yii2) → MariaDB
 | `models/` | ActiveRecord models + form models |
 | `migrations/` | Forward-only schema migrations |
 
-### Runners
-
-Runners are pull-based agents that poll the server for queued jobs. They self-register on first start using `RUNNER_BOOTSTRAP_SECRET` — no manual token management required in development.
-
-```bash
-# Runner containers register automatically via:
-RUNNER_NAME=runner-1
-RUNNER_BOOTSTRAP_SECRET=your-secret
-API_URL=http://nginx
-```
-
----
-
-## Configuration
-
-All configuration is via `.env`. Key variables:
-
-| Variable | Description |
-|---|---|
-| `COOKIE_VALIDATION_KEY` | Yii2 cookie signing key (min 32 chars) |
-| `APP_SECRET_KEY` | AES-256 key for credential encryption (min 32 chars) |
-| `RUNNER_BOOTSTRAP_SECRET` | Shared secret for runner self-registration |
-| `DB_*` | MariaDB connection settings |
-| `REDIS_*` | Redis connection settings |
-| `SMTP_*` | Mail settings for failure notifications |
-
----
-
-## Development
-
-```bash
-docker compose up -d                # Start all services
-docker compose logs -f app          # PHP-FPM logs
-docker compose logs -f queue-worker # Queue worker logs
-
-# Migrations (run automatically on startup, manual trigger if needed)
-docker compose exec app php yii migrate
-
-# Console help
-docker compose exec app php yii help
-```
-
-### Health checks
-
-All containers expose meaningful health checks. Verify status with:
-
-```bash
-docker compose ps
-```
-
-All services should show `(healthy)` after startup.
-
-### Rebuilding containers
-
-After changes to `docker/` (Dockerfile, PHP config, packages):
-
-```bash
-export UID GID   # Linux only, if UID != 1000
-docker compose down
-docker compose build --no-cache
-docker compose up -d
-```
-
-### Linux: UID alignment
-
-The PHP containers match `www-data` to your host UID. If your UID is not `1000`:
-
-```bash
-export UID GID
-docker compose up -d --build
-```
-
-Add `export UID GID` to your shell profile to apply automatically. Not needed when running as root.
+Runners are pull-based agents that poll the server for queued jobs and self-register on first start using `RUNNER_BOOTSTRAP_SECRET`. See [docs/runners.md](docs/runners.md) for setup and configuration.
 
 ---
 
@@ -274,34 +153,16 @@ Add `export UID GID` to your shell profile to apply automatically. Not needed wh
 
 ---
 
-## Production Deployment
+## Docs
 
-Ansilume includes an Ansible role for automated production deployment. See [docs/deployment.md](docs/deployment.md) for the full guide.
-
-```bash
-cd deploy
-ansible-playbook site.yaml -i inventory/production.yaml --ask-vault-pass
-```
-
-The role handles Docker installation, configuration templating, container orchestration, and health verification. Supports external databases and custom runner counts.
-
----
-
-## Troubleshooting
-
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues — container race conditions, runner registration, health checks, and more.
-
----
-
-## Releasing
-
-```bash
-./bin/release patch   # 0.1.0 → 0.1.1
-./bin/release minor   # 0.1.0 → 0.2.0
-./bin/release major   # 0.1.0 → 1.0.0
-```
-
-See [docs/releasing.md](docs/releasing.md) for the full release process.
+| | |
+|---|---|
+| [Installation](docs/installation.md) | Quickstart, manual setup, external DB, configuration reference |
+| [Runners](docs/runners.md) | Runner setup, groups, selftest |
+| [Deployment](docs/deployment.md) | Production Ansible role |
+| [Monitoring](docs/monitoring.md) | Prometheus metrics, health endpoint |
+| [Troubleshooting](docs/troubleshooting.md) | Common issues and the diagnostics script |
+| [Releasing](docs/releasing.md) | Release process |
 
 ---
 
