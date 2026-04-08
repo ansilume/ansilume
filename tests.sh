@@ -285,8 +285,10 @@ fi
 # =============================================================================
 section "CSRF safety (no data-method='post')"
 
-CSRF_ISSUES=$(grep -rn --include="*.php" "data-method.*post\|data.method.*post" views/ 2>/dev/null \
-    | grep -vP ':[0-9]+:\s*//' || true)
+# Check for HTML data-method="post" and Yii2 array syntax in data arrays
+CSRF_ISSUES=$(grep -rn --include="*.php" -P "data-method.*post|data.method.*post|'method'\s*=>\s*'post'" views/ 2>/dev/null \
+    | grep -vP ':[0-9]+:\s*//' \
+    | grep -vP "ActiveForm::begin|Html::beginForm" || true)
 if [[ -z "$CSRF_ISSUES" ]]; then
     ok "No data-method=\"post\" patterns found in views"
 else
@@ -762,7 +764,7 @@ elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
     SEED_OUT=$(dc php yii e2e/seed 2>&1 || true)
     if echo "$SEED_OUT" | grep -q "complete\|already exists"; then
         # Build and run Playwright container
-        E2E_OUT=$(docker compose --profile e2e run --rm playwright 2>&1 || true)
+        E2E_OUT=$(docker compose --profile e2e run --build --rm playwright 2>&1 || true)
         E2E_PASSED=$(echo "$E2E_OUT" | grep -oP '\d+(?= passed)' || echo "0")
         E2E_FAILED=$(echo "$E2E_OUT" | grep -oP '\d+(?= failed)' || echo "0")
 

@@ -96,12 +96,9 @@ export async function deleteByRowText(page: Page, indexUrl: string, rowText: str
     return;
   }
   await row.locator('a').first().click();
-  // The Delete control can be either a <button type="submit"> inside a <form>
-  // with explicit CSRF token (most entities) or a Yii Html::a with
-  // data-method=post (approval-rule, workflow-template, notification-template,
-  // runner-group). For the anchor variant, yii.js intercepts the click and
-  // builds a hidden POST form — but that indirection is fragile under
-  // Playwright, so we POST directly via fetch using the page's CSRF meta tag.
+  // The Delete control is a <button type="submit"> inside a <form> with
+  // explicit CSRF token. The data-method=post anchor fallback is kept for
+  // backwards compatibility but should no longer be needed.
   await page.waitForLoadState('domcontentloaded');
   const submitted = await page.evaluate(() => {
     const root = document.getElementById('page-content') || document.body;

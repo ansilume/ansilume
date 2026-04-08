@@ -41,10 +41,11 @@ $this->title = 'Workflow Templates';
                     <td><?= Html::encode(date('Y-m-d H:i', (int)$model->created_at)) ?></td>
                     <td class="text-end">
                         <?php if (Yii::$app->user->can('workflow.launch')) : ?>
-                            <?= Html::a('Launch', ['launch', 'id' => $model->id], [
-                                'class' => 'btn btn-success btn-sm',
-                                'data' => ['confirm' => 'Launch this workflow?', 'method' => 'post'],
-                            ]) ?>
+                            <form action="<?= \yii\helpers\Url::to(['launch', 'id' => $model->id]) ?>" method="post" style="display:inline"
+                                  onsubmit="return confirm('Launch this workflow?')">
+                                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                                <button type="submit" class="btn btn-success btn-sm">Launch</button>
+                            </form>
                         <?php endif; ?>
                     </td>
                 </tr>

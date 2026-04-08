@@ -33,16 +33,18 @@ $steps = $model->stepExecutions;
         }
         ?>
         <?php if ($hasPausedStep && Yii::$app->user->can('workflow.launch')) : ?>
-            <?= Html::a('Resume', ['resume', 'id' => $model->id], [
-                'class' => 'btn btn-success btn-sm',
-                'data' => ['confirm' => 'Resume this workflow?', 'method' => 'post'],
-            ]) ?>
+            <form action="<?= \yii\helpers\Url::to(['resume', 'id' => $model->id]) ?>" method="post" style="display:inline"
+                  onsubmit="return confirm('Resume this workflow?')">
+                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                <button type="submit" class="btn btn-success btn-sm">Resume</button>
+            </form>
         <?php endif; ?>
         <?php if (!$model->isFinished() && Yii::$app->user->can('workflow.cancel')) : ?>
-            <?= Html::a('Cancel', ['cancel', 'id' => $model->id], [
-                'class' => 'btn btn-outline-danger btn-sm ms-1',
-                'data' => ['confirm' => 'Cancel this workflow?', 'method' => 'post'],
-            ]) ?>
+            <form action="<?= \yii\helpers\Url::to(['cancel', 'id' => $model->id]) ?>" method="post" style="display:inline"
+                  onsubmit="return confirm('Cancel this workflow?')">
+                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                <button type="submit" class="btn btn-outline-danger btn-sm ms-1">Cancel</button>
+            </form>
         <?php endif; ?>
     </div>
 </div>

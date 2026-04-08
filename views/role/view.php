@@ -28,13 +28,11 @@ $inherited = array_diff($role['effectivePermissions'], $role['directPermissions'
             <?= Html::a('Edit', ['update', 'name' => $role['name']], ['class' => 'btn btn-outline-primary btn-sm']) ?>
         <?php endif; ?>
         <?php if (!$role['isSystem'] && Yii::$app->user->can('role.delete')) : ?>
-            <?= Html::a('Delete', ['delete', 'name' => $role['name']], [
-                'class' => 'btn btn-outline-danger btn-sm ms-1',
-                'data' => [
-                    'confirm' => "Delete role \"{$role['name']}\"? Users holding this role will be left without a role.",
-                    'method' => 'post',
-                ],
-            ]) ?>
+            <form action="<?= \yii\helpers\Url::to(['delete', 'name' => $role['name']]) ?>" method="post" style="display:inline"
+                  onsubmit="return confirm('Delete role &quot;<?= Html::encode($role['name']) ?>&quot;? Users holding this role will be left without a role.')">
+                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                <button type="submit" class="btn btn-outline-danger btn-sm ms-1">Delete</button>
+            </form>
         <?php endif; ?>
     </div>
 </div>

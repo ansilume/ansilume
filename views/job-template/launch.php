@@ -42,7 +42,6 @@ $hasSurvey = !empty($surveyFields);
 <?php $form = \yii\widgets\ActiveForm::begin([
     'id' => 'launch-form',
     'action' => ['launch', 'id' => $template->id],
-    'method' => 'post',
 ]); ?>
 
 <?php if ($hasSurvey) : ?>

@@ -41,19 +41,21 @@ foreach ($steps as $s) {
     <h2><?= Html::encode($this->title) ?></h2>
     <div>
         <?php if (Yii::$app->user->can('workflow.launch')) : ?>
-            <?= Html::a('Launch', ['launch', 'id' => $model->id], [
-                'class' => 'btn btn-success btn-sm',
-                'data' => ['confirm' => 'Launch this workflow?', 'method' => 'post'],
-            ]) ?>
+            <form action="<?= \yii\helpers\Url::to(['launch', 'id' => $model->id]) ?>" method="post" style="display:inline"
+                  onsubmit="return confirm('Launch this workflow?')">
+                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                <button type="submit" class="btn btn-success btn-sm">Launch</button>
+            </form>
         <?php endif; ?>
         <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm']) ?>
         <?php endif; ?>
         <?php if (Yii::$app->user->can('workflow-template.delete')) : ?>
-            <?= Html::a('Delete', ['delete', 'id' => $model->id], [
-                'class' => 'btn btn-outline-danger btn-sm ms-1',
-                'data' => ['confirm' => 'Delete this workflow template?', 'method' => 'post'],
-            ]) ?>
+            <form action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" method="post" style="display:inline"
+                  onsubmit="return confirm('Delete this workflow template?')">
+                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                <button type="submit" class="btn btn-outline-danger btn-sm ms-1">Delete</button>
+            </form>
         <?php endif; ?>
     </div>
 </div>

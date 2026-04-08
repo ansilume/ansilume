@@ -45,30 +45,10 @@ test.describe('Roles CRUD', () => {
   test('delete custom role', async ({ page }) => {
     page.on('dialog', (d) => d.accept());
     await page.goto('/role/view/' + roleName);
-    // Delete is a Yii data-method=post anchor — submit via direct POST form
-    // using the page's CSRF meta tag to avoid yii.js indirection.
-    const submitted = await page.evaluate((name) => {
-      const link = Array.from(document.querySelectorAll('a[data-method="post"]'))
-        .find((el) => /delete/i.test((el as HTMLElement).innerText || ''));
-      if (!link) return false;
-      const href = (link as HTMLAnchorElement).getAttribute('href') || '';
-      const csrfMeta = document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement | null;
-      const csrfParam = (document.querySelector('meta[name="csrf-param"]') as HTMLMetaElement | null)?.content || '_csrf';
-      const form = document.createElement('form');
-      form.method = 'post';
-      form.action = href;
-      if (csrfMeta) {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = csrfParam;
-        input.value = csrfMeta.content;
-        form.appendChild(input);
-      }
-      document.body.appendChild(form);
-      form.submit();
-      return true;
-    }, roleName);
-    expect(submitted).toBe(true);
+    // Delete button is inside an explicit <form> with CSRF token.
+    const deleteBtn = page.locator('button:has-text("Delete")');
+    await expect(deleteBtn).toBeVisible();
+    await deleteBtn.click();
     await page.waitForLoadState('networkidle', { timeout: 10_000 });
     await expectFlash(page, 'success');
     // Role no longer listed.

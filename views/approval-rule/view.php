@@ -18,10 +18,11 @@ $this->title = $model->name;
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm']) ?>
         <?php endif; ?>
         <?php if (Yii::$app->user->can('approval-rule.delete')) : ?>
-            <?= Html::a('Delete', ['delete', 'id' => $model->id], [
-                'class' => 'btn btn-outline-danger btn-sm ms-1',
-                'data' => ['confirm' => 'Delete this approval rule?', 'method' => 'post'],
-            ]) ?>
+            <form action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" method="post" style="display:inline"
+                  onsubmit="return confirm('Delete this approval rule?')">
+                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                <button type="submit" class="btn btn-outline-danger btn-sm ms-1">Delete</button>
+            </form>
         <?php endif; ?>
     </div>
 </div>
