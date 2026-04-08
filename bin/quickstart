@@ -14,8 +14,11 @@
 #   ./bin/quickstart -v
 #   curl -fsSL ... | bash -s -- --defaults -v
 #
+# Extra-verbose (includes full docker output):
+#   ./bin/quickstart -vv
+#
 # Or run locally:
-#   ./bin/quickstart [--defaults] [-v]
+#   ./bin/quickstart [--defaults] [-v|-vv] [--help]
 # =============================================================================
 
 set -euo pipefail
@@ -27,7 +30,25 @@ VERBOSE=0
 for arg in "$@"; do
     case "$arg" in
         --defaults) DEFAULTS=1 ;;
-        -v|--verbose) VERBOSE=1 ;;
+        -vv) VERBOSE=2 ;;
+        -v|--verbose) [ "$VERBOSE" -lt 1 ] && VERBOSE=1 ;;
+        -h|--help)
+            cat <<'HELP'
+Ansilume Quickstart — interactive installer
+
+Usage:
+  ./bin/quickstart [OPTIONS]
+  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quickstart | bash
+  curl -fsSL ... | bash -s -- [OPTIONS]
+
+Options:
+  --defaults    Non-interactive mode, use all defaults (admin/admin)
+  -v, --verbose Show debug output at each step
+  -vv           Extra-verbose: debug output + full docker command output
+  -h, --help    Show this help and exit
+HELP
+            exit 0
+            ;;
     esac
 done
 
@@ -44,7 +65,7 @@ ok()      { printf "  ${GREEN}✓${NC} %s\n" "$1"; }
 warn()    { printf "  ${YELLOW}⚠${NC} %s\n" "$1"; }
 fail()    { printf "  ${RED}✗${NC} %s\n" "$1"; }
 info()    { printf "  %s\n" "$1"; }
-debug()   { [ "$VERBOSE" = "1" ] && printf "  ${YELLOW}[debug]${NC} %s\n" "$1" || true; }
+debug()   { [ "$VERBOSE" -ge 1 ] && printf "  ${YELLOW}[debug]${NC} %s\n" "$1" || true; }
 section() { printf "\n${CYAN}${BOLD}── %s ──${NC}\n\n" "$1"; }
 die()     { printf "\n${RED}${BOLD}Error: %s${NC}\n\n" "$1" >&2; exit 1; }
 
@@ -232,7 +253,7 @@ if [ "$INSTALL_MODE" = "update" ]; then
     fi
 
     info "Pulling latest images and restarting..."
-    if [ "$VERBOSE" = "1" ]; then
+    if [ "$VERBOSE" -ge 2 ]; then
         $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
             info "  $line"
         done || true
@@ -421,7 +442,7 @@ fi
 
 debug "Running: $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always"
 info "Pulling images and starting services (this may take a moment)..."
-if [ "$VERBOSE" = "1" ]; then
+if [ "$VERBOSE" -ge 2 ]; then
     $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
         info "  $line"
     done || true
