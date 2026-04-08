@@ -111,8 +111,8 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
 }
 ?>
 <?php foreach ($alerts as $alert) : ?>
-<div class="alert alert-<?= $alert['type'] ?> d-flex justify-content-between align-items-center mb-3" role="alert">
-    <span><?= $alert['message'] ?></span>
+<div class="alert alert-<?= Html::encode($alert['type']) ?> d-flex justify-content-between align-items-center mb-3" role="alert">
+    <span><?= Html::encode($alert['message']) ?></span>
     <?= Html::a($alert['linkText'], $alert['link'], ['class' => 'btn btn-sm btn-outline-' . $alert['type']]) ?>
 </div>
 <?php endforeach; ?>

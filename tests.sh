@@ -18,6 +18,7 @@ PASS=0
 FAIL=0
 SKIP=0
 ERRORS=()
+START_TIME=$(date +%s)
 
 # Colours
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -788,8 +789,20 @@ fi
 # =============================================================================
 # Summary
 # =============================================================================
+ELAPSED=$(( $(date +%s) - START_TIME ))
+HOURS=$(( ELAPSED / 3600 ))
+MINUTES=$(( (ELAPSED % 3600) / 60 ))
+SECONDS_R=$(( ELAPSED % 60 ))
+if [[ $HOURS -gt 0 ]]; then
+    DURATION="${HOURS}h ${MINUTES}m ${SECONDS_R}s"
+elif [[ $MINUTES -gt 0 ]]; then
+    DURATION="${MINUTES}m ${SECONDS_R}s"
+else
+    DURATION="${SECONDS_R}s"
+fi
+
 echo -e "\n${BOLD}════════════════════════════════════════${NC}"
-echo -e "${BOLD}Results: ${GREEN}${PASS} passed${NC}  ${RED}${FAIL} failed${NC}  ${YELLOW}${SKIP} skipped${NC}"
+echo -e "${BOLD}Results: ${GREEN}${PASS} passed${NC}  ${RED}${FAIL} failed${NC}  ${YELLOW}${SKIP} skipped${NC}  ${CYAN}(${DURATION})${NC}"
 
 if [[ $FAIL -gt 0 ]]; then
     echo -e "\n${RED}Failed checks:${NC}"

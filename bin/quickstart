@@ -7,11 +7,23 @@
 # Usage (one-liner):
 #   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quickstart | bash
 #
+# Non-interactive with all defaults (admin/admin):
+#   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quickstart | bash -s -- --defaults
+#
 # Or run locally:
-#   ./bin/quickstart
+#   ./bin/quickstart [--defaults]
 # =============================================================================
 
 set -euo pipefail
+
+# ── Parse arguments ─────────────────────────────────────────────────────────
+
+DEFAULTS=0
+for arg in "$@"; do
+    case "$arg" in
+        --defaults) DEFAULTS=1 ;;
+    esac
+done
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +48,11 @@ ask() {
     local var_name="$3"
     local response
 
+    if [ "$DEFAULTS" = "1" ] && [ -n "$default" ]; then
+        eval "$var_name=\"\$default\""
+        return
+    fi
+
     if [ -n "$default" ]; then
         printf "  %s [%s]: " "$prompt" "$default" >/dev/tty
     else
@@ -52,7 +69,13 @@ ask() {
 ask_secret() {
     local prompt="$1"
     local var_name="$2"
+    local default="${3:-}"
     local response
+
+    if [ "$DEFAULTS" = "1" ] && [ -n "$default" ]; then
+        eval "$var_name=\"\$default\""
+        return
+    fi
 
     printf "  %s: " "$prompt" >/dev/tty
     read -rs response </dev/tty
@@ -142,14 +165,18 @@ ok "Install directory: ${INSTALL_DIR}"
 # Handle existing installation.
 INSTALL_MODE="fresh"
 if [ -f "${INSTALL_DIR}/.env" ]; then
-    printf "\n"
-    warn "Existing installation found in ${INSTALL_DIR}"
-    printf "\n"
-    printf "  ${BOLD}[1]${NC} Fresh install — removes all data and starts clean\n"
-    printf "  ${BOLD}[2]${NC} Update       — pull latest images, keep data and config\n"
-    printf "  ${BOLD}[3]${NC} Abort\n"
-    printf "\n"
-    ask "Choose" "3" EXISTING_MODE
+    if [ "$DEFAULTS" = "1" ]; then
+        EXISTING_MODE=1
+    else
+        printf "\n"
+        warn "Existing installation found in ${INSTALL_DIR}"
+        printf "\n"
+        printf "  ${BOLD}[1]${NC} Fresh install — removes all data and starts clean\n"
+        printf "  ${BOLD}[2]${NC} Update       — pull latest images, keep data and config\n"
+        printf "  ${BOLD}[3]${NC} Abort\n"
+        printf "\n"
+        ask "Choose" "3" EXISTING_MODE
+    fi
 
     case "$EXISTING_MODE" in
         1)
@@ -257,7 +284,7 @@ printf "\n"
 ask       "Admin username" "admin"             ADMIN_USER
 ask       "Admin email"    "admin@example.com" ADMIN_EMAIL
 while true; do
-    ask_secret "Admin password (min. 5 characters)" ADMIN_PASSWORD
+    ask_secret "Admin password (min. 5 characters)" ADMIN_PASSWORD "admin"
     if [ -z "$ADMIN_PASSWORD" ]; then
         fail "Password cannot be empty. Please enter at least 5 characters."
     elif [ "${#ADMIN_PASSWORD}" -lt 5 ]; then
@@ -341,6 +368,20 @@ if [ "$COMPOSE_FILE" != "docker-compose.yml" ]; then
     COMPOSE_ARGS="-f ${COMPOSE_FILE}"
 else
     COMPOSE_ARGS=""
+fi
+
+# Remove leftover containers and volumes from a previous install.
+# This prevents credential mismatches when the user deleted the directory
+# but Docker volumes (with the old DB password) still exist.
+if $COMPOSE_CMD $COMPOSE_ARGS ps -q 2>/dev/null | grep -q . \
+   || docker volume ls -q 2>/dev/null | grep -q "^ansilume_"; then
+    info "Cleaning up leftover containers and volumes..."
+    $COMPOSE_CMD $COMPOSE_ARGS down -v 2>/dev/null || true
+    # Remove orphan volumes that match the project name.
+    docker volume ls -q 2>/dev/null | grep "^ansilume_" | while read -r vol; do
+        docker volume rm "$vol" 2>/dev/null || true
+    done
+    ok "Cleanup complete"
 fi
 
 info "Pulling images and starting services..."
