@@ -379,9 +379,12 @@ if [ -n "$HAS_CONTAINERS" ] || [ -n "$HAS_VOLUMES" ]; then
     info "Cleaning up leftover containers and volumes..."
     $COMPOSE_CMD $COMPOSE_ARGS down -v 2>/dev/null || true
     # Remove orphan volumes that match the project name.
-    docker volume ls -q 2>/dev/null | grep "^ansilume_" | while read -r vol; do
-        docker volume rm "$vol" 2>/dev/null || true
-    done
+    LEFTOVER_VOLS=$(docker volume ls -q 2>/dev/null | grep "^ansilume_" || true)
+    if [ -n "$LEFTOVER_VOLS" ]; then
+        echo "$LEFTOVER_VOLS" | while read -r vol; do
+            docker volume rm "$vol" 2>/dev/null || true
+        done
+    fi
     ok "Cleanup complete"
 fi
 
