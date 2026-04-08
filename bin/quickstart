@@ -10,8 +10,12 @@
 # Non-interactive with all defaults (admin/admin):
 #   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quickstart | bash -s -- --defaults
 #
+# Verbose mode (debug output):
+#   ./bin/quickstart -v
+#   curl -fsSL ... | bash -s -- --defaults -v
+#
 # Or run locally:
-#   ./bin/quickstart [--defaults]
+#   ./bin/quickstart [--defaults] [-v]
 # =============================================================================
 
 set -euo pipefail
@@ -19,9 +23,11 @@ set -euo pipefail
 # ── Parse arguments ─────────────────────────────────────────────────────────
 
 DEFAULTS=0
+VERBOSE=0
 for arg in "$@"; do
     case "$arg" in
         --defaults) DEFAULTS=1 ;;
+        -v|--verbose) VERBOSE=1 ;;
     esac
 done
 
@@ -38,6 +44,7 @@ ok()      { printf "  ${GREEN}✓${NC} %s\n" "$1"; }
 warn()    { printf "  ${YELLOW}⚠${NC} %s\n" "$1"; }
 fail()    { printf "  ${RED}✗${NC} %s\n" "$1"; }
 info()    { printf "  %s\n" "$1"; }
+debug()   { [ "$VERBOSE" = "1" ] && printf "  ${YELLOW}[debug]${NC} %s\n" "$1" || true; }
 section() { printf "\n${CYAN}${BOLD}── %s ──${NC}\n\n" "$1"; }
 die()     { printf "\n${RED}${BOLD}Error: %s${NC}\n\n" "$1" >&2; exit 1; }
 
@@ -84,7 +91,7 @@ ask_secret() {
 }
 
 gen_secret() {
-    openssl rand -hex 32 2>/dev/null || LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64
+    openssl rand -hex 32 2>/dev/null || { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64 || true; }
 }
 
 # ── Header ───────────────────────────────────────────────────────────────────
@@ -225,12 +232,17 @@ if [ "$INSTALL_MODE" = "update" ]; then
     fi
 
     info "Pulling latest images and restarting..."
-    $COMPOSE_CMD $COMPOSE_ARGS pull 2>&1 | grep -E "Pull|pull|download" | while read -r line; do
-        info "  $line"
-    done || true
-    $COMPOSE_CMD $COMPOSE_ARGS up -d 2>&1 | grep -E "Start|Recreat|Create" | while read -r line; do
-        info "  $line"
-    done || true
+    if [ "$VERBOSE" = "1" ]; then
+        $COMPOSE_CMD $COMPOSE_ARGS pull 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+            info "  $line"
+        done || true
+        $COMPOSE_CMD $COMPOSE_ARGS up -d 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+            info "  $line"
+        done || true
+    else
+        $COMPOSE_CMD $COMPOSE_ARGS pull >/dev/null 2>&1 || true
+        $COMPOSE_CMD $COMPOSE_ARGS up -d >/dev/null 2>&1 || true
+    fi
     ok "Containers updated"
 
     info "Migrations will be applied automatically by the app container."
@@ -359,6 +371,7 @@ RUNNER_BOOTSTRAP_SECRET=${RUNNER_SECRET}
 EOF
 
 ok ".env written"
+debug "COMPOSE_FILE=${COMPOSE_FILE}"
 
 # ── 9. Start containers ───────────────────────────────────────────────────────
 
@@ -373,25 +386,48 @@ fi
 # Remove leftover containers and volumes from a previous install.
 # This prevents credential mismatches when the user deleted the directory
 # but Docker volumes (with the old DB password) still exist.
+debug "Checking for leftover containers..."
 HAS_CONTAINERS=$($COMPOSE_CMD $COMPOSE_ARGS ps -q 2>/dev/null || true)
-HAS_VOLUMES=$(docker volume ls -q 2>/dev/null | grep "^ansilume_" || true)
+debug "HAS_CONTAINERS='${HAS_CONTAINERS}'"
+debug "Checking for leftover volumes..."
+ALL_VOLUMES=$(docker volume ls -q 2>/dev/null || true)
+HAS_VOLUMES=""
+if [ -n "$ALL_VOLUMES" ]; then
+    HAS_VOLUMES=$(echo "$ALL_VOLUMES" | grep "^ansilume_" || true)
+fi
+debug "HAS_VOLUMES='${HAS_VOLUMES}'"
 if [ -n "$HAS_CONTAINERS" ] || [ -n "$HAS_VOLUMES" ]; then
     info "Cleaning up leftover containers and volumes..."
+    debug "Running compose down -v..."
     $COMPOSE_CMD $COMPOSE_ARGS down -v 2>/dev/null || true
+    debug "compose down -v done (exit: $?)"
     # Remove orphan volumes that match the project name.
-    LEFTOVER_VOLS=$(docker volume ls -q 2>/dev/null | grep "^ansilume_" || true)
+    REMAINING_VOLUMES=$(docker volume ls -q 2>/dev/null || true)
+    LEFTOVER_VOLS=""
+    if [ -n "$REMAINING_VOLUMES" ]; then
+        LEFTOVER_VOLS=$(echo "$REMAINING_VOLUMES" | grep "^ansilume_" || true)
+    fi
+    debug "LEFTOVER_VOLS='${LEFTOVER_VOLS}'"
     if [ -n "$LEFTOVER_VOLS" ]; then
         echo "$LEFTOVER_VOLS" | while read -r vol; do
+            debug "Removing volume: $vol"
             docker volume rm "$vol" 2>/dev/null || true
         done
     fi
     ok "Cleanup complete"
+else
+    debug "No leftover containers or volumes found"
 fi
 
-info "Pulling images and starting services..."
-$COMPOSE_CMD $COMPOSE_ARGS up -d --pull always 2>&1 | grep -E "Pull|Start|Create|error" | while read -r line; do
-    info "  $line"
-done || true
+debug "Running: $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always"
+info "Pulling images and starting services (this may take a moment)..."
+if [ "$VERBOSE" = "1" ]; then
+    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+        info "  $line"
+    done || true
+else
+    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always >/dev/null 2>&1 || true
+fi
 
 ok "Containers started"
 
@@ -401,7 +437,9 @@ section "Waiting for application"
 
 info "Waiting for the app container to become healthy (up to 3 minutes)..."
 
+debug "Getting app container ID..."
 APP_CONTAINER=$($COMPOSE_CMD $COMPOSE_ARGS ps -q app 2>/dev/null | head -1 || true)
+debug "APP_CONTAINER='${APP_CONTAINER}'"
 TIMEOUT=180
 ELAPSED=0
 
@@ -421,6 +459,7 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
         exit 1
     fi
 
+    debug "Health: ${HEALTH}, State: ${STATE} (${ELAPSED}s / ${TIMEOUT}s)"
     printf "  Waiting... (%ds / %ds)\r" "$ELAPSED" "$TIMEOUT"
     sleep 5
     ELAPSED=$((ELAPSED + 5))
@@ -435,6 +474,7 @@ fi
 
 section "Setup"
 
+debug "Creating admin user: $ADMIN_USER / $ADMIN_EMAIL"
 info "Creating admin user..."
 if ! ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
     php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" 2>&1); then
