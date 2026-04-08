@@ -476,18 +476,23 @@ section "Setup"
 
 debug "Creating admin user: $ADMIN_USER / $ADMIN_EMAIL"
 info "Creating admin user..."
-if ! ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
-    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" 2>&1); then
-    fail "Admin user creation failed"
-    if [ -n "$ADMIN_OUT" ]; then
-        echo "$ADMIN_OUT" | while IFS= read -r line || [ -n "$line" ]; do info "  $line"; done
-    fi
-    die "Check the output above and re-run the quickstart."
-fi
-if [ -n "$ADMIN_OUT" ]; then
-    echo "$ADMIN_OUT" | while IFS= read -r line || [ -n "$line" ]; do info "  $line"; done
-fi
-ok "Admin user created"
+ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
+    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" 2>&1) || true
+debug "setup/admin output: ${ADMIN_OUT}"
+case "$ADMIN_OUT" in
+    *"already exists"*)
+        ok "Admin user already exists — skipping"
+        ;;
+    *"created with ID"*)
+        ok "Admin user created"
+        ;;
+    *)
+        if [ -n "$ADMIN_OUT" ]; then
+            echo "$ADMIN_OUT" | while IFS= read -r line || [ -n "$line" ]; do info "  $line"; done
+        fi
+        die "Admin user creation failed. Check the output above and re-run the quickstart."
+        ;;
+esac
 
 # ── 12. Done ──────────────────────────────────────────────────────────────────
 
