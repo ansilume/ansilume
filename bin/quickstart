@@ -427,22 +427,10 @@ if [ $ELAPSED -ge $TIMEOUT ]; then
     warn "Timed out waiting for healthy status — proceeding anyway"
 fi
 
-# ── 11. Run migrations (safety net) ──────────────────────────────────────────
-# The app container's entrypoint already runs migrations on startup, but we
-# run them again here as a fallback — migrate is idempotent and harmless.
+# ── 11. Create admin user ─────────────────────────────────────────────────────
+# Migrations are handled by the app container's entrypoint automatically.
 
-section "Database setup"
-
-info "Running migrations..."
-MIGRATE_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app php yii migrate --interactive=0 2>&1) || {
-    fail "Migration failed"
-    echo "$MIGRATE_OUT" | tail -10 | while IFS= read -r line; do info "  $line"; done
-    die "Fix the database issue and re-run the quickstart."
-}
-echo "$MIGRATE_OUT" | tail -5 | while IFS= read -r line; do info "  $line"; done
-ok "Migrations applied"
-
-# ── 12. Create admin user ─────────────────────────────────────────────────────
+section "Setup"
 
 info "Creating admin user..."
 ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
@@ -454,7 +442,7 @@ ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
 echo "$ADMIN_OUT" | while IFS= read -r line; do info "  $line"; done
 ok "Admin user created"
 
-# ── 13. Done ──────────────────────────────────────────────────────────────────
+# ── 12. Done ──────────────────────────────────────────────────────────────────
 
 printf "\n${GREEN}${BOLD}"
 printf "  ╔═══════════════════════════════════════╗\n"
