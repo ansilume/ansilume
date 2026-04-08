@@ -322,7 +322,9 @@ if [ $ELAPSED -ge $TIMEOUT ]; then
     warn "Timed out waiting for healthy status — proceeding anyway"
 fi
 
-# ── 11. Run migrations ────────────────────────────────────────────────────────
+# ── 11. Run migrations (safety net) ──────────────────────────────────────────
+# The app container's entrypoint already runs migrations on startup, but we
+# run them again here as a fallback — migrate is idempotent and harmless.
 
 section "Database setup"
 

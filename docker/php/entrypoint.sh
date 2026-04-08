@@ -24,6 +24,18 @@ done
 # Skip for worker/runner containers (they start with a specific command, not php-fpm).
 # migrate --interactive=0 is idempotent — safe to run on every start.
 if [ "$1" = "php-fpm" ]; then
+    echo "[entrypoint] waiting for database..."
+    elapsed=0
+    while ! php -r "new PDO('mysql:host=' . getenv('DB_HOST') . ';port=' . (getenv('DB_PORT') ?: '3306'), getenv('DB_USER'), getenv('DB_PASSWORD'));" 2>/dev/null; do
+        elapsed=$((elapsed + 2))
+        if [ $elapsed -ge 60 ]; then
+            echo "[entrypoint] ERROR: database not reachable after 60s" >&2
+            exit 1
+        fi
+        sleep 2
+    done
+    echo "[entrypoint] database is reachable"
+
     echo "[entrypoint] running migrations..."
     flock /var/www/.migrate.lock php /var/www/yii migrate --interactive=0
 fi
