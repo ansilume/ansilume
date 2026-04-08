@@ -119,7 +119,7 @@ fi
 # =============================================================================
 section "Shell script checks"
 
-SHELL_SCRIPTS=$(git ls-files -- '*.sh' 'bin/*' | grep -v vendor/)
+SHELL_SCRIPTS=$(find . -path ./vendor -prune -o -path ./node_modules -prune -o -path ./runtime -prune -o -path './@runtime' -prune -o \( -name '*.sh' -o -path './bin/*' \) -print | sed 's|^\./||' | sort)
 SHELL_ERRORS=0
 
 # ── Shebang ─────────────────────────────────────────────────────────────────

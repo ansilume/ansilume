@@ -139,15 +139,78 @@ ask "Directory" "./ansilume" INSTALL_DIR
 INSTALL_DIR="$(mkdir -p "$INSTALL_DIR" && cd "$INSTALL_DIR" && pwd)"
 ok "Install directory: ${INSTALL_DIR}"
 
-# Abort if .env already exists (avoid clobbering a live install).
+# Handle existing installation.
+INSTALL_MODE="fresh"
 if [ -f "${INSTALL_DIR}/.env" ]; then
     printf "\n"
-    warn ".env already exists in ${INSTALL_DIR}"
-    ask "Overwrite existing installation?" "no" OVERWRITE
-    case "$OVERWRITE" in
-        y|Y|yes|YES) : ;;
-        *) die "Aborted to protect existing installation." ;;
+    warn "Existing installation found in ${INSTALL_DIR}"
+    printf "\n"
+    printf "  ${BOLD}[1]${NC} Fresh install — removes all data and starts clean\n"
+    printf "  ${BOLD}[2]${NC} Update       — pull latest images, keep data and config\n"
+    printf "  ${BOLD}[3]${NC} Abort\n"
+    printf "\n"
+    ask "Choose" "3" EXISTING_MODE
+
+    case "$EXISTING_MODE" in
+        1)
+            INSTALL_MODE="fresh"
+            info "Stopping and removing existing containers and volumes..."
+
+            # Determine compose file for teardown.
+            if [ -f "docker-compose.prebuilt.yml" ] && [ "$SOURCE_MODE" = "true" ]; then
+                TEARDOWN_ARGS="-f docker-compose.prebuilt.yml"
+            else
+                TEARDOWN_ARGS=""
+            fi
+            $COMPOSE_CMD $TEARDOWN_ARGS down -v 2>/dev/null || true
+            ok "Existing installation removed"
+            ;;
+        2)
+            INSTALL_MODE="update"
+            ;;
+        *)
+            die "Aborted."
+            ;;
     esac
+fi
+
+# ── Update path ─────────────────────────────────────────────────────────────
+# Pull latest images and restart — skip all configuration steps.
+
+if [ "$INSTALL_MODE" = "update" ]; then
+    section "Updating"
+
+    cd "$INSTALL_DIR"
+
+    if [ "$SOURCE_MODE" = "true" ]; then
+        info "Pulling latest source..."
+        git pull --ff-only
+        ok "Repository up to date"
+        COMPOSE_FILE="docker-compose.prebuilt.yml"
+    else
+        COMPOSE_FILE="docker-compose.yml"
+    fi
+
+    if [ "$COMPOSE_FILE" != "docker-compose.yml" ]; then
+        COMPOSE_ARGS="-f ${COMPOSE_FILE}"
+    else
+        COMPOSE_ARGS=""
+    fi
+
+    info "Pulling latest images and restarting..."
+    $COMPOSE_CMD $COMPOSE_ARGS pull 2>&1 | grep -E "Pull|pull|download" | while read -r line; do
+        info "  $line"
+    done || true
+    $COMPOSE_CMD $COMPOSE_ARGS up -d 2>&1 | grep -E "Start|Recreat|Create" | while read -r line; do
+        info "  $line"
+    done || true
+    ok "Containers updated"
+
+    info "Migrations will be applied automatically by the app container."
+    printf "\n"
+    ok "Update complete. Ansilume is restarting with the latest version."
+    printf "\n"
+    exit 0
 fi
 
 # ── 4. Database ──────────────────────────────────────────────────────────────

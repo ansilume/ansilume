@@ -12,7 +12,30 @@ done
 if [ "$1" = "php-fpm" ]; then
     echo "[entrypoint] waiting for database..."
     elapsed=0
-    while ! php -r "new PDO('mysql:host=' . getenv('DB_HOST') . ';port=' . (getenv('DB_PORT') ?: '3306'), getenv('DB_USER'), getenv('DB_PASSWORD'));" 2>/dev/null; do
+    while true; do
+        db_result=$(php -r "
+            try {
+                new PDO('mysql:host=' . getenv('DB_HOST') . ';port=' . (getenv('DB_PORT') ?: '3306'),
+                        getenv('DB_USER'), getenv('DB_PASSWORD'));
+                echo 'ok';
+            } catch (PDOException \$e) {
+                if (str_contains(\$e->getMessage(), 'Access denied')) {
+                    echo 'auth_error';
+                } else {
+                    echo 'unavailable';
+                }
+            }
+        " 2>/dev/null)
+
+        if [ "$db_result" = "ok" ]; then
+            break
+        fi
+        if [ "$db_result" = "auth_error" ]; then
+            echo "[entrypoint] ERROR: database credentials rejected (Access denied)" >&2
+            echo "[entrypoint] If you re-ran quickstart, choose 'Fresh install' to reset the database." >&2
+            exit 1
+        fi
+
         elapsed=$((elapsed + 2))
         if [ $elapsed -ge 60 ]; then
             echo "[entrypoint] ERROR: database not reachable after 60s" >&2
