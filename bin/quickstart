@@ -373,8 +373,9 @@ fi
 # Remove leftover containers and volumes from a previous install.
 # This prevents credential mismatches when the user deleted the directory
 # but Docker volumes (with the old DB password) still exist.
-if $COMPOSE_CMD $COMPOSE_ARGS ps -q 2>/dev/null | grep -q . \
-   || docker volume ls -q 2>/dev/null | grep -q "^ansilume_"; then
+HAS_CONTAINERS=$($COMPOSE_CMD $COMPOSE_ARGS ps -q 2>/dev/null || true)
+HAS_VOLUMES=$(docker volume ls -q 2>/dev/null | grep "^ansilume_" || true)
+if [ -n "$HAS_CONTAINERS" ] || [ -n "$HAS_VOLUMES" ]; then
     info "Cleaning up leftover containers and volumes..."
     $COMPOSE_CMD $COMPOSE_ARGS down -v 2>/dev/null || true
     # Remove orphan volumes that match the project name.
