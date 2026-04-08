@@ -196,7 +196,7 @@ if [ -f "${INSTALL_DIR}/.env" ]; then
             else
                 TEARDOWN_ARGS=""
             fi
-            $COMPOSE_CMD $TEARDOWN_ARGS down -v 2>/dev/null || true
+            $COMPOSE_CMD $TEARDOWN_ARGS down -v < /dev/null 2>/dev/null || true
             ok "Existing installation removed"
             ;;
         2)
@@ -233,15 +233,15 @@ if [ "$INSTALL_MODE" = "update" ]; then
 
     info "Pulling latest images and restarting..."
     if [ "$VERBOSE" = "1" ]; then
-        $COMPOSE_CMD $COMPOSE_ARGS pull 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
             info "  $line"
         done || true
-        $COMPOSE_CMD $COMPOSE_ARGS up -d 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+        $COMPOSE_CMD $COMPOSE_ARGS up -d < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
             info "  $line"
         done || true
     else
-        $COMPOSE_CMD $COMPOSE_ARGS pull >/dev/null 2>&1 || true
-        $COMPOSE_CMD $COMPOSE_ARGS up -d >/dev/null 2>&1 || true
+        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null >/dev/null 2>&1 || true
+        $COMPOSE_CMD $COMPOSE_ARGS up -d < /dev/null >/dev/null 2>&1 || true
     fi
     ok "Containers updated"
 
@@ -387,7 +387,7 @@ fi
 # This prevents credential mismatches when the user deleted the directory
 # but Docker volumes (with the old DB password) still exist.
 debug "Checking for leftover containers..."
-HAS_CONTAINERS=$($COMPOSE_CMD $COMPOSE_ARGS ps -q 2>/dev/null || true)
+HAS_CONTAINERS=$($COMPOSE_CMD $COMPOSE_ARGS ps -q < /dev/null 2>/dev/null || true)
 debug "HAS_CONTAINERS='${HAS_CONTAINERS}'"
 debug "Checking for leftover volumes..."
 ALL_VOLUMES=$(docker volume ls -q 2>/dev/null || true)
@@ -399,8 +399,8 @@ debug "HAS_VOLUMES='${HAS_VOLUMES}'"
 if [ -n "$HAS_CONTAINERS" ] || [ -n "$HAS_VOLUMES" ]; then
     info "Cleaning up leftover containers and volumes..."
     debug "Running compose down -v..."
-    $COMPOSE_CMD $COMPOSE_ARGS down -v 2>/dev/null || true
-    debug "compose down -v done (exit: $?)"
+    $COMPOSE_CMD $COMPOSE_ARGS down -v < /dev/null 2>/dev/null || true
+    debug "compose down -v done"
     # Remove orphan volumes that match the project name.
     REMAINING_VOLUMES=$(docker volume ls -q 2>/dev/null || true)
     LEFTOVER_VOLS=""
@@ -422,11 +422,11 @@ fi
 debug "Running: $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always"
 info "Pulling images and starting services (this may take a moment)..."
 if [ "$VERBOSE" = "1" ]; then
-    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
         info "  $line"
     done || true
 else
-    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always >/dev/null 2>&1 || true
+    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null >/dev/null 2>&1 || true
 fi
 
 ok "Containers started"
@@ -438,7 +438,7 @@ section "Waiting for application"
 info "Waiting for the app container to become healthy (up to 3 minutes)..."
 
 debug "Getting app container ID..."
-APP_CONTAINER=$($COMPOSE_CMD $COMPOSE_ARGS ps -q app 2>/dev/null | head -1 || true)
+APP_CONTAINER=$($COMPOSE_CMD $COMPOSE_ARGS ps -q app < /dev/null 2>/dev/null | head -1 || true)
 debug "APP_CONTAINER='${APP_CONTAINER}'"
 TIMEOUT=180
 ELAPSED=0
@@ -477,7 +477,7 @@ section "Setup"
 debug "Creating admin user: $ADMIN_USER / $ADMIN_EMAIL"
 info "Creating admin user..."
 ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
-    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" 2>&1) || true
+    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" < /dev/null 2>&1) || true
 debug "setup/admin output: ${ADMIN_OUT}"
 case "$ADMIN_OUT" in
     *"already exists"*)
