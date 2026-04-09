@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\models\ApprovalRequest;
 use app\models\Job;
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
+use app\services\ApprovalService;
 use app\services\WorkflowExecutionService;
 use app\tests\integration\DbTestCase;
 
@@ -572,5 +574,167 @@ class WorkflowExecutionServiceTest extends DbTestCase
         $wfJob->refresh();
         $this->assertSame(WorkflowJob::STATUS_SUCCEEDED, $wfJob->status);
         $this->assertNotNull($wfJob->finished_at);
+    }
+
+    // ── Regression: issue #14 — approval steps must create ApprovalRequest ──
+
+    /**
+     * Regression test for issue #14: launching a workflow with an approval
+     * step that has a valid approval_rule_id must create an ApprovalRequest
+     * record so that approvers can act on it. Without this, the approval
+     * step sits in RUNNING forever with no way to advance.
+     */
+    public function testApprovalStepCreatesApprovalRequest(): void
+    {
+        $user = $this->createUser('wf_approval_req');
+        $wt = $this->createWorkflowTemplate($user->id);
+        $rule = $this->createApprovalRule($user->id);
+        $step = $this->createWorkflowStep(
+            $wt->id,
+            0,
+            WorkflowStep::TYPE_APPROVAL,
+            null,
+            $rule->id
+        );
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        $wjs = WorkflowJobStep::findOne([
+            'workflow_job_id' => $wfJob->id,
+            'workflow_step_id' => $step->id,
+        ]);
+        $this->assertNotNull($wjs);
+        $this->assertSame(WorkflowJobStep::STATUS_RUNNING, $wjs->status);
+
+        // The critical assertion: an ApprovalRequest must exist for this step
+        $approvalRequest = ApprovalRequest::findOne([
+            'approval_rule_id' => $rule->id,
+        ]);
+        $this->assertNotNull(
+            $approvalRequest,
+            'Approval step must create an ApprovalRequest so approvers can act on it'
+        );
+        $this->assertSame(ApprovalRequest::STATUS_PENDING, $approvalRequest->status);
+    }
+
+    /**
+     * Regression test for issue #14: after an approval request is approved,
+     * the workflow must advance to the next step. Currently the
+     * ApprovalService sets the job to QUEUED but does not notify the
+     * WorkflowExecutionService, so the workflow stays stuck.
+     */
+    public function testApprovalResolutionAdvancesWorkflow(): void
+    {
+        [$user, $jt] = $this->scaffoldTemplate();
+        $approver = $this->createUser('wf_approver');
+        $wt = $this->createWorkflowTemplate($user->id);
+        $rule = $this->createApprovalRule(
+            $user->id,
+            \app\models\ApprovalRule::APPROVER_TYPE_USERS,
+            json_encode(['user_ids' => [$approver->id]]) ?: '{}',
+            1
+        );
+
+        $approvalStep = $this->createWorkflowStep(
+            $wt->id,
+            0,
+            WorkflowStep::TYPE_APPROVAL,
+            null,
+            $rule->id
+        );
+        $jobStep = $this->createWorkflowStep($wt->id, 1, WorkflowStep::TYPE_JOB, $jt->id);
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        // Verify approval step is running
+        $wjs = WorkflowJobStep::findOne([
+            'workflow_job_id' => $wfJob->id,
+            'workflow_step_id' => $approvalStep->id,
+        ]);
+        $this->assertNotNull($wjs);
+        $this->assertSame(WorkflowJobStep::STATUS_RUNNING, $wjs->status);
+
+        // Find the approval request and approve it
+        $request = ApprovalRequest::findOne([
+            'approval_rule_id' => $rule->id,
+        ]);
+        $this->assertNotNull($request, 'Approval request must exist');
+
+        /** @var ApprovalService $approvalService */
+        $approvalService = \Yii::$app->get('approvalService');
+        $approvalService->recordDecision($request, $approver->id, 'approved');
+
+        // After approval, the workflow should advance:
+        // - approval step should be succeeded
+        $wjs->refresh();
+        $this->assertSame(
+            WorkflowJobStep::STATUS_SUCCEEDED,
+            $wjs->status,
+            'Approval step should be marked succeeded after approval'
+        );
+
+        // - next step (job step) should be running
+        $wjs2 = WorkflowJobStep::findOne([
+            'workflow_job_id' => $wfJob->id,
+            'workflow_step_id' => $jobStep->id,
+        ]);
+        $this->assertNotNull(
+            $wjs2,
+            'Workflow should advance to next step after approval'
+        );
+        $this->assertSame(WorkflowJobStep::STATUS_RUNNING, $wjs2->status);
+    }
+
+    /**
+     * Regression test for issue #14: rejecting an approval request
+     * should fail the workflow step and follow the failure branch
+     * (or end the workflow if there is no failure branch).
+     */
+    public function testApprovalRejectionFailsWorkflowStep(): void
+    {
+        $user = $this->createUser('wf_reject');
+        $approver = $this->createUser('wf_rejector');
+        $wt = $this->createWorkflowTemplate($user->id);
+        $rule = $this->createApprovalRule(
+            $user->id,
+            \app\models\ApprovalRule::APPROVER_TYPE_USERS,
+            json_encode(['user_ids' => [$approver->id]]) ?: '{}',
+            1
+        );
+
+        $approvalStep = $this->createWorkflowStep(
+            $wt->id,
+            0,
+            WorkflowStep::TYPE_APPROVAL,
+            null,
+            $rule->id
+        );
+
+        $wfJob = $this->service()->launch($wt, $user->id);
+
+        $request = ApprovalRequest::findOne([
+            'approval_rule_id' => $rule->id,
+        ]);
+        $this->assertNotNull($request, 'Approval request must exist');
+
+        /** @var ApprovalService $approvalService */
+        $approvalService = \Yii::$app->get('approvalService');
+        $approvalService->recordDecision($request, $approver->id, 'rejected');
+
+        // Approval step should be failed
+        $wjs = WorkflowJobStep::findOne([
+            'workflow_job_id' => $wfJob->id,
+            'workflow_step_id' => $approvalStep->id,
+        ]);
+        $this->assertNotNull($wjs);
+        $this->assertSame(
+            WorkflowJobStep::STATUS_FAILED,
+            $wjs->status,
+            'Approval step should be marked failed after rejection'
+        );
+
+        // Workflow should be failed (no failure branch defined)
+        $wfJob->refresh();
+        $this->assertSame(WorkflowJob::STATUS_FAILED, $wfJob->status);
     }
 }

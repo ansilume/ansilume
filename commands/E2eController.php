@@ -149,6 +149,7 @@ class E2eController extends Controller
         $approvalRuleId = $this->seedApprovalRule($userId);
         $workflowTemplateId = $this->seedWorkflowTemplate($userId);
         $this->seedWorkflowStep($workflowTemplateId, $templateId, $approvalRuleId);
+        $this->seedApprovalWorkflow($userId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
         $this->seedCustomRole();
     }
@@ -371,8 +372,8 @@ class E2eController extends Controller
         $rule = new ApprovalRule();
         $rule->name = self::PREFIX . 'approval-rule';
         $rule->description = 'E2E test approval rule';
-        $rule->approver_type = 'role';
-        $rule->approver_config = (string)json_encode(['role' => 'admin']);
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $rule->approver_config = (string)json_encode(['user_ids' => [$userId]]);
         $rule->required_approvals = 1;
         $rule->timeout_minutes = 60;
         $rule->timeout_action = 'reject';
@@ -426,6 +427,39 @@ class E2eController extends Controller
         $this->stdout("  Created workflow step (ID {$step->id}).\n");
     }
 
+    private function seedApprovalWorkflow(int $userId, int $jobTemplateId, int $approvalRuleId): void
+    {
+        $name = self::PREFIX . 'approval-workflow';
+        $existing = WorkflowTemplate::find()->where(['name' => $name])->one();
+        if ($existing !== null) {
+            $this->stdout("  Approval workflow already exists (ID {$existing->id}).\n");
+            return;
+        }
+
+        $wt = new WorkflowTemplate();
+        $wt->name = $name;
+        $wt->description = 'E2E workflow with approval gate';
+        $wt->created_by = $userId;
+        $wt->save(false);
+
+        $approval = new WorkflowStep();
+        $approval->workflow_template_id = $wt->id;
+        $approval->name = self::PREFIX . 'step-approve';
+        $approval->step_order = 0;
+        $approval->step_type = 'approval';
+        $approval->approval_rule_id = $approvalRuleId;
+        $approval->on_failure_step_id = WorkflowStep::END_WORKFLOW;
+        $approval->save(false);
+
+        $job = new WorkflowStep();
+        $job->workflow_template_id = $wt->id;
+        $job->name = self::PREFIX . 'step-job-after-approval';
+        $job->step_order = 1;
+        $job->step_type = 'job';
+        $job->job_template_id = $jobTemplateId;
+        $job->save(false);
+        $this->stdout("  Created approval workflow (ID {$wt->id}) with 2 steps.\n");
+    }
     private function seedTeam(int $userId, int $projectId): void
     {
         $existing = Team::find()->where(['name' => self::PREFIX . 'team'])->one();
@@ -506,10 +540,48 @@ class E2eController extends Controller
         $auth = \Yii::$app->authManager;
 
         $users = User::find()->where(['like', 'username', self::PREFIX])->all();
+        $userIds = array_map(fn ($u) => $u->id, $users);
+
+        if ($userIds !== []) {
+            $this->teardownJobsByUsers($userIds);
+        }
+
         foreach ($users as $user) {
             $auth->revokeAll($user->id);
             $user->delete();
             $this->stdout("  Deleted user '{$user->username}'.\n");
+        }
+    }
+
+    /**
+     * @param int[] $userIds
+     */
+    private function teardownJobsByUsers(array $userIds): void
+    {
+        $db = \Yii::$app->db;
+        $del = fn (string $t, array $w) => $db->createCommand()->delete($t, $w)->execute();
+        $col = fn (string $t, array $w) => (new \yii\db\Query())->select('id')->from($t)->where($w)->column($db);
+
+        $jobIds = $col('{{%job}}', ['launched_by' => $userIds]);
+        if ($jobIds !== []) {
+            $del('{{%workflow_job_step}}', ['job_id' => $jobIds]);
+            $requestIds = $col('{{%approval_request}}', ['job_id' => $jobIds]);
+            if ($requestIds !== []) {
+                $del('{{%approval_decision}}', ['approval_request_id' => $requestIds]);
+                $del('{{%approval_request}}', ['id' => $requestIds]);
+            }
+            foreach (['job_artifact', 'job_host_summary', 'job_task', 'job_log'] as $t) {
+                $del('{{%' . $t . '}}', ['job_id' => $jobIds]);
+            }
+            $del('{{%job}}', ['id' => $jobIds]);
+            $this->stdout("  Cleaned up " . count($jobIds) . " job(s) created by e2e users.\n");
+        }
+
+        $wfJobIds = $col('{{%workflow_job}}', ['launched_by' => $userIds]);
+        if ($wfJobIds !== []) {
+            $del('{{%workflow_job_step}}', ['workflow_job_id' => $wfJobIds]);
+            $del('{{%workflow_job}}', ['id' => $wfJobIds]);
+            $this->stdout("  Cleaned up " . count($wfJobIds) . " workflow job(s).\n");
         }
     }
 

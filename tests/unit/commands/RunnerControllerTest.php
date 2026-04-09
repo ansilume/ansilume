@@ -243,6 +243,11 @@ class RunnerControllerSyncProjectTest extends TestCase
             {
                 return 0;
             }
+
+            public function stderr($string): int
+            {
+                return 0;
+            }
         };
     }
 
@@ -353,6 +358,61 @@ class RunnerControllerSyncProjectTest extends TestCase
 
         $this->assertNotNull($result);
         $this->assertStringContainsString('Git sync failed', $result);
+    }
+
+    // ── Regression: issue #10 — git sync must use safe directory env ─────
+
+    /**
+     * Regression test for issue #10: the runner's syncProject() must pass
+     * environment variables to the git subprocess — specifically
+     * GIT_TERMINAL_PROMPT=0 and GIT_CONFIG_* for safe.directory.
+     *
+     * ProjectService::baseGitEnv() sets these for web-triggered syncs,
+     * but the runner's syncProject() originally used bare proc_open
+     * without an env argument, causing "dubious ownership" failures
+     * and potential hangs waiting for credential prompts in Docker.
+     *
+     * This test reads the source to verify that proc_open is called
+     * with an explicit env array (4th argument) containing the required
+     * git configuration. This is a source-level guardrail because we
+     * cannot intercept proc_open without modifying production code.
+     */
+    public function testSyncProjectPassesGitEnvToProcOpen(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 3) . '/commands/RunnerController.php'
+        );
+        $this->assertNotFalse($source);
+
+        // Extract the syncProject method body
+        $this->assertMatchesRegularExpression(
+            '/function\s+syncProject/',
+            $source,
+            'syncProject method must exist'
+        );
+
+        // The method must set GIT_TERMINAL_PROMPT to prevent interactive prompts
+        $this->assertStringContainsString(
+            'GIT_TERMINAL_PROMPT',
+            $source,
+            'syncProject must set GIT_TERMINAL_PROMPT=0 to prevent hangs'
+        );
+
+        // The method must configure git safe.directory via GIT_CONFIG_*
+        $this->assertStringContainsString(
+            'safe.directory',
+            $source,
+            'syncProject must configure git safe.directory to avoid "dubious ownership" errors'
+        );
+
+        // proc_open must receive an env argument (not just cmd + descriptors + pipes)
+        // The 4th arg to proc_open is $cwd, the 5th is $env_vars.
+        // We check that the proc_open call in syncProject includes env.
+        $this->assertMatchesRegularExpression(
+            '/proc_open\s*\(\s*\$cmd\s*,\s*\$descriptors\s*,\s*\$pipes\s*,\s*null\s*,\s*\$/',
+            $source,
+            'proc_open in syncProject must pass env as 5th argument'
+        );
     }
 }
 

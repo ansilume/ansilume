@@ -138,7 +138,9 @@ class RunnerController extends Controller
             }
 
             $jobId = (int)($payload['job_id'] ?? 0);
-            $this->stdout("Claimed job #{$jobId}. Executing...\n");
+            $scmType = (string)($payload['scm_type'] ?? 'manual');
+            $playbook = basename((string)($payload['playbook_path'] ?? 'unknown'));
+            $this->stdout("Claimed job #{$jobId}. Playbook: {$playbook}, SCM: {$scmType}\n");
 
             $this->executeJob($jobId, $payload);
 
@@ -288,21 +290,30 @@ class RunnerController extends Controller
             return null;
         }
 
-        if (is_dir($projectPath . '/.git')) {
-            $cmd = ['git', '-C', $projectPath, 'pull', '--ff-only', 'origin', $scmBranch];
-        } else {
-            $cmd = ['git', 'clone', '--depth', '1', '--branch', $scmBranch, $scmUrl, $projectPath];
-        }
+        $isClone = !is_dir($projectPath . '/.git');
+        $cmd = $isClone
+            ? ['git', 'clone', '--depth', '1', '--branch', $scmBranch, $scmUrl, $projectPath]
+            : ['git', '-C', $projectPath, 'pull', '--ff-only', 'origin', $scmBranch];
 
-        $this->stdout("Syncing project: {$scmUrl} (branch: {$scmBranch}) → {$projectPath}\n");
+        $action = $isClone ? 'Cloning' : 'Pulling';
+        $this->stdout("{$action} project: {$scmUrl} (branch: {$scmBranch}) → {$projectPath}\n");
 
-        $descriptors = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
+        return $this->runGitCommand($cmd);
+    }
 
-        $proc = proc_open($cmd, $descriptors, $pipes);
+    /**
+     * Run a git command with safe environment and return null on success
+     * or an error message string on failure.
+     *
+     * @param array<int, string> $cmd
+     */
+    private function runGitCommand(array $cmd): ?string
+    {
+        $env = $this->buildGitEnv();
+        $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+
+        $startTime = microtime(true);
+        $proc = proc_open($cmd, $descriptors, $pipes, null, $env);
         if ($proc === false) {
             return "Failed to start git process.\n";
         }
@@ -313,17 +324,45 @@ class RunnerController extends Controller
         fclose($pipes[1]);
         fclose($pipes[2]);
         $exitCode = proc_close($proc);
+        $elapsed = round(microtime(true) - $startTime, 2);
 
         if ($exitCode !== 0) {
-            return sprintf(
-                "Git sync failed (exit %d):\n%s%s",
-                $exitCode,
-                $stdout,
-                $stderr
-            );
+            $this->logGitFailure($exitCode, $elapsed, $stdout, $stderr);
+            return sprintf("Git sync failed (exit %d, %.1fs):\n%s%s", $exitCode, $elapsed, $stdout, $stderr);
         }
 
+        $this->stdout("Git sync completed in {$elapsed}s\n");
         return null;
+    }
+
+    private function logGitFailure(int $exitCode, float $elapsed, string $stdout, string $stderr): void
+    {
+        $this->stderr("Git sync failed after {$elapsed}s (exit {$exitCode})\n");
+        if ($stderr !== '') {
+            $this->stderr("  stderr: {$stderr}\n");
+        }
+        if ($stdout !== '') {
+            $this->stderr("  stdout: {$stdout}\n");
+        }
+    }
+
+    /**
+     * Build environment variables for git subprocess.
+     * Mirrors ProjectService::baseGitEnv() to ensure consistent behavior
+     * between queue-based and pull-based runners.
+     *
+     * @return array<string, string>
+     */
+    private function buildGitEnv(): array
+    {
+        return [
+            'HOME' => getenv('HOME') ?: '/root',
+            'PATH' => getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin',
+            'GIT_TERMINAL_PROMPT' => '0',
+            'GIT_CONFIG_COUNT' => '1',
+            'GIT_CONFIG_KEY_0' => 'safe.directory',
+            'GIT_CONFIG_VALUE_0' => '*',
+        ];
     }
 
     /**
@@ -331,6 +370,7 @@ class RunnerController extends Controller
      */
     private function failJob(int $jobId, string $errorMessage): void
     {
+        $this->stderr("Job #{$jobId} failed: {$errorMessage}\n");
         $this->http()->post("/api/runner/v1/jobs/{$jobId}/logs", [
             'stream' => 'stderr',
             'content' => $errorMessage,

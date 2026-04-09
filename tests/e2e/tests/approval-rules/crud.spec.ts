@@ -57,8 +57,8 @@ test.describe('Approval Rules CRUD', () => {
     const row = page.locator('table.table tbody tr', { hasText: 'e2e-approval-rule' });
     if (await row.isVisible({ timeout: 3_000 }).catch(() => false)) {
       await row.locator('a').first().click();
-      // Should show "Role: admin" instead of raw JSON
-      await expect(page.locator('body')).toContainText('Role:');
+      // Should show human-readable approver config instead of raw JSON
+      await expect(page.locator('body')).toContainText('Users:');
     }
   });
 

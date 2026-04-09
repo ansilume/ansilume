@@ -44,6 +44,14 @@ printf "${BOLD}Ansilume Stack Diagnostics${NC}\n"
 printf "Generated: %s\n" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 printf "Hostname:  %s\n" "$(hostname 2>/dev/null || echo unknown)"
 
+# ── 0. Ansilume version ─────────────────────────────────────────────────────
+
+app_container_early=$(docker compose ps -q app 2>/dev/null | head -1 || true)
+if [ -n "$app_container_early" ]; then
+    app_version=$(docker exec "$app_container_early" cat /var/www/VERSION 2>/dev/null | tr -d '[:space:]' || echo "unknown")
+    printf "Version:   %s\n" "$app_version"
+fi
+
 # ── 1. Host environment ─────────────────────────────────────────────────────
 
 section "Host Environment"
@@ -343,6 +351,60 @@ else
             info "${runner_svc}: no projects synced yet (first git-backed job will trigger a clone)"
         fi
     done
+fi
+
+# ── 10b. Project sync status ────────────────────────────────────────────────
+
+if [ -n "$app_container" ]; then
+    section "Project Sync Status"
+
+    sync_output=$(docker exec "$app_container" php -r "
+        require '/var/www/vendor/autoload.php';
+        require '/var/www/config/bootstrap.php';
+        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        \$projects = app\models\Project::find()->all();
+        foreach (\$projects as \$p) {
+            printf(\"%d|%s|%s|%s|%s\n\",
+                \$p->id,
+                \$p->name,
+                \$p->scm_type,
+                \$p->status,
+                \$p->last_sync_error ?? ''
+            );
+        }
+    " 2>/dev/null || true)
+
+    if [ -n "$sync_output" ]; then
+        has_issues=false
+        while IFS='|' read -r pid pname pscm pstatus perror; do
+            case "$pstatus" in
+                synced)
+                    ok "Project #${pid} '${pname}' (${pscm}): synced"
+                    ;;
+                syncing)
+                    warn "Project #${pid} '${pname}' (${pscm}): stuck in syncing state"
+                    has_issues=true
+                    ;;
+                error)
+                    fail "Project #${pid} '${pname}' (${pscm}): sync error — ${perror}"
+                    has_issues=true
+                    ;;
+                new)
+                    info "Project #${pid} '${pname}' (${pscm}): not yet synced"
+                    ;;
+                *)
+                    info "Project #${pid} '${pname}' (${pscm}): status=${pstatus}"
+                    ;;
+            esac
+        done <<< "$sync_output"
+
+        if [ "$has_issues" = true ]; then
+            info ""
+            info "To re-sync a stuck project, use the web UI: Projects → select project → Sync"
+        fi
+    else
+        info "No projects found or could not query project status"
+    fi
 fi
 
 # ── 11. Port conflicts ──────────────────────────────────────────────────────

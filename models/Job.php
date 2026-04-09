@@ -8,7 +8,7 @@ use yii\db\ActiveRecord;
 
 /**
  * @property int         $id
- * @property int         $job_template_id
+ * @property int|null    $job_template_id
  * @property string      $status
  * @property string|null $extra_vars       JSON
  * @property string|null $limit
@@ -61,7 +61,7 @@ class Job extends ActiveRecord
     public function rules(): array
     {
         return [
-            [['job_template_id', 'launched_by'], 'required'],
+            [['launched_by'], 'required'],
             [['job_template_id', 'launched_by', 'exit_code', 'pid'], 'integer'],
             [['status'], 'in', 'range' => self::statuses()],
             [['extra_vars', 'runner_payload', 'execution_command'], 'string'],

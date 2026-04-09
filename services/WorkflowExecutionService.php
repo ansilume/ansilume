@@ -390,7 +390,7 @@ class WorkflowExecutionService extends Component
                 $this->dispatchJobStep($wfJob, $wjs, $step, $overrides);
                 break;
             case WorkflowStep::TYPE_APPROVAL:
-                $this->dispatchApprovalStep($wjs, $step);
+                $this->dispatchApprovalStep($wfJob, $wjs, $step);
                 break;
             case WorkflowStep::TYPE_PAUSE:
                 // Pause steps stay in "running" until externally resumed
@@ -425,6 +425,7 @@ class WorkflowExecutionService extends Component
     }
 
     private function dispatchApprovalStep(
+        WorkflowJob $wfJob,
         WorkflowJobStep $wjs,
         WorkflowStep $step
     ): void {
@@ -436,10 +437,52 @@ class WorkflowExecutionService extends Component
             return;
         }
 
-        // Approval steps wait; they'll be advanced when the approval resolves
-        // The approval is tracked externally, not via a child job
+        // Create a placeholder job so ApprovalRequest can link to it.
+        // The job is never executed — it exists only as a foreign key target.
+        $job = new Job();
+        $job->job_template_id = null;
+        $job->launched_by = $wfJob->launched_by;
+        $job->status = Job::STATUS_PENDING_APPROVAL;
+        $job->timeout_minutes = 0;
+        $job->has_changes = 0;
+        $job->created_at = time();
+        $job->updated_at = time();
+        $job->save(false);
+
+        $wjs->job_id = $job->id;
         $wjs->status = WorkflowJobStep::STATUS_RUNNING;
         $wjs->save(false);
+
+        /** @var ApprovalService $approvalService */
+        $approvalService = \Yii::$app->get('approvalService');
+        $approvalService->createRequest($job, $rule);
+    }
+
+    /**
+     * Called when an approval request linked to a workflow step is resolved.
+     * Advances or fails the workflow depending on the approval outcome.
+     */
+    public function onApprovalResolved(Job $job, bool $approved): void
+    {
+        /** @var WorkflowJobStep|null $wjs */
+        $wjs = WorkflowJobStep::findOne(['job_id' => $job->id]);
+        if ($wjs === null) {
+            return;
+        }
+
+        /** @var WorkflowJob|null $wfJob */
+        $wfJob = $wjs->workflowJob;
+        if ($wfJob === null || $wfJob->isFinished()) {
+            return;
+        }
+
+        $wjs->status = $approved
+            ? WorkflowJobStep::STATUS_SUCCEEDED
+            : WorkflowJobStep::STATUS_FAILED;
+        $wjs->finished_at = time();
+        $wjs->save(false);
+
+        $this->advanceAfterStep($wfJob, $wjs, $approved);
     }
 
     /**

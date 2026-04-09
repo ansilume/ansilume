@@ -259,19 +259,19 @@ class ApprovalService extends Component
 
     private function approveJob(Job $job): void
     {
-        // Check if this job belongs to a workflow step
         $wjs = \app\models\WorkflowJobStep::findOne(['job_id' => $job->id]);
+
         if ($wjs !== null) {
-            // Workflow context: let the workflow engine handle advancement
+            // Placeholder job — mark succeeded, never queued for execution
+            $job->status = Job::STATUS_SUCCEEDED;
+            $job->finished_at = time();
+            $job->save(false);
+            $this->notifyWorkflow($job, true);
+        } else {
             $job->status = Job::STATUS_QUEUED;
             $job->queued_at = time();
             $job->save(false);
-            return;
         }
-
-        $job->status = Job::STATUS_QUEUED;
-        $job->queued_at = time();
-        $job->save(false);
     }
 
     private function rejectJob(Job $job): void
@@ -279,5 +279,20 @@ class ApprovalService extends Component
         $job->status = Job::STATUS_REJECTED;
         $job->finished_at = time();
         $job->save(false);
+
+        $wjs = \app\models\WorkflowJobStep::findOne(['job_id' => $job->id]);
+        if ($wjs !== null) {
+            $this->notifyWorkflow($job, false);
+        }
+    }
+
+    /**
+     * Notify the workflow engine that an approval step has been resolved.
+     */
+    private function notifyWorkflow(Job $job, bool $approved): void
+    {
+        /** @var WorkflowExecutionService $wfService */
+        $wfService = \Yii::$app->get('workflowExecutionService');
+        $wfService->onApprovalResolved($job, $approved);
     }
 }

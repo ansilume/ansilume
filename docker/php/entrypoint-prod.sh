@@ -2,7 +2,7 @@
 set -e
 
 # Ensure runtime directories exist and are writable.
-for dir in /var/www/runtime /var/www/web/assets; do
+for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets; do
     mkdir -p "$dir"
     chown -R www-data:www-data "$dir"
 done

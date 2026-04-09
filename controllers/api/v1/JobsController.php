@@ -136,7 +136,7 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, status: string, job_template_id: int, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, check_mode: bool, exit_code: int|null, execution_command: string|null, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
+     * @return array{id: int, status: string, job_template_id: int|null, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, check_mode: bool, exit_code: int|null, execution_command: string|null, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
      */
     private function serializeJob(Job $job): array
     {

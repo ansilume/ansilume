@@ -268,7 +268,8 @@ abstract class DbTestCase extends TestCase
         int $workflowTemplateId,
         int $stepOrder,
         string $stepType = WorkflowStep::TYPE_JOB,
-        ?int $jobTemplateId = null
+        ?int $jobTemplateId = null,
+        ?int $approvalRuleId = null
     ): WorkflowStep {
         $ws = new WorkflowStep();
         $ws->workflow_template_id = $workflowTemplateId;
@@ -276,6 +277,7 @@ abstract class DbTestCase extends TestCase
         $ws->step_order = $stepOrder;
         $ws->step_type = $stepType;
         $ws->job_template_id = $jobTemplateId;
+        $ws->approval_rule_id = $approvalRuleId;
         $ws->created_at = time();
         $ws->updated_at = time();
         $ws->save(false);

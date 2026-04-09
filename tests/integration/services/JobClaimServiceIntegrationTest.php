@@ -418,6 +418,77 @@ class JobClaimServiceIntegrationTest extends DbTestCase
         $this->assertSame($job1->id, $claimed->id);
     }
 
+    // ── Regression: issue #10 — payload must include SCM metadata for runner sync
+
+    /**
+     * Regression test for issue #10: when the runner claims a job for a git
+     * project, the execution payload must include scm_type, scm_url, and
+     * scm_branch so that the runner can clone/pull the repo before executing.
+     *
+     * Without these fields, the runner's syncProject() skips the sync and
+     * the playbook runs against a non-existent or stale project directory.
+     */
+    public function testBuildExecutionPayloadIncludesScmMetadataForGitProject(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $project->scm_type = \app\models\Project::SCM_TYPE_GIT;
+        $project->scm_url = 'https://github.com/example/repo.git';
+        $project->scm_branch = 'main';
+        $project->save(false);
+
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        $this->assertSame('git', $payload['scm_type']);
+        $this->assertSame('https://github.com/example/repo.git', $payload['scm_url']);
+        $this->assertSame('main', $payload['scm_branch']);
+    }
+
+    /**
+     * Regression test for issue #10: for a project that has never been synced
+     * (status=new, local_path=null), the payload must still include SCM
+     * metadata so the runner can perform the initial clone. The project_path
+     * must not be empty — the runner skips sync when project_path is empty.
+     */
+    public function testBuildExecutionPayloadForUnsyncedProjectHasValidPath(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $project->scm_type = \app\models\Project::SCM_TYPE_GIT;
+        $project->scm_url = 'https://github.com/example/repo.git';
+        $project->scm_branch = 'develop';
+        $project->status = \app\models\Project::STATUS_NEW;
+        $project->local_path = null;
+        $project->save(false);
+
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $launchService = \Yii::$app->get('jobLaunchService');
+        $job = $launchService->launch($template, $user->id);
+
+        $payload = $this->service->buildExecutionPayload($job);
+
+        // project_path must not be empty — the runner skips sync if it is
+        $this->assertNotEmpty(
+            $payload['project_path'],
+            'Payload project_path must not be empty for unsynced projects; '
+            . 'the runner needs a valid path to clone into'
+        );
+        // SCM metadata must be present for the runner to sync
+        $this->assertSame('git', $payload['scm_type']);
+        $this->assertSame('https://github.com/example/repo.git', $payload['scm_url']);
+        $this->assertSame('develop', $payload['scm_branch']);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
