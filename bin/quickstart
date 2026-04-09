@@ -138,6 +138,15 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 ok "Docker: $(docker --version | head -1)"
 
+if ! docker info >/dev/null 2>&1; then
+    fail "Cannot connect to the Docker daemon."
+    info ""
+    info "Either Docker is not running, or your user lacks permission."
+    info "Try: sudo usermod -aG docker \$USER  (then log out and back in)"
+    exit 1
+fi
+ok "Docker daemon reachable"
+
 if docker compose version >/dev/null 2>&1; then
     ok "Docker Compose: $(docker compose version --short 2>/dev/null || echo 'v2')"
     COMPOSE_CMD="docker compose"
