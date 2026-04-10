@@ -544,6 +544,8 @@ With the core platform functional, prioritize:
 3. **Team scoping** — proper multi-tenant project/resource isolation
 4. **HA / scaling** — multi-worker, runner failover, queue reliability
 5. **Advanced features** — artifact management, launch surveys, relaunch/retry
+6. **LDAP/AD integration** — optional Active Directory authentication as addon (local users remain, AD users managed externally, password change disabled for AD users, optional group-to-role mapping). Approach: direct PHP ldap_* functions, `auth_source` column on user table, LoginForm checks auth_source for credential verification.
+7. **Runner group assignment** — runners connecting via bootstrap token cannot be assigned to a specific runner group, and cannot be moved between groups after registration. Needs concept: group selection at registration time, UI to reassign runners.
 
 Strengthen the core before adding new surface area.
 

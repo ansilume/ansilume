@@ -110,7 +110,11 @@ class RunAnsibleJobTest extends TestCase
         $calls->count = 0;
         \Yii::$app->set('artifactService', new class ($calls) extends \yii\base\Component {
             public \stdClass $calls;
-            public function __construct(\stdClass $c) { parent::__construct(); $this->calls = $c; }
+            public function __construct(\stdClass $c)
+            {
+                parent::__construct();
+                $this->calls = $c;
+            }
             public function collectFromDirectory($job, string $dir): array
             {
                 $this->calls->count++;

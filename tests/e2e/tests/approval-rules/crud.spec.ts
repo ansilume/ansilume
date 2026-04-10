@@ -72,6 +72,48 @@ test.describe('Approval Rules CRUD', () => {
     await expectFlash(page, 'success');
   });
 
+  test('warns when required approvals exceeds eligible users', async ({ page }) => {
+    await page.goto('/approval-rule/create');
+
+    // Select "users" type and pick only 1 user
+    await page.locator('#approver-type').selectOption('users');
+    const firstOption = page.locator('#approver-users option').first();
+    const firstValue = await firstOption.getAttribute('value');
+    if (firstValue) {
+      await page.locator('#approver-users').selectOption([firstValue]);
+    }
+
+    // Set required approvals to 5 — should trigger warning
+    await page.locator('#required-approvals').fill('5');
+    await page.locator('#required-approvals').dispatchEvent('input');
+    const warning = page.locator('#approver-count-warning');
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText(/exceeds/i);
+
+    // Reduce to 1 — warning should disappear
+    await page.locator('#required-approvals').fill('1');
+    await page.locator('#required-approvals').dispatchEvent('input');
+    await expect(warning).toBeHidden();
+  });
+
+  test('server rejects rule when required approvals exceeds eligible users', async ({ page }) => {
+    await page.goto('/approval-rule/create');
+    await page.locator('#approvalrule-name').fill('e2e-excess-approvers');
+    await page.locator('#approver-type').selectOption('users');
+    await expect(page.locator('#config-users')).toBeVisible();
+    const firstOption = page.locator('#approver-users option').first();
+    const firstValue = await firstOption.getAttribute('value');
+    if (firstValue) {
+      await page.locator('#approver-users').selectOption([firstValue]);
+    }
+    await page.locator('#required-approvals').fill('10');
+    await page.locator('#approvalrule-timeout_action').selectOption('reject');
+    await submitForm(page);
+
+    // Server-side validation should reject — page stays on form with error
+    await expect(page.locator('body')).toContainText(/exceeds/i, { timeout: 5_000 });
+  });
+
   test('delete approval rule', async ({ page }) => {
     await deleteByRowText(page, '/approval-rule/index', 'e2e-crud-approval-rule');
     await expectFlash(page, 'success');

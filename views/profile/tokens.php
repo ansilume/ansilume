@@ -161,8 +161,9 @@ $this->title = 'API Tokens';
         </table>
 
         <h6>Example</h6>
+        <?php $apiBase = rtrim(\Yii::$app->params['appBaseUrl'] ?? \yii\helpers\Url::to('/', true), '/'); ?>
         <pre class="bg-body-secondary p-3 rounded"><code>curl -s -H "Authorization: Bearer YOUR_TOKEN" \
-     <?= Html::encode(\yii\helpers\Url::to(['/api/v1/jobs'], true)) ?> | jq .</code></pre>
+     <?= Html::encode($apiBase . '/api/v1/jobs') ?> | jq .</code></pre>
     </div>
 </div>
 

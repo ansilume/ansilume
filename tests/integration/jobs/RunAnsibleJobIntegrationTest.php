@@ -213,7 +213,10 @@ class RunAnsibleJobIntegrationTest extends DbTestCase
         $job = $this->makeJobWithStatus(Job::STATUS_QUEUED);
 
         $runner = new class (['jobId' => $job->id]) extends RunAnsibleJob {
-            protected function runPlaybook(Job $job): int { return 0; }
+            protected function runPlaybook(Job $job): int
+            {
+                return 0;
+            }
         };
         $runner->execute(null);
 
@@ -382,7 +385,10 @@ class RunAnsibleJobIntegrationTest extends DbTestCase
                 return new class ($self) extends \app\components\ArtifactCollector {
                     /** @var object */
                     private $parent;
-                    public function __construct(object $parent) { $this->parent = $parent; }
+                    public function __construct(object $parent)
+                    {
+                        $this->parent = $parent;
+                    }
                     public function collect(\app\models\Job $job, array $env): void
                     {
                         $this->parent->collectCalled = true;
@@ -446,7 +452,9 @@ class RunAnsibleJobIntegrationTest extends DbTestCase
                 protected function createArtifactCollector(): \app\components\ArtifactCollector
                 {
                     return new class extends \app\components\ArtifactCollector {
-                        public function collect(\app\models\Job $job, array $env): void {}
+                        public function collect(\app\models\Job $job, array $env): void
+                        {
+                        }
                     };
                 }
                 protected function createCredentialInjector(): \app\components\CredentialInjector
@@ -508,7 +516,9 @@ class RunAnsibleJobIntegrationTest extends DbTestCase
     private function swapWebhookServiceWithStub(): void
     {
         $this->swapComponent('webhookService', new class extends \yii\base\Component {
-            public function dispatch(string $event, $payload): void {}
+            public function dispatch(string $event, $payload): void
+            {
+            }
         });
     }
 
@@ -540,7 +550,7 @@ class RunAnsibleJobIntegrationTest extends DbTestCase
 /**
  * Testable subclass exposing protected methods for integration tests.
  */
-class TestableRunAnsibleJobDb extends RunAnsibleJob
+class TestableRunAnsibleJobDb extends RunAnsibleJob // phpcs:ignore PSR1.Classes.ClassDeclaration.MultipleClasses
 {
     public function parseCallbackFile(string $callbackFile): array
     {

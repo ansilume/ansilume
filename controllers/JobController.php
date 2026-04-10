@@ -141,6 +141,9 @@ class JobController extends BaseController
         if ($original->verbosity !== null) {
             $overrides['verbosity'] = $original->verbosity;
         }
+        if ($original->check_mode) {
+            $overrides['check_mode'] = 1;
+        }
 
         try {
             /** @var JobLaunchService $svc */

@@ -111,7 +111,10 @@ $this->title = $model->name;
             <div class="card-body">
                 <?php $rawToken = \Yii::$app->session?->getFlash('trigger_token_raw'); ?>
                 <?php if ($rawToken) : ?>
-                    <?php $triggerUrl = \yii\helpers\Url::to(['/trigger/fire', 'token' => $rawToken], true) ?>
+                    <?php
+                    $appBase = rtrim(\Yii::$app->params['appBaseUrl'] ?? \yii\helpers\Url::to('/', true), '/');
+                    $triggerUrl = $appBase . '/trigger/fire?token=' . urlencode($rawToken);
+                    ?>
                     <div class="alert alert-warning mb-3">
                         <strong>Copy this token now — it will not be shown again.</strong>
                         <div class="mt-2">
@@ -184,7 +187,19 @@ $this->title = $model->name;
             </div>
             <div class="card-body p-0">
                 <?php if ($model->lint_output) : ?>
-                    <pre class="job-log m-0" style="max-height:300px;overflow-y:auto;"><?= Html::encode($model->lint_output) ?></pre>
+                    <pre class="job-log m-0" id="template-lint-output" style="max-height:300px;overflow-y:auto;"></pre>
+                    <script src="<?= \Yii::$app->request->baseUrl ?>/js/ansi_up.min.js"></script>
+                    <script>
+                    (function () {
+                        var au = new AnsiUp();
+                        au.use_classes = false;
+                        au.ansi_colors[0][0].rgb = [118, 118, 118];
+                        au.ansi_colors[0][4].rgb = [77, 159, 236];
+                        au.ansi_colors[0][5].rgb = [198, 120, 221];
+                        var el = document.getElementById('template-lint-output');
+                        el.innerHTML = au.ansi_to_html(<?= json_encode($model->lint_output) // xss-ok: json_encode escapes?>);
+                    })();
+                    </script>
                 <?php else : ?>
                     <p class="text-muted p-3 mb-0">Lint output will appear here after saving the template or syncing the project.</p>
                 <?php endif; ?>

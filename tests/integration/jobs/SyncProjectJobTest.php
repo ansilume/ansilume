@@ -91,8 +91,14 @@ class SyncProjectJobTest extends DbTestCase
         $lintStub = new class extends \yii\base\Component {
             public int $projectCalls = 0;
             public int $templateCalls = 0;
-            public function runForProject(\app\models\Project $p): void { $this->projectCalls++; }
-            public function runForTemplate(\app\models\JobTemplate $t): void { $this->templateCalls++; }
+            public function runForProject(\app\models\Project $p): void
+            {
+                $this->projectCalls++;
+            }
+            public function runForTemplate(\app\models\JobTemplate $t): void
+            {
+                $this->templateCalls++;
+            }
         };
         \Yii::$app->set('projectService', $projectStub);
         \Yii::$app->set('lintService', $lintStub);

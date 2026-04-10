@@ -66,4 +66,43 @@ class ApprovalRuleTest extends TestCase
 
         $this->assertSame([], $rule->getParsedConfig());
     }
+
+    public function testCountEligibleApproversForUsers(): void
+    {
+        $rule = $this->createPartialMock(ApprovalRule::class, []);
+        $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
+        $ref->setAccessible(true);
+        $ref->setValue($rule, [
+            'approver_type' => ApprovalRule::APPROVER_TYPE_USERS,
+            'approver_config' => json_encode(['user_ids' => [1, 2, 3]]),
+        ]);
+
+        $this->assertSame(3, $rule->countEligibleApprovers());
+    }
+
+    public function testCountEligibleApproversForUsersEmpty(): void
+    {
+        $rule = $this->createPartialMock(ApprovalRule::class, []);
+        $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
+        $ref->setAccessible(true);
+        $ref->setValue($rule, [
+            'approver_type' => ApprovalRule::APPROVER_TYPE_USERS,
+            'approver_config' => json_encode(['user_ids' => []]),
+        ]);
+
+        $this->assertSame(0, $rule->countEligibleApprovers());
+    }
+
+    public function testCountEligibleApproversNullForUnknownType(): void
+    {
+        $rule = $this->createPartialMock(ApprovalRule::class, []);
+        $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
+        $ref->setAccessible(true);
+        $ref->setValue($rule, [
+            'approver_type' => 'unknown',
+            'approver_config' => '{}',
+        ]);
+
+        $this->assertNull($rule->countEligibleApprovers());
+    }
 }

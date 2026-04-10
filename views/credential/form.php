@@ -95,10 +95,10 @@ $isEdit = !$model->isNewRecord;
 <script>
 document.addEventListener('DOMContentLoaded', function () {
     var map = {
-        '<?= Credential::TYPE_SSH_KEY ?>':           'secret-ssh',
+        '<?= Credential::TYPE_SSH_KEY ?>': 'secret-ssh',
         '<?= Credential::TYPE_USERNAME_PASSWORD ?>': 'secret-password',
-        '<?= Credential::TYPE_VAULT ?>':             'secret-vault',
-        '<?= Credential::TYPE_TOKEN ?>':             'secret-token',
+        '<?= Credential::TYPE_VAULT ?>': 'secret-vault',
+        '<?= Credential::TYPE_TOKEN ?>': 'secret-token',
     };
     var typeSelect = document.getElementById('credential-type');
     if (!typeSelect) return;

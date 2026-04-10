@@ -223,6 +223,118 @@ class ApprovalRuleTest extends DbTestCase
         $this->assertSame([], $reloaded->getApproverUserIds());
     }
 
+    public function testValidateApproverCountRejectsExcessForUsers(): void
+    {
+        $user = $this->createUser();
+        $rule = new ApprovalRule();
+        $rule->name = 'test-count-validation';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $rule->approver_config = (string)json_encode(['user_ids' => [1, 2]]);
+        $rule->required_approvals = 5;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = $user->id;
+
+        $this->assertFalse($rule->validate());
+        $this->assertArrayHasKey('required_approvals', $rule->errors);
+        $this->assertStringContainsString('exceeds', $rule->errors['required_approvals'][0]);
+    }
+
+    public function testValidateApproverCountAcceptsValidForUsers(): void
+    {
+        $user = $this->createUser();
+        $rule = new ApprovalRule();
+        $rule->name = 'test-count-ok';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $rule->approver_config = (string)json_encode(['user_ids' => [1, 2, 3]]);
+        $rule->required_approvals = 2;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = $user->id;
+
+        $this->assertTrue($rule->validate());
+    }
+
+    /**
+     * Role/team types skip hard validation (membership is dynamic) — JS warning only.
+     */
+    public function testValidateApproverCountDoesNotRejectForRole(): void
+    {
+        $user = $this->createUser();
+        $rule = new ApprovalRule();
+        $rule->name = 'test-count-role-ok';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_ROLE;
+        $rule->approver_config = (string)json_encode(['role' => 'admin']);
+        $rule->required_approvals = 50;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = $user->id;
+
+        $this->assertTrue($rule->validate());
+    }
+
+    public function testValidateApproverCountDoesNotRejectForTeam(): void
+    {
+        $user = $this->createUser();
+        $member = $this->createUser('member');
+        $team = $this->createTeam($user->id);
+        $this->addTeamMember((int)$team->id, (int)$member->id);
+
+        $rule = new ApprovalRule();
+        $rule->name = 'test-count-team-ok';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_TEAM;
+        $rule->approver_config = (string)json_encode(['team_id' => $team->id]);
+        $rule->required_approvals = 50;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = $user->id;
+
+        $this->assertTrue($rule->validate());
+    }
+
+    public function testCountEligibleApproversUsersType(): void
+    {
+        $user = $this->createUser();
+        $rule = $this->createApprovalRule(
+            $user->id,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            (string)json_encode(['user_ids' => [1, 2, 3]])
+        );
+        $this->assertSame(3, $rule->countEligibleApprovers());
+    }
+
+    public function testCountEligibleApproversRoleType(): void
+    {
+        $user = $this->createUser();
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $roleName = 'test_count2_role_' . uniqid('', true);
+        $role = $auth->createRole($roleName);
+        $auth->add($role);
+        $auth->assign($role, (string)$user->id);
+
+        $rule = $this->createApprovalRule(
+            $user->id,
+            ApprovalRule::APPROVER_TYPE_ROLE,
+            (string)json_encode(['role' => $roleName])
+        );
+        $this->assertSame(1, $rule->countEligibleApprovers());
+
+        $auth->revoke($role, (string)$user->id);
+        $auth->remove($role);
+    }
+
+    public function testCountEligibleApproversTeamType(): void
+    {
+        $user = $this->createUser();
+        $member = $this->createUser('member');
+        $team = $this->createTeam($user->id);
+        $this->addTeamMember((int)$team->id, (int)$member->id);
+
+        $rule = $this->createApprovalRule(
+            $user->id,
+            ApprovalRule::APPROVER_TYPE_TEAM,
+            (string)json_encode(['team_id' => $team->id])
+        );
+        $this->assertSame(1, $rule->countEligibleApprovers());
+    }
+
     public function testCreatorRelation(): void
     {
         $user = $this->createUser();

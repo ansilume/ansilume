@@ -559,7 +559,7 @@ $this->title = 'Analytics';
     </div>
 
     <!-- Chart.js for Job Trend -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+    <script src="<?= \Yii::$app->request->baseUrl ?>/js/chart.min.js"></script>
     <script>
     (function() {
         var trendData = <?= json_encode($data['jobTrend'] ?? []) ?>;

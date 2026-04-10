@@ -35,20 +35,26 @@ class m000013_000000_create_schedules_table extends Migration
         ], $tableOptions);
 
         $this->createIndex('idx_schedule_template_id', '{{%schedule}}', 'job_template_id');
-        $this->createIndex('idx_schedule_enabled',     '{{%schedule}}', 'enabled');
+        $this->createIndex('idx_schedule_enabled', '{{%schedule}}', 'enabled');
         $this->createIndex('idx_schedule_next_run_at', '{{%schedule}}', 'next_run_at');
 
         $this->addForeignKey(
             'fk_schedule_template_id',
-            '{{%schedule}}', 'job_template_id',
-            '{{%job_template}}', 'id',
-            'CASCADE', 'CASCADE'
+            '{{%schedule}}',
+            'job_template_id',
+            '{{%job_template}}',
+            'id',
+            'CASCADE',
+            'CASCADE'
         );
         $this->addForeignKey(
             'fk_schedule_created_by',
-            '{{%schedule}}', 'created_by',
-            '{{%user}}', 'id',
-            'RESTRICT', 'CASCADE'
+            '{{%schedule}}',
+            'created_by',
+            '{{%user}}',
+            'id',
+            'RESTRICT',
+            'CASCADE'
         );
     }
 

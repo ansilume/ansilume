@@ -53,10 +53,13 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
     </div>
     <p class="mb-1"><strong>Docker one-liner:</strong></p>
     <?php
-    $dockerSnippet = "docker run --rm \\\n" .
+    $appBase = rtrim(\Yii::$app->params['appBaseUrl'] ?? $apiUrl, '/');
+    $groupSlug = preg_replace('/[^a-z0-9-]/', '', strtolower($group->name));
+    $dockerSnippet = "docker run -d --restart unless-stopped \\\n" .
+        "  --name ansilume-runner-" . $groupSlug . " \\\n" .
         "  -e RUNNER_TOKEN=" . $tokenFlash['raw_token'] . " \\\n" .
-        "  -e API_URL=" . $apiUrl . " \\\n" .
-        "  ghcr.io/ansilume/ansilume:latest \\\n" .
+        "  -e API_URL=" . $appBase . " \\\n" .
+        "  ghcr.io/ansilume/ansilume-runner:latest \\\n" .
         "  php yii runner/start";
     ?>
     <pre class="bg-dark text-light p-2 rounded small mb-0"><?= Html::encode($dockerSnippet) ?></pre>

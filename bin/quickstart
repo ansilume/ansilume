@@ -27,9 +27,11 @@ set -euo pipefail
 
 DEFAULTS=0
 VERBOSE=0
+UNINSTALL=0
 for arg in "$@"; do
     case "$arg" in
         --defaults) DEFAULTS=1 ;;
+        --uninstall) UNINSTALL=1 ;;
         -vv) VERBOSE=2 ;;
         -v|--verbose) [ "$VERBOSE" -lt 1 ] && VERBOSE=1 ;;
         -h|--help)
@@ -43,6 +45,7 @@ Usage:
 
 Options:
   --defaults    Non-interactive mode, use all defaults (admin/admin)
+  --uninstall   Remove all Ansilume containers, images, and volumes
   -v, --verbose Show debug output at each step
   -vv           Extra-verbose: debug output + full docker command output
   -h, --help    Show this help and exit
@@ -115,12 +118,90 @@ gen_secret() {
     openssl rand -hex 32 2>/dev/null || { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 64 || true; }
 }
 
+# ── Uninstall mode ──────────────────────────────────────────────────────────
+
+if [ "$UNINSTALL" = "1" ]; then
+    printf "\n${CYAN}${BOLD}"
+    printf "  ╔═══════════════════════════════════════╗\n"
+    printf "  ║       Ansilume Uninstall              ║\n"
+    printf "  ╚═══════════════════════════════════════╝\n"
+    printf "${NC}\n"
+
+    UNINSTALL_DIR="$(pwd)"
+    if [ -f "$UNINSTALL_DIR/docker-compose.yml" ] || [ -f "$UNINSTALL_DIR/docker-compose.prebuilt.yml" ]; then
+        info "Uninstall directory: ${UNINSTALL_DIR}"
+    else
+        warn "No Ansilume installation found in ${UNINSTALL_DIR}"
+        info "Run this command from the directory where Ansilume was installed."
+        exit 1
+    fi
+
+    printf "\n"
+    warn "This will remove all Ansilume containers, volumes, and images."
+    warn "All data (database, projects, logs) will be permanently deleted."
+    printf "\n"
+    ask "Type 'yes' to confirm" "" CONFIRM_UNINSTALL
+
+    if [ "$CONFIRM_UNINSTALL" != "yes" ]; then
+        info "Uninstall cancelled."
+        exit 0
+    fi
+
+    # Detect compose command
+    if docker compose version >/dev/null 2>&1; then
+        COMPOSE_CMD="docker compose"
+    elif command -v docker-compose >/dev/null 2>&1; then
+        COMPOSE_CMD="docker-compose"
+    else
+        fail "Neither 'docker compose' nor 'docker-compose' found."
+        exit 1
+    fi
+
+    section "Removing containers and volumes"
+    if [ -f "docker-compose.prebuilt.yml" ]; then
+        $COMPOSE_CMD -f docker-compose.prebuilt.yml down -v --rmi all 2>/dev/null || true
+    fi
+    $COMPOSE_CMD down -v --rmi all 2>/dev/null || true
+    ok "Containers, volumes, and images removed."
+
+    section "Cleaning up files"
+    # Remove generated config files but preserve user data awareness
+    for f in .env docker-compose.prebuilt.yml; do
+        if [ -f "$f" ]; then
+            rm -f "$f"
+            ok "Removed $f"
+        fi
+    done
+
+    printf "\n${GREEN}${BOLD}Ansilume has been uninstalled.${NC}\n\n"
+    info "To reinstall, run the quickstart again."
+    printf "\n"
+    exit 0
+fi
+
 # ── Header ───────────────────────────────────────────────────────────────────
 
+# Fetch latest version tag (silent, falls back to "latest" if offline/error)
+ANSILUME_VERSION=$(curl -fsSL https://api.github.com/repos/ansilume/ansilume/releases/latest 2>/dev/null \
+    | grep -m1 '"tag_name"' | sed 's/.*"tag_name":[^"]*"\([^"]*\)".*/\1/' || true)
+ANSILUME_VERSION="${ANSILUME_VERSION:-latest}"
+
+BANNER_TEXT="Ansilume Quickstart Setup ${ANSILUME_VERSION}"
+BANNER_LEN=${#BANNER_TEXT}
+# Pad to minimum 37 chars (original box width), center content
+INNER_WIDTH=$((BANNER_LEN + 4))
+[ "$INNER_WIDTH" -lt 37 ] && INNER_WIDTH=37
+PAD_TOTAL=$((INNER_WIDTH - BANNER_LEN))
+PAD_LEFT=$((PAD_TOTAL / 2))
+PAD_RIGHT=$((PAD_TOTAL - PAD_LEFT))
+TOP_LINE=$(printf '═%.0s' $(seq 1 "$INNER_WIDTH"))
+LEFT_PAD=$(printf ' %.0s' $(seq 1 "$PAD_LEFT"))
+RIGHT_PAD=$(printf ' %.0s' $(seq 1 "$PAD_RIGHT"))
+
 printf "\n${CYAN}${BOLD}"
-printf "  ╔═══════════════════════════════════════╗\n"
-printf "  ║       Ansilume Quickstart Setup       ║\n"
-printf "  ╚═══════════════════════════════════════╝\n"
+printf "  ╔%s╗\n" "$TOP_LINE"
+printf "  ║%s%s%s║\n" "$LEFT_PAD" "$BANNER_TEXT" "$RIGHT_PAD"
+printf "  ╚%s╝\n" "$TOP_LINE"
 printf "${NC}\n"
 info "This script will configure and start Ansilume on this machine."
 info "It only asks for the essentials — everything else uses sensible defaults."
@@ -193,7 +274,7 @@ else
     info "Configuration files will be created in the chosen directory."
 fi
 printf "\n"
-ask "Directory" "./ansilume" INSTALL_DIR
+ask "Directory" "." INSTALL_DIR
 
 # Resolve to absolute path.
 INSTALL_DIR="$(mkdir -p "$INSTALL_DIR" && cd "$INSTALL_DIR" && pwd)"
@@ -209,7 +290,7 @@ if [ -f "${INSTALL_DIR}/.env" ]; then
         warn "Existing installation found in ${INSTALL_DIR}"
         printf "\n"
         printf "  ${BOLD}[1]${NC} Fresh install — removes all data and starts clean\n"
-        printf "  ${BOLD}[2]${NC} Update       — pull latest images, keep data and config\n"
+        printf "  ${BOLD}[2]${NC} Update        — pull latest images, keep data and config\n"
         printf "  ${BOLD}[3]${NC} Abort\n"
         printf "\n"
         ask "Choose" "3" EXISTING_MODE
@@ -315,7 +396,8 @@ fi
 section "Network"
 
 ask "HTTP port" "8080" NGINX_PORT
-ok "Ansilume will be available at http://localhost:${NGINX_PORT}"
+ask "External URL (for notifications, API examples)" "http://localhost:${NGINX_PORT}" APP_URL
+ok "Ansilume will be available at ${APP_URL}"
 
 # ── 6. Admin account ─────────────────────────────────────────────────────────
 
@@ -383,6 +465,7 @@ YII_ENV=prod
 YII_DEBUG=0
 
 NGINX_PORT=${NGINX_PORT}
+APP_URL=${APP_URL}
 
 DB_HOST=${DB_HOST}
 DB_PORT=${DB_PORT}

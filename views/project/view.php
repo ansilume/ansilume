@@ -154,7 +154,19 @@ $this->title = $model->name;
             </div>
             <div class="card-body p-0">
                 <?php if ($model->lint_output) : ?>
-                    <pre class="job-log m-0" style="max-height:400px;overflow-y:auto;"><?= Html::encode($model->lint_output) ?></pre>
+                    <pre class="job-log m-0" id="lint-output" style="max-height:400px;overflow-y:auto;"></pre>
+                    <script src="<?= \Yii::$app->request->baseUrl ?>/js/ansi_up.min.js"></script>
+                    <script>
+                    (function () {
+                        var au = new AnsiUp();
+                        au.use_classes = false;
+                        au.ansi_colors[0][0].rgb = [118, 118, 118];
+                        au.ansi_colors[0][4].rgb = [77, 159, 236];
+                        au.ansi_colors[0][5].rgb = [198, 120, 221];
+                        var el = document.getElementById('lint-output');
+                        el.innerHTML = au.ansi_to_html(<?= json_encode($model->lint_output) // xss-ok: json_encode escapes?>);
+                    })();
+                    </script>
                 <?php else : ?>
                     <p class="text-muted p-3 mb-0">No lint output yet. Click "Run Lint" or sync the project to generate a report.</p>
                 <?php endif; ?>

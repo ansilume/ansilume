@@ -56,8 +56,10 @@ COPY . /var/www/
 COPY --from=composer /build/vendor /var/www/vendor
 
 # Ensure runtime directories exist
-RUN mkdir -p /var/www/runtime /var/www/web/assets \
-    && chown -R www-data:www-data /var/www/runtime /var/www/web/assets
+RUN mkdir -p /var/www/runtime /var/www/web/assets /tmp/ansible \
+    && chown -R www-data:www-data /var/www/runtime /var/www/web/assets /tmp/ansible
+
+ENV ANSIBLE_HOME=/tmp/ansible
 
 # Production entrypoint
 COPY docker/php/entrypoint-prod.sh /usr/local/bin/entrypoint.sh

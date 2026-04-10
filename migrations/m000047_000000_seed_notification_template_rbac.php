@@ -52,12 +52,14 @@ class m000047_000000_seed_notification_template_rbac extends Migration
     public function safeDown(): void
     {
         $auth = Yii::$app->authManager;
-        foreach ([
+        foreach (
+            [
             'notification-template.view',
             'notification-template.create',
             'notification-template.update',
             'notification-template.delete',
-        ] as $name) {
+            ] as $name
+        ) {
             $perm = $auth->getPermission($name);
             if ($perm !== null) {
                 $auth->remove($perm);

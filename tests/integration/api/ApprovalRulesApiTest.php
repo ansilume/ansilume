@@ -85,4 +85,29 @@ class ApprovalRulesApiTest extends DbTestCase
         $this->assertFalse($rule->validate());
         $this->assertArrayHasKey('approver_config', $rule->errors);
     }
+
+    public function testApprovalRuleRejectsExcessApprovers(): void
+    {
+        $rule = new ApprovalRule();
+        $rule->name = 'Test Excess';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $rule->approver_config = (string)json_encode(['user_ids' => [1]]);
+        $rule->required_approvals = 3;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = 1;
+        $this->assertFalse($rule->validate());
+        $this->assertArrayHasKey('required_approvals', $rule->errors);
+    }
+
+    public function testApprovalRuleAcceptsMatchingApprovers(): void
+    {
+        $rule = new ApprovalRule();
+        $rule->name = 'Test Match';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $rule->approver_config = (string)json_encode(['user_ids' => [1, 2, 3]]);
+        $rule->required_approvals = 3;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = 1;
+        $this->assertTrue($rule->validate());
+    }
 }

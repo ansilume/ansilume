@@ -59,40 +59,100 @@ class PasswordResetRequestFormTest extends DbTestCase
                         parent::__construct();
                         $this->mailer = $mailer;
                     }
-                    public function getCharset(): string { return 'utf-8'; }
-                    public function setCharset($charset): self { return $this; }
+                    public function getCharset(): string
+                    {
+                        return 'utf-8';
+                    }
+                    public function setCharset($charset): self
+                    {
+                        return $this;
+                    }
                     /** @return string */
-                    public function getFrom() { return ''; }
+                    public function getFrom()
+                    {
+                        return '';
+                    }
                     /** @param string|array<string, string> $from */
-                    public function setFrom($from): self { return $this; }
+                    public function setFrom($from): self
+                    {
+                        return $this;
+                    }
                     /** @return string */
-                    public function getTo() { return ''; }
+                    public function getTo()
+                    {
+                        return '';
+                    }
                     /** @param string|array<string, string> $to */
-                    public function setTo($to): self { return $this; }
+                    public function setTo($to): self
+                    {
+                        return $this;
+                    }
                     /** @return string */
-                    public function getReplyTo() { return ''; }
+                    public function getReplyTo()
+                    {
+                        return '';
+                    }
                     /** @param string|array<string, string> $replyTo */
-                    public function setReplyTo($replyTo): self { return $this; }
+                    public function setReplyTo($replyTo): self
+                    {
+                        return $this;
+                    }
                     /** @return string */
-                    public function getCc() { return ''; }
+                    public function getCc()
+                    {
+                        return '';
+                    }
                     /** @param string|array<string, string> $cc */
-                    public function setCc($cc): self { return $this; }
+                    public function setCc($cc): self
+                    {
+                        return $this;
+                    }
                     /** @return string */
-                    public function getBcc() { return ''; }
+                    public function getBcc()
+                    {
+                        return '';
+                    }
                     /** @param string|array<string, string> $bcc */
-                    public function setBcc($bcc): self { return $this; }
-                    public function getSubject() { return ''; }
-                    public function setSubject($subject): self { return $this; }
-                    public function setTextBody($text): self { return $this; }
-                    public function setHtmlBody($html): self { return $this; }
+                    public function setBcc($bcc): self
+                    {
+                        return $this;
+                    }
+                    public function getSubject()
+                    {
+                        return '';
+                    }
+                    public function setSubject($subject): self
+                    {
+                        return $this;
+                    }
+                    public function setTextBody($text): self
+                    {
+                        return $this;
+                    }
+                    public function setHtmlBody($html): self
+                    {
+                        return $this;
+                    }
                     /** @param array<string, string> $options */
-                    public function attach($fileName, array $options = []): self { return $this; }
+                    public function attach($fileName, array $options = []): self
+                    {
+                        return $this;
+                    }
                     /** @param array<string, string> $options */
-                    public function attachContent($content, array $options = []): self { return $this; }
+                    public function attachContent($content, array $options = []): self
+                    {
+                        return $this;
+                    }
                     /** @param array<string, string> $options */
-                    public function embed($fileName, array $options = []): string { return ''; }
+                    public function embed($fileName, array $options = []): string
+                    {
+                        return '';
+                    }
                     /** @param array<string, string> $options */
-                    public function embedContent($content, array $options = []): string { return ''; }
+                    public function embedContent($content, array $options = []): string
+                    {
+                        return '';
+                    }
                     public function send(\yii\mail\MailerInterface $mailer = null): bool
                     {
                         $m = $this->mailer;
@@ -101,12 +161,21 @@ class PasswordResetRequestFormTest extends DbTestCase
                         /** @phpstan-ignore-next-line */
                         return $m->shouldReturn;
                     }
-                    public function toString(): string { return ''; }
+                    public function toString(): string
+                    {
+                        return '';
+                    }
                 };
             }
-            public function send($message): bool { return true; }
+            public function send($message): bool
+            {
+                return true;
+            }
             /** @param array<int, \yii\mail\MessageInterface> $messages */
-            public function sendMultiple(array $messages): int { return count($messages); }
+            public function sendMultiple(array $messages): int
+            {
+                return count($messages);
+            }
         });
     }
 
@@ -215,9 +284,15 @@ class PasswordResetRequestFormTest extends DbTestCase
             {
                 throw new \RuntimeException('simulated mailer failure');
             }
-            public function send($message): bool { return false; }
+            public function send($message): bool
+            {
+                return false;
+            }
             /** @param array<int, \yii\mail\MessageInterface> $messages */
-            public function sendMultiple(array $messages): int { return 0; }
+            public function sendMultiple(array $messages): int
+            {
+                return 0;
+            }
         });
 
         $user = $this->createUser();

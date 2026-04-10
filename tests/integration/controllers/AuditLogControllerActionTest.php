@@ -18,7 +18,6 @@ use yii\web\NotFoundHttpException;
  */
 class AuditLogControllerActionTest extends WebControllerTestCase
 {
-
     // ── actionIndex() ────────────────────────────────────────────────────────
 
     public function testIndexRendersWithoutFilters(): void

@@ -144,6 +144,48 @@ class JobLaunchServiceTest extends DbTestCase
         $this->assertFalse($payload['check_mode']);
     }
 
+    /**
+     * Regression: re-launch must copy all parameters from the original job.
+     * Bug: check_mode was not copied, causing dry-run jobs to re-launch as real runs.
+     */
+    public function testRelaunchPreservesAllParameters(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+
+        // Launch a job with all possible overrides
+        $original = $this->service->launch($template, $user->id, [
+            'extra_vars' => '{"env":"staging"}',
+            'limit' => 'webservers',
+            'verbosity' => 3,
+            'check_mode' => 1,
+        ]);
+
+        // Simulate controller relaunch logic
+        $overrides = [];
+        if ($original->extra_vars) {
+            $overrides['extra_vars'] = $original->extra_vars;
+        }
+        if ($original->limit) {
+            $overrides['limit'] = $original->limit;
+        }
+        if ($original->verbosity !== null) {
+            $overrides['verbosity'] = $original->verbosity;
+        }
+        if ($original->check_mode) {
+            $overrides['check_mode'] = 1;
+        }
+
+        $relaunched = $this->service->launch($template, $user->id, $overrides);
+
+        // All parameters must match 1:1
+        $this->assertSame(1, (int)$relaunched->check_mode, 'check_mode not preserved');
+        $this->assertSame($original->limit, $relaunched->limit, 'limit not preserved');
+        $this->assertSame($original->verbosity, $relaunched->verbosity, 'verbosity not preserved');
+        $origVars = json_decode((string)$original->extra_vars, true);
+        $relaunchVars = json_decode((string)$relaunched->extra_vars, true);
+        $this->assertSame($origVars, $relaunchVars, 'extra_vars not preserved');
+    }
+
     public function testLaunchSnapshotsTimeoutMinutesFromTemplate(): void
     {
         [$template, $user] = $this->makeFixtures();

@@ -116,7 +116,7 @@ class LintService extends Component
      */
     protected function execute(?string $playbook, string $cwd): array
     {
-        $cmd = ['ansible-lint', '--profile', 'production', '--nocolor'];
+        $cmd = ['ansible-lint', '--profile', 'production', '--force-color'];
         // For project-level runs, omit the path argument so ansible-lint uses
         // full auto-discovery from the CWD (picks up playbooks/ and roles/).
         // For template-level runs, pass the specific playbook as entry point.

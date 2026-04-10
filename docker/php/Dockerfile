@@ -42,6 +42,8 @@ RUN if [ "${USER_ID}" != "0" ]; then \
 COPY --chown=root:root docker/php/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+ENV ANSIBLE_HOME=/tmp/ansible
+
 WORKDIR /var/www
 
 # Run entrypoint as root so composer install can write vendor/ to the

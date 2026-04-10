@@ -18,6 +18,51 @@ test.describe('Credentials CRUD', () => {
     expect(bodyText).not.toContain('e2e-dummy-token-value');
   });
 
+  test('type selector toggles secret fields', async ({ page }) => {
+    await page.goto('/credential/create');
+
+    // Default type — ssh_key should be visible
+    await page.locator('#credential-type').selectOption('ssh_key');
+    await expect(page.locator('#secret-ssh')).toBeVisible();
+    await expect(page.locator('#secret-password')).toBeHidden();
+    await expect(page.locator('#secret-vault')).toBeHidden();
+    await expect(page.locator('#secret-token')).toBeHidden();
+
+    // Switch to username/password
+    await page.locator('#credential-type').selectOption('username_password');
+    await expect(page.locator('#secret-ssh')).toBeHidden();
+    await expect(page.locator('#secret-password')).toBeVisible();
+    await expect(page.locator('#secret-vault')).toBeHidden();
+    await expect(page.locator('#secret-token')).toBeHidden();
+
+    // Switch to vault
+    await page.locator('#credential-type').selectOption('vault');
+    await expect(page.locator('#secret-ssh')).toBeHidden();
+    await expect(page.locator('#secret-password')).toBeHidden();
+    await expect(page.locator('#secret-vault')).toBeVisible();
+    await expect(page.locator('#secret-token')).toBeHidden();
+
+    // Switch to token
+    await page.locator('#credential-type').selectOption('token');
+    await expect(page.locator('#secret-ssh')).toBeHidden();
+    await expect(page.locator('#secret-password')).toBeHidden();
+    await expect(page.locator('#secret-vault')).toBeHidden();
+    await expect(page.locator('#secret-token')).toBeVisible();
+  });
+
+  test('create SSH key credential', async ({ page }) => {
+    await page.goto('/credential/create');
+    await fillForm(page, 'credential', {
+      name: 'e2e-crud-ssh-credential',
+      description: 'SSH key credential by E2E test',
+    });
+    await page.locator('#credential-type').selectOption('ssh_key');
+    await expect(page.locator('#secret-ssh')).toBeVisible();
+    await page.locator('#ssh-private-key').fill('-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----');
+    await submitForm(page);
+    await expectFlash(page, 'success');
+  });
+
   test('create token credential', async ({ page }) => {
     await page.goto('/credential/create');
     await fillForm(page, 'credential', {
@@ -41,6 +86,11 @@ test.describe('Credentials CRUD', () => {
 
   test('delete credential', async ({ page }) => {
     await deleteByRowText(page, '/credential/index', 'e2e-crud-credential');
+    await expectFlash(page, 'success');
+  });
+
+  test('delete SSH credential', async ({ page }) => {
+    await deleteByRowText(page, '/credential/index', 'e2e-crud-ssh-credential');
     await expectFlash(page, 'success');
   });
 });

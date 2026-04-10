@@ -69,7 +69,8 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
         <div class="form-text">Hold Ctrl / Cmd to select multiple users.</div>
     </div>
 
-    <?= $form->field($model, 'required_approvals')->textInput(['type' => 'number', 'min' => 1, 'max' => 50]) ?>
+    <?= $form->field($model, 'required_approvals')->textInput(['type' => 'number', 'min' => 1, 'max' => 50, 'id' => 'required-approvals']) ?>
+    <div id="approver-count-warning" class="alert alert-warning" style="display:none"></div>
     <?= $form->field($model, 'timeout_minutes')->textInput(['type' => 'number', 'min' => 1, 'max' => 10080])->hint('Leave empty for no timeout.') ?>
     <?= $form->field($model, 'timeout_action')->dropDownList(ApprovalRule::timeoutActions()) ?>
 
@@ -80,6 +81,25 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
 
 <?php ActiveForm::end(); ?>
 
+<?php
+// Pre-compute approver counts for JS warning
+$roleCounts = [];
+$auth = \Yii::$app->authManager;
+if ($auth !== null) {
+    foreach (array_keys($roles) as $rn) {
+        $roleCounts[$rn] = count($auth->getUserIdsByRole($rn));
+    }
+}
+$teamCounts = [];
+foreach (array_keys($teams) as $tid) {
+    $teamCounts[(string)$tid] = (int)(new \yii\db\Query())
+        ->select('user_id')
+        ->from('{{%team_member}}')
+        ->where(['team_id' => $tid])
+        ->count();
+}
+?>
+
 </div>
 </div>
 
@@ -87,14 +107,40 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
 (function () {
     var typeSelect = document.getElementById('approver-type');
     var panels = {
-        role:  document.getElementById('config-role'),
-        team:  document.getElementById('config-team'),
+        role: document.getElementById('config-role'),
+        team: document.getElementById('config-team'),
         users: document.getElementById('config-users')
     };
-    var roleSelect  = document.getElementById('approver-role');
-    var teamSelect  = document.getElementById('approver-team');
+    var roleSelect = document.getElementById('approver-role');
+    var teamSelect = document.getElementById('approver-team');
     var usersSelect = document.getElementById('approver-users');
     var configInput = document.getElementById('approver-config');
+    var requiredInput = document.getElementById('required-approvals');
+    var warningDiv = document.getElementById('approver-count-warning');
+
+    var roleCounts = <?= json_encode($roleCounts) ?>;
+    var teamCounts = <?= json_encode($teamCounts) ?>;
+
+    function checkApproverCount() {
+        var type = typeSelect.value;
+        var count = 0;
+        if (type === 'role') {
+            count = roleSelect.value ? (roleCounts[roleSelect.value] || 0) : 0;
+        } else if (type === 'team') {
+            count = teamSelect.value ? (teamCounts[teamSelect.value] || 0) : 0;
+        } else if (type === 'users') {
+            for (var i = 0; i < usersSelect.options.length; i++) {
+                if (usersSelect.options[i].selected) count++;
+            }
+        }
+        var required = parseInt(requiredInput.value, 10) || 1;
+        if (count > 0 && required > count) {
+            warningDiv.textContent = 'Warning: Required approvals (' + required + ') exceeds eligible approvers (' + count + ').';
+            warningDiv.style.display = '';
+        } else {
+            warningDiv.style.display = 'none';
+        }
+    }
 
     function showPanel() {
         var type = typeSelect.value;
@@ -122,14 +168,16 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
         configInput.value = json;
     }
 
-    typeSelect.addEventListener('change', function () { showPanel(); syncConfig(); });
-    roleSelect.addEventListener('change', syncConfig);
-    teamSelect.addEventListener('change', syncConfig);
-    usersSelect.addEventListener('change', syncConfig);
+    typeSelect.addEventListener('change', function () { showPanel(); syncConfig(); checkApproverCount(); });
+    roleSelect.addEventListener('change', function () { syncConfig(); checkApproverCount(); });
+    teamSelect.addEventListener('change', function () { syncConfig(); checkApproverCount(); });
+    usersSelect.addEventListener('change', function () { syncConfig(); checkApproverCount(); });
+    requiredInput.addEventListener('input', checkApproverCount);
 
     // Initial state
     showPanel();
     syncConfig();
+    checkApproverCount();
 
     // Sync before submit
     document.getElementById('approval-rule-form').addEventListener('submit', syncConfig);

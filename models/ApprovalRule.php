@@ -57,7 +57,48 @@ class ApprovalRule extends ActiveRecord
             [['approver_config'], 'string'],
             [['approver_config'], 'validateJson'],
             [['job_template_id', 'created_by'], 'integer'],
+            [['required_approvals'], 'validateApproverCount'],
         ];
+    }
+
+    /**
+     * Validate that required_approvals does not exceed the number of eligible approvers.
+     * Only enforced for APPROVER_TYPE_USERS where the count is deterministic.
+     * For roles/teams, membership is dynamic — enforced as a JS warning only.
+     */
+    public function validateApproverCount(string $attribute): void
+    {
+        if ($this->approver_type !== self::APPROVER_TYPE_USERS) {
+            return;
+        }
+        $count = $this->countEligibleApprovers();
+        if ($count !== null && $this->$attribute > $count) {
+            $this->addError($attribute, sprintf(
+                'Required approvals (%d) exceeds eligible approvers (%d).',
+                $this->$attribute,
+                $count
+            ));
+        }
+    }
+
+    /**
+     * Count eligible approvers based on current config, or null if indeterminate.
+     */
+    public function countEligibleApprovers(): ?int
+    {
+        $config = $this->getParsedConfig();
+
+        switch ($this->approver_type) {
+            case self::APPROVER_TYPE_USERS:
+                $ids = $config['user_ids'] ?? [];
+                return is_array($ids) ? count($ids) : 0;
+            case self::APPROVER_TYPE_ROLE:
+                return count($this->resolveRoleIds($config));
+            case self::APPROVER_TYPE_TEAM:
+                return count($this->resolveTeamIds($config));
+            default:
+                return null;
+        }
     }
 
     public function validateJson(string $attribute): void

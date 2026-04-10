@@ -113,7 +113,7 @@ class BaseApiControllerTest extends WebControllerTestCase
 /**
  * Concrete test double exposing protected helpers.
  */
-class StubApiController extends BaseApiController
+class StubApiController extends BaseApiController // phpcs:ignore PSR1.Classes.ClassDeclaration.MultipleClasses
 {
     public function callAuthenticate(): void
     {

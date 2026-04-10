@@ -21,7 +21,7 @@ $this->title = 'Users';
 <div class="table-responsive">
     <table class="table table-hover">
         <thead class="table-light">
-            <tr><th>#</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Superadmin</th><th>Created</th><th></th></tr>
+            <tr><th>#</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>MFA</th><th>Superadmin</th><th>Created</th><th></th></tr>
         </thead>
         <tbody>
         <?php foreach ($dataProvider->getModels() as $user) : ?>
@@ -49,6 +49,7 @@ $this->title = 'Users';
                         <span class="badge text-bg-secondary">Inactive</span>
                     <?php endif; ?>
                 </td>
+                <td><?= $user->totp_enabled ? '<span class="badge text-bg-info">TOTP</span>' : '<span class="text-muted">—</span>' // xss-ok: hardcoded strings?></td>
                 <td><?= $user->is_superadmin ? '<span class="badge text-bg-warning">Yes</span>' : '—' // xss-ok: hardcoded strings?></td>
                 <td><?= date('Y-m-d', $user->created_at) ?></td>
                 <td class="text-end text-nowrap">
