@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\TimeHelper;
 use yii\helpers\Html;
 use yii\helpers\Url;
 use yii\widgets\LinkPager;
@@ -22,8 +23,12 @@ $this->title = 'Schedules';
 <?php if (empty($models)) : ?>
     <p class="text-muted">No schedules yet. Create one to run jobs automatically on a cron schedule.</p>
 <?php else : ?>
+    <div class="mb-2">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter schedules…"
+               data-table-filter="schedule-table" style="max-width:300px">
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover">
+        <table class="table table-hover" id="schedule-table">
             <thead class="table-light">
                 <tr>
                     <th>#</th>
@@ -51,14 +56,10 @@ $this->title = 'Schedules';
                     </td>
                     <td><code><?= Html::encode($model->cron_expression) ?></code></td>
                     <td><?= Html::encode($model->timezone) ?></td>
-                    <td class="text-nowrap">
-                        <?= $model->next_run_at
-                            ? date('Y-m-d H:i', $model->next_run_at) . ' UTC'
-                            : '<span class="text-muted">—</span>' ?>
-                    </td>
+                    <td class="text-nowrap"><?= TimeHelper::relative($model->next_run_at) ?></td>
                     <td class="text-nowrap">
                         <?= $model->last_run_at
-                            ? date('Y-m-d H:i', $model->last_run_at) . ' UTC'
+                            ? TimeHelper::relative($model->last_run_at)
                             : '<span class="text-muted">Never</span>' ?>
                     </td>
                     <td>

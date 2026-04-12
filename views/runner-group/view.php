@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var app\models\RunnerGroup $group */
 /** @var app\models\Runner[] $runners */
 
+use app\helpers\TimeHelper;
 use yii\helpers\Html;
 use yii\helpers\Url;
 
@@ -62,7 +63,14 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
         "  ghcr.io/ansilume/ansilume-runner:latest \\\n" .
         "  php yii runner/start";
     ?>
-    <pre class="bg-dark text-light p-2 rounded small mb-0"><?= Html::encode($dockerSnippet) ?></pre>
+    <div class="position-relative">
+        <pre class="bg-dark text-light p-2 rounded small mb-0" id="docker-snippet"><?= Html::encode($dockerSnippet) ?></pre>
+        <button type="button" class="btn btn-sm btn-outline-light position-absolute top-0 end-0 m-1"
+                onclick="copyToClipboard(document.getElementById('docker-snippet').textContent).then(function(){
+                    var b = event.target; b.textContent = 'Copied!';
+                    setTimeout(function(){ b.textContent = 'Copy'; }, 2000);
+                })">Copy</button>
+    </div>
 </div>
 <?php endif; ?>
 
@@ -128,7 +136,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                         <?php endif; ?>
                     </td>
                     <td class="text-muted small">
-                        <?= $runner->last_seen_at ? date('Y-m-d H:i:s', $runner->last_seen_at) : '—' ?>
+                        <?= TimeHelper::relative($runner->last_seen_at) ?>
                     </td>
                     <td class="text-muted small"><?= Html::encode($runner->description ?? '') ?></td>
                     <td class="text-end">

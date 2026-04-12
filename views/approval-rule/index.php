@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\TimeHelper;
 use app\models\ApprovalRule;
 use yii\helpers\Html;
 
@@ -39,7 +40,7 @@ $this->title = 'Approval Rules';
                     <td><?= Html::encode(ApprovalRule::approverTypes()[$model->approver_type] ?? $model->approver_type) ?></td>
                     <td><?= Html::encode((string)$model->required_approvals) ?></td>
                     <td><?= $model->timeout_minutes !== null ? Html::encode($model->timeout_minutes . ' min') : '—' ?></td>
-                    <td><?= Html::encode(date('Y-m-d H:i', (int)$model->created_at)) ?></td>
+                    <td><?= TimeHelper::relative((int)$model->created_at) ?></td>
                 </tr>
             <?php endforeach; ?>
         </tbody>

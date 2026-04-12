@@ -12,6 +12,15 @@ use yii\widgets\ActiveForm;
 $isNew = $model->isNewRecord;
 $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
 ?>
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><?= Html::a('Schedules', ['index']) ?></li>
+        <?php if (!$isNew) : ?>
+            <li class="breadcrumb-item"><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></li>
+        <?php endif; ?>
+        <li class="breadcrumb-item active"><?= $isNew ? 'New' : 'Edit' ?></li>
+    </ol>
+</nav>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0"><?= $this->title ?></h2>
     <?= Html::a('Cancel', $isNew ? ['index'] : ['view', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>

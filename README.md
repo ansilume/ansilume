@@ -84,6 +84,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Approval workflows** — gate sensitive steps behind named approval rules with per-rule approver lists
 
 ### Operations
+- **Air-gapped / offline ready** — all CSS, JavaScript, and fonts are bundled locally; the UI requires no outbound internet access and works fully offline in isolated or restricted networks
 - **Monitoring endpoints** — [Prometheus and JSON metrics](docs/monitoring.md) for jobs, tasks, hosts, runners, queues, and infrastructure health
 - **Health dashboard** — at-a-glance status of database, Redis, queue, runners, and migrations
 - **Production deployment** — [Ansible role](docs/deployment.md) for automated install, upgrades, and rollbacks
@@ -150,6 +151,7 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 - Ansible execution runs in isolated worker processes with auditable command construction
 - Runner tokens are stored as SHA-256 hashes — raw tokens are shown exactly once
 - Artifact collection skips symlinks to prevent path traversal and file exfiltration
+- Fully offline capable — no CDN dependencies, no external asset loading; safe to deploy in air-gapped, classified, or compliance-restricted environments
 
 ---
 

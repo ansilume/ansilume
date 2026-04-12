@@ -41,7 +41,14 @@ $this->title = 'API Tokens';
 <?php if ($newToken) : ?>
 <div class="alert alert-success">
     <strong>New token created.</strong> Copy it now — it will not be shown again.<br>
-    <code class="user-select-all fs-6"><?= Html::encode($newToken) ?></code>
+    <div class="d-flex align-items-center gap-2 mt-2">
+        <code class="user-select-all fs-6"><?= Html::encode($newToken) ?></code>
+        <button type="button" class="btn btn-sm btn-outline-success"
+                onclick="copyToClipboard('<?= Html::encode($newToken) ?>').then(function(){
+                    var b = event.target; b.textContent = 'Copied!';
+                    setTimeout(function(){ b.textContent = 'Copy'; }, 2000);
+                })">Copy</button>
+    </div>
 </div>
 <?php endif; ?>
 

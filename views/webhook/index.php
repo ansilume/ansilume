@@ -24,8 +24,12 @@ $this->title = 'Webhooks';
 <?php if (empty($models)) : ?>
     <p class="text-muted">No webhooks configured yet.</p>
 <?php else : ?>
+    <div class="mb-2">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter webhooks…"
+               data-table-filter="webhook-table" style="max-width:300px">
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover">
+        <table class="table table-hover" id="webhook-table">
             <thead class="table-light">
                 <tr>
                     <th>#</th>

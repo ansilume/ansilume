@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\TimeHelper;
 use app\models\WorkflowTemplate;
 use yii\helpers\Html;
 
@@ -38,7 +39,7 @@ $this->title = 'Workflow Templates';
                     <td><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></td>
                     <td><?= Html::encode((string)count($model->steps)) ?></td>
                     <td><?= Html::encode($model->creator?->username ?? '—') ?></td>
-                    <td><?= Html::encode(date('Y-m-d H:i', (int)$model->created_at)) ?></td>
+                    <td><?= TimeHelper::relative((int)$model->created_at) ?></td>
                     <td class="text-end">
                         <?php if (Yii::$app->user->can('workflow.launch')) : ?>
                             <form action="<?= \yii\helpers\Url::to(['launch', 'id' => $model->id]) ?>" method="post" style="display:inline"

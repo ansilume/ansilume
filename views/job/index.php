@@ -10,6 +10,7 @@ declare(strict_types=1);
 /** @var app\models\User[] $users */
 /** @var array $statusOptions */
 
+use app\helpers\TimeHelper;
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\RunnerGroup;
@@ -161,7 +162,7 @@ $this->title = 'Jobs';
                     </td>
                     <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                     <td><?= Html::encode($job->jobTemplate->runnerGroup->name ?? '—') ?></td>
-                    <td><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
+                    <td><?= TimeHelper::relative($job->started_at) ?></td>
                     <td>
                         <?php
                         if ($job->started_at !== null && $job->finished_at !== null) {

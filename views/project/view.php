@@ -175,7 +175,13 @@ $this->title = $model->name;
     </div>
 </div>
 
-<?php if (!empty($playbooks) || !empty($tree)) : ?>
+<?php if (empty($playbooks) && empty($tree) && $model->status !== \app\models\Project::STATUS_SYNCED) : ?>
+<div class="row g-3 mt-1">
+    <div class="col-12">
+        <p class="text-muted">Sync the project to detect playbooks and browse the repository structure.</p>
+    </div>
+</div>
+<?php elseif (!empty($playbooks) || !empty($tree)) : ?>
 <div class="row g-3 mt-1">
 
     <?php if (!empty($playbooks)) : ?>

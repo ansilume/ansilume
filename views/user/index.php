@@ -18,8 +18,15 @@ $this->title = 'Users';
     <?php endif; ?>
 </div>
 
+<?php if (empty($dataProvider->getModels())) : ?>
+    <p class="text-muted">No users yet.</p>
+<?php else : ?>
+<div class="mb-2">
+    <input type="text" class="form-control form-control-sm" placeholder="Filter users…"
+           data-table-filter="user-table" style="max-width:300px">
+</div>
 <div class="table-responsive">
-    <table class="table table-hover">
+    <table class="table table-hover" id="user-table">
         <thead class="table-light">
             <tr><th>#</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>MFA</th><th>Superadmin</th><th>Created</th><th></th></tr>
         </thead>
@@ -63,4 +70,5 @@ $this->title = 'Users';
         </tbody>
     </table>
 </div>
-<?= LinkPager::widget(['pagination' => $dataProvider->pagination]) ?>
+    <?= LinkPager::widget(['pagination' => $dataProvider->pagination]) ?>
+<?php endif; ?>

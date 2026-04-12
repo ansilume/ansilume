@@ -212,6 +212,7 @@ $active = fn (string $prefix): string =>
 
 <script src="/js/bootstrap.bundle.min.js"></script>
 <script src="/js/copy-to-clipboard.js"></script>
+<script src="/js/table-filter.js"></script>
 
 <?php $this->endBody() ?>
 </body>

@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\TimeHelper;
 use app\models\NotificationTemplate;
 use yii\helpers\Html;
 
@@ -46,7 +47,7 @@ $this->title = 'Notification Templates';
                     <?php endforeach; ?>
                 </td>
                 <td class="text-muted small">
-                    <?= Html::encode(date('Y-m-d H:i', (int)$model->created_at)) ?>
+                    <?= TimeHelper::relative((int)$model->created_at) ?>
                 </td>
             </tr>
         <?php endforeach; ?>

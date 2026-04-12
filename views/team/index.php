@@ -24,8 +24,12 @@ $this->title = 'Teams';
 <?php if (empty($models)) : ?>
     <p class="text-muted">No teams yet.</p>
 <?php else : ?>
+    <div class="mb-2">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter teams…"
+               data-table-filter="team-table" style="max-width:300px">
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover">
+        <table class="table table-hover" id="team-table">
             <thead class="table-light">
                 <tr>
                     <th>#</th><th>Name</th><th>Description</th><th>Created by</th><th></th>

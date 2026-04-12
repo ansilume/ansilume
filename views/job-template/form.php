@@ -17,6 +17,15 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
 ?>
 <div class="row justify-content-center">
 <div class="col-lg-8">
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><?= Html::a('Job Templates', ['index']) ?></li>
+        <?php if (!$model->isNewRecord) : ?>
+            <li class="breadcrumb-item"><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></li>
+        <?php endif; ?>
+        <li class="breadcrumb-item active"><?= $model->isNewRecord ? 'New' : 'Edit' ?></li>
+    </ol>
+</nav>
 <h2><?= Html::encode($this->title) ?></h2>
 
 <?php $form = ActiveForm::begin(['id' => 'jt-form']); ?>
@@ -79,21 +88,25 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
             <?= $form->field($model, 'verbosity')->dropDownList([
                 0 => '0 (Normal)', 1 => '1 (-v)', 2 => '2 (-vv)',
                 3 => '3 (-vvv)', 4 => '4 (-vvvv)', 5 => '5 (-vvvvv)',
-            ]) ?>
+            ])->hint('Higher levels produce more detailed output for debugging.') ?>
         </div>
         <div class="col-md-3">
-            <?= $form->field($model, 'forks')->textInput(['type' => 'number', 'min' => 1, 'max' => 200]) ?>
+            <?= $form->field($model, 'forks')->textInput(['type' => 'number', 'min' => 1, 'max' => 200])
+                ->hint('Number of parallel host connections (default 5).') ?>
         </div>
         <div class="col-md-6">
-            <?= $form->field($model, 'limit')->textInput(['placeholder' => 'webservers:!staging', 'maxlength' => 255]) ?>
+            <?= $form->field($model, 'limit')->textInput(['placeholder' => 'webservers:!staging', 'maxlength' => 255])
+                ->hint('Ansible host pattern to restrict execution to a subset of hosts.') ?>
         </div>
     </div>
     <div class="row g-2">
         <div class="col-md-4">
-            <?= $form->field($model, 'tags')->textInput(['placeholder' => 'deploy,config', 'maxlength' => 512]) ?>
+            <?= $form->field($model, 'tags')->textInput(['placeholder' => 'deploy,config', 'maxlength' => 512])
+                ->hint('Comma-separated. Only run tasks with these tags.') ?>
         </div>
         <div class="col-md-4">
-            <?= $form->field($model, 'skip_tags')->textInput(['placeholder' => 'slow', 'maxlength' => 512]) ?>
+            <?= $form->field($model, 'skip_tags')->textInput(['placeholder' => 'slow', 'maxlength' => 512])
+                ->hint('Comma-separated. Skip tasks with these tags.') ?>
         </div>
     </div>
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\TimeHelper;
 use app\models\ApprovalRequest;
 use yii\helpers\Html;
 
@@ -35,8 +36,8 @@ $this->title = 'Approvals';
                     <td><?= Html::a('#' . Html::encode((string)$model->job_id), ['/job/view', 'id' => $model->job_id]) ?></td>
                     <td><?= Html::encode($model->approvalRule?->name ?? '—') ?></td>
                     <td><span class="badge text-bg-<?= ApprovalRequest::statusCssClass($model->status) ?>"><?= Html::encode(ApprovalRequest::statusLabel($model->status)) ?></span></td>
-                    <td><?= $model->requested_at ? Html::encode(date('Y-m-d H:i', (int)$model->requested_at)) : '—' ?></td>
-                    <td><?= $model->resolved_at ? Html::encode(date('Y-m-d H:i', (int)$model->resolved_at)) : '—' ?></td>
+                    <td><?= TimeHelper::relative($model->requested_at !== null ? (int)$model->requested_at : null) ?></td>
+                    <td><?= TimeHelper::relative($model->resolved_at !== null ? (int)$model->resolved_at : null) ?></td>
                 </tr>
             <?php endforeach; ?>
         </tbody>

@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\JobTemplate $model */
 
+use app\helpers\TimeHelper;
 use yii\helpers\Html;
 
 $this->title = $model->name;
@@ -223,7 +224,7 @@ $this->title = $model->name;
                                 <td><?= Html::a('#' . $job->id, ['/job/view', 'id' => $job->id]) ?></td>
                                 <td><span class="badge text-bg-<?= \app\models\Job::statusCssClass($job->status) ?>"><?= Html::encode(\app\models\Job::statusLabel($job->status)) ?></span></td>
                                 <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
-                                <td><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
+                                <td><?= TimeHelper::relative($job->started_at) ?></td>
                                 <td><?php
                                 if ($job->started_at !== null && $job->finished_at !== null) {
                                         echo gmdate('i:s', $job->finished_at - $job->started_at);

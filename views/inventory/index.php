@@ -22,8 +22,12 @@ $this->title = 'Inventories';
 <?php if (empty($models)) : ?>
     <p class="text-muted">No inventories yet.</p>
 <?php else : ?>
+    <div class="mb-2">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter inventories…"
+               data-table-filter="inventory-table" style="max-width:300px">
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover">
+        <table class="table table-hover" id="inventory-table">
             <thead class="table-light">
                 <tr>
                     <th>#</th><th>Name</th><th>Type</th><th>Project</th><th>Created by</th><th></th>

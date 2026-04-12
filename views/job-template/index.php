@@ -21,8 +21,12 @@ $this->title = 'Job Templates';
 <?php if (empty($models)) : ?>
     <p class="text-muted">No job templates yet.</p>
 <?php else : ?>
+    <div class="mb-2">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter templates…"
+               data-table-filter="template-table" style="max-width:300px">
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover">
+        <table class="table table-hover" id="template-table">
             <thead class="table-light">
                 <tr><th>#</th><th>Name</th><th>Project</th><th>Playbook</th><th>Inventory</th><th>Runner</th><th></th></tr>
             </thead>

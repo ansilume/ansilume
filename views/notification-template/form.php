@@ -35,7 +35,15 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
 ?>
 <div class="row justify-content-center">
 <div class="col-lg-9">
-
+<nav aria-label="breadcrumb">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><?= Html::a('Notification Templates', ['index']) ?></li>
+        <?php if (!$model->isNewRecord) : ?>
+            <li class="breadcrumb-item"><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></li>
+        <?php endif; ?>
+        <li class="breadcrumb-item active"><?= $model->isNewRecord ? 'New' : 'Edit' ?></li>
+    </ol>
+</nav>
 <h2><?= Html::encode($this->title) ?></h2>
 
 <?php $form = ActiveForm::begin(['id' => 'notification-template-form']); ?>

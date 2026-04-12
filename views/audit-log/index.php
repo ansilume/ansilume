@@ -10,6 +10,7 @@ declare(strict_types=1);
 /** @var app\models\User[] $users */
 /** @var array<int, string> $objectUsernames */
 
+use app\helpers\TimeHelper;
 use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
 use yii\helpers\Url;
@@ -57,7 +58,7 @@ $this->title = 'Audit Log';
         <?php foreach ($dataProvider->getModels() as $entry) : ?>
             <tr>
                 <td><?= Html::a($entry->id, ['view', 'id' => $entry->id]) ?></td>
-                <td><?= date('Y-m-d H:i:s', $entry->created_at) ?></td>
+                <td><?= TimeHelper::relative($entry->created_at) ?></td>
                 <td><?= Html::encode($entry->user->username ?? ($entry->user_id ? "#{$entry->user_id}" : 'system')) ?></td>
                 <td><?= Html::encode($entry->action) ?></td>
                 <td>

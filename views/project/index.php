@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\TimeHelper;
 use app\models\Project;
 use yii\helpers\Html;
 use yii\helpers\Url;
@@ -23,8 +24,12 @@ $this->title = 'Projects';
 <?php if (empty($models)) : ?>
     <p class="text-muted">No projects yet.</p>
 <?php else : ?>
+    <div class="mb-2">
+        <input type="text" class="form-control form-control-sm" placeholder="Filter projects…"
+               data-table-filter="project-table" style="max-width:300px">
+    </div>
     <div class="table-responsive">
-        <table class="table table-hover">
+        <table class="table table-hover" id="project-table">
             <thead class="table-light">
                 <tr>
                     <th>#</th>
@@ -57,7 +62,7 @@ $this->title = 'Projects';
                             <?= Html::encode(Project::statusLabel($model->status)) ?>
                         </span>
                     </td>
-                    <td><?= $model->last_synced_at ? date('Y-m-d H:i', $model->last_synced_at) : '—' ?></td>
+                    <td><?= TimeHelper::relative($model->last_synced_at) ?></td>
                     <td><?= Html::encode($model->creator->username ?? '—') ?></td>
                     <td class="text-end text-nowrap">
                         <?php if (\Yii::$app->user?->can('project.update') && $model->scm_type === Project::SCM_TYPE_GIT) : ?>

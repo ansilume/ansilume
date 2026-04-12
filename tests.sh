@@ -297,6 +297,27 @@ else
 fi
 
 # =============================================================================
+# 5b. Offline: no external CSS/JS/font references
+# =============================================================================
+section "Offline capability (no external assets)"
+
+# The app must work in air-gapped networks. Flag <link>, <script>, @import,
+# and url() references pointing to external CDNs. Regular <a href> links
+# (documentation, etc.) are fine and excluded.
+EXTERNAL_ASSETS=$(grep -rn --include="*.php" --include="*.html" --include="*.js" --include="*.css" \
+    -P '(<link\b.*href|<script\b.*src|@import\s+url|url\()\s*[=\(]?\s*["\x27]?https?://' \
+    views/ web/ assets/ 2>/dev/null \
+    | grep -vP '^\s*//' \
+    | grep -vP '// offline-ok' \
+    || true)
+if [[ -z "$EXTERNAL_ASSETS" ]]; then
+    ok "No external CSS/JS/font references found — fully offline capable"
+else
+    fail "Found external asset references — app must work offline"
+    echo "$EXTERNAL_ASSETS" | sed 's/^/     /'
+fi
+
+# =============================================================================
 # 6. Migrations: file naming and class name consistency
 # =============================================================================
 section "Migration naming consistency"

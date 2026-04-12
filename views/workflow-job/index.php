@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\TimeHelper;
 use app\models\WorkflowJob;
 use yii\helpers\Html;
 
@@ -35,8 +36,8 @@ $this->title = 'Workflow Jobs';
                     <td><?= Html::encode($model->workflowTemplate?->name ?? '—') ?></td>
                     <td><span class="badge text-bg-<?= WorkflowJob::statusCssClass($model->status) ?>"><?= Html::encode(WorkflowJob::statusLabel($model->status)) ?></span></td>
                     <td><?= Html::encode($model->launcher?->username ?? '—') ?></td>
-                    <td><?= $model->started_at ? Html::encode(date('Y-m-d H:i', (int)$model->started_at)) : '—' ?></td>
-                    <td><?= $model->finished_at ? Html::encode(date('Y-m-d H:i', (int)$model->finished_at)) : '—' ?></td>
+                    <td><?= TimeHelper::relative($model->started_at !== null ? (int)$model->started_at : null) ?></td>
+                    <td><?= TimeHelper::relative($model->finished_at !== null ? (int)$model->finished_at : null) ?></td>
                 </tr>
             <?php endforeach; ?>
         </tbody>
