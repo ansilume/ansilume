@@ -86,12 +86,12 @@ $this->title = $model->name;
                 <span>Public Key</span>
                 <?php if ($sshInfo && $sshInfo['public_key']) : ?>
                     <button type="button" id="btn-copy-pubkey" class="btn btn-sm btn-outline-secondary"
-                            onclick="navigator.clipboard.writeText(document.getElementById('pubkey-display').value).then(function(){
+                            onclick="copyToClipboard(document.getElementById('pubkey-display').value).then(function(){
                                 var btn = document.getElementById('btn-copy-pubkey');
                                 btn.textContent = 'Copied!';
                                 btn.classList.replace('btn-outline-secondary','btn-success');
                                 setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
-                            })">Copy</button>
+                            }).catch(function(){ alert('Copy failed — please copy manually.'); })">Copy</button>
                 <?php endif; ?>
             </div>
             <?php if ($sshInfo && $sshInfo['public_key']) : ?>

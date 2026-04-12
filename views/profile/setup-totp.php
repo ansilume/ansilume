@@ -34,12 +34,12 @@ $this->title = 'Set Up Two-Factor Authentication';
             <div class="input-group mb-4">
                 <input type="text" class="form-control font-monospace" value="<?= Html::encode($secret) ?>" readonly id="totp-secret" />
                 <button class="btn btn-outline-secondary" type="button" id="btn-copy-totp"
-                        onclick="navigator.clipboard.writeText(document.getElementById('totp-secret').value).then(function(){
+                        onclick="copyToClipboard(document.getElementById('totp-secret').value).then(function(){
                             var btn = document.getElementById('btn-copy-totp');
                             btn.textContent = 'Copied!';
                             btn.classList.replace('btn-outline-secondary','btn-success');
                             setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
-                        })">Copy</button>
+                        }).catch(function(){ alert('Copy failed — please copy manually.'); })">Copy</button>
             </div>
         </div>
     </div>

@@ -211,6 +211,7 @@ $active = fn (string $prefix): string =>
 </div>
 
 <script src="/js/bootstrap.bundle.min.js"></script>
+<script src="/js/copy-to-clipboard.js"></script>
 
 <?php $this->endBody() ?>
 </body>

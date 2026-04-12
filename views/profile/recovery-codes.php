@@ -37,7 +37,7 @@ $this->title = 'Recovery Codes';
 
             <div class="d-flex gap-2">
                 <button class="btn btn-outline-secondary btn-sm" type="button" id="copy-codes-btn"
-                    onclick="navigator.clipboard.writeText(<?= Html::encode(json_encode(implode("\n", $recoveryCodes))) ?>).then(function(){ document.getElementById('copy-codes-btn').textContent='Copied!'; })">
+                    onclick="copyToClipboard(<?= Html::encode(json_encode(implode("\n", $recoveryCodes))) ?>).then(function(){ document.getElementById('copy-codes-btn').textContent='Copied!'; }).catch(function(){ alert('Copy failed — please copy manually.'); })">
                     Copy all codes
                 </button>
                 <button class="btn btn-outline-secondary btn-sm" type="button"

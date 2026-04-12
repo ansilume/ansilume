@@ -93,4 +93,48 @@ test.describe('Credentials CRUD', () => {
     await deleteByRowText(page, '/credential/index', 'e2e-crud-ssh-credential');
     await expectFlash(page, 'success');
   });
+
+  // Regression: issue #17 — the "Copy" button next to the generated SSH
+  // public key did nothing on plain HTTP because navigator.clipboard is only
+  // defined in secure contexts (HTTPS / localhost). The E2E test suite runs
+  // against http://nginx inside Docker, which is itself a non-secure context,
+  // so this test exercises the exact failure mode from the bug report.
+  //
+  // The fix adds a document.execCommand fallback via the shared
+  // copyToClipboard() helper — clicking the button must still resolve the
+  // promise and transition the button to "Copied!".
+  test('copy public key button works on HTTP (issue #17 regression)', async ({ page }) => {
+    // Belt-and-braces: explicitly strip navigator.clipboard and force
+    // isSecureContext=false so this test cannot accidentally pass via the
+    // clipboard API even if Playwright is later pointed at a secure origin.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        get() {
+          return undefined;
+        },
+      });
+      Object.defineProperty(window, 'isSecureContext', {
+        configurable: true,
+        get() {
+          return false;
+        },
+      });
+    });
+
+    await page.goto('/credential/create');
+    await page.locator('#credential-type').selectOption('ssh_key');
+    await page.locator('#btn-generate-key').click();
+    await expect(page.locator('#ssh-pubkey-block')).toBeVisible({ timeout: 10_000 });
+
+    const pubkey = await page.locator('#ssh-public-key-display').inputValue();
+    expect(pubkey).toMatch(/^ssh-ed25519 /);
+
+    // Without navigator.clipboard the old code silently failed — the fallback
+    // path (document.execCommand) must now resolve the promise and flip the
+    // button label to "Copied!".
+    const copyBtn = page.locator('#btn-copy-pubkey-form');
+    await copyBtn.click();
+    await expect(copyBtn).toHaveText('Copied!');
+  });
 });

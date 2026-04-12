@@ -111,12 +111,12 @@ $isLive = !$job->isFinished();
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Execution Command</span>
                 <button type="button" id="btn-copy-cmd" class="btn btn-sm btn-outline-secondary"
-                        onclick="navigator.clipboard.writeText(document.getElementById('exec-cmd-display').textContent).then(function(){
+                        onclick="copyToClipboard(document.getElementById('exec-cmd-display').textContent).then(function(){
                             var btn = document.getElementById('btn-copy-cmd');
                             btn.textContent = 'Copied!';
                             btn.classList.replace('btn-outline-secondary','btn-success');
                             setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
-                        })">Copy</button>
+                        }).catch(function(){ alert('Copy failed — please copy manually.'); })">Copy</button>
             </div>
             <div class="card-body p-0">
                 <pre class="job-log m-0" id="exec-cmd-display" style="max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"><?= Html::encode($job->execution_command) ?></pre>
@@ -345,10 +345,10 @@ if (logEl.scrollHeight > logEl.clientHeight) {
                     card.innerHTML = '<div class="card-header d-flex justify-content-between align-items-center">'
                         + '<span>Execution Command</span>'
                         + '<button type="button" id="btn-copy-cmd" class="btn btn-sm btn-outline-secondary"'
-                        + ' onclick="navigator.clipboard.writeText(document.getElementById(\'exec-cmd-display\').textContent).then(function(){'
+                        + ' onclick="copyToClipboard(document.getElementById(\'exec-cmd-display\').textContent).then(function(){'
                         + 'var btn=document.getElementById(\'btn-copy-cmd\');btn.textContent=\'Copied!\';btn.classList.replace(\'btn-outline-secondary\',\'btn-success\');'
                         + 'setTimeout(function(){btn.textContent=\'Copy\';btn.classList.replace(\'btn-success\',\'btn-outline-secondary\');},2000);'
-                        + '})">Copy</button></div>'
+                        + '}).catch(function(){alert(\'Copy failed — please copy manually.\');})">Copy</button></div>'
                         + '<div class="card-body p-0">'
                         + '<pre class="job-log m-0" id="exec-cmd-display" style="max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>'
                         + '</div>';
