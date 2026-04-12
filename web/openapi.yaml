@@ -45,6 +45,11 @@ tags:
   - name: Job Templates
   - name: Jobs
   - name: Schedules
+  - name: Runner Groups
+  - name: Teams
+  - name: Users
+  - name: Webhooks
+  - name: Audit Logs
   - name: Notification Templates
   - name: Approval Rules
   - name: Approvals
@@ -82,15 +87,88 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProjectList' }
+    post:
+      tags: [Projects]
+      summary: Create a project
+      description: Requires `project.create`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectInput' }
+            examples:
+              git:
+                summary: Git-backed project
+                value:
+                  name: my-playbooks
+                  scm_type: git
+                  scm_url: "https://github.com/example/playbooks.git"
+                  scm_branch: main
+              manual:
+                summary: Manual project
+                value:
+                  name: local-playbooks
+                  scm_type: manual
+      responses:
+        '201': { $ref: '#/components/responses/ProjectResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/projects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
     get:
       tags: [Projects]
       summary: Get a single project
-      parameters:
-        - $ref: '#/components/parameters/IdPath'
       responses:
         '200': { $ref: '#/components/responses/ProjectResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Projects]
+      summary: Update a project
+      description: Requires `project.update`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProjectInput' }
+      responses:
+        '200': { $ref: '#/components/responses/ProjectResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Projects]
+      summary: Delete a project
+      description: |
+        Requires `project.delete`. Refuses if job templates reference this project.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/projects/{id}/sync:
+    post:
+      tags: [Projects]
+      summary: Trigger a git sync for a project
+      description: |
+        Requires `project.update`. Only works for `scm_type=git` projects.
+        Queues a background sync job.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200':
+          description: Sync queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      syncing: { type: boolean }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ───────────────────────────── Inventories ─────────────────────────────
   /api/v1/inventories:
@@ -249,13 +327,56 @@ paths:
         '200':
           description: Paginated list
           content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateList' } } }
+    post:
+      tags: [Job Templates]
+      summary: Create a job template
+      description: Requires `job-template.create`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobTemplateInput' }
+            example:
+              name: Deploy web servers
+              project_id: 1
+              inventory_id: 1
+              playbook: site.yml
+              runner_group_id: 1
+              verbosity: 0
+              forks: 5
+      responses:
+        '201': { $ref: '#/components/responses/JobTemplateResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/job-templates/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
     get:
       tags: [Job Templates]
       summary: Get a single job template
-      parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/JobTemplateResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Job Templates]
+      summary: Update a job template
+      description: Requires `job-template.update`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/JobTemplateInput' }
+      responses:
+        '200': { $ref: '#/components/responses/JobTemplateResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Job Templates]
+      summary: Delete a job template
+      description: Requires `job-template.delete`.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ────────────────────────────── Jobs ──────────────────────────────
@@ -317,13 +438,54 @@ paths:
         '200':
           description: Paginated list
           content: { application/json: { schema: { $ref: '#/components/schemas/ScheduleList' } } }
+    post:
+      tags: [Schedules]
+      summary: Create a schedule
+      description: Requires `job.launch`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleInput' }
+            example:
+              name: Nightly deploy
+              job_template_id: 1
+              cron_expression: "0 2 * * *"
+              timezone: UTC
+              enabled: true
+      responses:
+        '201': { $ref: '#/components/responses/ScheduleResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/schedules/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
     get:
       tags: [Schedules]
       summary: Get a single schedule
-      parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/ScheduleResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Schedules]
+      summary: Update a schedule
+      description: Requires `job.launch`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleInput' }
+      responses:
+        '200': { $ref: '#/components/responses/ScheduleResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Schedules]
+      summary: Delete a schedule
+      description: Requires `job.launch`.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/schedules/{id}/toggle:
     post:
@@ -332,6 +494,377 @@ paths:
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/ScheduleResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────── Runner Groups ───────────────────────
+  /api/v1/runner-groups:
+    get:
+      tags: [Runner Groups]
+      summary: List runner groups
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/RunnerGroupList' } } }
+    post:
+      tags: [Runner Groups]
+      summary: Create a runner group
+      description: Requires `runner-group.create`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunnerGroupInput' }
+            example:
+              name: production-runners
+              description: Runners in the production datacenter
+      responses:
+        '201': { $ref: '#/components/responses/RunnerGroupResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/runner-groups/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Runner Groups]
+      summary: Get a single runner group
+      responses:
+        '200': { $ref: '#/components/responses/RunnerGroupResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Runner Groups]
+      summary: Update a runner group
+      description: Requires `runner-group.update`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunnerGroupInput' }
+      responses:
+        '200': { $ref: '#/components/responses/RunnerGroupResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Runner Groups]
+      summary: Delete a runner group
+      description: |
+        Requires `runner-group.delete`. Refuses if runners or job templates
+        still reference this group.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ────────────────────────────── Teams ──────────────────────────────
+  /api/v1/teams:
+    get:
+      tags: [Teams]
+      summary: List teams
+      description: Requires `admin` role.
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/TeamList' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Teams]
+      summary: Create a team
+      description: Requires `admin` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeamInput' }
+            example:
+              name: platform-team
+              description: Infrastructure automation team
+      responses:
+        '201': { $ref: '#/components/responses/TeamResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/teams/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Teams]
+      summary: Get a team with members and projects
+      description: Requires `admin` role.
+      responses:
+        '200': { $ref: '#/components/responses/TeamResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Teams]
+      summary: Update a team
+      description: Requires `admin` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TeamInput' }
+      responses:
+        '200': { $ref: '#/components/responses/TeamResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Teams]
+      summary: Delete a team
+      description: Requires `admin` role. Also removes all member and project associations.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/teams/{id}/members:
+    post:
+      tags: [Teams]
+      summary: Add a member to a team
+      description: Requires `admin` role.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: integer }
+            example:
+              user_id: 5
+      responses:
+        '201': { $ref: '#/components/responses/TeamResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/teams/{id}/members/{userId}:
+    delete:
+      tags: [Teams]
+      summary: Remove a member from a team
+      description: Requires `admin` role.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - in: path
+          name: userId
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200': { $ref: '#/components/responses/TeamResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/teams/{id}/projects:
+    post:
+      tags: [Teams]
+      summary: Assign a project to a team
+      description: Requires `admin` role.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: integer }
+                role: { type: string, default: viewer, enum: [viewer, operator] }
+            example:
+              project_id: 3
+              role: operator
+      responses:
+        '201': { $ref: '#/components/responses/TeamResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/teams/{id}/projects/{projectId}:
+    delete:
+      tags: [Teams]
+      summary: Unassign a project from a team
+      description: Requires `admin` role.
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - in: path
+          name: projectId
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200': { $ref: '#/components/responses/TeamResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ────────────────────────────── Users ──────────────────────────────
+  /api/v1/users:
+    get:
+      tags: [Users]
+      summary: List users
+      description: Requires `user.view`.
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/UserList' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Users]
+      summary: Create a user
+      description: Requires `user.create`. Password is required and must be at least 5 characters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserInput' }
+            example:
+              username: operator01
+              email: operator01@example.com
+              password: changeme123
+              role: operator
+      responses:
+        '201': { $ref: '#/components/responses/UserResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/users/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Users]
+      summary: Get a single user
+      description: |
+        Requires `user.view`. Sensitive fields (password_hash, auth_key,
+        totp_secret, recovery_codes) are never returned.
+      responses:
+        '200': { $ref: '#/components/responses/UserResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Users]
+      summary: Update a user
+      description: |
+        Requires `user.update`. Password is optional on update — if provided
+        it must be at least 5 characters.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserInput' }
+      responses:
+        '200': { $ref: '#/components/responses/UserResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Users]
+      summary: Delete a user
+      description: |
+        Requires `user.delete`. Cannot delete your own account or the last
+        superadmin.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ─────────────────────────── Webhooks ───────────────────────────
+  /api/v1/webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List webhooks
+      description: Requires `admin` role.
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/WebhookList' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Webhooks]
+      summary: Create a webhook
+      description: Requires `admin` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookInput' }
+            example:
+              name: slack-notifications
+              url: "https://hooks.slack.com/services/T00/B00/xxx"
+              events: [job.success, job.failure]
+              enabled: true
+      responses:
+        '201': { $ref: '#/components/responses/WebhookResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/webhooks/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Webhooks]
+      summary: Get a single webhook
+      description: Requires `admin` role.
+      responses:
+        '200': { $ref: '#/components/responses/WebhookResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Webhooks]
+      summary: Update a webhook
+      description: Requires `admin` role.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookInput' }
+      responses:
+        '200': { $ref: '#/components/responses/WebhookResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Webhooks]
+      summary: Delete a webhook
+      description: Requires `admin` role.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─────────────────────── Audit Logs ───────────────────────
+  /api/v1/audit-logs:
+    get:
+      tags: [Audit Logs]
+      summary: List audit log entries
+      description: |
+        Requires `user.view`. Supports filtering by action, user_id, and
+        object_type via query parameters.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - in: query
+          name: action
+          required: false
+          schema: { type: string }
+          description: Filter by action name (e.g. "user.login")
+        - in: query
+          name: user_id
+          required: false
+          schema: { type: integer }
+          description: Filter by user ID
+        - in: query
+          name: object_type
+          required: false
+          schema: { type: string }
+          description: Filter by object type (e.g. "project", "job")
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/AuditLogList' } } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/audit-logs/{id}:
+    get:
+      tags: [Audit Logs]
+      summary: Get a single audit log entry
+      description: Requires `user.view`.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/AuditLogResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ─────────────────────── Notification Templates ───────────────────────
@@ -943,6 +1476,46 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/Schedule' }
+    RunnerGroupResponse:
+      description: Runner group
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/RunnerGroup' }
+    TeamResponse:
+      description: Team with members and projects
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/TeamDetail' }
+    UserResponse:
+      description: User (sensitive fields excluded)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/User' }
+    WebhookResponse:
+      description: Webhook
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Webhook' }
+    AuditLogResponse:
+      description: Audit log entry
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/AuditLog' }
     NotificationTemplateResponse:
       description: Notification template
       content:
@@ -1096,9 +1669,12 @@ components:
       properties:
         id:              { type: integer }
         name:            { type: string }
-        cron_expression: { type: string }
         job_template_id: { type: integer }
+        cron_expression: { type: string }
+        timezone:        { type: string }
         enabled:         { type: boolean }
+        last_run_at:     { type: integer, nullable: true }
+        next_run_at:     { type: integer, nullable: true }
         created_at:      { type: integer }
         updated_at:      { type: integer }
     ScheduleList:
@@ -1152,6 +1728,193 @@ components:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/NotificationTemplate' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    ProjectInput:
+      type: object
+      required: [name, scm_type]
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, nullable: true }
+        scm_type: { type: string, enum: [manual, git] }
+        scm_url: { type: string, nullable: true }
+        scm_branch: { type: string, nullable: true }
+        scm_credential_id: { type: integer, nullable: true }
+
+    JobTemplateInput:
+      type: object
+      required: [name, project_id, inventory_id, playbook]
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, nullable: true }
+        project_id: { type: integer }
+        inventory_id: { type: integer }
+        credential_id: { type: integer, nullable: true }
+        playbook: { type: string }
+        extra_vars: { type: string, nullable: true }
+        verbosity: { type: integer, minimum: 0, maximum: 5, default: 0 }
+        forks: { type: integer, minimum: 1, default: 5 }
+        become: { type: boolean, default: false }
+        become_method: { type: string, default: sudo }
+        become_user: { type: string, default: root }
+        limit: { type: string, nullable: true }
+        tags: { type: string, nullable: true }
+        skip_tags: { type: string, nullable: true }
+        timeout_minutes: { type: integer, default: 120 }
+        runner_group_id: { type: integer, nullable: true }
+        approval_rule_id: { type: integer, nullable: true }
+        survey_fields: { type: string, nullable: true, description: JSON array of survey field definitions }
+
+    ScheduleInput:
+      type: object
+      required: [name, job_template_id, cron_expression]
+      properties:
+        name: { type: string, maxLength: 128 }
+        job_template_id: { type: integer }
+        cron_expression: { type: string, description: "Standard 5-field cron expression" }
+        timezone: { type: string, default: UTC }
+        extra_vars: { type: string, nullable: true }
+        enabled: { type: boolean, default: true }
+
+    RunnerGroup:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        runner_count: { type: integer }
+        created_at: { type: integer }
+    RunnerGroupInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, nullable: true }
+    RunnerGroupList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/RunnerGroup' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    TeamSummary:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        member_count: { type: integer }
+        project_count: { type: integer }
+        created_at: { type: integer }
+    TeamDetail:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        members:
+          type: array
+          items:
+            type: object
+            properties:
+              user_id: { type: integer }
+              username: { type: string }
+        projects:
+          type: array
+          items:
+            type: object
+            properties:
+              project_id: { type: integer }
+              name: { type: string }
+              role: { type: string }
+        created_at: { type: integer }
+    TeamInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, nullable: true }
+    TeamList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/TeamSummary' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    User:
+      type: object
+      description: Sensitive fields (password_hash, auth_key, totp_secret, recovery_codes) are never returned.
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        email: { type: string }
+        status: { type: integer, description: "10 = active, 0 = inactive" }
+        is_superadmin: { type: boolean }
+        totp_enabled: { type: boolean }
+        role: { type: string, nullable: true }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    UserInput:
+      type: object
+      required: [username, email]
+      properties:
+        username: { type: string, maxLength: 128 }
+        email: { type: string, format: email }
+        password:
+          type: string
+          minLength: 5
+          description: Required on create, optional on update
+        status: { type: integer }
+        is_superadmin: { type: boolean }
+        role: { type: string, description: RBAC role name to assign }
+    UserList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/User' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    Webhook:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        url: { type: string }
+        events: { type: string, description: Comma-separated event names }
+        enabled: { type: boolean }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    WebhookInput:
+      type: object
+      required: [name, url]
+      properties:
+        name: { type: string, maxLength: 128 }
+        url: { type: string, format: uri }
+        secret: { type: string, nullable: true }
+        events:
+          description: Event names as array or comma-separated string
+          oneOf:
+            - { type: array, items: { type: string } }
+            - { type: string }
+        enabled: { type: boolean, default: true }
+    WebhookList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Webhook' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    AuditLog:
+      type: object
+      properties:
+        id: { type: integer }
+        user_id: { type: integer, nullable: true }
+        action: { type: string }
+        object_type: { type: string, nullable: true }
+        object_id: { type: integer, nullable: true }
+        metadata: { type: object, nullable: true, description: Parsed JSON context }
+        ip_address: { type: string, nullable: true }
+        created_at: { type: integer }
+    AuditLogList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AuditLog' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
 
     GenericList:

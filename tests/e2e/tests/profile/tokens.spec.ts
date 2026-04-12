@@ -24,4 +24,30 @@ test.describe('API Tokens', () => {
     await expect(banner.getByRole('link', { name: /OpenAPI spec/i })).toHaveAttribute('href', '/openapi.yaml');
     await expect(banner.getByRole('link', { name: /Swagger UI/i })).toHaveAttribute('href', /:8088$/);
   });
+
+  test('API reference is rendered dynamically from OpenAPI spec', async ({ page }) => {
+    await page.goto('/profile/tokens');
+
+    // The API Reference card must exist
+    const card = page.locator('.card', { hasText: 'API Reference' });
+    await expect(card).toBeVisible();
+
+    // Must show the API version badge
+    await expect(card.locator('.badge').first()).toBeVisible({ timeout: 10_000 });
+
+    // Must contain endpoint tables generated from openapi.yaml —
+    // check for known tags and endpoints
+    await expect(card).toContainText('Projects');
+    await expect(card).toContainText('Jobs');
+    await expect(card).toContainText('Credentials');
+    await expect(card).toContainText('/api/v1/jobs');
+    await expect(card).toContainText('/api/v1/projects');
+
+    // Must show HTTP method badges
+    await expect(card.locator('.badge:has-text("GET")').first()).toBeVisible();
+    await expect(card.locator('.badge:has-text("POST")').first()).toBeVisible();
+
+    // Must have the OpenAPI spec link in the card header
+    await expect(card.getByRole('link', { name: /OpenAPI spec/i })).toHaveAttribute('href', '/openapi.yaml');
+  });
 });

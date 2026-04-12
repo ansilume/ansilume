@@ -97,71 +97,40 @@ $this->title = 'API Tokens';
     </table>
 <?php endif; ?>
 
+<?php
+$endpointsByTag = \app\helpers\OpenApiHelper::getEndpointsByTag();
+$apiVersion = \app\helpers\OpenApiHelper::getVersion();
+$apiBase = rtrim(\Yii::$app->params['appBaseUrl'] ?? \yii\helpers\Url::to('/', true), '/');
+?>
 <div class="card mt-4">
-    <div class="card-header">API Reference</div>
+    <div class="card-header d-flex align-items-center">
+        API Reference
+        <?php if ($apiVersion !== '') : ?>
+            <span class="badge text-bg-secondary ms-2">v<?= Html::encode($apiVersion) ?></span>
+        <?php endif; ?>
+        <?= Html::a('OpenAPI spec', '/openapi.yaml', ['class' => 'btn btn-sm btn-outline-secondary ms-auto', 'target' => '_blank', 'rel' => 'noopener']) ?>
+    </div>
     <div class="card-body">
         <p>All requests require the header <code>Authorization: Bearer &lt;token&gt;</code>.</p>
         <p>Responses are JSON. Successful responses contain a <code>"data"</code> key, errors contain <code>"error"</code>.</p>
 
-        <h6 class="mt-3">Jobs</h6>
-        <table class="table table-sm mb-3">
-            <thead><tr><th style="width:80px">Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/jobs</code></td><td>List jobs (supports <code>?status=</code>, <code>?template_id=</code>, pagination)</td></tr>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/jobs/{id}</code></td><td>Job detail with logs and status</td></tr>
-                <tr><td><span class="badge text-bg-primary">POST</span></td><td><code>/api/v1/jobs</code></td><td>Launch a job — body: <code>{"template_id": 1}</code>, optional: <code>extra_vars</code>, <code>limit</code>, <code>verbosity</code></td></tr>
-                <tr><td><span class="badge text-bg-primary">POST</span></td><td><code>/api/v1/jobs/{id}/cancel</code></td><td>Cancel a running job</td></tr>
-            </tbody>
-        </table>
-
-        <h6>Job Templates</h6>
-        <table class="table table-sm mb-3">
-            <thead><tr><th style="width:80px">Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/job-templates</code></td><td>List templates</td></tr>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/job-templates/{id}</code></td><td>Template detail</td></tr>
-            </tbody>
-        </table>
-
-        <h6>Projects</h6>
-        <table class="table table-sm mb-3">
-            <thead><tr><th style="width:80px">Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/projects</code></td><td>List projects</td></tr>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/projects/{id}</code></td><td>Project detail</td></tr>
-            </tbody>
-        </table>
-
-        <h6>Inventories</h6>
-        <table class="table table-sm mb-3">
-            <thead><tr><th style="width:80px">Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/inventories</code></td><td>List inventories</td></tr>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/inventories/{id}</code></td><td>Inventory detail (content excluded for security)</td></tr>
-            </tbody>
-        </table>
-
-        <h6>Credentials</h6>
-        <table class="table table-sm mb-3">
-            <thead><tr><th style="width:80px">Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/credentials</code></td><td>List credentials (secrets never returned)</td></tr>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/credentials/{id}</code></td><td>Credential metadata</td></tr>
-            </tbody>
-        </table>
-
-        <h6>Schedules</h6>
-        <table class="table table-sm mb-3">
-            <thead><tr><th style="width:80px">Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-            <tbody>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/schedules</code></td><td>List schedules</td></tr>
-                <tr><td><span class="badge text-bg-success">GET</span></td><td><code>/api/v1/schedules/{id}</code></td><td>Schedule detail</td></tr>
-                <tr><td><span class="badge text-bg-primary">POST</span></td><td><code>/api/v1/schedules/{id}/toggle</code></td><td>Enable/disable a schedule</td></tr>
-            </tbody>
-        </table>
+        <?php foreach ($endpointsByTag as $tag => $endpoints) : ?>
+            <h6 class="mt-3"><?= Html::encode($tag) ?></h6>
+            <table class="table table-sm mb-3">
+                <thead><tr><th style="width:80px">Method</th><th style="width:320px">Endpoint</th><th>Description</th></tr></thead>
+                <tbody>
+                    <?php foreach ($endpoints as $ep) : ?>
+                        <tr>
+                            <td><span class="badge <?= Html::encode($ep['badge']) ?>"><?= Html::encode($ep['method']) ?></span></td>
+                            <td><code><?= Html::encode($ep['path']) ?></code></td>
+                            <td><?= Html::encode($ep['summary']) ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endforeach; ?>
 
         <h6>Example</h6>
-        <?php $apiBase = rtrim(\Yii::$app->params['appBaseUrl'] ?? \yii\helpers\Url::to('/', true), '/'); ?>
         <pre class="bg-body-secondary p-3 rounded"><code>curl -s -H "Authorization: Bearer YOUR_TOKEN" \
      <?= Html::encode($apiBase . '/api/v1/jobs') ?> | jq .</code></pre>
     </div>

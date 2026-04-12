@@ -4,15 +4,22 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\models\AuditLog;
 use app\models\Project;
+use app\services\ProjectService;
 use yii\data\ActiveDataProvider;
+use yii\db\ActiveRecord;
 use yii\web\NotFoundHttpException;
 
 /**
  * API v1: Projects
  *
- * GET /api/v1/projects
- * GET /api/v1/projects/{id}
+ * GET    /api/v1/projects
+ * GET    /api/v1/projects/{id}
+ * POST   /api/v1/projects
+ * PUT    /api/v1/projects/{id}
+ * DELETE /api/v1/projects/{id}
+ * POST   /api/v1/projects/{id}/sync
  */
 class ProjectsController extends BaseApiController
 {
@@ -41,12 +48,173 @@ class ProjectsController extends BaseApiController
      */
     public function actionView(int $id): array
     {
-        /** @var Project|null $project */
-        $project = Project::findOne($id);
-        if ($project === null) {
-            throw new NotFoundHttpException("Project #{$id} not found.");
+        return $this->success($this->serialize($this->findModel($id)));
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionCreate(): array
+    {
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
+        $user = \Yii::$app->user;
+        if (!$user->can('project.create')) {
+            return $this->error('Forbidden.', 403);
         }
-        return $this->success($this->serialize($project));
+
+        $model = new Project();
+        $body = (array)\Yii::$app->request->bodyParams;
+        $this->applyBody($model, $body);
+        $model->created_by = (int)$user->id;
+        $model->status = 'new';
+
+        if (!$model->validate()) {
+            return $this->error($this->firstError($model), 422);
+        }
+        if (!$model->save(false)) {
+            return $this->error('Failed to save project.', 422);
+        }
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_PROJECT_CREATED,
+            'project',
+            $model->id,
+            null,
+            ['name' => $model->name, 'scm_type' => $model->scm_type, 'source' => 'api']
+        );
+
+        if ($model->scm_type === Project::SCM_TYPE_GIT) {
+            /** @var ProjectService $svc */
+            $svc = \Yii::$app->get('projectService');
+            $svc->queueSync($model);
+        }
+
+        return $this->success($this->serialize($model), 201);
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionUpdate(int $id): array
+    {
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
+        $user = \Yii::$app->user;
+        if (!$user->can('project.update')) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        $model = $this->findModel($id);
+        $body = (array)\Yii::$app->request->bodyParams;
+        $this->applyBody($model, $body);
+
+        if (!$model->validate()) {
+            return $this->error($this->firstError($model), 422);
+        }
+        if (!$model->save(false)) {
+            return $this->error('Failed to save project.', 422);
+        }
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_PROJECT_UPDATED,
+            'project',
+            $model->id,
+            null,
+            ['name' => $model->name, 'source' => 'api']
+        );
+
+        if ($model->scm_type === Project::SCM_TYPE_GIT) {
+            /** @var ProjectService $svc */
+            $svc = \Yii::$app->get('projectService');
+            $svc->queueSync($model);
+        }
+
+        return $this->success($this->serialize($model));
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionDelete(int $id): array
+    {
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
+        $user = \Yii::$app->user;
+        if (!$user->can('project.delete')) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        $model = $this->findModel($id);
+        $templateCount = $model->getJobTemplates()->count();
+        if ($templateCount > 0) {
+            return $this->error(
+                "Cannot delete \"{$model->name}\": {$templateCount} job template(s) still reference this project.",
+                422
+            );
+        }
+
+        $name = $model->name;
+        $model->delete();
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_PROJECT_DELETED,
+            'project',
+            $id,
+            null,
+            ['name' => $name, 'source' => 'api']
+        );
+
+        return $this->success(['deleted' => true]);
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionSync(int $id): array
+    {
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
+        $user = \Yii::$app->user;
+        if (!$user->can('project.update')) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        $model = $this->findModel($id);
+        if ($model->scm_type !== Project::SCM_TYPE_GIT) {
+            return $this->error('This project has no SCM configured.', 422);
+        }
+
+        /** @var ProjectService $svc */
+        $svc = \Yii::$app->get('projectService');
+        $svc->queueSync($model);
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_PROJECT_SYNCED,
+            'project',
+            $model->id,
+            null,
+            ['name' => $model->name, 'source' => 'api']
+        );
+
+        return $this->success(['synced' => true]);
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     */
+    private function applyBody(Project $model, array $body): void
+    {
+        foreach (['name', 'description', 'scm_type', 'scm_url', 'scm_branch'] as $field) {
+            if (!array_key_exists($field, $body)) {
+                continue;
+            }
+            $value = $body[$field];
+            if ($value === null && in_array($field, ['description', 'scm_url'], true)) {
+                $model->$field = null;
+            } else {
+                $model->$field = (string)$value;
+            }
+        }
+        if (array_key_exists('scm_credential_id', $body)) {
+            $model->scm_credential_id = $body['scm_credential_id'] !== null ? (int)$body['scm_credential_id'] : null;
+        }
     }
 
     /**
@@ -65,5 +233,26 @@ class ProjectsController extends BaseApiController
             'last_synced_at' => $p->last_synced_at,
             'created_at' => $p->created_at,
         ];
+    }
+
+    private function findModel(int $id): Project
+    {
+        /** @var Project|null $p */
+        $p = Project::findOne($id);
+        if ($p === null) {
+            throw new NotFoundHttpException("Project #{$id} not found.");
+        }
+        return $p;
+    }
+
+    /**
+     * @param ActiveRecord $model
+     */
+    private function firstError($model): string
+    {
+        foreach ($model->errors as $errors) {
+            return $errors[0] ?? 'Validation failed.';
+        }
+        return 'Validation failed.';
     }
 }
