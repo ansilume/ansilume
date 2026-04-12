@@ -37,6 +37,32 @@ class FileHelper
     }
 
     /**
+     * Recursively remove a directory and all its contents.
+     */
+    public static function removeDirectory(string $path): bool
+    {
+        if (!is_dir($path)) {
+            return true;
+        }
+        $items = scandir($path);
+        if ($items === false) {
+            return false;
+        }
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $full = $path . DIRECTORY_SEPARATOR . $item;
+            if (is_dir($full)) {
+                self::removeDirectory($full);
+            } else {
+                unlink($full);
+            }
+        }
+        return rmdir($path);
+    }
+
+    /**
      * Read file contents, returning $default on failure.
      */
     public static function safeFileGetContents(string $path, string $default = ''): string

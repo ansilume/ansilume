@@ -93,13 +93,16 @@ abstract class BaseApiController extends Controller
      */
     protected function paginated(array $items, int $total, int $page, int $perPage): array
     {
+        $page = max(1, $page);
+        $perPage = max(1, $perPage);
+
         return [
             'data' => $items,
             'meta' => [
-                'total' => $total,
+                'total' => max(0, $total),
                 'page' => $page,
                 'per_page' => $perPage,
-                'pages' => (int)ceil($total / max($perPage, 1)),
+                'pages' => (int)ceil(max(0, $total) / $perPage),
             ],
         ];
     }

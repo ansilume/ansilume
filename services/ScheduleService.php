@@ -39,6 +39,13 @@ class ScheduleService extends Component
                 continue;
             }
 
+            // Atomic claim: advance next_run_at only if it hasn't changed since
+            // we read it. Prevents duplicate launches when multiple schedule
+            // runners are active.
+            if (!$this->claimSchedule($schedule)) {
+                continue;
+            }
+
             try {
                 $this->launchSchedule($schedule);
                 $launched++;
@@ -59,9 +66,6 @@ class ScheduleService extends Component
                     ],
                 ]);
             }
-
-            // Always advance next_run_at, even if launch failed.
-            $this->advanceSchedule($schedule);
         }
 
         return $launched;
@@ -111,18 +115,35 @@ class ScheduleService extends Component
     }
 
     /**
-     * Update last_run_at and compute + store next_run_at.
+     * Atomically claim a schedule for execution by advancing its next_run_at.
+     *
+     * Uses UPDATE ... WHERE to ensure only one runner processes a schedule
+     * when multiple schedule-runners are active concurrently.
      */
-    private function advanceSchedule(Schedule $schedule): void
+    private function claimSchedule(Schedule $schedule): bool
     {
+        $oldNextRunAt = $schedule->next_run_at;
         $schedule->last_run_at = time();
         $schedule->computeNextRunAt();
 
-        if (!$schedule->save(false, ['last_run_at', 'next_run_at', 'updated_at'])) {
-            \Yii::error(
-                "Failed to advance schedule #{$schedule->id}: " . json_encode($schedule->errors),
-                __CLASS__
-            );
+        // Atomic: only update if next_run_at hasn't changed since we read it
+        $condition = ['id' => $schedule->id, 'enabled' => true];
+        if ($oldNextRunAt !== null) {
+            $condition['next_run_at'] = $oldNextRunAt;
+        } else {
+            // Schedule with null next_run_at — match on null explicitly
+            $condition['next_run_at'] = null;
         }
+
+        $rows = Schedule::updateAll(
+            [
+                'last_run_at' => $schedule->last_run_at,
+                'next_run_at' => $schedule->next_run_at,
+                'updated_at' => time(),
+            ],
+            $condition
+        );
+
+        return $rows > 0;
     }
 }

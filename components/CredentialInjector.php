@@ -134,17 +134,21 @@ class CredentialInjector
      */
     private function writeTempFile(string $content, string $prefix): ?string
     {
+        // Set umask before tempnam so file is created as 0600 from the start,
+        // avoiding a TOCTOU window where the secret is world-readable.
+        $oldUmask = umask(0o177);
         $path = tempnam(sys_get_temp_dir(), $prefix);
         if ($path === false) {
+            umask($oldUmask);
             return null;
         }
 
         if (!FileHelper::safeFilePutContents($path, $content)) {
+            umask($oldUmask);
             FileHelper::safeUnlink($path);
             return null;
         }
-
-        FileHelper::safeChmod($path, 0600);
+        umask($oldUmask);
 
         return $path;
     }

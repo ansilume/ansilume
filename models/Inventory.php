@@ -45,9 +45,11 @@ class Inventory extends ActiveRecord
         return [
             [['name', 'inventory_type'], 'required'],
             [['name'], 'string', 'max' => 128],
-            [['description', 'content'], 'string'],
+            [['description'], 'string', 'max' => 1000],
+            [['content'], 'string', 'max' => 262144],
             [['inventory_type'], 'in', 'range' => [self::TYPE_STATIC, self::TYPE_DYNAMIC, self::TYPE_FILE]],
             [['source_path'], 'string', 'max' => 512],
+            [['source_path'], 'validateSourcePath'],
             [['content'], 'required',
                 'when' => fn ($m) => $m->inventory_type === self::TYPE_STATIC,
                 'whenClient' => "function(attr, val) { return $('#inventory-type').val() === 'static'; }",
@@ -59,6 +61,17 @@ class Inventory extends ActiveRecord
             [['project_id', 'created_by'], 'integer'],
             [['content'], 'validateYaml'],
         ];
+    }
+
+    public function validateSourcePath(string $attribute): void
+    {
+        $path = $this->$attribute;
+        if (empty($path)) {
+            return;
+        }
+        if (preg_match('#(?:^|/)\.\.(?:/|$)#', (string)$path)) {
+            $this->addError($attribute, 'Source path must not contain path traversal sequences (..).');
+        }
     }
 
     public function validateYaml(string $attribute): void

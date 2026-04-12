@@ -125,6 +125,8 @@ class ScheduleController extends BaseController
         $model->enabled = !$model->enabled;
         if ($model->enabled) {
             $model->computeNextRunAt();
+        } else {
+            $model->next_run_at = null;
         }
         $model->save(false, ['enabled', 'next_run_at', 'updated_at']);
         $state = $model->enabled ? 'enabled' : 'disabled';

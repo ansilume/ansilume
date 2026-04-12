@@ -143,8 +143,9 @@ class CredentialController extends BaseController
             $pair = $cs->generateSshKeyPair();
             return $this->asJson(['ok' => true, 'private_key' => $pair['private_key'], 'public_key' => $pair['public_key']]);
         } catch (\RuntimeException $e) {
+            \Yii::error('SSH key generation failed: ' . $e->getMessage(), __CLASS__);
             \Yii::$app->response->statusCode = 500;
-            return $this->asJson(['ok' => false, 'error' => $e->getMessage()]);
+            return $this->asJson(['ok' => false, 'error' => 'Key generation failed.']);
         }
     }
 

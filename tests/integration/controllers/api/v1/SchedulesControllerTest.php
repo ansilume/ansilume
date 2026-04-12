@@ -191,6 +191,28 @@ class SchedulesControllerTest extends WebControllerTestCase
         $this->assertTrue($item2['enabled']);
     }
 
+    public function testToggleDisableClearsNextRunAt(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $project = $this->createProject($userId);
+        $inventory = $this->createInventory($userId);
+        $group = $this->createRunnerGroup($userId);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $userId);
+        $schedule = $this->createSchedule($template->id, $userId);
+
+        // Set next_run_at to simulate an active schedule
+        $schedule->next_run_at = time() + 3600;
+        $schedule->save(false, ['next_run_at']);
+
+        // Disable via toggle
+        $data = $this->callSuccess($this->ctrl->actionToggle($schedule->id));
+        /** @var array<string, mixed> $item */
+        $item = $data;
+        $this->assertFalse($item['enabled']);
+        $this->assertNull($item['next_run_at'], 'next_run_at must be cleared when schedule is disabled');
+    }
+
     // -- Helpers --------------------------------------------------------------
 
     /**

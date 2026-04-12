@@ -56,7 +56,7 @@ class Project extends ActiveRecord
         return [
             [['name', 'scm_type'], 'required'],
             [['name'], 'string', 'max' => 128],
-            [['description'], 'string'],
+            [['description'], 'string', 'max' => 1000],
             [['scm_type'], 'in', 'range' => [self::SCM_TYPE_GIT, self::SCM_TYPE_MANUAL]],
             [['scm_url'], 'validateScmUrl', 'when' => fn ($m) => $m->scm_type === self::SCM_TYPE_GIT],
             [['scm_url', 'local_path'], 'string', 'max' => 512],
@@ -140,10 +140,10 @@ class Project extends ActiveRecord
             return;
         }
         // Accept SSH git URLs: git@host:path.git or ssh://git@host/path
-        if (preg_match('#^(git|ssh)@[\w.\-]+:.+#i', $url)) {
+        if (preg_match('#^(git|ssh)@[\w.\-]+(:\d+)?:[\w.\-/~@]+$#i', $url)) {
             return;
         }
-        if (preg_match('#^ssh://[\w.\-@]+/.+#i', $url)) {
+        if (preg_match('#^ssh://[\w.\-@]+(:\d+)?/[\w.\-/~@]+$#i', $url)) {
             return;
         }
         $this->addError('scm_url', 'SCM URL must be a valid HTTPS URL (https://…) or SSH URL (git@host:org/repo.git).');

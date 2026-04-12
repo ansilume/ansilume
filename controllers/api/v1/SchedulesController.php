@@ -154,6 +154,8 @@ class SchedulesController extends BaseApiController
         $schedule->enabled = !$schedule->enabled;
         if ($schedule->enabled) {
             $schedule->computeNextRunAt();
+        } else {
+            $schedule->next_run_at = null;
         }
         $schedule->save(false, ['enabled', 'next_run_at', 'updated_at']);
         \Yii::$app->get('auditService')->log(

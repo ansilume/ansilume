@@ -359,10 +359,13 @@ class WorkflowExecutionService extends Component
             return null;
         }
 
-        // Explicit step ID
+        // Explicit step ID — must belong to the same workflow template
         if ($stepId !== null) {
             /** @var WorkflowStep|null $s */
-            $s = WorkflowStep::findOne($stepId);
+            $s = WorkflowStep::findOne([
+                'id' => $stepId,
+                'workflow_template_id' => $current->workflow_template_id,
+            ]);
             return $s;
         }
 

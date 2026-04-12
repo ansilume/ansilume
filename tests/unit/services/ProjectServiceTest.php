@@ -81,9 +81,46 @@ class ProjectServiceTest extends TestCase
 
         // Must be a credential helper shell function
         $this->assertMatchesRegularExpression('/^!f\(\) \{.*\}; f$/', $script);
-        // Must contain echo for each credential line
-        $this->assertStringContainsString('echo "username=bot"', $script);
-        $this->assertStringContainsString('echo "password=tok3n"', $script);
+        // Must contain printf for each credential line (uses escapeshellarg)
+        $this->assertStringContainsString('printf', $script);
+        $this->assertStringContainsString('username=bot', $script);
+        $this->assertStringContainsString('password=tok3n', $script);
+    }
+
+    /**
+     * Regression: shell metacharacters in credentials must be escaped.
+     * A password like $(rm -rf /) or `cmd` must not execute in the shell.
+     */
+    public function testBuildCredentialHelperEscapesShellMetachars(): void
+    {
+        $service = new ProjectService();
+        $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
+        $ref->setAccessible(true);
+
+        $script = $ref->invoke($service, 'user', 'p@ss$(rm -rf /)');
+
+        // escapeshellarg wraps values in single quotes, preventing execution.
+        // The dangerous sequence is inside single quotes: '...$(rm -rf /)...'
+        $this->assertStringContainsString("'password=p@ss", $script);
+        $this->assertStringContainsString("'username=user'", $script);
+        // Must NOT use unquoted double-quote echo (the old vulnerable pattern)
+        $this->assertStringNotContainsString('echo "password=', $script);
+    }
+
+    /**
+     * Regression: double-quote injection in credentials must be escaped.
+     */
+    public function testBuildCredentialHelperEscapesDoubleQuotes(): void
+    {
+        $service = new ProjectService();
+        $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
+        $ref->setAccessible(true);
+
+        $script = $ref->invoke($service, 'user"name', 'pass"word');
+
+        // escapeshellarg wraps in single quotes, so double quotes are safe
+        $this->assertStringContainsString('user"name', $script);
+        $this->assertStringContainsString('pass"word', $script);
     }
 
     public function testCleanupKeyFileDeletesTempFile(): void

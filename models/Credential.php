@@ -41,7 +41,7 @@ class Credential extends ActiveRecord
         return [
             [['name', 'credential_type'], 'required'],
             [['name'], 'string', 'max' => 128],
-            [['description'], 'string'],
+            [['description'], 'string', 'max' => 1000],
             [['credential_type'], 'in', 'range' => [
                 self::TYPE_SSH_KEY,
                 self::TYPE_USERNAME_PASSWORD,

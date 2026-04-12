@@ -252,11 +252,12 @@ class ProjectService extends Component
      */
     private function buildCredentialHelperScript(string $user, string $secret): string
     {
-        // credential helper protocol: each field on its own line
-        $lines = ['username=' . $user, 'password=' . $secret]; // noqa: not a hardcoded secret
-        $echos = implode('; ', array_map(fn (string $l) => 'echo "' . $l . '"', $lines));
+        // credential helper protocol: each field on its own line.
+        // printf %s avoids shell metacharacter interpretation in user/password.
+        $safeUser = escapeshellarg('username=' . $user);
+        $safePass = escapeshellarg('password=' . $secret); // noqa: not a hardcoded secret
 
-        return '!f() { ' . $echos . '; }; f';
+        return '!f() { printf "%s\n" ' . $safeUser . ' ' . $safePass . '; }; f';
     }
 
     /**
@@ -282,9 +283,10 @@ class ProjectService extends Component
             return null;
         }
 
+        $oldUmask = umask(0o177); // create files as 0600
         $keyFile = tempnam(sys_get_temp_dir(), 'ansilume_ssh_');
         file_put_contents($keyFile, $key);
-        chmod($keyFile, 0600);
+        umask($oldUmask);
 
         return $keyFile;
     }

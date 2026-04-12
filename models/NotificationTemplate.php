@@ -80,9 +80,10 @@ class NotificationTemplate extends ActiveRecord
         return [
             [['name', 'channel', 'events'], 'required'],
             [['name'], 'string', 'max' => 128],
-            [['description', 'body_template'], 'string'],
+            [['description'], 'string', 'max' => 1000],
+            [['body_template'], 'string', 'max' => 65535],
             [['channel'], 'in', 'range' => array_keys(self::channelLabels())],
-            [['config'], 'string'],
+            [['config'], 'string', 'max' => 4096],
             [['config'], 'validateJson'],
             [['config'], 'validateChannelConfig'],
             [['subject_template'], 'string', 'max' => 512],

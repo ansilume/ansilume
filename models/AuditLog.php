@@ -163,7 +163,7 @@ class AuditLog extends ActiveRecord
             [['object_type'], 'string', 'max' => 64],
             [['ip_address'], 'string', 'max' => 45],
             [['user_agent'], 'string', 'max' => 512],
-            [['metadata'], 'string'],
+            [['metadata'], 'string', 'max' => 65535],
             [['user_id', 'object_id'], 'integer'],
         ];
     }

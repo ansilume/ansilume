@@ -62,9 +62,13 @@ class Job extends ActiveRecord
     {
         return [
             [['launched_by'], 'required'],
-            [['job_template_id', 'launched_by', 'exit_code', 'pid'], 'integer'],
+            [['job_template_id', 'launched_by'], 'integer'],
+            [['exit_code'], 'integer', 'min' => -256, 'max' => 255],
+            [['pid'], 'integer', 'min' => 0],
+            [['timeout_minutes'], 'integer', 'min' => 0, 'max' => 1440],
             [['status'], 'in', 'range' => self::statuses()],
-            [['extra_vars', 'runner_payload', 'execution_command'], 'string'],
+            [['extra_vars'], 'string', 'max' => 65535],
+            [['runner_payload', 'execution_command'], 'string', 'max' => 1048576],
             [['extra_vars'], 'validateJson'],
             [['limit'], 'string', 'max' => 255],
             [['verbosity'], 'integer', 'min' => 0, 'max' => 5],

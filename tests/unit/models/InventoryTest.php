@@ -150,6 +150,46 @@ class InventoryTest extends TestCase
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Path traversal validation (regression)
+    // -------------------------------------------------------------------------
+
+    /**
+     * @dataProvider pathTraversalProvider
+     */
+    public function testSourcePathTraversalValidation(string $path, bool $shouldFail): void
+    {
+        $inv = new Inventory();
+        $inv->name = 'Test';
+        $inv->inventory_type = Inventory::TYPE_FILE;
+        $inv->source_path = $path;
+        $inv->project_id = 1;
+        $inv->validate(['source_path']);
+
+        if ($shouldFail) {
+            $this->assertArrayHasKey('source_path', $inv->errors, "Path '{$path}' should be rejected");
+        } else {
+            $this->assertArrayNotHasKey('source_path', $inv->errors, "Path '{$path}' should be accepted");
+        }
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: bool}>
+     */
+    public static function pathTraversalProvider(): array
+    {
+        return [
+            'simple traversal' => ['../../etc/passwd', true],
+            'mid-path traversal' => ['inventories/../../../etc/shadow', true],
+            'trailing traversal' => ['inventories/..', true],
+            'leading traversal' => ['../hosts.yml', true],
+            'normal relative path' => ['inventories/prod/hosts.yml', false],
+            'simple filename' => ['hosts.yml', false],
+            'double dots in name' => ['my..file.yml', false],
+            'nested valid path' => ['group_vars/all/vault.yml', false],
+        ];
+    }
+
     /**
      * @dataProvider localhostDetectionProvider
      */

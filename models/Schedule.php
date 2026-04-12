@@ -47,7 +47,7 @@ class Schedule extends ActiveRecord
             [['timezone'], 'string', 'max' => 64],
             [['timezone'], 'validateTimezone'],
             [['timezone'], 'default', 'value' => 'UTC'],
-            [['extra_vars'], 'string'],
+            [['extra_vars'], 'string', 'max' => 65535],
             [['extra_vars'], 'validateJson'],
             [['enabled'], 'boolean'],
             [['enabled'], 'default', 'value' => true],

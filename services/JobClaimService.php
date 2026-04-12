@@ -159,7 +159,16 @@ class JobClaimService extends Component
 
         /** @var CredentialService $credentialService */
         $credentialService = \Yii::$app->get('credentialService');
-        $secrets = $credentialService->getSecrets($credential);
+
+        try {
+            $secrets = $credentialService->getSecrets($credential);
+        } catch (\Exception $e) {
+            \Yii::error(
+                "Failed to decrypt credential #{$credentialId}: " . $e->getMessage(),
+                __CLASS__
+            );
+            return null;
+        }
 
         return [
             'credential_type' => $credential->credential_type,

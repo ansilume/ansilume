@@ -132,7 +132,7 @@ class LintService extends Component
 
         $env = array_merge(getenv() ?: [], [
             'HOME' => sys_get_temp_dir(),
-            'ANSIBLE_HOME' => sys_get_temp_dir() . '/ansible',
+            'ANSIBLE_HOME' => $this->ensureCacheDir($cwd),
         ]);
 
         $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
@@ -150,6 +150,30 @@ class LintService extends Component
 
         $output = trim(($stdout ?: '') . ($stderr ? "\n" . $stderr : ''));
         return [$output, $exitCode];
+    }
+
+    /**
+     * Ensure a writable .ansible cache dir exists inside the project CWD.
+     *
+     * ansible-compat's get_cache_dir() (isolated mode) tries $cwd/.ansible
+     * for caching. If that dir is not writable it emits noisy warnings
+     * before falling back to /tmp. Creating it upfront silences them.
+     */
+    protected function ensureCacheDir(string $cwd): string
+    {
+        $cacheDir = $cwd . '/.ansible';
+        if (is_dir($cacheDir)) {
+            return $cacheDir;
+        }
+        if (mkdir($cacheDir, 0o755, true) || is_dir($cacheDir)) {
+            return $cacheDir;
+        }
+        // Fallback: writable temp dir
+        $fallback = sys_get_temp_dir() . '/ansible';
+        if (!is_dir($fallback)) {
+            mkdir($fallback, 0o755, true);
+        }
+        return $fallback;
     }
 
     protected function store(JobTemplate $template, ?int $exitCode, string $output): void

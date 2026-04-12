@@ -96,7 +96,8 @@ class JobsController extends BaseApiController
             $job = $svc->launch($template, (int)($user->id ?? 0), $overrides);
             return $this->success($this->serializeJob($job), 201);
         } catch (\RuntimeException $e) {
-            return $this->error('Launch failed: ' . $e->getMessage(), 500);
+            \Yii::error('Job launch failed: ' . $e->getMessage(), __CLASS__);
+            return $this->error('Launch failed.', 500);
         }
     }
 

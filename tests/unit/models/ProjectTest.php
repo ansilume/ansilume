@@ -62,10 +62,14 @@ class ProjectTest extends TestCase
     public static function invalidUrlProvider(): array
     {
         return [
-            ['ftp://example.com/repo.git'],
-            ['not-a-url'],
-            ['github.com/org/repo'],
-            ['/local/path/repo'],
+            'ftp scheme' => ['ftp://example.com/repo.git'],
+            'bare string' => ['not-a-url'],
+            'missing scheme' => ['github.com/org/repo'],
+            'absolute path' => ['/local/path/repo'],
+            'shell injection via semicolon' => ['git@host:; rm -rf /'],
+            'shell injection via backtick' => ['git@host:`whoami`.git'],
+            'shell injection via dollar' => ['git@host:$(id).git'],
+            'pipe injection' => ['git@host:repo | cat /etc/passwd'],
         ];
     }
 

@@ -407,7 +407,7 @@ class CredentialControllerActionTest extends WebControllerTestCase
         $this->assertSame(500, \Yii::$app->response->statusCode);
         $this->assertIsArray($response->data);
         $this->assertFalse($response->data['ok']);
-        $this->assertSame('ssh-keygen missing', $response->data['error']);
+        $this->assertSame('Key generation failed.', $response->data['error']);
     }
 
     // ── actionDelete() ───────────────────────────────────────────────────────

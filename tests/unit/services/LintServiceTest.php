@@ -392,10 +392,10 @@ class LintServiceTest extends TestCase
 
     /**
      * Regression test for issue #16: ansible-lint emits warnings about
-     * /.ansible not being writable. The execute() method must pass
-     * ANSIBLE_HOME to proc_open so ansible-lint uses a writable cache dir.
+     * /.ansible not being writable. The execute() method must create a
+     * writable .ansible dir in the CWD and pass it as ANSIBLE_HOME.
      */
-    public function testExecutePassesAnsibleHomeEnvToProcOpen(): void
+    public function testExecuteCreatesWritableCacheDirInCwd(): void
     {
         $source = file_get_contents(
             dirname(__DIR__, 3) . '/services/LintService.php'
@@ -408,12 +408,68 @@ class LintServiceTest extends TestCase
             'execute() must set ANSIBLE_HOME so ansible-lint has a writable cache dir'
         );
 
+        // The .ansible dir must be created inside $cwd before proc_open
+        $this->assertStringContainsString(
+            "/.ansible",
+            $source,
+            'execute() must create .ansible cache dir inside project CWD'
+        );
+
         // proc_open must receive an env argument (5th parameter)
         $this->assertMatchesRegularExpression(
             '/proc_open\s*\(\s*\$cmd\s*,\s*\$descriptors\s*,\s*\$pipes\s*,\s*\$cwd\s*,\s*\$env\s*\)/',
             $source,
             'proc_open in execute() must pass $env as 5th argument'
         );
+    }
+
+    /**
+     * Regression test for issue #16: verify that execute() creates .ansible
+     * dir inside the CWD so ansible-compat does not warn about /.ansible.
+     */
+    public function testExecuteCreatesDotAnsibleDirInCwd(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_' . uniqid('', true);
+        mkdir($dir);
+
+        try {
+            // Use a subclass that exposes execute() as public
+            $svc = new class extends LintService {
+                public array $stored = [];
+                public array $storedProjects = [];
+
+                /** @return array{0: string, 1: int} */
+                public function callExecute(?string $playbook, string $cwd): array
+                {
+                    return $this->execute($playbook, $cwd);
+                }
+
+                protected function store(JobTemplate $template, ?int $exitCode, string $output): void
+                {
+                    $this->stored[] = ['exitCode' => $exitCode, 'output' => $output];
+                }
+
+                protected function storeProject(Project $project, ?int $exitCode, string $output): void
+                {
+                    $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output];
+                }
+            };
+
+            // Before execute, .ansible should not exist
+            $this->assertDirectoryDoesNotExist($dir . '/.ansible');
+
+            // execute() will try to run ansible-lint (may or may not be installed),
+            // but the key assertion is that it creates the .ansible cache dir
+            $svc->callExecute(null, $dir);
+
+            $this->assertDirectoryExists(
+                $dir . '/.ansible',
+                'execute() must create .ansible cache dir in CWD to prevent ansible-compat warnings'
+            );
+        } finally {
+            // Recursively clean up — ansible-lint may create nested dirs
+            $this->removeDir($dir);
+        }
     }
 
     public function testRunForTemplateStoresGitWorkspaceNotFoundMessage(): void
@@ -458,5 +514,24 @@ class LintServiceTest extends TestCase
         $this->assertCount(1, $svc->stored);
         $this->assertNull($svc->stored[0]['exitCode']);
         $this->assertStringContainsString('sync the project first', $svc->stored[0]['output']);
+    }
+
+    private function removeDir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        $items = scandir($dir);
+        if ($items === false) {
+            return;
+        }
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $item;
+            is_dir($path) ? $this->removeDir($path) : unlink($path);
+        }
+        rmdir($dir);
     }
 }

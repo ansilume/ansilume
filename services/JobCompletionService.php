@@ -105,8 +105,16 @@ class JobCompletionService extends Component
         $dispatcher->dispatch($event, JobPayloadBuilder::build($job));
     }
 
+    /** Maximum log chunk size in bytes (1 MB). */
+    private const MAX_LOG_CHUNK_SIZE = 1_048_576;
+
     public function appendLog(Job $job, string $stream, string $content, int $sequence): void
     {
+        if (strlen($content) > self::MAX_LOG_CHUNK_SIZE) {
+            $content = substr($content, 0, self::MAX_LOG_CHUNK_SIZE)
+                . "\n\n[truncated — chunk exceeded 1 MB limit]";
+        }
+
         $log = new JobLog();
         $log->job_id = $job->id;
         $log->stream = $stream;

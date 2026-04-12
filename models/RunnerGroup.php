@@ -37,7 +37,7 @@ class RunnerGroup extends ActiveRecord
         return [
             [['name'], 'required'],
             [['name'], 'string', 'max' => 128],
-            [['description'], 'string'],
+            [['description'], 'string', 'max' => 1000],
             [['created_by'], 'integer'],
         ];
     }

@@ -38,7 +38,7 @@ class Team extends ActiveRecord
             [['name'], 'required'],
             [['name'], 'string', 'max' => 128],
             [['name'], 'unique'],
-            [['description'], 'string'],
+            [['description'], 'string', 'max' => 1000],
             [['created_by'], 'integer'],
         ];
     }

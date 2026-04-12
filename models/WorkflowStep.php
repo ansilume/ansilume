@@ -64,7 +64,7 @@ class WorkflowStep extends ActiveRecord
             [['step_order'], 'integer', 'min' => 0],
             [['workflow_template_id', 'job_template_id', 'approval_rule_id'], 'integer'],
             [['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'], 'integer', 'min' => 0],
-            [['extra_vars_template'], 'string'],
+            [['extra_vars_template'], 'string', 'max' => 65535],
             [['extra_vars_template'], 'validateJson'],
         ];
     }

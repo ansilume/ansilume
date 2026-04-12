@@ -40,7 +40,7 @@ class Runner extends ActiveRecord
             [['runner_group_id', 'name'], 'required'],
             [['runner_group_id', 'created_by'], 'integer'],
             [['name'], 'string', 'max' => 128],
-            [['description'], 'string'],
+            [['description'], 'string', 'max' => 1000],
             [['token_hash'], 'string', 'max' => 64],
         ];
     }
