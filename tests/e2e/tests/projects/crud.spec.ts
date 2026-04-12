@@ -49,6 +49,38 @@ test.describe('Projects CRUD', () => {
     await expectFlash(page, 'success');
   });
 
+  // Regression: issue #15 — deleting a project that still has job templates
+  // must show a danger flash instead of throwing an FK constraint exception.
+  test('delete project with templates is refused (issue #15 regression)', async ({ page }) => {
+    // The seeded e2e-project has e2e-template referencing it.
+    page.on('dialog', (d) => d.accept());
+    await page.goto('/project/index');
+    const row = page.locator('table.table tbody tr', { hasText: 'e2e-project' }).first();
+    await expect(row).toBeVisible({ timeout: 5_000 });
+    await row.locator('a').first().click();
+    await page.waitForLoadState('domcontentloaded');
+
+    // Submit the delete form on the view page.
+    const submitted = await page.evaluate(() => {
+      const root = document.getElementById('page-content') || document.body;
+      const btn = Array.from(root.querySelectorAll('form button[type="submit"], form input[type="submit"]'))
+        .find((el) => /delete/i.test((el as HTMLElement).innerText || (el as HTMLInputElement).value || ''));
+      if (btn) {
+        const form = (btn as HTMLButtonElement).closest('form') as HTMLFormElement | null;
+        if (form) { form.submit(); return true; }
+      }
+      return false;
+    });
+    expect(submitted).toBe(true);
+    await page.waitForLoadState('networkidle', { timeout: 10_000 });
+
+    // Must show danger flash with refusal, not an exception page.
+    await expectFlash(page, 'danger', 'job template');
+    // Project must still be listed.
+    await page.goto('/project/index');
+    await expect(page.locator('table.table tbody tr', { hasText: 'e2e-project' })).toBeVisible();
+  });
+
   test('delete project', async ({ page }) => {
     await deleteByRowText(page, '/project/index', 'e2e-crud-project');
     await expectFlash(page, 'success');

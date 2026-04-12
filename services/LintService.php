@@ -130,7 +130,12 @@ class LintService extends Component
             2 => ['pipe', 'w'],
         ];
 
-        $process = proc_open($cmd, $descriptors, $pipes, $cwd);
+        $env = array_merge(getenv() ?: [], [
+            'HOME' => sys_get_temp_dir(),
+            'ANSIBLE_HOME' => sys_get_temp_dir() . '/ansible',
+        ]);
+
+        $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
 
         if (!is_resource($process)) {
             return ['Failed to start ansible-lint process.', -1];

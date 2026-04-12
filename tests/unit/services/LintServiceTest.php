@@ -386,6 +386,36 @@ class LintServiceTest extends TestCase
     // runForTemplate — git project "sync first" message
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // Regression: issue #16 — ansible-lint cache dir must be writable
+    // -------------------------------------------------------------------------
+
+    /**
+     * Regression test for issue #16: ansible-lint emits warnings about
+     * /.ansible not being writable. The execute() method must pass
+     * ANSIBLE_HOME to proc_open so ansible-lint uses a writable cache dir.
+     */
+    public function testExecutePassesAnsibleHomeEnvToProcOpen(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 3) . '/services/LintService.php'
+        );
+        $this->assertNotFalse($source);
+
+        $this->assertStringContainsString(
+            'ANSIBLE_HOME',
+            $source,
+            'execute() must set ANSIBLE_HOME so ansible-lint has a writable cache dir'
+        );
+
+        // proc_open must receive an env argument (5th parameter)
+        $this->assertMatchesRegularExpression(
+            '/proc_open\s*\(\s*\$cmd\s*,\s*\$descriptors\s*,\s*\$pipes\s*,\s*\$cwd\s*,\s*\$env\s*\)/',
+            $source,
+            'proc_open in execute() must pass $env as 5th argument'
+        );
+    }
+
     public function testRunForTemplateStoresGitWorkspaceNotFoundMessage(): void
     {
         // Use a subclass that stubs resolveProjectPath to return a non-existent dir
