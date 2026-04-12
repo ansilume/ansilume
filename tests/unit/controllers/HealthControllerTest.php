@@ -120,6 +120,8 @@ class HealthControllerTest extends TestCase
         $this->assertArrayHasKey('migrations', $response['checks']);
         $this->assertArrayHasKey('runners', $response['checks']);
         $this->assertArrayHasKey('scheduler', $response['checks']);
+        $this->assertArrayHasKey('rbac', $response['checks']);
+        $this->assertArrayHasKey('users', $response['checks']);
     }
 
     // ── Full action — HTTP status ──────────────────────────────────────────

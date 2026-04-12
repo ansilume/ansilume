@@ -55,6 +55,9 @@ class SetupController extends Controller
         $role = $auth->getRole('admin');
         if ($role !== null) {
             $auth->assign($role, $user->id);
+        } else {
+            $this->stderr("WARNING: RBAC role 'admin' not found — user created without role assignment.\n");
+            $this->stderr("Run migrations to seed RBAC roles: php yii migrate\n");
         }
 
         /** @var AuditService $audit */
@@ -104,6 +107,10 @@ class SetupController extends Controller
         }
 
         $this->stdout("Running deferred seed migrations...\n");
-        \Yii::$app->runAction('migrate/up', ['interactive' => 0]);
+        $result = \Yii::$app->runAction('migrate/up', ['interactive' => 0]);
+        if ($result !== ExitCode::OK && $result !== null) {
+            $this->stderr("WARNING: Deferred seed migrations returned non-zero exit code.\n");
+            $this->stderr("The admin user was created, but demo data may be incomplete.\n");
+        }
     }
 }

@@ -6,6 +6,7 @@ namespace app\commands;
 
 use app\models\NotificationTemplate;
 use app\models\Runner;
+use app\models\User;
 use app\services\NotificationDispatcher;
 use yii\console\Controller;
 use yii\console\ExitCode;
@@ -63,6 +64,15 @@ class HealthController extends Controller
             $healthy = false;
         }
 
+        // RBAC core roles
+        $this->checkRbacRoles($healthy);
+
+        // Runtime directories
+        $this->checkRuntimeDirs($healthy);
+
+        // Admin user
+        $this->checkAdminUser($healthy);
+
         if (!$healthy) {
             $this->stderr("[health] status: degraded\n");
             return ExitCode::UNSPECIFIED_ERROR;
@@ -70,6 +80,62 @@ class HealthController extends Controller
 
         $this->stdout("[health] status: ok\n");
         return ExitCode::OK;
+    }
+
+    private function checkRbacRoles(bool &$healthy): void
+    {
+        try {
+            /** @var \yii\rbac\ManagerInterface $auth */
+            $auth = \Yii::$app->authManager;
+            $missing = [];
+            foreach (['admin', 'operator', 'viewer'] as $roleName) {
+                if ($auth->getRole($roleName) === null) {
+                    $missing[] = $roleName;
+                }
+            }
+            if (!empty($missing)) {
+                $this->stderr("[health] rbac: missing roles — " . implode(', ', $missing) . "\n");
+                $healthy = false;
+            } else {
+                $this->stdout("[health] rbac: ok\n");
+            }
+        } catch (\Throwable $e) {
+            $this->stderr("[health] rbac: error — " . $e->getMessage() . "\n");
+            $healthy = false;
+        }
+    }
+
+    private function checkRuntimeDirs(bool &$healthy): void
+    {
+        $dirs = ['/var/www/runtime', '/var/www/runtime/projects', '/var/www/runtime/artifacts', '/var/www/runtime/logs', '/var/www/web/assets'];
+        $notWritable = [];
+        foreach ($dirs as $dir) {
+            if (!is_writable($dir)) {
+                $notWritable[] = $dir;
+            }
+        }
+        if (!empty($notWritable)) {
+            $this->stderr("[health] dirs: not writable — " . implode(', ', $notWritable) . "\n");
+            $healthy = false;
+        } else {
+            $this->stdout("[health] dirs: ok\n");
+        }
+    }
+
+    private function checkAdminUser(bool &$healthy): void
+    {
+        try {
+            $userCount = (int)User::find()->count();
+            if ($userCount === 0) {
+                $this->stderr("[health] users: none — run setup/admin to create the first user\n");
+                $healthy = false;
+            } else {
+                $this->stdout("[health] users: {$userCount} registered\n");
+            }
+        } catch (\Throwable $e) {
+            $this->stderr("[health] users: error — " . $e->getMessage() . "\n");
+            $healthy = false;
+        }
     }
 
     /**

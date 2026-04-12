@@ -6,7 +6,18 @@ set -e
 # flock prevents concurrent composer installs when multiple containers
 # (app, runner-1, runner-2, …) start simultaneously on the same volume.
 echo "[entrypoint] running composer install..."
-cd /var/www && flock /var/www/.composer.install.lock composer install --no-interaction --optimize-autoloader
+if ! cd /var/www || ! flock /var/www/.composer.install.lock composer install --no-interaction --optimize-autoloader; then
+    echo "[entrypoint] ERROR: composer install failed" >&2
+    echo "[entrypoint] Check disk space and network connectivity." >&2
+    exit 1
+fi
+
+# Verify autoload works after install
+if ! php -r "require '/var/www/vendor/autoload.php';" 2>/dev/null; then
+    echo "[entrypoint] ERROR: vendor/autoload.php is broken after composer install" >&2
+    echo "[entrypoint] Try removing vendor/ and restarting: rm -rf /var/www/vendor && docker compose restart" >&2
+    exit 1
+fi
 
 # Create runtime directories required by Yii2 and set permissions for www-data.
 # These are git-ignored and must exist on every fresh checkout. The projects,
@@ -69,7 +80,13 @@ if [ "$1" = "php-fpm" ]; then
     echo "[entrypoint] database is reachable"
 
     echo "[entrypoint] running migrations..."
-    flock /var/www/.migrate.lock php /var/www/yii migrate --interactive=0
+    if ! flock /var/www/.migrate.lock php /var/www/yii migrate --interactive=0; then
+        echo "[entrypoint] ERROR: database migrations failed" >&2
+        echo "[entrypoint] Check the migration output above for details." >&2
+        echo "[entrypoint] Common causes: schema conflicts, insufficient permissions, or a stuck lock." >&2
+        exit 1
+    fi
+    echo "[entrypoint] migrations complete"
 fi
 
 exec "$@"

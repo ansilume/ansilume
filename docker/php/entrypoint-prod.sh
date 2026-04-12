@@ -7,6 +7,14 @@ for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts
     chown -R www-data:www-data "$dir"
 done
 
+# Verify vendor autoload is intact (baked into image but could be damaged by volume mounts)
+if ! php -r "require '/var/www/vendor/autoload.php';" 2>/dev/null; then
+    echo "[entrypoint] ERROR: vendor/autoload.php is missing or broken" >&2
+    echo "[entrypoint] The container image may be corrupted. Pull the latest image:" >&2
+    echo "[entrypoint]   docker compose pull && docker compose up -d" >&2
+    exit 1
+fi
+
 # Run database migrations when starting as php-fpm (the app container).
 # Workers and schedule-runner start with a different command, so they skip this.
 if [ "$1" = "php-fpm" ]; then
@@ -46,7 +54,13 @@ if [ "$1" = "php-fpm" ]; then
     echo "[entrypoint] database is reachable"
 
     echo "[entrypoint] running migrations..."
-    php /var/www/yii migrate --interactive=0
+    if ! php /var/www/yii migrate --interactive=0; then
+        echo "[entrypoint] ERROR: database migrations failed" >&2
+        echo "[entrypoint] Check the migration output above for details." >&2
+        echo "[entrypoint] Common causes: schema conflicts, insufficient permissions, or a stuck lock." >&2
+        exit 1
+    fi
+    echo "[entrypoint] migrations complete"
 fi
 
 exec "$@"

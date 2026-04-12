@@ -100,6 +100,24 @@ class SetupControllerTest extends DbTestCase
     // No audit entry is written when the command aborts
     // -------------------------------------------------------------------------
 
+    public function testAdminUserGetsRbacRoleAssigned(): void
+    {
+        $username = 'setup_rbac_' . uniqid('', true);
+        $email = $username . '@example.com';
+
+        $result = $this->ctrl->actionAdmin($username, $email, 'S3cur3P@ss!');
+
+        $this->assertSame(ExitCode::OK, $result);
+
+        $user = User::find()->where(['username' => $username])->one();
+        $this->assertNotNull($user);
+
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        $roles = $auth->getRolesByUser($user->id);
+        $this->assertArrayHasKey('admin', $roles, 'Admin user must have the admin RBAC role');
+    }
+
     public function testNoAuditLogWhenSuperadminAlreadyExists(): void
     {
         // Seed a superadmin so the command aborts.

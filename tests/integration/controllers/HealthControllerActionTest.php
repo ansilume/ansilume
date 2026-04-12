@@ -211,4 +211,55 @@ class HealthControllerActionTest extends WebControllerTestCase
         $this->assertFalse($result['checks']['scheduler']['ok']);
         $this->assertSame('Scheduler check failed', $result['checks']['scheduler']['error']);
     }
+
+    public function testRbacCheckPassesWhenRolesExist(): void
+    {
+        $ctrl = new HealthController('health', \Yii::$app);
+        $result = $ctrl->actionIndex();
+
+        // Test DB has RBAC roles seeded by migrations
+        $this->assertArrayHasKey('rbac', $result['checks']);
+        $this->assertTrue($result['checks']['rbac']['ok']);
+    }
+
+    public function testUsersCheckReportsUserCount(): void
+    {
+        $this->createUser();
+
+        $ctrl = new HealthController('health', \Yii::$app);
+        $result = $ctrl->actionIndex();
+
+        $this->assertArrayHasKey('users', $result['checks']);
+        $this->assertTrue($result['checks']['users']['ok']);
+        $this->assertGreaterThanOrEqual(1, $result['checks']['users']['total']);
+    }
+
+    public function testUsersCheckReportsNoUsersOnEmptyDb(): void
+    {
+        // Subclass that simulates empty user table
+        $ctrl = new class ('health', \Yii::$app) extends HealthController {
+            protected function checkUsers(): array
+            {
+                return ['ok' => false, 'error' => 'No users exist', 'total' => 0, 'superadmins' => 0];
+            }
+        };
+
+        $result = $ctrl->actionIndex();
+        $this->assertFalse($result['checks']['users']['ok']);
+        $this->assertSame('No users exist', $result['checks']['users']['error']);
+    }
+
+    public function testRbacCheckDetectsMissingRoles(): void
+    {
+        $ctrl = new class ('health', \Yii::$app) extends HealthController {
+            protected function checkRbac(): array
+            {
+                return ['ok' => false, 'error' => 'Missing roles: admin, operator'];
+            }
+        };
+
+        $result = $ctrl->actionIndex();
+        $this->assertFalse($result['checks']['rbac']['ok']);
+        $this->assertStringContainsString('Missing roles', $result['checks']['rbac']['error']);
+    }
 }

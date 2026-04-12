@@ -219,6 +219,15 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 ok "Docker: $(docker --version | head -1)"
 
+# Check Docker version (v20+ required for compose v2 and healthcheck features)
+DOCKER_MAJOR=$(docker version --format '{{.Server.Version}}' 2>/dev/null | cut -d. -f1 || echo "0")
+if [ "${DOCKER_MAJOR:-0}" -lt 20 ]; then
+    fail "Docker version 20+ is required (found: $(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'unknown'))"
+    info ""
+    info "Update Docker: https://docs.docker.com/engine/install/"
+    exit 1
+fi
+
 if ! docker info >/dev/null 2>&1; then
     fail "Cannot connect to the Docker daemon."
     info ""
@@ -243,6 +252,29 @@ fi
 
 if ! command -v openssl >/dev/null 2>&1; then
     warn "openssl not found — secrets will use /dev/urandom fallback"
+fi
+
+# Check available disk space (need at least 2 GB for images + data)
+if command -v df >/dev/null 2>&1; then
+    DISK_AVAIL_KB=$(df -k . 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ -n "$DISK_AVAIL_KB" ] && [ "$DISK_AVAIL_KB" -lt 2097152 ] 2>/dev/null; then
+        DISK_AVAIL_MB=$((DISK_AVAIL_KB / 1024))
+        fail "Not enough disk space: ${DISK_AVAIL_MB}MB available, at least 2048MB recommended."
+        info "Free up disk space and try again."
+        exit 1
+    fi
+    ok "Disk space: $((DISK_AVAIL_KB / 1024))MB available"
+fi
+
+# Check available memory (need at least 512 MB)
+if command -v free >/dev/null 2>&1; then
+    MEM_AVAIL_MB=$(free -m 2>/dev/null | awk '/^Mem:/ {print $7}')
+    if [ -n "$MEM_AVAIL_MB" ] && [ "$MEM_AVAIL_MB" -lt 512 ] 2>/dev/null; then
+        warn "Low memory: ${MEM_AVAIL_MB}MB available. Ansilume needs at least 512MB."
+        info "Containers may fail to start or be killed by the OOM killer."
+    else
+        ok "Memory: ${MEM_AVAIL_MB}MB available"
+    fi
 fi
 
 # ── 2. Deployment mode ───────────────────────────────────────────────────────
@@ -532,14 +564,47 @@ else
     debug "No leftover containers or volumes found"
 fi
 
+# Check for port conflicts before starting containers
+if command -v ss >/dev/null 2>&1; then
+    PORT_CONFLICT=$(ss -tlnp 2>/dev/null | grep ":${NGINX_PORT} " | grep -v docker || true)
+    if [ -n "$PORT_CONFLICT" ]; then
+        fail "Port ${NGINX_PORT} is already in use by another process."
+        info "Either stop that process or choose a different port."
+        info ""
+        info "Listening process:"
+        info "  $PORT_CONFLICT"
+        exit 1
+    fi
+elif command -v netstat >/dev/null 2>&1; then
+    PORT_CONFLICT=$(netstat -tlnp 2>/dev/null | grep ":${NGINX_PORT} " | grep -v docker || true)
+    if [ -n "$PORT_CONFLICT" ]; then
+        fail "Port ${NGINX_PORT} is already in use by another process."
+        info "Either stop that process or choose a different port."
+        exit 1
+    fi
+fi
+
 debug "Running: $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always"
 info "Pulling images and starting services (this may take a moment)..."
+COMPOSE_EXIT=0
 if [ "$VERBOSE" -ge 2 ]; then
     $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
         info "  $line"
-    done || true
+    done
+    COMPOSE_EXIT=${PIPESTATUS[0]:-$?}
 else
-    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null >/dev/null 2>&1 || true
+    COMPOSE_UP_OUT=$($COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1) || COMPOSE_EXIT=$?
+fi
+
+if [ "$COMPOSE_EXIT" -ne 0 ]; then
+    fail "Failed to start containers (exit code: ${COMPOSE_EXIT})"
+    if [ -n "${COMPOSE_UP_OUT:-}" ]; then
+        echo "$COMPOSE_UP_OUT" | tail -10 | while IFS= read -r line || [ -n "$line" ]; do info "  $line"; done
+    fi
+    info ""
+    info "Check logs: $COMPOSE_CMD $COMPOSE_ARGS logs"
+    info "Run diagnostics: curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
+    exit 1
 fi
 
 ok "Containers started"
@@ -579,7 +644,10 @@ while [ $ELAPSED -lt $TIMEOUT ]; do
 done
 
 if [ $ELAPSED -ge $TIMEOUT ]; then
-    warn "Timed out waiting for healthy status — proceeding anyway"
+    warn "Timed out waiting for healthy status after ${TIMEOUT}s — proceeding anyway"
+    info "The app container may still be running migrations or waiting for dependencies."
+    info "If setup fails, run diagnostics:"
+    info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
 fi
 
 # ── 11. Create admin user ─────────────────────────────────────────────────────
@@ -589,9 +657,10 @@ section "Setup"
 
 debug "Creating admin user: $ADMIN_USER / $ADMIN_EMAIL"
 info "Creating admin user..."
+ADMIN_EXIT=0
 ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
-    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" < /dev/null 2>&1) || true
-debug "setup/admin output: ${ADMIN_OUT}"
+    php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" < /dev/null 2>&1) || ADMIN_EXIT=$?
+debug "setup/admin exit=${ADMIN_EXIT} output: ${ADMIN_OUT}"
 case "$ADMIN_OUT" in
     *"already exists"*)
         ok "Admin user already exists — skipping"
@@ -603,7 +672,18 @@ case "$ADMIN_OUT" in
         if [ -n "$ADMIN_OUT" ]; then
             echo "$ADMIN_OUT" | while IFS= read -r line || [ -n "$line" ]; do info "  $line"; done
         fi
-        die "Admin user creation failed. Check the output above and re-run the quickstart."
+        info ""
+        info "Possible causes:"
+        info "  - Database migrations have not finished yet"
+        info "  - Database is not reachable from the app container"
+        info "  - RBAC roles were not seeded correctly"
+        info ""
+        info "Try waiting a moment and running manually:"
+        info "  $COMPOSE_CMD $COMPOSE_ARGS exec app php yii setup/admin $ADMIN_USER $ADMIN_EMAIL <password>"
+        info ""
+        info "Run diagnostics:"
+        info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
+        die "Admin user creation failed (exit code: ${ADMIN_EXIT})."
         ;;
 esac
 

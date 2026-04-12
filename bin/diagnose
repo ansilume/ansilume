@@ -407,6 +407,106 @@ if [ -n "$app_container" ]; then
     fi
 fi
 
+# ── 10c. Application integrity ─────────────────────────────────────────────
+
+section "Application Integrity"
+
+if [ -n "$app_container" ]; then
+    # Vendor autoload
+    if docker exec "$app_container" test -f /var/www/vendor/autoload.php 2>/dev/null; then
+        if docker exec "$app_container" php -r "require '/var/www/vendor/autoload.php'; echo 'ok';" 2>/dev/null | grep -q "ok"; then
+            ok "vendor/autoload.php: present and loadable"
+        else
+            fail "vendor/autoload.php: exists but cannot be loaded (corrupted)"
+            info "  Fix: docker compose exec app composer install"
+        fi
+    else
+        fail "vendor/autoload.php: missing"
+        info "  Fix: docker compose exec app composer install"
+    fi
+
+    # Runtime directories
+    dirs_ok=true
+    for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets; do
+        if ! docker exec "$app_container" test -w "$dir" 2>/dev/null; then
+            fail "Directory not writable: ${dir}"
+            dirs_ok=false
+        fi
+    done
+    if [ "$dirs_ok" = true ]; then
+        ok "Runtime directories: all writable"
+    fi
+
+    # RBAC core roles
+    rbac_output=$(docker exec "$app_container" php -r "
+        require '/var/www/vendor/autoload.php';
+        require '/var/www/config/bootstrap.php';
+        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        \$auth = \$app->authManager;
+        foreach (['admin', 'operator', 'viewer'] as \$r) {
+            echo (\$auth->getRole(\$r) !== null ? 'ok' : 'missing') . '|' . \$r . PHP_EOL;
+        }
+    " 2>/dev/null || true)
+
+    if [ -n "$rbac_output" ]; then
+        rbac_ok=true
+        while IFS='|' read -r rstatus rname; do
+            if [ "$rstatus" != "ok" ]; then
+                fail "RBAC role missing: ${rname}"
+                rbac_ok=false
+            fi
+        done <<< "$rbac_output"
+        if [ "$rbac_ok" = true ]; then
+            ok "RBAC roles: admin, operator, viewer present"
+        else
+            info "  RBAC roles are created by migrations. Run: docker compose exec app php yii migrate"
+        fi
+    else
+        warn "Could not check RBAC roles"
+    fi
+
+    # Admin user exists
+    admin_output=$(docker exec "$app_container" php -r "
+        require '/var/www/vendor/autoload.php';
+        require '/var/www/config/bootstrap.php';
+        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        \$total = (int)app\models\User::find()->count();
+        \$admins = (int)app\models\User::find()->where(['is_superadmin' => true])->count();
+        echo \$total . '|' . \$admins;
+    " 2>/dev/null || true)
+
+    if [ -n "$admin_output" ]; then
+        user_total=$(echo "$admin_output" | cut -d'|' -f1)
+        admin_count=$(echo "$admin_output" | cut -d'|' -f2)
+        if [ "${user_total:-0}" -eq 0 ]; then
+            fail "No users in database — login is impossible"
+            info "  Fix: docker compose exec app php yii setup/admin admin admin@example.com yourpassword"
+        elif [ "${admin_count:-0}" -eq 0 ]; then
+            warn "Users exist (${user_total}) but no superadmin — may not be able to manage the system"
+        else
+            ok "Users: ${user_total} total, ${admin_count} superadmin(s)"
+        fi
+    else
+        warn "Could not check user accounts"
+    fi
+else
+    warn "App container not running — cannot check application integrity"
+fi
+
+# ── 10d. Login page accessibility ──────────────────────────────────────────
+
+if [ -n "$nginx_container" ]; then
+    login_status=$(docker exec "$nginx_container" sh -c \
+        "wget -qSO /dev/null http://127.0.0.1/login 2>&1 | head -1" 2>/dev/null || true)
+    if echo "$login_status" | grep -q "200"; then
+        ok "Login page: accessible (HTTP 200)"
+    elif [ -n "$login_status" ]; then
+        warn "Login page: unexpected response — ${login_status}"
+    else
+        warn "Login page: no response from nginx"
+    fi
+fi
+
 # ── 11. Port conflicts ──────────────────────────────────────────────────────
 
 section "Port Conflicts"
@@ -481,6 +581,31 @@ for svc in $expected_services; do
         ok "${svc}: healthy"
     fi
 done
+
+# Application integrity in summary
+if [ -n "$app_container" ]; then
+    # Re-check admin user for summary
+    summary_admin=$(docker exec "$app_container" php -r "
+        require '/var/www/vendor/autoload.php';
+        require '/var/www/config/bootstrap.php';
+        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        echo (int)app\models\User::find()->where(['is_superadmin' => true])->count();
+    " 2>/dev/null || echo "0")
+    if [ "${summary_admin:-0}" -eq 0 ]; then
+        fail "admin-user: no superadmin exists"
+        all_ok=false
+    else
+        ok "admin-user: ${summary_admin} superadmin(s)"
+    fi
+
+    # Re-check vendor for summary
+    if ! docker exec "$app_container" php -r "require '/var/www/vendor/autoload.php'; echo 'ok';" 2>/dev/null | grep -q "ok"; then
+        fail "vendor: autoload broken"
+        all_ok=false
+    else
+        ok "vendor: intact"
+    fi
+fi
 
 echo ""
 

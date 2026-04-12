@@ -8,6 +8,7 @@ use app\models\Job;
 use app\models\Runner;
 use app\models\RunnerGroup;
 use app\models\Schedule;
+use app\models\User;
 use yii\filters\ContentNegotiator;
 use yii\web\Controller;
 use yii\web\Response;
@@ -82,6 +83,8 @@ class HealthController extends Controller
         return [
             'runners' => $this->checkRunners(),
             'scheduler' => $this->checkScheduler(),
+            'rbac' => $this->checkRbac(),
+            'users' => $this->checkUsers(),
         ];
     }
 
@@ -224,6 +227,46 @@ class HealthController extends Controller
             ->count();
 
         return ['enabled' => $enabled, 'overdue' => $overdue];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function checkRbac(): array
+    {
+        try {
+            /** @var \yii\rbac\ManagerInterface $auth */
+            $auth = \Yii::$app->authManager;
+            $missing = [];
+            foreach (['admin', 'operator', 'viewer'] as $roleName) {
+                if ($auth->getRole($roleName) === null) {
+                    $missing[] = $roleName;
+                }
+            }
+            if (!empty($missing)) {
+                return ['ok' => false, 'error' => 'Missing roles: ' . implode(', ', $missing)];
+            }
+            return ['ok' => true];
+        } catch (\Throwable) {
+            return ['ok' => false, 'error' => 'RBAC check failed'];
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    protected function checkUsers(): array
+    {
+        try {
+            $total = (int)User::find()->count();
+            $admins = (int)User::find()->where(['is_superadmin' => true])->count();
+            if ($total === 0) {
+                return ['ok' => false, 'error' => 'No users exist', 'total' => 0, 'superadmins' => 0];
+            }
+            return ['ok' => true, 'total' => $total, 'superadmins' => $admins];
+        } catch (\Throwable) {
+            return ['ok' => false, 'error' => 'User check failed'];
+        }
     }
 
     /**

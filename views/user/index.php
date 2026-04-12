@@ -33,7 +33,7 @@ $this->title = 'Users';
         <tbody>
         <?php foreach ($dataProvider->getModels() as $user) : ?>
             <?php
- /** @var \yii\rbac\ManagerInterface $auth */
+            /** @var \yii\rbac\ManagerInterface $auth */
             $auth = \Yii::$app->authManager;
             $roles = $auth->getRolesByUser($user->id);
             ?>
