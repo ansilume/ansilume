@@ -102,6 +102,7 @@ services:
     restart: unless-stopped
     environment:
       - RUNNER_NAME=runner-1
+      - RUNNER_GROUP=${RUNNER_GROUP:-}
       - RUNNER_BOOTSTRAP_SECRET=${RUNNER_BOOTSTRAP_SECRET}
       - API_URL=http://nginx
     depends_on:

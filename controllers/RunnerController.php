@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\models\AuditLog;
+use app\models\Job;
 use app\models\Runner;
 use app\models\RunnerGroup;
 use yii\web\NotFoundHttpException;
@@ -18,7 +19,7 @@ class RunnerController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['create', 'delete', 'regenerate-token'], 'allow' => true, 'roles' => ['runner-group.update']],
+            ['actions' => ['create', 'delete', 'regenerate-token', 'move'], 'allow' => true, 'roles' => ['runner-group.update']],
         ];
     }
 
@@ -31,6 +32,7 @@ class RunnerController extends BaseController
             'create' => ['POST'],
             'delete' => ['POST'],
             'regenerate-token' => ['POST'],
+            'move' => ['POST'],
         ];
     }
 
@@ -85,6 +87,52 @@ class RunnerController extends BaseController
 
         $this->session()->setFlash('success', "Runner \"{$name}\" deleted.");
         return $this->redirect(['/runner-group/view', 'id' => $groupId]);
+    }
+
+    public function actionMove(int $id): Response
+    {
+        $runner = $this->findModel($id);
+        $sourceGroupId = $runner->runner_group_id;
+
+        /** @var int|string $rawTargetGroupId */
+        $rawTargetGroupId = \Yii::$app->request->post('target_group_id');
+        $targetGroupId = (int)$rawTargetGroupId;
+
+        if ($targetGroupId === $sourceGroupId) {
+            $this->session()->setFlash('warning', 'Runner is already in that group.');
+            return $this->redirect(['/runner-group/view', 'id' => $sourceGroupId]);
+        }
+
+        /** @var RunnerGroup|null $targetGroup */
+        $targetGroup = RunnerGroup::findOne($targetGroupId);
+        if ($targetGroup === null) {
+            $this->session()->setFlash('danger', 'Target runner group not found.');
+            return $this->redirect(['/runner-group/view', 'id' => $sourceGroupId]);
+        }
+
+        $hasActiveJobs = Job::find()
+            ->where(['runner_id' => $runner->id])
+            ->andWhere(['in', 'status', [Job::STATUS_RUNNING, Job::STATUS_PENDING]])
+            ->exists();
+
+        if ($hasActiveJobs) {
+            $this->session()->setFlash('danger', 'Cannot move runner — it has active or pending jobs. Wait for them to complete.');
+            return $this->redirect(['/runner-group/view', 'id' => $sourceGroupId]);
+        }
+
+        $runner->runner_group_id = $targetGroup->id;
+        $runner->save(false);
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_RUNNER_UPDATED,
+            'runner',
+            $runner->id,
+            null,
+            ['name' => $runner->name, 'from_group_id' => $sourceGroupId, 'to_group_id' => $targetGroup->id]
+        );
+
+        $this->session()->setFlash('success', "Runner \"{$runner->name}\" moved to group \"{$targetGroup->name}\".");
+        return $this->redirect(['/runner-group/view', 'id' => $targetGroup->id]);
     }
 
     public function actionRegenerateToken(int $id): Response

@@ -25,6 +25,7 @@ use yii\console\ExitCode;
  *   RUNNER_TOKEN             — the runner's authentication token; if omitted,
  *                              self-registration is attempted using the variables below
  *   RUNNER_NAME              — name to register under (required for self-registration)
+ *   RUNNER_GROUP             — target runner group name (optional, defaults to "default")
  *   RUNNER_BOOTSTRAP_SECRET  — shared secret that authorises self-registration
  *   API_URL                  — base URL of the ansilume server, e.g. https://your-host (required)
  */

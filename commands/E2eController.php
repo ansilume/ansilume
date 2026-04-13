@@ -139,6 +139,7 @@ class E2eController extends Controller
     private function seedData(int $userId): void
     {
         $runnerGroupId = $this->seedRunnerGroup($userId);
+        $this->seedSecondRunnerGroup($userId);
         $projectId = $this->seedProject($userId);
         $inventoryId = $this->seedInventory($userId);
         $credentialId = $this->seedCredential($userId);
@@ -199,6 +200,24 @@ class E2eController extends Controller
 
         $this->stdout("  Created runner group (ID {$group->id}).\n");
         return $group->id;
+    }
+
+    private function seedSecondRunnerGroup(int $userId): void
+    {
+        $name = self::PREFIX . 'runner-group-2';
+        $existing = RunnerGroup::find()->where(['name' => $name])->one();
+        if ($existing !== null) {
+            $this->stdout("  Second runner group already exists (ID {$existing->id}).\n");
+            return;
+        }
+
+        $group = new RunnerGroup();
+        $group->name = $name;
+        $group->description = 'E2E second runner group (for move tests)';
+        $group->created_by = $userId;
+        $group->save(false);
+
+        $this->stdout("  Created second runner group (ID {$group->id}).\n");
     }
 
     private function seedProject(int $userId): int

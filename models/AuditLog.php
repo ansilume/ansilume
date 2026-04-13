@@ -84,6 +84,7 @@ class AuditLog extends ActiveRecord
 
     // -- Runner actions --------------------------------------------------------
     public const ACTION_RUNNER_CREATED = 'runner.created';
+    public const ACTION_RUNNER_UPDATED = 'runner.updated';
     public const ACTION_RUNNER_DELETED = 'runner.deleted';
     public const ACTION_RUNNER_TOKEN_REGENERATED = 'runner.token.regenerated';
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\RunnerGroup $group */
 /** @var app\models\Runner[] $runners */
+/** @var app\models\RunnerGroup[] $allGroups */
 
 use app\helpers\TimeHelper;
 use yii\helpers\Html;
@@ -145,6 +146,22 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-warning me-1">Regen Token</button>
                             </form>
+                            <?php if (!empty($allGroups)) : ?>
+                            <div class="btn-group me-1" style="display:inline-flex">
+                                <button type="button" class="btn btn-sm btn-outline-info dropdown-toggle" data-bs-toggle="dropdown">Move</button>
+                                <ul class="dropdown-menu">
+                                    <?php foreach ($allGroups as $tg) : ?>
+                                    <li>
+                                        <form method="post" action="<?= Url::to(['/runner/move', 'id' => $runner->id]) ?>" style="display:contents">
+                                            <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
+                                            <input type="hidden" name="target_group_id" value="<?= $tg->id ?>">
+                                            <button type="submit" class="dropdown-item"><?= Html::encode($tg->name) ?></button>
+                                        </form>
+                                    </li>
+                                    <?php endforeach; ?>
+                                </ul>
+                            </div>
+                            <?php endif; ?>
                             <form method="post" action="<?= Url::to(['/runner/delete', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="return confirm('Delete runner &quot;<?= addslashes($runner->name) ?>&quot;?')">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>

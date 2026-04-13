@@ -46,6 +46,7 @@ tags:
   - name: Jobs
   - name: Schedules
   - name: Runner Groups
+  - name: Runners
   - name: Teams
   - name: Users
   - name: Webhooks
@@ -555,6 +556,80 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ────────────────────────────── Runners ────────────────────────────
+  /api/v1/runners:
+    get:
+      tags: [Runners]
+      summary: List runners
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - name: group_id
+          in: query
+          schema: { type: integer }
+          description: Filter by runner group ID
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/RunnerList' } } }
+  /api/v1/runners/{id}:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Runners]
+      summary: Get a single runner
+      responses:
+        '200': { $ref: '#/components/responses/RunnerResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Runners]
+      summary: Delete a runner
+      description: Requires `runner-group.update`.
+      responses:
+        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/runners/{id}/move:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    post:
+      tags: [Runners]
+      summary: Move runner to a different group
+      description: |
+        Requires `runner-group.update`. Refuses if the runner has active
+        or pending jobs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunnerMoveInput' }
+            example:
+              target_group_id: 2
+      responses:
+        '200': { $ref: '#/components/responses/RunnerResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/runners/{id}/regenerate-token:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    post:
+      tags: [Runners]
+      summary: Regenerate runner token
+      description: |
+        Requires `runner-group.update`. Returns the new raw token (shown once).
+      responses:
+        '200':
+          description: New token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      runner: { $ref: '#/components/schemas/Runner' }
+                      token: { type: string, description: Raw token (shown once) }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # ────────────────────────────── Teams ──────────────────────────────
   /api/v1/teams:
@@ -1484,6 +1559,14 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/RunnerGroup' }
+    RunnerResponse:
+      description: Runner
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/Runner' }
     TeamResponse:
       description: Team with members and projects
       content:
@@ -1794,6 +1877,28 @@ components:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/RunnerGroup' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    Runner:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        runner_group_id: { type: integer }
+        runner_group_name: { type: string, nullable: true }
+        is_online: { type: boolean }
+        last_seen_at: { type: integer, nullable: true }
+        created_at: { type: integer }
+    RunnerMoveInput:
+      type: object
+      required: [target_group_id]
+      properties:
+        target_group_id: { type: integer, description: ID of the target runner group }
+    RunnerList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Runner' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
 
     TeamSummary:

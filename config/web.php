@@ -26,6 +26,7 @@ $config = [
         'api/v1/roles' => 'app\controllers\api\v1\RolesController',
         'api/v1/profile' => 'app\controllers\api\v1\ProfileController',
         'api/v1/runner-groups' => 'app\controllers\api\v1\RunnerGroupsController',
+        'api/v1/runners' => 'app\controllers\api\v1\RunnersController',
         'api/v1/teams' => 'app\controllers\api\v1\TeamsController',
         'api/v1/users' => 'app\controllers\api\v1\UsersController',
         'api/v1/webhooks' => 'app\controllers\api\v1\WebhooksController',
@@ -261,6 +262,12 @@ $config = [
                 ['pattern' => 'api/v1/runner-groups/<id:\d+>', 'route' => 'api/v1/runner-groups/delete', 'verb' => 'DELETE'],
                 ['pattern' => 'api/v1/runner-groups', 'route' => 'api/v1/runner-groups/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/runner-groups', 'route' => 'api/v1/runner-groups/create', 'verb' => 'POST'],
+                // Runners API
+                ['pattern' => 'api/v1/runners/<id:\d+>/move', 'route' => 'api/v1/runners/move', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/runners/<id:\d+>/regenerate-token', 'route' => 'api/v1/runners/regenerate-token', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/runners/<id:\d+>', 'route' => 'api/v1/runners/view', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/runners/<id:\d+>', 'route' => 'api/v1/runners/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/runners', 'route' => 'api/v1/runners/index', 'verb' => 'GET'],
                 // Teams API
                 ['pattern' => 'api/v1/teams/<id:\d+>/members/<userId:\d+>', 'route' => 'api/v1/teams/remove-member', 'verb' => 'DELETE'],
                 ['pattern' => 'api/v1/teams/<id:\d+>/members', 'route' => 'api/v1/teams/add-member', 'verb' => 'POST'],
@@ -304,6 +311,7 @@ $config = [
                 'runner/create' => 'runner/create',
                 'runner/delete/<id:\d+>' => 'runner/delete',
                 'runner/regenerate-token/<id:\d+>' => 'runner/regenerate-token',
+                'runner/move/<id:\d+>' => 'runner/move',
                 // Dashboard chart data
                 'site/chart-data' => 'site/chart-data',
                 // Credential helpers

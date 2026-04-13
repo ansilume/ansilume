@@ -537,15 +537,20 @@ composer install               # Install PHP dependencies
 
 ## Roadmap Focus
 
-With the core platform functional, prioritize:
+### Completed
 
-1. **Hardening** — edge cases, error handling, input validation gaps
-2. **Operational polish** — better empty states, UX feedback, log rendering
-3. **Team scoping** — proper multi-tenant project/resource isolation
-4. **HA / scaling** — multi-worker, runner failover, queue reliability
-5. **Advanced features** — artifact management, launch surveys, relaunch/retry
-6. **LDAP/AD integration** — optional Active Directory authentication as addon (local users remain, AD users managed externally, password change disabled for AD users, optional group-to-role mapping). Approach: direct PHP ldap_* functions, `auth_source` column on user table, LoginForm checks auth_source for credential verification.
-7. **Runner group assignment** — runners connecting via bootstrap token cannot be assigned to a specific runner group, and cannot be moved between groups after registration. Needs concept: group selection at registration time, UI to reassign runners.
+1. ~~**Hardening**~~ — security hardening, input validation, race conditions (v2.0.23)
+2. ~~**Operational polish**~~ — relative timestamps, breadcrumbs, table filters, offline check (v2.0.24)
+3. ~~**First-run reliability**~~ — quickstart pre-flight checks, diagnostics, health checks (v2.0.25)
+4. ~~**API CRUD endpoints**~~ — all resources (Projects, Job Templates, Schedules, Runner Groups, Teams, Users, Webhooks, Audit Logs) have full REST API with tests and OpenAPI spec
+
+### Next
+
+1. **Runner group assignment** — runners connecting via bootstrap token cannot be assigned to a specific runner group, and cannot be moved between groups after registration. Needs: group selection at registration time, UI/API to reassign runners between groups.
+2. **Team scoping** — proper multi-tenant project/resource isolation
+3. **HA / scaling** — multi-worker, runner failover, queue reliability
+4. **Advanced features** — artifact management, launch surveys, relaunch/retry
+5. **LDAP/AD integration** — optional Active Directory authentication as addon (local users remain, AD users managed externally, password change disabled for AD users, optional group-to-role mapping). Approach: direct PHP ldap_* functions, `auth_source` column on user table, LoginForm checks auth_source for credential verification.
 
 Strengthen the core before adding new surface area.
 

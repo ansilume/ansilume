@@ -89,12 +89,19 @@ class RunnerTokenResolver
 
     private function selfRegister(string $name, string $bootstrapSecret): string
     {
-        $this->controller->stdout("No token found — registering as '{$name}' with the server...\n");
+        $group = $_ENV['RUNNER_GROUP'] ?? '';
+        $groupInfo = $group !== '' ? " in group '{$group}'" : '';
+        $this->controller->stdout("No token found — registering as '{$name}'{$groupInfo} with the server...\n");
 
-        $response = $this->http->postUnauthenticated('/api/runner/v1/register', [
+        $payload = [
             'name' => $name,
             'bootstrap_secret' => $bootstrapSecret,
-        ]);
+        ];
+        if ($group !== '') {
+            $payload['group'] = $group;
+        }
+
+        $response = $this->http->postUnauthenticated('/api/runner/v1/register', $payload);
 
         if ($response === null) {
             $apiUrl = '(server)';

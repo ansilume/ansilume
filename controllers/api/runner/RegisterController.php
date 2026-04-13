@@ -18,8 +18,11 @@ use yii\web\Response;
  *
  * A runner that has no pre-configured token can call this endpoint with a
  * shared bootstrap secret to obtain a token automatically.  The endpoint
- * creates (or resets the token of) a runner record named after the caller
- * and places it in the "default" runner group.
+ * creates (or resets the token of) a runner record named after the caller.
+ *
+ * The optional "group" field specifies the target runner group by name.
+ * If omitted or empty, the runner is placed in the "default" group (created
+ * automatically if it does not exist).
  *
  * Protected by RUNNER_BOOTSTRAP_SECRET from the environment.  If that
  * variable is not set or empty the endpoint returns 403.
@@ -40,7 +43,10 @@ class RegisterController extends Controller
 
     /**
      * POST /api/runner/v1/register
-     * Body: { name: "runner-1", bootstrap_secret: "..." }
+     * Body: { name: "runner-1", bootstrap_secret: "...", group: "my-group" }
+     *
+     * The "group" field is optional. If provided, the runner is placed in the
+     * named group (which must already exist). If omitted, "default" is used.
      *
      * @return array{ok: bool, error?: string, data?: array{runner_id: int, runner_name: string, group_id: int, group_name: string, token: string}}
      */
@@ -55,6 +61,7 @@ class RegisterController extends Controller
         $body = (array)\Yii::$app->request->bodyParams;
         $name = trim((string)($body['name'] ?? ''));
         $secret = (string)($body['bootstrap_secret'] ?? '');
+        $groupName = trim((string)($body['group'] ?? ''));
 
         if (!hash_equals($bootstrapSecret, $secret)) {
             \Yii::$app->response->statusCode = 403;
@@ -72,7 +79,12 @@ class RegisterController extends Controller
             return ['ok' => false, 'error' => 'No users exist yet. Run setup/admin first.'];
         }
 
-        $group = $this->ensureDefaultGroup($systemUserId);
+        $group = $this->resolveGroup($groupName, $systemUserId);
+        if ($group === null) {
+            \Yii::$app->response->statusCode = 400;
+            return ['ok' => false, 'error' => "Runner group \"{$groupName}\" not found."];
+        }
+
         [$runner, $rawToken] = $this->upsertRunner($group->id, $name, $systemUserId);
 
         return [
@@ -85,6 +97,20 @@ class RegisterController extends Controller
                 'token' => $rawToken,
             ],
         ];
+    }
+
+    /**
+     * Resolve the target runner group by name.
+     * If no name is provided, use "default" (auto-create if missing).
+     * If a name is provided, look it up (do NOT auto-create user-specified groups).
+     */
+    private function resolveGroup(string $groupName, int $systemUserId): ?RunnerGroup
+    {
+        if ($groupName === '') {
+            return $this->ensureDefaultGroup($systemUserId);
+        }
+
+        return RunnerGroup::findOne(['name' => $groupName]);
     }
 
     private function resolveSystemUserId(): ?int

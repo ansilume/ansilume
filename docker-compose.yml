@@ -206,6 +206,7 @@ services:
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
     environment:
       - RUNNER_NAME=runner-1
+      - RUNNER_GROUP=${RUNNER_GROUP:-}
       - RUNNER_BOOTSTRAP_SECRET=${RUNNER_BOOTSTRAP_SECRET}
       - API_URL=http://nginx
     depends_on:
@@ -238,6 +239,7 @@ services:
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
     environment:
       - RUNNER_NAME=runner-2
+      - RUNNER_GROUP=${RUNNER_GROUP:-}
       - RUNNER_BOOTSTRAP_SECRET=${RUNNER_BOOTSTRAP_SECRET}
       - API_URL=http://nginx
     depends_on:

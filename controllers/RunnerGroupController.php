@@ -78,7 +78,9 @@ class RunnerGroupController extends BaseController
     {
         $group = $this->findModel($id);
         $runners = $group->getRunners()->orderBy('name')->all();
-        return $this->render('view', compact('group', 'runners'));
+        /** @var RunnerGroup[] $allGroups */
+        $allGroups = RunnerGroup::find()->where(['!=', 'id', $group->id])->orderBy('name')->all();
+        return $this->render('view', compact('group', 'runners', 'allGroups'));
     }
 
     public function actionCreate(): string|Response

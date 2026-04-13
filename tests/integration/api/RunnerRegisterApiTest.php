@@ -82,4 +82,37 @@ class RunnerRegisterApiTest extends DbTestCase
         $result = RunnerGroup::findOne(['name' => 'nonexistent-group-' . uniqid('', true)]);
         $this->assertNull($result);
     }
+
+    public function testRunnerCanBePlacedInSpecificGroup(): void
+    {
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $runner = $this->createRunner($group->id, $user->id);
+
+        $this->assertSame($group->id, $runner->runner_group_id);
+        $this->assertSame($group->name, $runner->group->name);
+    }
+
+    public function testRunnerCanBeMovedBetweenGroups(): void
+    {
+        $user = $this->createUser();
+        $group1 = $this->createRunnerGroup($user->id);
+        $group2 = $this->createRunnerGroup($user->id);
+        $runner = $this->createRunner($group1->id, $user->id);
+
+        $this->assertSame($group1->id, $runner->runner_group_id);
+
+        $runner->runner_group_id = $group2->id;
+        $runner->save(false);
+        $runner->refresh();
+
+        $this->assertSame($group2->id, $runner->runner_group_id);
+        $this->assertSame($group2->name, $runner->group->name);
+    }
+
+    public function testNonexistentGroupReturnsNull(): void
+    {
+        $result = RunnerGroup::findOne(['name' => 'does-not-exist-' . uniqid('', true)]);
+        $this->assertNull($result);
+    }
 }
