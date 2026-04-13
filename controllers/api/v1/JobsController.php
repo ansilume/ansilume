@@ -9,6 +9,7 @@ use app\models\Job;
 use app\models\JobSearchForm;
 use app\models\JobTemplate;
 use app\services\JobLaunchService;
+use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use yii\web\NotFoundHttpException;
 
 /**
@@ -21,6 +22,8 @@ use yii\web\NotFoundHttpException;
  */
 class JobsController extends BaseApiController
 {
+    use ApiTeamScopingTrait;
+
     public $enableCsrfValidation = false;
 
     /**
@@ -29,6 +32,7 @@ class JobsController extends BaseApiController
     public function actionIndex(): array
     {
         $search = new JobSearchForm();
+        $search->teamFilter = $this->checker()->buildJobFilter($this->currentUserId());
         $dp = $search->search(\Yii::$app->request->queryParams);
 
         $jobs = $dp->getModels();
@@ -48,9 +52,18 @@ class JobsController extends BaseApiController
     /**
      * @return array{data: mixed}
      */
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
     public function actionView(int $id): array
     {
-        return $this->success($this->serializeJob($this->findJob($id)));
+        $job = $this->findJob($id);
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
+        return $this->success($this->serializeJob($job));
     }
 
     /**
@@ -74,21 +87,12 @@ class JobsController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
 
-        $overrides = [];
-        if (!empty($body['extra_vars'])) {
-            $overrides['extra_vars'] = is_array($body['extra_vars'])
-                ? json_encode($body['extra_vars'])
-                : $body['extra_vars'];
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $template->project_id)) {
+            return $this->error('Forbidden.', 403);
         }
-        if (!empty($body['limit'])) {
-            $overrides['limit'] = $body['limit'];
-        }
-        if (isset($body['verbosity'])) {
-            $overrides['verbosity'] = (int)$body['verbosity'];
-        }
-        if (!empty($body['check_mode'])) {
-            $overrides['check_mode'] = 1;
-        }
+
+        $overrides = $this->buildOverrides($body);
 
         try {
             /** @var JobLaunchService $svc */
@@ -118,12 +122,42 @@ class JobsController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
 
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
+
         $job->status = Job::STATUS_CANCELED;
         $job->finished_at = time();
         $job->save(false);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_JOB_CANCELED, 'job', $job->id);
 
         return $this->success($this->serializeJob($job));
+    }
+
+    /**
+     * @param array<string, mixed> $body
+     * @return array<string, mixed>
+     */
+    private function buildOverrides(array $body): array
+    {
+        $overrides = [];
+        if (!empty($body['extra_vars'])) {
+            $overrides['extra_vars'] = is_array($body['extra_vars'])
+                ? json_encode($body['extra_vars'])
+                : $body['extra_vars'];
+        }
+        if (!empty($body['limit'])) {
+            $overrides['limit'] = $body['limit'];
+        }
+        if (isset($body['verbosity'])) {
+            $overrides['verbosity'] = (int)$body['verbosity'];
+        }
+        if (!empty($body['check_mode'])) {
+            $overrides['check_mode'] = 1;
+        }
+        return $overrides;
     }
 
     private function findJob(int $id): Job

@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
 use app\models\Inventory;
+use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
 
@@ -20,13 +21,21 @@ use yii\web\NotFoundHttpException;
  */
 class InventoriesController extends BaseApiController
 {
+    use ApiTeamScopingTrait;
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
     public function actionIndex(): array
     {
+        $query = Inventory::find()->orderBy(['id' => SORT_DESC]);
+        $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'inventory.project_id');
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+
         $dp = new ActiveDataProvider([
-            'query' => Inventory::find()->orderBy(['id' => SORT_DESC]),
+            'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
         /** @var int $page */
@@ -43,9 +52,17 @@ class InventoriesController extends BaseApiController
     /**
      * @return array{data: mixed}
      */
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
     public function actionView(int $id): array
     {
-        return $this->success($this->serialize($this->findModel($id)));
+        $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $model->project_id)) {
+            return $this->error('Forbidden.', 403);
+        }
+        return $this->success($this->serialize($model));
     }
 
     /**
@@ -63,6 +80,11 @@ class InventoriesController extends BaseApiController
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
         $model->created_by = (int)$user->id;
+
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
+            return $this->error('Forbidden.', 403);
+        }
 
         if (!$model->save()) {
             return $this->error($this->firstError($model), 422);
@@ -91,6 +113,10 @@ class InventoriesController extends BaseApiController
         }
 
         $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
+            return $this->error('Forbidden.', 403);
+        }
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
 
@@ -121,6 +147,10 @@ class InventoriesController extends BaseApiController
         }
 
         $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
+            return $this->error('Forbidden.', 403);
+        }
         $name = $model->name;
         $model->delete();
 

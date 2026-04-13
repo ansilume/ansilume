@@ -543,14 +543,14 @@ composer install               # Install PHP dependencies
 2. ~~**Operational polish**~~ — relative timestamps, breadcrumbs, table filters, offline check (v2.0.24)
 3. ~~**First-run reliability**~~ — quickstart pre-flight checks, diagnostics, health checks (v2.0.25)
 4. ~~**API CRUD endpoints**~~ — all resources (Projects, Job Templates, Schedules, Runner Groups, Teams, Users, Webhooks, Audit Logs) have full REST API with tests and OpenAPI spec
+5. ~~**Runner group assignment**~~ — runners can be moved between groups via web UI and REST API, with active-job guards and audit logging (v2.0.26)
+6. ~~**Team scoping**~~ — multi-tenant resource isolation: projects assigned to teams with viewer/operator roles; all child resources (templates, inventories, jobs, schedules) inherit access transitively; enforced across web UI and REST API
 
 ### Next
 
-1. **Runner group assignment** — runners connecting via bootstrap token cannot be assigned to a specific runner group, and cannot be moved between groups after registration. Needs: group selection at registration time, UI/API to reassign runners between groups.
-2. **Team scoping** — proper multi-tenant project/resource isolation
-3. **HA / scaling** — multi-worker, runner failover, queue reliability
-4. **Advanced features** — artifact management, launch surveys, relaunch/retry
-5. **LDAP/AD integration** — optional Active Directory authentication as addon (local users remain, AD users managed externally, password change disabled for AD users, optional group-to-role mapping). Approach: direct PHP ldap_* functions, `auth_source` column on user table, LoginForm checks auth_source for credential verification.
+1. **HA / scaling** — multi-worker, runner failover, queue reliability
+2. **Advanced features** — artifact management, launch surveys, relaunch/retry
+3. **LDAP/AD integration** — optional Active Directory authentication as addon (local users remain, AD users managed externally, password change disabled for AD users, optional group-to-role mapping). Approach: direct PHP ldap_* functions, `auth_source` column on user table, LoginForm checks auth_source for credential verification.
 
 Strengthen the core before adding new surface area.
 

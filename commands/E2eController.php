@@ -152,6 +152,10 @@ class E2eController extends Controller
         $this->seedWorkflowStep($workflowTemplateId, $templateId, $approvalRuleId);
         $this->seedApprovalWorkflow($userId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
+        $seeder = new E2eTeamScopingSeeder(function (string $msg): void {
+            $this->stdout($msg);
+        });
+        $seeder->seed($userId, $runnerGroupId);
         $this->seedCustomRole();
     }
 

@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
 use app\models\Project;
+use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use app\services\ProjectService;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
@@ -23,13 +24,21 @@ use yii\web\NotFoundHttpException;
  */
 class ProjectsController extends BaseApiController
 {
+    use ApiTeamScopingTrait;
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
     public function actionIndex(): array
     {
+        $query = Project::find()->orderBy(['id' => SORT_DESC]);
+        $filter = $this->checker()->buildProjectFilter($this->currentUserId());
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+
         $dp = new ActiveDataProvider([
-            'query' => Project::find()->orderBy(['id' => SORT_DESC]),
+            'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
         /** @var int $page */
@@ -46,9 +55,17 @@ class ProjectsController extends BaseApiController
     /**
      * @return array{data: mixed}
      */
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
     public function actionView(int $id): array
     {
-        return $this->success($this->serialize($this->findModel($id)));
+        $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canView($userId, $model->id)) {
+            return $this->error('Forbidden.', 403);
+        }
+        return $this->success($this->serialize($model));
     }
 
     /**
@@ -104,6 +121,10 @@ class ProjectsController extends BaseApiController
         }
 
         $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperate($userId, $model->id)) {
+            return $this->error('Forbidden.', 403);
+        }
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
 
@@ -143,6 +164,10 @@ class ProjectsController extends BaseApiController
         }
 
         $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperate($userId, $model->id)) {
+            return $this->error('Forbidden.', 403);
+        }
         $templateCount = $model->getJobTemplates()->count();
         if ($templateCount > 0) {
             return $this->error(
@@ -177,6 +202,10 @@ class ProjectsController extends BaseApiController
         }
 
         $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperate($userId, $model->id)) {
+            return $this->error('Forbidden.', 403);
+        }
         if ($model->scm_type !== Project::SCM_TYPE_GIT) {
             return $this->error('This project has no SCM configured.', 422);
         }

@@ -12,12 +12,15 @@ use app\models\Project;
 use app\models\RunnerGroup;
 use app\services\JobLaunchService;
 use app\services\LintService;
+use app\controllers\traits\TeamScopingTrait;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 class JobTemplateController extends BaseController
 {
+    use TeamScopingTrait;
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -49,8 +52,15 @@ class JobTemplateController extends BaseController
 
     public function actionIndex(): string
     {
+        $query = JobTemplate::find()->with(['project', 'inventory', 'creator'])->orderBy(['id' => SORT_DESC]);
+
+        $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+
         $dataProvider = new ActiveDataProvider([
-            'query' => JobTemplate::find()->with(['project', 'inventory', 'creator'])->orderBy(['id' => SORT_DESC]),
+            'query' => $query,
             'pagination' => ['pageSize' => 20],
         ]);
         return $this->render('index', ['dataProvider' => $dataProvider]);
@@ -58,7 +68,9 @@ class JobTemplateController extends BaseController
 
     public function actionView(int $id): string
     {
-        return $this->render('view', ['model' => $this->findModel($id)]);
+        $model = $this->findModel($id);
+        $this->requireChildView($model->project_id);
+        return $this->render('view', ['model' => $model]);
     }
 
     public function actionCreate(?int $project_id = null, ?string $playbook = null): Response|string
@@ -77,6 +89,7 @@ class JobTemplateController extends BaseController
             $model->playbook = $playbook;
         }
         if ($model->load((array)\Yii::$app->request->post())) {
+            $this->requireChildOperate($model->project_id);
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_CREATED, 'job_template', $model->id, null, ['name' => $model->name]);
@@ -93,6 +106,7 @@ class JobTemplateController extends BaseController
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
+        $this->requireChildOperate($model->project_id);
         if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_UPDATED, 'job_template', $model->id, null, ['name' => $model->name]);
             /** @var \app\services\LintService $lintService */
@@ -107,6 +121,7 @@ class JobTemplateController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
+        $this->requireChildOperate($model->project_id);
         $name = $model->name;
         $model->softDelete();
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_DELETED, 'job_template', $id, null, ['name' => $name]);
@@ -118,6 +133,7 @@ class JobTemplateController extends BaseController
     {
         $id = (int)(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0));
         $template = $this->findModel($id);
+        $this->requireChildOperate($template->project_id);
         /** @var array<string, mixed> $overrides */
         $overrides = (array)\Yii::$app->request->post('overrides', []);
         /** @var array<string, mixed> $survey */
@@ -143,6 +159,7 @@ class JobTemplateController extends BaseController
     public function actionGenerateTriggerToken(int $id): Response
     {
         $model = $this->findModel($id);
+        $this->requireChildOperate($model->project_id);
         $model->generateTriggerToken();
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED,
@@ -160,6 +177,7 @@ class JobTemplateController extends BaseController
     public function actionRevokeTriggerToken(int $id): Response
     {
         $model = $this->findModel($id);
+        $this->requireChildOperate($model->project_id);
         $model->revokeTriggerToken();
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_REVOKED,
@@ -177,10 +195,25 @@ class JobTemplateController extends BaseController
      */
     private function formData(JobTemplate $model): array
     {
+        $userId = $this->currentUserId();
+        $checker = $this->checker();
+
+        $projectQuery = Project::find()->orderBy('name');
+        $projectFilter = $checker->buildProjectFilter($userId);
+        if ($projectFilter !== null) {
+            $projectQuery->andWhere($projectFilter);
+        }
+
+        $inventoryQuery = Inventory::find()->orderBy('name');
+        $inventoryFilter = $checker->buildChildResourceFilter($userId, 'inventory.project_id');
+        if ($inventoryFilter !== null) {
+            $inventoryQuery->andWhere($inventoryFilter);
+        }
+
         return [
             'model' => $model,
-            'projects' => Project::find()->orderBy('name')->all(),
-            'inventories' => Inventory::find()->orderBy('name')->all(),
+            'projects' => $projectQuery->all(),
+            'inventories' => $inventoryQuery->all(),
             'credentials' => Credential::find()->orderBy('name')->all(),
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
         ];

@@ -146,7 +146,7 @@ class ProjectController extends BaseController
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
-        $this->requireAccess($model);
+        $this->requireAccess($model, true);
         if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_UPDATED, 'project', $model->id, null, ['name' => $model->name]);
             if ($model->scm_type === Project::SCM_TYPE_GIT && $model->scm_url) {
@@ -165,7 +165,7 @@ class ProjectController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $this->requireAccess($model);
+        $this->requireAccess($model, true);
 
         $templateCount = $model->getJobTemplates()->count();
         if ($templateCount > 0) {
@@ -183,7 +183,7 @@ class ProjectController extends BaseController
     public function actionLint(int $id): Response
     {
         $model = $this->findModel($id);
-        $this->requireAccess($model);
+        $this->requireAccess($model, true);
         /** @var LintService $lintSvc */
         $lintSvc = \Yii::$app->get('lintService');
         $lintSvc->runForProject($model);
@@ -195,7 +195,7 @@ class ProjectController extends BaseController
     public function actionSync(int $id): Response
     {
         $model = $this->findModel($id);
-        $this->requireAccess($model);
+        $this->requireAccess($model, true);
         if ($model->scm_type !== Project::SCM_TYPE_GIT) {
             $this->session()->setFlash('warning', 'This project has no SCM configured.');
             return $this->redirect(['view', 'id' => $id]);
@@ -235,11 +235,16 @@ class ProjectController extends BaseController
         return $model;
     }
 
-    private function requireAccess(Project $model): void
+    private function requireAccess(Project $model, bool $operatorRequired = false): void
     {
         /** @var ProjectAccessChecker $checker */
         $checker = \Yii::$app->get('projectAccessChecker');
-        if (!$checker->canView((int)\Yii::$app->user->id, $model->id)) {
+        $userId = (int)\Yii::$app->user->id;
+        if ($operatorRequired) {
+            if (!$checker->canOperate($userId, $model->id)) {
+                throw new \yii\web\ForbiddenHttpException('You do not have permission to modify this project.');
+            }
+        } elseif (!$checker->canView($userId, $model->id)) {
             throw new \yii\web\ForbiddenHttpException('You do not have access to this project.');
         }
     }

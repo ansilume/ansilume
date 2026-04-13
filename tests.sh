@@ -569,12 +569,14 @@ fi
 section "PHPMD (complexity + unused code)"
 
 if dc php vendor/bin/phpmd --version >/dev/null 2>&1; then
-    PHPMD_OUT=$(dc php vendor/bin/phpmd \
-        controllers,services,commands,jobs,components,helpers,models \
-        text phpmd.xml \
-        --suffixes php \
-        --exclude vendor,tests \
-        2>&1 || true)
+    PHPMD_OUT=""
+    for phpmd_dir in controllers services commands jobs components helpers models; do
+        PHPMD_OUT+=$(dc php vendor/bin/phpmd \
+            "$phpmd_dir" text phpmd.xml \
+            --suffixes php \
+            --exclude vendor,tests \
+            2>&1 || true)
+    done
     if [[ -z "$PHPMD_OUT" ]]; then
         ok "PHPMD passed (no violations)"
     else
@@ -667,7 +669,7 @@ section "Consistency checks"
 
 # Every controller should extend BaseController, a Base*Controller, or yii Controller
 CTRL_ISSUES=$(grep -rLn "extends BaseController\|extends Base.*Controller\|extends Controller\|extends \\\yii" controllers/ 2>/dev/null \
-    | grep -v "^Binary" || true)
+    | grep -v "^Binary" | grep -v '/traits/' || true)
 if [[ -z "$CTRL_ISSUES" ]]; then
     ok "All controllers extend a base controller"
 else

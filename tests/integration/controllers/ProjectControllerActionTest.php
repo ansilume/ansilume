@@ -128,8 +128,11 @@ class ProjectControllerActionTest extends WebControllerTestCase
     public function testViewForbiddenForUserWithoutAccess(): void
     {
         $owner = $this->createUser('owner');
-        $outsider = $this->createUser('outsider'); // not superadmin
+        $outsider = $this->createUser('outsider');
         $project = $this->createProject($owner->id);
+        // Restrict project to a team — outsider is not a member
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id);
         $this->loginAs($outsider);
 
         $ctrl = $this->makeController();
@@ -400,6 +403,8 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $owner = $this->createUser('upd-owner');
         $outsider = $this->createUser('upd-outsider');
         $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id);
         $this->loginAs($outsider);
 
         $ctrl = $this->makeController();
@@ -424,6 +429,8 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $owner = $this->createUser('del-owner');
         $outsider = $this->createUser('del-outsider');
         $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id);
         $this->loginAs($outsider);
 
         $ctrl = $this->makeController();
@@ -448,6 +455,8 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $owner = $this->createUser('sync-owner');
         $outsider = $this->createUser('sync-outsider');
         $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id);
         $this->loginAs($outsider);
 
         $ctrl = $this->makeController();
@@ -472,6 +481,8 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $owner = $this->createUser('lint-owner');
         $outsider = $this->createUser('lint-outsider');
         $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id);
         $this->loginAs($outsider);
 
         $ctrl = $this->makeController();

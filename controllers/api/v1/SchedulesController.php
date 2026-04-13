@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
+use app\models\JobTemplate;
 use app\models\Schedule;
+use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
 use yii\web\NotFoundHttpException;
@@ -22,13 +24,21 @@ use yii\web\NotFoundHttpException;
  */
 class SchedulesController extends BaseApiController
 {
+    use ApiTeamScopingTrait;
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
     public function actionIndex(): array
     {
+        $query = Schedule::find()->orderBy(['id' => SORT_DESC]);
+        $filter = $this->checker()->buildJobFilter($this->currentUserId());
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+
         $dp = new ActiveDataProvider([
-            'query' => Schedule::find()->orderBy(['id' => SORT_DESC]),
+            'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
         /** @var int $page */
@@ -45,9 +55,18 @@ class SchedulesController extends BaseApiController
     /**
      * @return array{data: mixed}
      */
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
     public function actionView(int $id): array
     {
-        return $this->success($this->serialize($this->findModel($id)));
+        $model = $this->findModel($id);
+        $projectId = $model->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
+        return $this->success($this->serialize($model));
     }
 
     /**
@@ -65,6 +84,13 @@ class SchedulesController extends BaseApiController
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
         $model->created_by = (int)$user->id;
+
+        // Check team access via the template's project
+        $templateProjectId = $this->resolveTemplateProjectId($model->job_template_id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $templateProjectId)) {
+            return $this->error('Forbidden.', 403);
+        }
 
         if (!$model->validate()) {
             return $this->error($this->firstError($model), 422);
@@ -97,6 +123,11 @@ class SchedulesController extends BaseApiController
         }
 
         $model = $this->findModel($id);
+        $projectId = $model->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
 
@@ -131,6 +162,11 @@ class SchedulesController extends BaseApiController
         }
 
         $model = $this->findModel($id);
+        $projectId = $model->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
         $name = $model->name;
         $model->delete();
 
@@ -148,9 +184,17 @@ class SchedulesController extends BaseApiController
     /**
      * @return array{data: mixed}
      */
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
     public function actionToggle(int $id): array
     {
         $schedule = $this->findModel($id);
+        $projectId = $schedule->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
         $schedule->enabled = !$schedule->enabled;
         if ($schedule->enabled) {
             $schedule->computeNextRunAt();
@@ -209,6 +253,13 @@ class SchedulesController extends BaseApiController
             'created_at' => $s->created_at,
             'updated_at' => $s->updated_at,
         ];
+    }
+
+    private function resolveTemplateProjectId(int $templateId): ?int
+    {
+        /** @var JobTemplate|null $template */
+        $template = JobTemplate::findOne($templateId);
+        return $template->project_id ?? null;
     }
 
     private function findModel(int $id): Schedule

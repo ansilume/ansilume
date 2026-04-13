@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\models\JobTemplate;
 use app\models\TeamProject;
 use app\models\User;
 use yii\base\Component;
@@ -22,6 +23,9 @@ use yii\base\Component;
  * When no team_project rows exist for a project at all, the project is
  * considered "open" and all authenticated users with appropriate RBAC
  * permissions can access it (backward-compatible behaviour).
+ *
+ * Child resources (job templates, inventories, jobs, schedules) inherit
+ * access from their parent project via project_id foreign keys.
  */
 class ProjectAccessChecker extends Component
 {
@@ -41,6 +45,30 @@ class ProjectAccessChecker extends Component
     {
         $role = $this->resolveRole($userId, $projectId);
         return $role === TeamProject::ROLE_OPERATOR;
+    }
+
+    /**
+     * Check view access for a child resource linked to a project.
+     * Returns true if projectId is null (global/unlinked resource).
+     */
+    public function canViewChildResource(int $userId, ?int $projectId): bool
+    {
+        if ($projectId === null) {
+            return true;
+        }
+        return $this->canView($userId, $projectId);
+    }
+
+    /**
+     * Check operator access for a child resource linked to a project.
+     * Returns true if projectId is null (global/unlinked resource) AND user has RBAC permission.
+     */
+    public function canOperateChildResource(int $userId, ?int $projectId): bool
+    {
+        if ($projectId === null) {
+            return true;
+        }
+        return $this->canOperate($userId, $projectId);
     }
 
     /**
@@ -69,11 +97,11 @@ class ProjectAccessChecker extends Component
             ->where(['project_id' => $projectId])
             ->exists();
 
-        // If the project is not restricted to any team, fall back to RBAC-only.
+        // If the project is not restricted to any team, all authenticated users
+        // with an active account have full access. Controller-level RBAC rules
+        // (accessRules) already gate which actions a user can invoke.
         if (!$hasAnyTeamAccess) {
-            return $auth->checkAccess($userId, 'project.view')
-                ? TeamProject::ROLE_OPERATOR // RBAC operator-or-above can do everything
-                : null;
+            return TeamProject::ROLE_OPERATOR;
         }
 
         // Project is team-restricted — look for a matching team assignment.
@@ -106,55 +134,143 @@ class ProjectAccessChecker extends Component
      * accessible by the given user.
      *
      * Returns null when no restriction is needed (admin/superadmin).
-     * Otherwise returns a Yii2 condition array for use with andWhere().
-     *
-     * Logic:
-     *   - Projects with NO team_project rows are open to all authenticated users.
-     *   - Projects WITH team_project rows require team membership.
      *
      * @return array<int|string, mixed>|null
      */
     public function buildProjectFilter(?int $userId): ?array
     {
         if ($userId === null) {
-            return ['0=1']; // Guest — no access
+            return ['0=1'];
         }
 
-        /** @var User $user */
-        $user = User::findOne($userId);
-        if ($user === null) {
-            return ['0=1']; // No access
+        if ($this->isUnrestricted($userId)) {
+            return null;
         }
 
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-        if ($user->is_superadmin || $auth->checkAccess($userId, 'admin')) {
-            return null; // No filter — see everything
-        }
-
-        // IDs of restricted projects the user can access via team membership
-        $teamProjectIds = array_map('intval', TeamProject::find()
-            ->innerJoinWith('team.teamMembers', false)
-            ->where(['team_member.user_id' => $userId])
-            ->select('team_project.project_id')
-            ->distinct()
-            ->column());
-
-        // IDs of ALL restricted projects (may not all be accessible)
-        $allRestrictedIds = array_map('intval', TeamProject::find()
-            ->select('project_id')
-            ->distinct()
-            ->column());
-
-        // User can see: open projects (not restricted) OR projects accessible via team
-        // We express this as: project.id NOT IN (restricted) OR project.id IN (accessible)
+        $allRestrictedIds = $this->getRestrictedProjectIds();
         if (empty($allRestrictedIds)) {
-            return null; // No restrictions exist at all
+            return null;
         }
+
+        $teamProjectIds = $this->getAccessibleProjectIds($userId);
 
         return ['or',
             ['not in', 'id', $allRestrictedIds],
             ['in', 'id', $teamProjectIds],
         ];
+    }
+
+    /**
+     * Build a query condition for tables with a project_id column
+     * (job_template, inventory, etc.).
+     *
+     * Handles nullable project_id: rows with NULL project_id are considered
+     * global and always pass the filter.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    public function buildChildResourceFilter(?int $userId, string $projectIdColumn): ?array
+    {
+        if ($userId === null) {
+            return ['0=1'];
+        }
+
+        if ($this->isUnrestricted($userId)) {
+            return null;
+        }
+
+        $allRestrictedIds = $this->getRestrictedProjectIds();
+        if (empty($allRestrictedIds)) {
+            return null;
+        }
+
+        $teamProjectIds = $this->getAccessibleProjectIds($userId);
+
+        // Allow: global (project_id IS NULL) OR open project OR team-accessible project
+        return ['or',
+            [$projectIdColumn => null],
+            ['not in', $projectIdColumn, $allRestrictedIds],
+            ['in', $projectIdColumn, $teamProjectIds],
+        ];
+    }
+
+    /**
+     * Build a query condition for the job table, filtering via job_template.project_id.
+     *
+     * Uses a subquery to find accessible job_template IDs rather than
+     * materializing all IDs in memory.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    public function buildJobFilter(?int $userId): ?array
+    {
+        if ($userId === null) {
+            return ['0=1'];
+        }
+
+        if ($this->isUnrestricted($userId)) {
+            return null;
+        }
+
+        $allRestrictedIds = $this->getRestrictedProjectIds();
+        if (empty($allRestrictedIds)) {
+            return null;
+        }
+
+        $teamProjectIds = $this->getAccessibleProjectIds($userId);
+
+        // Subquery: job_template IDs whose project is accessible
+        $accessibleTemplateIds = JobTemplate::find()
+            ->select('id')
+            ->where(['or',
+                ['not in', 'project_id', $allRestrictedIds],
+                ['in', 'project_id', $teamProjectIds],
+            ]);
+
+        return ['in', 'job_template_id', $accessibleTemplateIds];
+    }
+
+    /**
+     * Check if user is admin/superadmin (unrestricted access).
+     */
+    private function isUnrestricted(int $userId): bool
+    {
+        /** @var User|null $user */
+        $user = User::findOne($userId);
+        if ($user === null) {
+            return false;
+        }
+
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        return $user->is_superadmin || $auth->checkAccess($userId, 'admin');
+    }
+
+    /**
+     * Get IDs of all projects that have team_project entries (restricted projects).
+     *
+     * @return int[]
+     */
+    private function getRestrictedProjectIds(): array
+    {
+        return array_map('intval', TeamProject::find()
+            ->select('project_id')
+            ->distinct()
+            ->column());
+    }
+
+    /**
+     * Get IDs of projects accessible to a user via team membership.
+     *
+     * @return int[]
+     */
+    private function getAccessibleProjectIds(int $userId): array
+    {
+        return array_map('intval', TeamProject::find()
+            ->innerJoinWith('team.teamMembers', false)
+            ->where(['team_member.user_id' => $userId])
+            ->select('team_project.project_id')
+            ->distinct()
+            ->column());
     }
 }

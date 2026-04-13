@@ -17,11 +17,15 @@ use app\models\User;
 use app\services\JobLaunchService;
 use app\services\NotificationDispatcher;
 use app\services\notification\JobPayloadBuilder;
+use app\controllers\traits\TeamScopingTrait;
+use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 class JobController extends BaseController
 {
+    use TeamScopingTrait;
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -43,13 +47,23 @@ class JobController extends BaseController
 
     public function actionIndex(): string
     {
+        $checker = $this->checker();
+        $userId = $this->currentUserId();
+
         $searchForm = new JobSearchForm();
+        $searchForm->teamFilter = $checker->buildJobFilter($userId);
         $dataProvider = $searchForm->search(\Yii::$app->request->queryParams);
+
+        $templateQuery = JobTemplate::find()->orderBy('name');
+        $templateFilter = $checker->buildChildResourceFilter($userId, 'job_template.project_id');
+        if ($templateFilter !== null) {
+            $templateQuery->andWhere($templateFilter);
+        }
 
         return $this->render('index', [
             'searchForm' => $searchForm,
             'dataProvider' => $dataProvider,
-            'templates' => JobTemplate::find()->orderBy('name')->all(),
+            'templates' => $templateQuery->all(),
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
             'users' => User::find()->orderBy('username')->all(),
             'statusOptions' => array_combine(
@@ -62,6 +76,7 @@ class JobController extends BaseController
     public function actionView(int $id): string
     {
         $job = $this->findModel($id);
+        $this->requireJobView($job);
         $logs = $job->getLogs()->all();
         $tasks = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
         $hostSummaries = $job->getHostSummaries()->all();
@@ -79,6 +94,7 @@ class JobController extends BaseController
     {
         \Yii::$app->response->format = Response::FORMAT_JSON;
         $job = $this->findModel($id);
+        $this->requireJobView($job);
         /** @var JobLog[] $chunks */
         $chunks = $job->getLogs()->andWhere(['>', 'sequence', $after])->all();
 
@@ -97,6 +113,7 @@ class JobController extends BaseController
     public function actionCancel(int $id): Response
     {
         $job = $this->findModel($id);
+        $this->requireJobOperate($job);
         if (!$job->isCancelable()) {
             $this->session()->setFlash('warning', "Job #{$job->id} cannot be canceled in status \"{$job->status}\".");
             return $this->redirect(['view', 'id' => $id]);
@@ -124,6 +141,7 @@ class JobController extends BaseController
     public function actionRelaunch(int $id): Response
     {
         $original = $this->findModel($id);
+        $this->requireJobOperate($original);
         $template = $original->jobTemplate;
 
         if ($template === null) {
@@ -159,7 +177,8 @@ class JobController extends BaseController
 
     public function actionDownloadArtifact(int $id, int $artifact_id): Response
     {
-        $this->findModel($id);
+        $job = $this->findModel($id);
+        $this->requireJobView($job);
 
         /** @var JobArtifact|null $artifact */
         $artifact = JobArtifact::findOne(['id' => $artifact_id, 'job_id' => $id]);
@@ -178,6 +197,24 @@ class JobController extends BaseController
             $artifact->display_name,
             ['mimeType' => $artifact->mime_type, 'inline' => false]
         );
+    }
+
+    private function requireJobView(Job $job): void
+    {
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            throw new ForbiddenHttpException('You do not have access to this resource.');
+        }
+    }
+
+    private function requireJobOperate(Job $job): void
+    {
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+            throw new ForbiddenHttpException('You do not have permission to modify this resource.');
+        }
     }
 
     private function findModel(int $id): Job

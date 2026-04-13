@@ -173,10 +173,11 @@ class ProjectAccessCheckerTest extends DbTestCase
         $this->assertSame(['0=1'], $filter);
     }
 
-    public function testBuildProjectFilterReturnsNoAccessForNonExistentUser(): void
+    public function testBuildProjectFilterReturnsNullForNonExistentUserWhenNoRestrictions(): void
     {
+        // When no team_project rows exist, all users (even non-existent) see everything
         $filter = $this->checker->buildProjectFilter(999999);
-        $this->assertSame(['0=1'], $filter);
+        $this->assertNull($filter);
     }
 
     public function testBuildProjectFilterReturnsNullWhenNoRestrictionsExist(): void
@@ -212,5 +213,147 @@ class ProjectAccessCheckerTest extends DbTestCase
         // Filter should be an 'or' condition array (not null, not deny-all)
         $this->assertIsArray($filter);
         $this->assertNotSame(['0=1'], $filter);
+    }
+
+    // -------------------------------------------------------------------------
+    // canViewChildResource() / canOperateChildResource()
+    // -------------------------------------------------------------------------
+
+    public function testCanViewChildResourceReturnsTrueForNullProjectId(): void
+    {
+        $user = $this->createUser();
+        $this->assertTrue($this->checker->canViewChildResource($user->id, null));
+    }
+
+    public function testCanViewChildResourceReturnsTrueForTeamMember(): void
+    {
+        $owner = $this->createUser('owner');
+        $member = $this->createUser('member');
+        $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id, TeamProject::ROLE_VIEWER);
+        $this->addTeamMember($team->id, $member->id);
+
+        $this->assertTrue($this->checker->canViewChildResource($member->id, $project->id));
+    }
+
+    public function testCanViewChildResourceReturnsFalseForNonMember(): void
+    {
+        $owner = $this->createUser('owner');
+        $other = $this->createUser('other');
+        $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id, TeamProject::ROLE_OPERATOR);
+
+        $this->assertFalse($this->checker->canViewChildResource($other->id, $project->id));
+    }
+
+    public function testCanOperateChildResourceReturnsTrueForNullProjectId(): void
+    {
+        $user = $this->createUser();
+        $this->assertTrue($this->checker->canOperateChildResource($user->id, null));
+    }
+
+    public function testCanOperateChildResourceReturnsFalseForViewer(): void
+    {
+        $owner = $this->createUser('owner');
+        $member = $this->createUser('member');
+        $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id, TeamProject::ROLE_VIEWER);
+        $this->addTeamMember($team->id, $member->id);
+
+        $this->assertFalse($this->checker->canOperateChildResource($member->id, $project->id));
+    }
+
+    public function testCanOperateChildResourceReturnsTrueForOperator(): void
+    {
+        $owner = $this->createUser('owner');
+        $member = $this->createUser('member');
+        $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id, TeamProject::ROLE_OPERATOR);
+        $this->addTeamMember($team->id, $member->id);
+
+        $this->assertTrue($this->checker->canOperateChildResource($member->id, $project->id));
+    }
+
+    // -------------------------------------------------------------------------
+    // buildChildResourceFilter()
+    // -------------------------------------------------------------------------
+
+    public function testBuildChildResourceFilterReturnsNullForAdmin(): void
+    {
+        $user = $this->createUser();
+        \Yii::$app->db->createCommand()
+            ->update('{{%user}}', ['is_superadmin' => 1], ['id' => $user->id])
+            ->execute();
+
+        $this->assertNull($this->checker->buildChildResourceFilter($user->id, 'project_id'));
+    }
+
+    public function testBuildChildResourceFilterReturnsDenyForNullUser(): void
+    {
+        $this->assertSame(['0=1'], $this->checker->buildChildResourceFilter(null, 'project_id'));
+    }
+
+    public function testBuildChildResourceFilterReturnsNullWhenNoRestrictions(): void
+    {
+        $user = $this->createUser();
+        $this->assertNull($this->checker->buildChildResourceFilter($user->id, 'project_id'));
+    }
+
+    public function testBuildChildResourceFilterReturnsOrConditionForTeamMember(): void
+    {
+        $owner = $this->createUser('owner');
+        $member = $this->createUser('member');
+        $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id, TeamProject::ROLE_OPERATOR);
+        $this->addTeamMember($team->id, $member->id);
+
+        $filter = $this->checker->buildChildResourceFilter($member->id, 'inventory.project_id');
+        $this->assertIsArray($filter);
+        $this->assertSame('or', $filter[0]);
+    }
+
+    // -------------------------------------------------------------------------
+    // buildJobFilter()
+    // -------------------------------------------------------------------------
+
+    public function testBuildJobFilterReturnsNullForAdmin(): void
+    {
+        $user = $this->createUser();
+        \Yii::$app->db->createCommand()
+            ->update('{{%user}}', ['is_superadmin' => 1], ['id' => $user->id])
+            ->execute();
+
+        $this->assertNull($this->checker->buildJobFilter($user->id));
+    }
+
+    public function testBuildJobFilterReturnsDenyForNullUser(): void
+    {
+        $this->assertSame(['0=1'], $this->checker->buildJobFilter(null));
+    }
+
+    public function testBuildJobFilterReturnsNullWhenNoRestrictions(): void
+    {
+        $user = $this->createUser();
+        $this->assertNull($this->checker->buildJobFilter($user->id));
+    }
+
+    public function testBuildJobFilterReturnsInConditionForTeamMember(): void
+    {
+        $owner = $this->createUser('owner');
+        $member = $this->createUser('member');
+        $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id, TeamProject::ROLE_OPERATOR);
+        $this->addTeamMember($team->id, $member->id);
+
+        $filter = $this->checker->buildJobFilter($member->id);
+        $this->assertIsArray($filter);
+        $this->assertSame('in', $filter[0]);
+        $this->assertSame('job_template_id', $filter[1]);
     }
 }

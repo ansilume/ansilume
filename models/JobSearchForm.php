@@ -21,6 +21,14 @@ class JobSearchForm extends Model
     public ?string $date_to = null;
     public ?string $has_changes = null;
 
+    /**
+     * Team-based access filter. When set, restricts jobs to those whose
+     * job_template belongs to an accessible project.
+     *
+     * @var array<int|string, mixed>|null
+     */
+    public ?array $teamFilter = null;
+
     public function rules(): array
     {
         return [
@@ -44,6 +52,9 @@ class JobSearchForm extends Model
             ->with(['jobTemplate', 'launcher', 'hostSummaries'])
             ->orderBy(['id' => SORT_DESC]);
 
+        if ($this->teamFilter !== null) {
+            $query->andWhere($this->teamFilter);
+        }
         if (!empty($this->status)) {
             $query->andWhere(['status' => $this->status]);
         }

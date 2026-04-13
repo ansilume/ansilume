@@ -7,12 +7,16 @@ namespace app\controllers;
 use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\Schedule;
+use app\controllers\traits\TeamScopingTrait;
 use yii\data\ActiveDataProvider;
+use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 class ScheduleController extends BaseController
 {
+    use TeamScopingTrait;
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -38,8 +42,15 @@ class ScheduleController extends BaseController
 
     public function actionIndex(): string
     {
+        $query = Schedule::find()->with(['jobTemplate', 'creator'])->orderBy(['id' => SORT_DESC]);
+
+        $filter = $this->buildScheduleFilter();
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+
         $dataProvider = new ActiveDataProvider([
-            'query' => Schedule::find()->with(['jobTemplate', 'creator'])->orderBy(['id' => SORT_DESC]),
+            'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
         return $this->render('index', ['dataProvider' => $dataProvider]);
@@ -47,7 +58,9 @@ class ScheduleController extends BaseController
 
     public function actionView(int $id): string
     {
-        return $this->render('view', ['model' => $this->findModel($id)]);
+        $model = $this->findModel($id);
+        $this->requireScheduleView($model);
+        return $this->render('view', ['model' => $model]);
     }
 
     public function actionCreate(): Response|string
@@ -57,6 +70,7 @@ class ScheduleController extends BaseController
         $model->enabled = true;
 
         if ($model->load((array)\Yii::$app->request->post())) {
+            $this->requireScheduleOperate($model);
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             $model->computeNextRunAt();
             if ($model->save()) {
@@ -81,6 +95,7 @@ class ScheduleController extends BaseController
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
+        $this->requireScheduleOperate($model);
 
         if ($model->load((array)\Yii::$app->request->post())) {
             $model->computeNextRunAt();
@@ -106,6 +121,7 @@ class ScheduleController extends BaseController
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
+        $this->requireScheduleOperate($model);
         $name = $model->name;
         $model->delete();
         \Yii::$app->get('auditService')->log(
@@ -122,6 +138,7 @@ class ScheduleController extends BaseController
     public function actionToggle(int $id): Response
     {
         $model = $this->findModel($id);
+        $this->requireScheduleOperate($model);
         $model->enabled = !$model->enabled;
         if ($model->enabled) {
             $model->computeNextRunAt();
@@ -150,16 +167,56 @@ class ScheduleController extends BaseController
      */
     private function getTemplateList(): array
     {
-        $rows = JobTemplate::find()
-            ->select(['id', 'name'])
-            ->orderBy('name')
-            ->asArray()
-            ->all();
+        $query = JobTemplate::find()
+            ->select(['id', 'name', 'project_id'])
+            ->orderBy('name');
+
+        $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+
+        /** @var array<int, array{id: int, name: string}> $rows */
+        $rows = $query->asArray()->all();
 
         $list = [];
         foreach ($rows as $row) {
             $list[$row['id']] = $row['name'] . ' (' . $row['id'] . ')';
         }
         return $list;
+    }
+
+    /**
+     * Build a schedule filter via job_template subquery.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    private function buildScheduleFilter(): ?array
+    {
+        $jobFilter = $this->checker()->buildJobFilter($this->currentUserId());
+        if ($jobFilter === null) {
+            return null;
+        }
+        // buildJobFilter returns ['in', 'job_template_id', $subquery]
+        // Schedules also use job_template_id, so reuse directly
+        return $jobFilter;
+    }
+
+    private function requireScheduleView(Schedule $model): void
+    {
+        $projectId = $model->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            throw new ForbiddenHttpException('You do not have access to this resource.');
+        }
+    }
+
+    private function requireScheduleOperate(Schedule $model): void
+    {
+        $projectId = $model->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+            throw new ForbiddenHttpException('You do not have permission to modify this resource.');
+        }
     }
 }
