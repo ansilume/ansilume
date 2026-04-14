@@ -30,22 +30,42 @@ jobs:
             .env
 
       - name: Start services
-        run: docker compose up -d --build
+        run: |
+          # Start infrastructure first, then app services separately.
+          # docker compose up waits for depends_on health checks, which can
+          # exceed GitHub Actions step timeouts on slow runners, so we start
+          # infra (db, redis) first and wait for app health ourselves.
+          docker compose up -d --build db redis
+          docker compose up -d --build app nginx queue-worker schedule-runner runner-1 runner-2 adminer mailhog swagger
         env:
           UID: "1000"
           GID: "1000"
 
       - name: Wait for app to be healthy
         run: |
-          for i in $(seq 1 30); do
-            STATUS=$(docker compose ps app --format json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('Health',''))" 2>/dev/null || echo "")
+          echo "Waiting for app container to become healthy (up to 15 minutes)..."
+          for i in $(seq 1 180); do
+            STATUS=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ansilume_app 2>/dev/null || echo "unknown")
             if [ "$STATUS" = "healthy" ]; then
-              echo "App is healthy"
+              echo "App is healthy after $((i * 5))s"
               break
             fi
-            echo "Waiting for app... ($i/30)"
+            STATE=$(docker inspect --format '{{.State.Status}}' ansilume_app 2>/dev/null || echo "unknown")
+            if [ "$STATE" != "running" ]; then
+              echo "App container is not running (state: $STATE)"
+              docker compose logs app
+              exit 1
+            fi
+            if [ "$((i % 12))" = "0" ]; then
+              echo "Still waiting... ($((i * 5))s elapsed, status: $STATUS)"
+            fi
             sleep 5
           done
+          if [ "$STATUS" != "healthy" ]; then
+            echo "Timed out waiting for app to become healthy"
+            docker compose logs app
+            exit 1
+          fi
           docker compose ps
 
       - name: Set up test database
