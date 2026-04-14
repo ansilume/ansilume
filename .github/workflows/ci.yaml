@@ -14,7 +14,7 @@ jobs:
   test:
     name: Test Suite
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -29,14 +29,13 @@ jobs:
             -e "s|^RUNNER_BOOTSTRAP_SECRET=.*|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
             .env
 
-      - name: Start services
+      - name: Build and start core services
         run: |
-          # Start infrastructure first, then app services separately.
-          # docker compose up waits for depends_on health checks, which can
-          # exceed GitHub Actions step timeouts on slow runners, so we start
-          # infra (db, redis) first and wait for app health ourselves.
-          docker compose up -d --build db redis
-          docker compose up -d --build app nginx queue-worker schedule-runner runner-1 runner-2 adminer mailhog swagger
+          # Build all images first, then start in stages to avoid
+          # docker compose blocking on depends_on health checks.
+          docker compose build
+          docker compose up -d db redis mailhog swagger adminer
+          docker compose up -d app queue-worker schedule-runner
         env:
           UID: "1000"
           GID: "1000"
@@ -66,7 +65,9 @@ jobs:
             docker compose logs app
             exit 1
           fi
-          docker compose ps
+
+      - name: Start remaining services
+        run: docker compose up -d
 
       - name: Set up test database
         run: |
