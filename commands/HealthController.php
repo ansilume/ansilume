@@ -127,8 +127,9 @@ class HealthController extends Controller
         try {
             $userCount = (int)User::find()->count();
             if ($userCount === 0) {
+                // No users is expected during initial setup (before setup/admin runs).
+                // Warn but do not mark unhealthy — the app is functional without users.
                 $this->stderr("[health] users: none — run setup/admin to create the first user\n");
-                $healthy = false;
             } else {
                 $this->stdout("[health] users: {$userCount} registered\n");
             }
