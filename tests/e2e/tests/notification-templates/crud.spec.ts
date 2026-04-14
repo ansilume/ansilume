@@ -43,6 +43,16 @@ test.describe('Notification Templates CRUD', () => {
     await expectFlash(page, 'success');
   });
 
+  test('send test notification', async ({ page }) => {
+    await page.goto('/notification-template/index');
+    // Navigate to the seeded e2e-notification template view page.
+    await page.locator('table.table tbody tr', { hasText: 'e2e-notification' }).locator('a').first().click();
+    // Click "Send Test" button.
+    await page.locator('button:has-text("Send Test")').click();
+    // Should redirect back to view with a flash (success or error depending on channel config).
+    await expect(page.locator('.alert')).toBeVisible();
+  });
+
   test('delete notification template', async ({ page }) => {
     await deleteByRowText(page, '/notification-template/index', 'e2e-crud-notification');
     await expectFlash(page, 'success');

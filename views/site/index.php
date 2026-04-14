@@ -18,6 +18,7 @@ declare(strict_types=1);
 /** @var app\models\Project[] $syncErrors */
 /** @var bool $hasSchedules */
 
+use app\helpers\TimeHelper;
 use app\models\ApprovalRequest;
 use app\models\Job;
 use app\models\WorkflowJob;
@@ -445,7 +446,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                         </td>
                         <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                         <td><span class="small text-muted"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></span></td>
-                        <td class="text-nowrap"><?= $job->started_at ? date('Y-m-d H:i', $job->started_at) : '—' ?></td>
+                        <td class="text-nowrap"><?= TimeHelper::relative($job->started_at) ?></td>
                         <td class="text-nowrap">
                             <?php
                             if ($job->started_at !== null && $job->finished_at !== null) {

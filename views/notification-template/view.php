@@ -15,7 +15,11 @@ $this->title = $model->name;
     <h2><?= Html::encode($this->title) ?></h2>
     <div>
         <?php if (Yii::$app->user->can('notification-template.update')) : ?>
-            <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm']) ?>
+            <form action="<?= \yii\helpers\Url::to(['test', 'id' => $model->id]) ?>" method="post" style="display:inline">
+                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+                <button type="submit" class="btn btn-outline-secondary btn-sm">Send Test</button>
+            </form>
+            <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm ms-1']) ?>
         <?php endif; ?>
         <?php if (Yii::$app->user->can('notification-template.delete')) : ?>
             <form action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" method="post" style="display:inline"

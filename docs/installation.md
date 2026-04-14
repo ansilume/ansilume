@@ -146,6 +146,12 @@ Add `export UID GID` to your shell profile to make it permanent.
 
 ---
 
+## Updating
+
+See [updating.md](updating.md) for how to update an existing installation — interactive, unattended, manual, and rollback procedures.
+
+---
+
 ## Production deployment via Ansible
 
 Ansilume includes an Ansible role for automated production deployment, upgrades, and rollbacks. See [deployment.md](deployment.md) for the full guide.
