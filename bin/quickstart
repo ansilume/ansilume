@@ -17,8 +17,11 @@
 # Extra-verbose (includes full docker output):
 #   ./bin/quickstart -vv
 #
+# Unattended update (from the install directory):
+#   ./bin/quickstart --update
+#
 # Or run locally:
-#   ./bin/quickstart [--defaults] [-v|-vv] [--help]
+#   ./bin/quickstart [--defaults] [--update] [-v|-vv] [--help]
 # =============================================================================
 
 set -euo pipefail
@@ -28,10 +31,12 @@ set -euo pipefail
 DEFAULTS=0
 VERBOSE=0
 UNINSTALL=0
+UPDATE=0
 for arg in "$@"; do
     case "$arg" in
         --defaults) DEFAULTS=1 ;;
         --uninstall) UNINSTALL=1 ;;
+        --update) UPDATE=1 ;;
         -vv) VERBOSE=2 ;;
         -v|--verbose) [ "$VERBOSE" -lt 1 ] && VERBOSE=1 ;;
         -h|--help)
@@ -45,6 +50,7 @@ Usage:
 
 Options:
   --defaults    Non-interactive mode, use all defaults (admin/admin)
+  --update      Unattended update — pull latest images/source, keep data
   --uninstall   Remove all Ansilume containers, images, and volumes
   -v, --verbose Show debug output at each step
   -vv           Extra-verbose: debug output + full docker command output
@@ -277,6 +283,110 @@ if command -v free >/dev/null 2>&1; then
     fi
 fi
 
+# ── Helper: merge new .env variables ────────────────────────────────────────
+
+merge_env() {
+    local env_file="${INSTALL_DIR}/.env"
+    local added=0
+
+    # Known variables with safe defaults for new additions.
+    # Only variables that have been added in newer versions need to be here.
+    # Core variables (DB_HOST, NGINX_PORT, etc.) are always present from initial install.
+    # Format: "VAR_NAME=default_value"
+    local NEW_VARS=""
+    # Example for future use:
+    # NEW_VARS="SOME_NEW_VAR=default_value
+    # ANOTHER_VAR=other_default"
+
+    if [ -z "$NEW_VARS" ]; then
+        ok ".env is up to date"
+        return
+    fi
+
+    while IFS='=' read -r var val; do
+        [ -z "$var" ] && continue
+        if ! grep -q "^${var}=" "$env_file" 2>/dev/null; then
+            echo "${var}=${val}" >> "$env_file"
+            ok "Added new config variable: ${var}"
+            added=$((added + 1))
+        fi
+    done <<< "$NEW_VARS"
+
+    if [ "$added" -eq 0 ]; then
+        ok ".env is up to date"
+    fi
+}
+
+# ── Helper: wait for app container health ───────────────────────────────────
+
+wait_healthy() {
+    local container
+    container=$($COMPOSE_CMD $COMPOSE_ARGS ps -q app < /dev/null 2>/dev/null | head -1 || true)
+
+    if [ -z "$container" ]; then
+        warn "Could not find app container — skipping health check"
+        return
+    fi
+
+    local timeout=180
+    local elapsed=0
+
+    while [ $elapsed -lt $timeout ]; do
+        local health state
+        health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || echo "unknown")
+        state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || echo "unknown")
+
+        if [ "$health" = "healthy" ]; then
+            ok "App container is healthy"
+            return
+        fi
+
+        if [ "$state" != "running" ]; then
+            fail "App container is not running (state: ${state})"
+            info ""
+            info "Check logs with: $COMPOSE_CMD $COMPOSE_ARGS logs app"
+            return 1
+        fi
+
+        debug "Health: ${health}, State: ${state} (${elapsed}s / ${timeout}s)"
+        printf "  Waiting... (%ds / %ds)\r" "$elapsed" "$timeout"
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+
+    warn "Timed out waiting for healthy status after ${timeout}s — proceeding anyway"
+    info "The app container may still be running migrations or waiting for dependencies."
+    info "If setup fails, run diagnostics:"
+    info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
+}
+
+# ── Resolve compose download ref ────────────────────────────────────────────
+# Use version tag for GitHub raw URLs, fall back to main if version is "latest".
+
+COMPOSE_DOWNLOAD_REF="${ANSILUME_VERSION}"
+[ "$COMPOSE_DOWNLOAD_REF" = "latest" ] && COMPOSE_DOWNLOAD_REF="main"
+
+# ── Unattended update (--update) ────────────────────────────────────────────
+
+INSTALL_MODE="fresh"
+if [ "$UPDATE" = "1" ]; then
+    INSTALL_DIR="$(pwd)"
+    if [ ! -f "${INSTALL_DIR}/.env" ]; then
+        die "No existing installation found in ${INSTALL_DIR}. Cannot update."
+    fi
+    if [ -d "${INSTALL_DIR}/.git" ]; then
+        SOURCE_MODE=true
+        if ! command -v git >/dev/null 2>&1; then
+            die "git is required for source-mode updates but was not found."
+        fi
+    else
+        SOURCE_MODE=false
+    fi
+    INSTALL_MODE="update"
+fi
+
+if [ "$INSTALL_MODE" != "update" ]; then
+
 # ── 2. Deployment mode ───────────────────────────────────────────────────────
 
 section "Deployment mode"
@@ -313,7 +423,6 @@ INSTALL_DIR="$(mkdir -p "$INSTALL_DIR" && cd "$INSTALL_DIR" && pwd)"
 ok "Install directory: ${INSTALL_DIR}"
 
 # Handle existing installation.
-INSTALL_MODE="fresh"
 if [ -f "${INSTALL_DIR}/.env" ]; then
     if [ "$DEFAULTS" = "1" ]; then
         EXISTING_MODE=1
@@ -344,6 +453,12 @@ if [ -f "${INSTALL_DIR}/.env" ]; then
             ;;
         2)
             INSTALL_MODE="update"
+            # Auto-detect source vs prebuilt from actual installation.
+            if [ -d "${INSTALL_DIR}/.git" ]; then
+                SOURCE_MODE=true
+            else
+                SOURCE_MODE=false
+            fi
             ;;
         *)
             die "Aborted."
@@ -351,23 +466,42 @@ if [ -f "${INSTALL_DIR}/.env" ]; then
     esac
 fi
 
+fi # end skip for --update
+
 # ── Update path ─────────────────────────────────────────────────────────────
-# Pull latest images and restart — skip all configuration steps.
+# Pull latest images/source, merge .env, restart, and health-check.
 
 if [ "$INSTALL_MODE" = "update" ]; then
     section "Updating"
 
     cd "$INSTALL_DIR"
 
+    # ── Backup hint ──
+    info "Tip: back up your .env and database before major updates."
+    info "  cp .env .env.backup"
+    info "  $COMPOSE_CMD exec db mysqldump -uansilume -p\$DB_PASSWORD ansilume > backup.sql"
+    printf "\n"
+
+    # ── Source: git pull ──
     if [ "$SOURCE_MODE" = "true" ]; then
         info "Pulling latest source..."
         git pull --ff-only
         ok "Repository up to date"
         COMPOSE_FILE="docker-compose.prebuilt.yml"
     else
+        # ── Prebuilt: re-download compose file ──
         COMPOSE_FILE="docker-compose.yml"
+        info "Downloading latest docker-compose.yml..."
+        curl -fsSL \
+            "https://raw.githubusercontent.com/ansilume/ansilume/${COMPOSE_DOWNLOAD_REF}/docker-compose.prebuilt.yml" \
+            -o "$COMPOSE_FILE"
+        ok "docker-compose.yml updated"
     fi
 
+    # ── .env merge: add new variables ──
+    merge_env
+
+    # ── Pull and restart ──
     if [ "$COMPOSE_FILE" != "docker-compose.yml" ]; then
         COMPOSE_ARGS="-f ${COMPOSE_FILE}"
     else
@@ -388,9 +522,14 @@ if [ "$INSTALL_MODE" = "update" ]; then
     fi
     ok "Containers updated"
 
+    # ── Health check ──
+    section "Waiting for application"
+    info "Waiting for the app container to become healthy (up to 3 minutes)..."
+    wait_healthy
+
     info "Migrations will be applied automatically by the app container."
     printf "\n"
-    ok "Update complete. Ansilume is restarting with the latest version."
+    ok "Update complete. Ansilume is running the latest version."
     printf "\n"
     exit 0
 fi
@@ -473,7 +612,7 @@ else
     if [ ! -f "$COMPOSE_FILE" ]; then
         info "Downloading docker-compose.yml..."
         curl -fsSL \
-            "https://raw.githubusercontent.com/ansilume/ansilume/main/docker-compose.prebuilt.yml" \
+            "https://raw.githubusercontent.com/ansilume/ansilume/${COMPOSE_DOWNLOAD_REF}/docker-compose.prebuilt.yml" \
             -o "$COMPOSE_FILE"
         ok "docker-compose.yml downloaded"
     else
@@ -614,41 +753,7 @@ ok "Containers started"
 section "Waiting for application"
 
 info "Waiting for the app container to become healthy (up to 3 minutes)..."
-
-debug "Getting app container ID..."
-APP_CONTAINER=$($COMPOSE_CMD $COMPOSE_ARGS ps -q app < /dev/null 2>/dev/null | head -1 || true)
-debug "APP_CONTAINER='${APP_CONTAINER}'"
-TIMEOUT=180
-ELAPSED=0
-
-while [ $ELAPSED -lt $TIMEOUT ]; do
-    HEALTH=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$APP_CONTAINER" 2>/dev/null || echo "unknown")
-    STATE=$(docker inspect --format '{{.State.Status}}' "$APP_CONTAINER" 2>/dev/null || echo "unknown")
-
-    if [ "$HEALTH" = "healthy" ]; then
-        ok "App container is healthy"
-        break
-    fi
-
-    if [ "$STATE" != "running" ]; then
-        fail "App container is not running (state: ${STATE})"
-        info ""
-        info "Check logs with: $COMPOSE_CMD logs app"
-        exit 1
-    fi
-
-    debug "Health: ${HEALTH}, State: ${STATE} (${ELAPSED}s / ${TIMEOUT}s)"
-    printf "  Waiting... (%ds / %ds)\r" "$ELAPSED" "$TIMEOUT"
-    sleep 5
-    ELAPSED=$((ELAPSED + 5))
-done
-
-if [ $ELAPSED -ge $TIMEOUT ]; then
-    warn "Timed out waiting for healthy status after ${TIMEOUT}s — proceeding anyway"
-    info "The app container may still be running migrations or waiting for dependencies."
-    info "If setup fails, run diagnostics:"
-    info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
-fi
+wait_healthy
 
 # ── 11. Create admin user ─────────────────────────────────────────────────────
 # Migrations are handled by the app container's entrypoint automatically.
