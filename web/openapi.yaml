@@ -429,6 +429,90 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/jobs/{id}/artifacts:
+    get:
+      tags: [Jobs]
+      summary: List artifacts for a job
+      description: Requires `job.view`.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200':
+          description: List of artifacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/JobArtifact' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/jobs/{id}/artifacts/download-all:
+    get:
+      tags: [Jobs]
+      summary: Download all artifacts as a zip archive
+      description: Requires `job.view`.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200':
+          description: Zip file download
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/jobs/{id}/artifacts/{artifact_id}/download:
+    get:
+      tags: [Jobs]
+      summary: Download a single artifact
+      description: Requires `job.view`.
+      parameters:
+        - { $ref: '#/components/parameters/IdPath' }
+        - name: artifact_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: File download
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/jobs/{id}/artifacts/{artifact_id}/content:
+    get:
+      tags: [Jobs]
+      summary: Get artifact content inline (text-based files only)
+      description: Requires `job.view`. Returns 415 for non-previewable MIME types.
+      parameters:
+        - { $ref: '#/components/parameters/IdPath' }
+        - name: artifact_id
+          in: path
+          required: true
+          schema: { type: integer, minimum: 1 }
+      responses:
+        '200':
+          description: Inline artifact content
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:           { type: integer }
+                      display_name: { type: string }
+                      mime_type:    { type: string }
+                      content:      { type: string }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '415':
+          description: Artifact type is not previewable
+
   # ─────────────────────────── Schedules ───────────────────────────
   /api/v1/schedules:
     get:
@@ -1737,10 +1821,20 @@ components:
         status:
           type: string
           enum: [pending, waiting, running, successful, failed, error, canceled]
+        artifact_count:  { type: integer }
         started_at:      { type: integer, nullable: true }
         finished_at:     { type: integer, nullable: true }
         created_at:      { type: integer }
         updated_at:      { type: integer }
+    JobArtifact:
+      type: object
+      properties:
+        id:           { type: integer }
+        display_name: { type: string }
+        mime_type:    { type: string }
+        size_bytes:   { type: integer }
+        previewable:  { type: boolean }
+        created_at:   { type: integer }
     JobList:
       type: object
       properties:

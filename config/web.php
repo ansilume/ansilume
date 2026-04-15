@@ -179,6 +179,7 @@ $config = [
             'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/artifacts',
             'maxFileSize' => (int)(getenv('ARTIFACT_MAX_FILE_SIZE') ?: 10485760),
+            'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
         ],
         'urlManager' => [
             'enablePrettyUrl' => true,
@@ -193,6 +194,10 @@ $config = [
                 'verify-totp' => 'site/verify-totp',
                 // API v1
                 ['pattern' => 'api/v1/jobs/<id:\d+>/cancel', 'route' => 'api/v1/jobs/cancel', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/jobs/<id:\d+>/artifacts/download-all', 'route' => 'api/v1/jobs/download-all-artifacts', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/jobs/<id:\d+>/artifacts/<artifact_id:\d+>/download', 'route' => 'api/v1/jobs/download-artifact', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/jobs/<id:\d+>/artifacts/<artifact_id:\d+>/content', 'route' => 'api/v1/jobs/artifact-content', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/jobs/<id:\d+>/artifacts', 'route' => 'api/v1/jobs/artifacts', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/jobs/<id:\d+>', 'route' => 'api/v1/jobs/view'],
                 ['pattern' => 'api/v1/jobs', 'route' => 'api/v1/jobs/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/jobs', 'route' => 'api/v1/jobs/create', 'verb' => 'POST'],
@@ -377,6 +382,8 @@ $config = [
                 'audit-log/<action>/<id:\d+>' => 'audit-log/<action>',
                 'project/lint/<id:\d+>' => 'project/lint',
                 // Job artifacts
+                ['pattern' => 'job/<id:\d+>/artifacts/download-all', 'route' => 'job/download-all-artifacts'],
+                ['pattern' => 'job/<id:\d+>/artifact/<artifact_id:\d+>/content', 'route' => 'job/artifact-content'],
                 ['pattern' => 'job/<id:\d+>/artifact/<artifact_id:\d+>', 'route' => 'job/download-artifact'],
                 // Inventory
                 'inventory/parse-hosts/<id:\d+>' => 'inventory/parse-hosts',

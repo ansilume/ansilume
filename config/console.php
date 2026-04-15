@@ -120,6 +120,7 @@ return [
             'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/artifacts',
             'maxFileSize' => (int)(getenv('ARTIFACT_MAX_FILE_SIZE') ?: 10485760),
+            'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
         ],
         'queue' => [
             'class' => 'yii\queue\redis\Queue',

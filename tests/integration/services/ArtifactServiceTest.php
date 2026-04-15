@@ -151,4 +151,193 @@ class ArtifactServiceTest extends DbTestCase
         // Test JobArtifact->job relation
         $this->assertSame($job->id, $artifacts[0]->job->id);
     }
+
+    // -------------------------------------------------------------------------
+    // Tests: deleteExpiredArtifacts
+    // -------------------------------------------------------------------------
+
+    public function testDeleteExpiredArtifactsRemovesOldRecords(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/old.txt', 'old data');
+
+        $service = $this->makeService();
+        $service->retentionDays = 7;
+        $service->collectFromDirectory($job, $sourceDir);
+
+        // Backdate the artifact to 10 days ago
+        $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+        $artifact->created_at = time() - (10 * 86400);
+        $artifact->save(false);
+
+        $deleted = $service->deleteExpiredArtifacts();
+        $this->assertSame(1, $deleted);
+        $this->assertCount(0, $service->getArtifacts($job));
+    }
+
+    public function testDeleteExpiredArtifactsKeepsRecentOnes(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/recent.txt', 'recent');
+
+        $service = $this->makeService();
+        $service->retentionDays = 7;
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $deleted = $service->deleteExpiredArtifacts();
+        $this->assertSame(0, $deleted);
+        $this->assertCount(1, $service->getArtifacts($job));
+    }
+
+    public function testDeleteExpiredArtifactsReturnsZeroWhenDisabled(): void
+    {
+        $service = $this->makeService();
+        $service->retentionDays = 0;
+        $this->assertSame(0, $service->deleteExpiredArtifacts());
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests: cleanupOrphans
+    // -------------------------------------------------------------------------
+
+    public function testCleanupOrphansRemovesFilesWithoutDbRecords(): void
+    {
+        $service = $this->makeService();
+        $storageDir = $this->tempDir . '/storage/job_999';
+        mkdir($storageDir, 0750, true);
+        file_put_contents($storageDir . '/orphan.txt', 'orphaned');
+
+        $removed = $service->cleanupOrphans();
+        $this->assertSame(1, $removed);
+        $this->assertFalse(file_exists($storageDir . '/orphan.txt'));
+    }
+
+    public function testCleanupOrphansKeepsFilesWithDbRecords(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/keep.txt', 'keep me');
+
+        $service = $this->makeService();
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $removed = $service->cleanupOrphans();
+        $this->assertSame(0, $removed);
+        $this->assertCount(1, $service->getArtifacts($job));
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests: getStorageStats
+    // -------------------------------------------------------------------------
+
+    public function testGetStorageStatsReturnsCorrectCounts(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job1 = $this->createJob($template->id, $user->id);
+        $job2 = $this->createJob($template->id, $user->id);
+
+        $dir1 = $this->tempDir . '/source1';
+        mkdir($dir1, 0750, true);
+        file_put_contents($dir1 . '/a.txt', str_repeat('x', 100));
+
+        $dir2 = $this->tempDir . '/source2';
+        mkdir($dir2, 0750, true);
+        file_put_contents($dir2 . '/b.txt', str_repeat('y', 200));
+
+        $service = $this->makeService();
+        $service->collectFromDirectory($job1, $dir1);
+        $service->collectFromDirectory($job2, $dir2);
+
+        $stats = $service->getStorageStats();
+        $this->assertSame(2, $stats['artifact_count']);
+        $this->assertSame(2, $stats['job_count']);
+        $this->assertSame(300, $stats['total_bytes']);
+    }
+
+    public function testGetStorageStatsEmptyDatabase(): void
+    {
+        $service = $this->makeService();
+        $stats = $service->getStorageStats();
+        $this->assertSame(0, $stats['artifact_count']);
+        $this->assertSame(0, $stats['job_count']);
+        $this->assertSame(0, $stats['total_bytes']);
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests: createZipArchive
+    // -------------------------------------------------------------------------
+
+    public function testCreateZipArchiveContainsAllArtifacts(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/report.json', '{"ok":true}');
+        file_put_contents($sourceDir . '/output.txt', 'hello');
+
+        $service = $this->makeService();
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $zipPath = $service->createZipArchive($job);
+        $this->assertNotNull($zipPath);
+        $this->assertFileExists($zipPath);
+
+        $zip = new \ZipArchive();
+        $zip->open($zipPath);
+        $names = [];
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $names[] = $zip->getNameIndex($i);
+        }
+        $zip->close();
+        unlink($zipPath);
+
+        sort($names);
+        $this->assertSame(['output.txt', 'report.json'], $names);
+    }
+
+    public function testCreateZipArchiveReturnsNullForJobWithNoArtifacts(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $service = $this->makeService();
+        $this->assertNull($service->createZipArchive($job));
+    }
 }

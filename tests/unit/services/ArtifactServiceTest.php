@@ -481,4 +481,134 @@ class ArtifactServiceTest extends TestCase
 
         $this->assertSame([], $artifacts);
     }
+
+    // -------------------------------------------------------------------------
+    // Tests: isPreviewable
+    // -------------------------------------------------------------------------
+
+    public function testIsPreviewableReturnsTrueForTextTypes(): void
+    {
+        $service = new ArtifactService();
+        $this->assertTrue($service->isPreviewable('text/plain'));
+        $this->assertTrue($service->isPreviewable('text/csv'));
+        $this->assertTrue($service->isPreviewable('text/yaml'));
+        $this->assertTrue($service->isPreviewable('text/html'));
+        $this->assertTrue($service->isPreviewable('application/json'));
+        $this->assertTrue($service->isPreviewable('application/xml'));
+        $this->assertTrue($service->isPreviewable('application/yaml'));
+    }
+
+    public function testIsPreviewableReturnsFalseForBinaryTypes(): void
+    {
+        $service = new ArtifactService();
+        $this->assertFalse($service->isPreviewable('application/octet-stream'));
+        $this->assertFalse($service->isPreviewable('application/zip'));
+        $this->assertFalse($service->isPreviewable('application/gzip'));
+        $this->assertFalse($service->isPreviewable('application/x-tar'));
+        $this->assertFalse($service->isPreviewable('image/png'));
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests: getArtifactContent
+    // -------------------------------------------------------------------------
+
+    public function testGetArtifactContentReturnsNullForBinaryType(): void
+    {
+        $service = new ArtifactService();
+        $artifact = $this->makeArtifactStub('application/zip', '/nonexistent');
+        $this->assertNull($service->getArtifactContent($artifact));
+    }
+
+    public function testGetArtifactContentReturnsNullForMissingFile(): void
+    {
+        $service = new ArtifactService();
+        $artifact = $this->makeArtifactStub('text/plain', '/nonexistent/file.txt');
+        $this->assertNull($service->getArtifactContent($artifact));
+    }
+
+    public function testGetArtifactContentReturnsContentForTextFile(): void
+    {
+        $service = new ArtifactService();
+        $filePath = $this->tempDir . '/preview.txt';
+        file_put_contents($filePath, 'Hello, world!');
+        $artifact = $this->makeArtifactStub('text/plain', $filePath);
+        $this->assertSame('Hello, world!', $service->getArtifactContent($artifact));
+    }
+
+    public function testGetArtifactContentRespectsMaxBytes(): void
+    {
+        $service = new ArtifactService();
+        $filePath = $this->tempDir . '/large.txt';
+        file_put_contents($filePath, str_repeat('A', 1000));
+        $artifact = $this->makeArtifactStub('text/plain', $filePath);
+        $content = $service->getArtifactContent($artifact, 100);
+        $this->assertNotNull($content);
+        $this->assertSame(100, strlen($content));
+    }
+
+    public function testGetArtifactContentReturnsJsonContent(): void
+    {
+        $service = new ArtifactService();
+        $filePath = $this->tempDir . '/data.json';
+        file_put_contents($filePath, '{"key": "value"}');
+        $artifact = $this->makeArtifactStub('application/json', $filePath);
+        $this->assertSame('{"key": "value"}', $service->getArtifactContent($artifact));
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests: createZipArchive (unit-level, no DB)
+    // -------------------------------------------------------------------------
+
+    public function testCreateZipArchiveReturnsNullForEmptyJob(): void
+    {
+        // Service with stubbed getArtifacts returning empty
+        $service = new class () extends ArtifactService {
+            /** @return JobArtifact[] */
+            public function getArtifacts(Job $job): array
+            {
+                return [];
+            }
+        };
+        $job = $this->makeJob();
+        $this->assertNull($service->createZipArchive($job));
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers for new tests
+    // -------------------------------------------------------------------------
+
+    private function makeArtifactStub(string $mimeType, string $storagePath): JobArtifact
+    {
+        $artifact = new class () extends JobArtifact {
+            /** @var array<string, mixed> */
+            private array $_data = [];
+
+            public function init(): void
+            {
+            }
+
+            public static function getTableSchema(): ?\yii\db\TableSchema
+            {
+                return null;
+            }
+
+            public function __set($name, $value): void
+            {
+                $this->_data[$name] = $value;
+            }
+
+            public function __get($name): mixed
+            {
+                return $this->_data[$name] ?? null;
+            }
+
+            public function __isset($name): bool
+            {
+                return isset($this->_data[$name]);
+            }
+        };
+        $artifact->mime_type = $mimeType;
+        $artifact->storage_path = $storagePath;
+        return $artifact;
+    }
 }

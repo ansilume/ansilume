@@ -235,9 +235,16 @@ $isLive = !$job->isFinished();
 </div>
 <?php endif; ?>
 
-<?php if (!empty($artifacts)) : ?>
-<div class="card mb-3">
-    <div class="card-header">Artifacts <span class="badge text-bg-secondary"><?= count($artifacts) ?></span></div>
+<?php if (!empty($artifacts)) :
+    /** @var \app\services\ArtifactService $artifactService */
+    $artifactService = \Yii::$app->get('artifactService'); ?>
+    <div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Artifacts <span class="badge text-bg-secondary"><?= count($artifacts) ?></span></span>
+        <?php if (count($artifacts) > 1) : ?>
+            <?= Html::a('Download All (zip)', ['download-all-artifacts', 'id' => $job->id], ['class' => 'btn btn-sm btn-outline-primary']) ?>
+        <?php endif; ?>
+    </div>
     <div class="card-body p-0">
         <table class="table table-sm table-hover mb-0 small">
             <thead>
@@ -263,8 +270,16 @@ $isLive = !$job->isFinished();
                         echo $bytes . ' B'; // xss-ok: integer
                     }
                     ?></td>
-                    <td class="text-end">
+                    <td class="text-end text-nowrap">
+                        <?php if ($artifactService->isPreviewable($artifact->mime_type)) : ?>
+                            <button type="button" class="btn btn-sm btn-outline-info artifact-preview-btn" data-url="<?= Html::encode(Url::to(['artifact-content', 'id' => $job->id, 'artifact_id' => $artifact->id])) ?>" data-artifact-id="<?= $artifact->id ?>">Preview</button>
+                        <?php endif; ?>
                         <?= Html::a('Download', ['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
+                    </td>
+                </tr>
+                <tr class="artifact-preview-row d-none" id="artifact-preview-<?= $artifact->id ?>">
+                    <td colspan="4" class="p-0">
+                        <pre class="mb-0 p-2 bg-dark text-light" style="max-height:400px;overflow:auto;font-size:0.8rem"><code class="artifact-preview-content"></code></pre>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -371,5 +386,39 @@ if (logEl.scrollHeight > logEl.clientHeight) {
 
     setTimeout(poll, 1500);
 })();
+</script>
+<?php endif; ?>
+<?php if (!empty($artifacts)) : ?>
+<script>
+document.querySelectorAll('.artifact-preview-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var id = btn.getAttribute('data-artifact-id');
+        var row = document.getElementById('artifact-preview-' + id);
+        if (!row) return;
+
+        if (!row.classList.contains('d-none')) {
+            row.classList.add('d-none');
+            return;
+        }
+
+        var content = row.querySelector('.artifact-preview-content');
+        if (content.dataset.loaded) {
+            row.classList.remove('d-none');
+            return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Loading\u2026';
+        fetch(btn.getAttribute('data-url'))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                content.textContent = data.content || data.error || '';
+                content.dataset.loaded = '1';
+                row.classList.remove('d-none');
+            })
+            .catch(function () { content.textContent = 'Failed to load preview.'; row.classList.remove('d-none'); })
+            .finally(function () { btn.disabled = false; btn.textContent = 'Preview'; });
+    });
+});
 </script>
 <?php endif; ?>

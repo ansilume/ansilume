@@ -6,8 +6,10 @@ namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
 use app\models\Job;
+use app\models\JobArtifact;
 use app\models\JobSearchForm;
 use app\models\JobTemplate;
+use app\services\ArtifactService;
 use app\services\JobLaunchService;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use yii\web\NotFoundHttpException;
@@ -137,6 +139,130 @@ class JobsController extends BaseApiController
     }
 
     /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionArtifacts(int $id): array
+    {
+        $job = $this->findJob($id);
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        /** @var ArtifactService $svc */
+        $svc = \Yii::$app->get('artifactService');
+        $artifacts = $svc->getArtifacts($job);
+
+        return $this->success(array_map(
+            fn (JobArtifact $a) => $this->serializeArtifact($a, $svc),
+            $artifacts
+        ));
+    }
+
+    /**
+     * @return \yii\web\Response|array{error: array{message: string}}
+     */
+    public function actionDownloadArtifact(int $id, int $artifact_id): \yii\web\Response|array
+    {
+        $job = $this->findJob($id);
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        /** @var JobArtifact|null $artifact */
+        $artifact = JobArtifact::findOne(['id' => $artifact_id, 'job_id' => $id]);
+        if ($artifact === null) {
+            return $this->error('Artifact not found.', 404);
+        }
+
+        if (!file_exists($artifact->storage_path)) {
+            return $this->error('Artifact file no longer exists on disk.', 404);
+        }
+
+        $response = \Yii::$app->response;
+        assert($response instanceof \yii\web\Response);
+        return $response->sendFile(
+            $artifact->storage_path,
+            $artifact->display_name,
+            ['mimeType' => $artifact->mime_type, 'inline' => false]
+        );
+    }
+
+    /**
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionArtifactContent(int $id, int $artifact_id): array
+    {
+        $job = $this->findJob($id);
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        /** @var JobArtifact|null $artifact */
+        $artifact = JobArtifact::findOne(['id' => $artifact_id, 'job_id' => $id]);
+        if ($artifact === null) {
+            return $this->error('Artifact not found.', 404);
+        }
+
+        /** @var ArtifactService $svc */
+        $svc = \Yii::$app->get('artifactService');
+        if (!$svc->isPreviewable($artifact->mime_type)) {
+            return $this->error('Artifact type is not previewable.', 415);
+        }
+
+        $content = $svc->getArtifactContent($artifact);
+        if ($content === null) {
+            return $this->error('Artifact file could not be read.', 404);
+        }
+
+        return $this->success([
+            'id' => $artifact->id,
+            'display_name' => $artifact->display_name,
+            'mime_type' => $artifact->mime_type,
+            'content' => $content,
+        ]);
+    }
+
+    /**
+     * @return \yii\web\Response|array{error: array{message: string}}
+     */
+    public function actionDownloadAllArtifacts(int $id): \yii\web\Response|array
+    {
+        $job = $this->findJob($id);
+        $projectId = $job->jobTemplate->project_id ?? null;
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        /** @var ArtifactService $svc */
+        $svc = \Yii::$app->get('artifactService');
+        $zipPath = $svc->createZipArchive($job);
+        if ($zipPath === null) {
+            return $this->error('No artifacts to download.', 404);
+        }
+
+        register_shutdown_function(static function () use ($zipPath): void {
+            if (file_exists($zipPath)) {
+                unlink($zipPath);
+            }
+        });
+
+        $response = \Yii::$app->response;
+        assert($response instanceof \yii\web\Response);
+        return $response->sendFile(
+            $zipPath,
+            "job-{$id}-artifacts.zip",
+            ['mimeType' => 'application/zip', 'inline' => false]
+        );
+    }
+
+    /**
      * @param array<string, mixed> $body
      * @return array<string, mixed>
      */
@@ -171,7 +297,7 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, status: string, job_template_id: int|null, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, check_mode: bool, exit_code: int|null, execution_command: string|null, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
+     * @return array{id: int, status: string, job_template_id: int|null, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, check_mode: bool, exit_code: int|null, execution_command: string|null, artifact_count: int, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
      */
     private function serializeJob(Job $job): array
     {
@@ -187,10 +313,26 @@ class JobsController extends BaseApiController
             'check_mode' => (bool)$job->check_mode,
             'exit_code' => $job->exit_code,
             'execution_command' => $job->execution_command,
+            'artifact_count' => (int)$job->getArtifacts()->count(),
             'queued_at' => $job->queued_at,
             'started_at' => $job->started_at,
             'finished_at' => $job->finished_at,
             'created_at' => $job->created_at,
+        ];
+    }
+
+    /**
+     * @return array{id: int, display_name: string, mime_type: string, size_bytes: int, previewable: bool, created_at: int}
+     */
+    private function serializeArtifact(JobArtifact $artifact, ArtifactService $svc): array
+    {
+        return [
+            'id' => $artifact->id,
+            'display_name' => $artifact->display_name,
+            'mime_type' => $artifact->mime_type,
+            'size_bytes' => $artifact->size_bytes,
+            'previewable' => $svc->isPreviewable($artifact->mime_type),
+            'created_at' => $artifact->created_at,
         ];
     }
 }

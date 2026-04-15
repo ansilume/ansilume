@@ -14,6 +14,7 @@ use app\models\JobTemplate;
 use app\models\NotificationTemplate;
 use app\models\RunnerGroup;
 use app\models\User;
+use app\services\ArtifactService;
 use app\services\JobLaunchService;
 use app\services\NotificationDispatcher;
 use app\services\notification\JobPayloadBuilder;
@@ -32,7 +33,7 @@ class JobController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view', 'log-poll', 'download-artifact'], 'allow' => true, 'roles' => ['job.view']],
+            ['actions' => ['index', 'view', 'log-poll', 'download-artifact', 'artifact-content', 'download-all-artifacts'], 'allow' => true, 'roles' => ['job.view']],
             ['actions' => ['cancel', 'relaunch'], 'allow' => true, 'roles' => ['job.cancel']],
         ];
     }
@@ -196,6 +197,63 @@ class JobController extends BaseController
             $artifact->storage_path,
             $artifact->display_name,
             ['mimeType' => $artifact->mime_type, 'inline' => false]
+        );
+    }
+
+    public function actionArtifactContent(int $id, int $artifact_id): Response
+    {
+        \Yii::$app->response->format = Response::FORMAT_JSON;
+        $job = $this->findModel($id);
+        $this->requireJobView($job);
+
+        /** @var JobArtifact|null $artifact */
+        $artifact = JobArtifact::findOne(['id' => $artifact_id, 'job_id' => $id]);
+        if ($artifact === null) {
+            throw new NotFoundHttpException("Artifact not found.");
+        }
+
+        /** @var ArtifactService $svc */
+        $svc = \Yii::$app->get('artifactService');
+        if (!$svc->isPreviewable($artifact->mime_type)) {
+            \Yii::$app->response->statusCode = 415;
+            return $this->asJson(['error' => 'Artifact type is not previewable.']);
+        }
+
+        $content = $svc->getArtifactContent($artifact);
+        if ($content === null) {
+            throw new NotFoundHttpException("Artifact file could not be read.");
+        }
+
+        return $this->asJson([
+            'content' => $content,
+            'mime_type' => $artifact->mime_type,
+        ]);
+    }
+
+    public function actionDownloadAllArtifacts(int $id): Response
+    {
+        $job = $this->findModel($id);
+        $this->requireJobView($job);
+
+        /** @var ArtifactService $svc */
+        $svc = \Yii::$app->get('artifactService');
+        $zipPath = $svc->createZipArchive($job);
+        if ($zipPath === null) {
+            throw new NotFoundHttpException("No artifacts to download.");
+        }
+
+        register_shutdown_function(static function () use ($zipPath): void {
+            if (file_exists($zipPath)) {
+                unlink($zipPath);
+            }
+        });
+
+        $webResponse = \Yii::$app->response;
+        assert($webResponse instanceof \yii\web\Response);
+        return $webResponse->sendFile(
+            $zipPath,
+            "job-{$id}-artifacts.zip",
+            ['mimeType' => 'application/zip', 'inline' => false]
         );
     }
 

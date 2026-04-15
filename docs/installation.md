@@ -107,6 +107,8 @@ All configuration is via `.env`. Key variables:
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | Redis connection |
 | `NGINX_PORT` | Host port for the web UI (default: `8080`) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | Optional email for notifications |
+| `ARTIFACT_MAX_FILE_SIZE` | Max single artifact file size in bytes (default: `10485760` / 10 MB) |
+| `ARTIFACT_RETENTION_DAYS` | Days to keep artifacts, `0` = forever (default: `0`). Cleanup via `php yii artifact/cleanup` |
 
 ---
 

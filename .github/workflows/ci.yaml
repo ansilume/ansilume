@@ -12,9 +12,28 @@ concurrency:
 
 jobs:
   test:
-    name: Test Suite
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: lint
+            name: Lint & Checks
+            timeout: 15
+          - suite: style
+            name: Code Style
+            timeout: 15
+          - suite: phpstan
+            name: PHPStan
+            timeout: 15
+          - suite: phpunit
+            name: PHPUnit
+            timeout: 20
+          - suite: e2e
+            name: Playwright E2E
+            timeout: 30
 
     steps:
       - name: Checkout
@@ -29,47 +48,41 @@ jobs:
             -e "s|^RUNNER_BOOTSTRAP_SECRET=.*|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
             .env
 
-      - name: Build and start core services
+      - name: Build and start services
         run: |
-          # Build all images first, then start in stages to avoid
-          # docker compose blocking on depends_on health checks.
           docker compose build
-          docker compose up -d db redis mailhog swagger adminer
-          docker compose up -d app queue-worker schedule-runner
+          docker compose up -d db redis
+          docker compose up -d app queue-worker
         env:
           UID: "1000"
           GID: "1000"
 
       - name: Wait for app to be healthy
         run: |
-          echo "Waiting for app container to become healthy (up to 15 minutes)..."
+          echo "Waiting for app container..."
           for i in $(seq 1 180); do
             STATUS=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ansilume_app 2>/dev/null || echo "unknown")
             if [ "$STATUS" = "healthy" ]; then
-              echo "App is healthy after $((i * 5))s"
+              echo "App healthy after $((i * 5))s"
               break
             fi
             STATE=$(docker inspect --format '{{.State.Status}}' ansilume_app 2>/dev/null || echo "unknown")
             if [ "$STATE" != "running" ]; then
-              echo "App container is not running (state: $STATE)"
+              echo "App not running (state: $STATE)"
               docker compose logs app
               exit 1
             fi
-            if [ "$((i % 12))" = "0" ]; then
-              echo "Still waiting... ($((i * 5))s elapsed, status: $STATUS)"
-            fi
+            [ "$((i % 12))" = "0" ] && echo "Waiting... ($((i * 5))s, status: $STATUS)"
             sleep 5
           done
           if [ "$STATUS" != "healthy" ]; then
-            echo "Timed out waiting for app to become healthy"
+            echo "Timeout waiting for app"
             docker compose logs app
             exit 1
           fi
 
-      - name: Start remaining services
-        run: docker compose up -d
-
       - name: Set up test database
+        if: matrix.suite == 'phpunit'
         run: |
           DB_ROOT_PASSWORD=$(grep '^DB_ROOT_PASSWORD=' .env | cut -d= -f2)
           DB_USER=$(grep '^DB_USER=' .env | cut -d= -f2)
@@ -80,24 +93,15 @@ jobs:
              FLUSH PRIVILEGES;"
           docker compose exec -T app bash -c "DB_NAME=${DB_TEST_NAME} php yii migrate --interactive=0"
 
-      - name: Run test suite
-        run: docker compose exec -T app bash -c './tests.sh --skip-e2e'
-
       - name: Build Playwright container
+        if: matrix.suite == 'e2e'
         run: docker compose --profile e2e build playwright
 
-      - name: Seed E2E data
-        run: docker compose exec -T app php yii e2e/seed
-
-      - name: Run Playwright E2E tests
-        run: docker compose --profile e2e run --rm --no-deps playwright
-
-      - name: Teardown E2E data
-        if: always()
-        run: docker compose exec -T app php yii e2e/teardown || true
+      - name: Run ${{ matrix.name }}
+        run: bin/tests-${{ matrix.suite }}.sh
 
       - name: Upload Playwright report
-        if: always()
+        if: always() && matrix.suite == 'e2e'
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
@@ -109,4 +113,3 @@ jobs:
         run: |
           docker compose logs app
           docker compose logs db
-          docker compose logs queue-worker

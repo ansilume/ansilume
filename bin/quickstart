@@ -293,10 +293,7 @@ merge_env() {
     # Only variables that have been added in newer versions need to be here.
     # Core variables (DB_HOST, NGINX_PORT, etc.) are always present from initial install.
     # Format: "VAR_NAME=default_value"
-    local NEW_VARS=""
-    # Example for future use:
-    # NEW_VARS="SOME_NEW_VAR=default_value
-    # ANOTHER_VAR=other_default"
+    local NEW_VARS="ARTIFACT_RETENTION_DAYS=0"
 
     if [ -z "$NEW_VARS" ]; then
         ok ".env is up to date"

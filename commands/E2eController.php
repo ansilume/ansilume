@@ -7,6 +7,8 @@ namespace app\commands;
 use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Inventory;
+use app\models\Job;
+use app\models\JobArtifact;
 use app\models\JobTemplate;
 use app\models\NotificationTemplate;
 use app\models\Project;
@@ -57,8 +59,7 @@ class E2eController extends Controller
     {
         $this->stdout("Tearing down E2E test data...\n");
 
-        $this->teardownEntities();
-        $this->teardownUsers();
+        $this->createTeardownHelper()->teardownAll();
 
         $this->stdout("E2E teardown complete.\n");
         return ExitCode::OK;
@@ -152,6 +153,7 @@ class E2eController extends Controller
         $this->seedWorkflowStep($workflowTemplateId, $templateId, $approvalRuleId);
         $this->seedApprovalWorkflow($userId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
+        $this->seedJobWithArtifacts($userId, $templateId);
         $seeder = new E2eTeamScopingSeeder(function (string $msg): void {
             $this->stdout($msg);
         });
@@ -518,106 +520,72 @@ class E2eController extends Controller
         $this->stdout("  Created team (ID {$team->id}) with member and project.\n");
     }
 
-    private function teardownEntities(): void
+    private function seedJobWithArtifacts(int $userId, int $templateId): void
     {
-        // Delete in reverse dependency order
-        $this->deleteByPrefix(WorkflowStep::class, 'name');
-        $this->deleteByPrefix(WorkflowTemplate::class, 'name');
-        $this->deleteByPrefix(ApprovalRule::class, 'name');
-        $this->deleteByPrefix(Schedule::class, 'name');
-        $this->deleteByPrefix(Webhook::class, 'name');
-        $this->deleteByPrefix(NotificationTemplate::class, 'name');
-        $this->deleteByPrefix(JobTemplate::class, 'name');
-        $this->deleteByPrefix(Credential::class, 'name');
-        $this->deleteByPrefix(Inventory::class, 'name');
-        $this->deleteByPrefix(Project::class, 'name');
-
-        // Teams: delete members and project associations first
-        $teams = Team::find()->where(['like', 'name', self::PREFIX])->all();
-        foreach ($teams as $team) {
-            TeamProject::deleteAll(['team_id' => $team->id]);
-            TeamMember::deleteAll(['team_id' => $team->id]);
-            $team->delete();
-            $this->stdout("  Deleted team '{$team->name}'.\n");
+        // Check if we already have an e2e job with artifacts
+        $existing = Job::find()
+            ->where(['job_template_id' => $templateId, 'status' => Job::STATUS_SUCCEEDED])
+            ->andWhere(['like', 'execution_command', 'e2e-artifact'])
+            ->one();
+        if ($existing !== null) {
+            $this->stdout("  Job with artifacts already exists (ID {$existing->id}).\n");
+            return;
         }
 
-        $this->deleteByPrefix(RunnerGroup::class, 'name');
-        $this->teardownCustomRoles();
+        $job = new Job();
+        $job->job_template_id = $templateId;
+        $job->launched_by = $userId;
+        $job->status = Job::STATUS_SUCCEEDED;
+        $job->exit_code = 0;
+        $job->execution_command = 'e2e-artifact-job';
+        $job->timeout_minutes = 120;
+        $job->has_changes = 0;
+        $job->queued_at = time() - 60;
+        $job->started_at = time() - 30;
+        $job->finished_at = time();
+        $job->created_at = time();
+        $job->updated_at = time();
+        $job->save(false);
+
+        // Create artifact files on disk (world-readable so www-data can serve them)
+        $storagePath = \Yii::getAlias('@runtime/artifacts') . '/job_' . $job->id;
+        if (!is_dir($storagePath)) {
+            mkdir($storagePath, 0755, true);
+        }
+
+        // Text artifact (previewable)
+        $textFile = $storagePath . '/report.txt';
+        file_put_contents($textFile, "E2E Artifact Report\nStatus: OK\nTimestamp: " . date('c'));
+        $a1 = new JobArtifact();
+        $a1->job_id = $job->id;
+        $a1->filename = 'report.txt';
+        $a1->display_name = 'report.txt';
+        $a1->mime_type = 'text/plain';
+        $a1->size_bytes = (int)filesize($textFile);
+        $a1->storage_path = $textFile;
+        $a1->created_at = time();
+        $a1->save(false);
+
+        // JSON artifact (previewable)
+        $jsonFile = $storagePath . '/results.json';
+        file_put_contents($jsonFile, '{"status":"ok","tests_passed":42,"tests_failed":0}');
+        $a2 = new JobArtifact();
+        $a2->job_id = $job->id;
+        $a2->filename = 'results.json';
+        $a2->display_name = 'results.json';
+        $a2->mime_type = 'application/json';
+        $a2->size_bytes = (int)filesize($jsonFile);
+        $a2->storage_path = $jsonFile;
+        $a2->created_at = time();
+        $a2->save(false);
+
+        $this->stdout("  Created job #{$job->id} with 2 artifacts.\n");
     }
 
-    private function teardownCustomRoles(): void
+    private function createTeardownHelper(): E2eTeardownHelper
     {
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-        foreach ($auth->getRoles() as $role) {
-            if (str_starts_with($role->name, self::PREFIX)) {
-                $auth->remove($role);
-                $this->stdout("  Deleted custom role '{$role->name}'.\n");
-            }
-        }
-    }
-
-    private function teardownUsers(): void
-    {
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-
-        $users = User::find()->where(['like', 'username', self::PREFIX])->all();
-        $userIds = array_map(fn ($u) => $u->id, $users);
-
-        if ($userIds !== []) {
-            $this->teardownJobsByUsers($userIds);
-        }
-
-        foreach ($users as $user) {
-            $auth->revokeAll($user->id);
-            $user->delete();
-            $this->stdout("  Deleted user '{$user->username}'.\n");
-        }
-    }
-
-    /**
-     * @param int[] $userIds
-     */
-    private function teardownJobsByUsers(array $userIds): void
-    {
-        $db = \Yii::$app->db;
-        $del = fn (string $t, array $w) => $db->createCommand()->delete($t, $w)->execute();
-        $col = fn (string $t, array $w) => (new \yii\db\Query())->select('id')->from($t)->where($w)->column($db);
-
-        $jobIds = $col('{{%job}}', ['launched_by' => $userIds]);
-        if ($jobIds !== []) {
-            $del('{{%workflow_job_step}}', ['job_id' => $jobIds]);
-            $requestIds = $col('{{%approval_request}}', ['job_id' => $jobIds]);
-            if ($requestIds !== []) {
-                $del('{{%approval_decision}}', ['approval_request_id' => $requestIds]);
-                $del('{{%approval_request}}', ['id' => $requestIds]);
-            }
-            foreach (['job_artifact', 'job_host_summary', 'job_task', 'job_log'] as $t) {
-                $del('{{%' . $t . '}}', ['job_id' => $jobIds]);
-            }
-            $del('{{%job}}', ['id' => $jobIds]);
-            $this->stdout("  Cleaned up " . count($jobIds) . " job(s) created by e2e users.\n");
-        }
-
-        $wfJobIds = $col('{{%workflow_job}}', ['launched_by' => $userIds]);
-        if ($wfJobIds !== []) {
-            $del('{{%workflow_job_step}}', ['workflow_job_id' => $wfJobIds]);
-            $del('{{%workflow_job}}', ['id' => $wfJobIds]);
-            $this->stdout("  Cleaned up " . count($wfJobIds) . " workflow job(s).\n");
-        }
-    }
-
-    /**
-     * @param class-string<\yii\db\ActiveRecord> $modelClass
-     */
-    private function deleteByPrefix(string $modelClass, string $column): void
-    {
-        $models = $modelClass::find()->where(['like', $column, self::PREFIX])->all();
-        foreach ($models as $model) {
-            $name = $model->$column ?? '(unknown)';
-            $model->delete();
-            $this->stdout("  Deleted {$modelClass}::'{$name}'.\n");
-        }
+        return new E2eTeardownHelper(self::PREFIX, function (string $msg): void {
+            $this->stdout($msg);
+        });
     }
 }

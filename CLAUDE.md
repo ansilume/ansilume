@@ -253,7 +253,19 @@ Avoid opaque JSON unless it is genuinely schema-flexible (extra vars, artifact m
 
 ## Testing
 
-`./tests.sh` is the single source of truth for the test suite. It runs inside Docker and includes:
+The test suite is split into independent scripts under `bin/` that can run in parallel:
+
+| Script | Contents |
+|--------|----------|
+| `bin/tests-lint.sh` | Syntax, strict_types, security, XSS, CSRF, offline, migrations, consistency, composer, OpenAPI, ansible-lint, shell checks |
+| `bin/tests-style.sh` | phpcs PSR-12, php-cs-fixer, PHPMD, PHPCPD |
+| `bin/tests-phpstan.sh` | PHPStan static analysis |
+| `bin/tests-phpunit.sh` | PHPUnit unit + integration tests, coverage, migration end-to-end |
+| `bin/tests-e2e.sh` | Playwright E2E browser tests |
+
+`bin/tests.sh` runs all suites sequentially for manual use.
+
+Combined, the suites cover:
 
 - PHPUnit (unit + integration tests)
 - Playwright E2E browser tests (full UI walkthrough per role)
@@ -271,7 +283,7 @@ Avoid opaque JSON unless it is genuinely schema-flexible (extra vars, artifact m
 
 The long-term goal is to reach **PHPStan level max (9)** with zero errors. Levels are raised incrementally — every level increase must be accompanied by fixing all new findings before merging. The current enforced level is tracked in `phpstan.neon`. When adding new code, always write PHPDoc array shapes (`@param array<string, int>`, `@return array{key: type}`) and precise return types so that higher levels pass without rework.
 
-Always run the full `./tests.sh` — never partial or `--fast`.
+Always run the full test suite — never partial or `--fast`.
 
 ### Coverage requirement
 
@@ -360,18 +372,18 @@ If the request is underspecified, make reasonable assumptions that fit this file
 
 ## Push Workflow
 
-Do not run `./tests.sh` after every task — only when the user says **"PUSH IT"**.
+Do not run tests after every task — only when the user says **"PUSH IT"**.
 
 When the user says "PUSH IT", follow this exact sequence:
 
-1. **Run `./tests.sh`** — the full test suite, never partial or `--fast`.
-2. **All checks must pass.** Zero errors, zero warnings. If anything fails, fix it and re-run until clean.
+1. **Run all test suites in parallel** — execute every `bin/tests-*.sh` script (excluding `bin/tests-common.sh`) simultaneously using parallel Bash tool calls. Never use `--fast`.
+2. **All suites must pass.** Zero errors, zero warnings. If any suite fails, fix the issue and re-run the failing suite(s) until clean.
 3. **Commit** all changes.
 4. **Ask the user**: plain commit (no release) or a release? If release, ask: `PATCH`, `MINOR`, or `MAJOR`?
    - **Plain commit**: just `git push`.
    - **Release**: run `./bin/release patch`, `./bin/release minor`, or `./bin/release major`, then `git push --follow-tags`.
 
-Never push without a green `./tests.sh`. Never skip asking about the release type.
+Never push without all green test suites. Never skip asking about the release type.
 
 ---
 
@@ -453,7 +465,7 @@ The spec is part of the contract, not documentation that can lag behind:
 - **The spec version** (`info.version`) should track the application version
   and be bumped together with `./bin/release`.
 
-A test in `tests.sh` validates that `web/openapi.yaml` parses as valid YAML
+A test in `bin/tests-lint.sh` validates that `web/openapi.yaml` parses as valid YAML
 and resolves all `$ref`s. If you add an endpoint without updating the spec,
 the suite will fail.
 
@@ -518,7 +530,12 @@ Prefer:
 
 ```bash
 docker compose up -d          # Start development environment
-./tests.sh                    # Full test suite (always run complete, never partial)
+bin/tests.sh                  # Full test suite sequentially (runs all bin/tests-*.sh)
+bin/tests-lint.sh             # Run only lint/static checks
+bin/tests-style.sh            # Run only code style checks
+bin/tests-phpstan.sh          # Run only PHPStan
+bin/tests-phpunit.sh          # Run only PHPUnit (unit + integration)
+bin/tests-e2e.sh              # Run only Playwright E2E
 ./bin/release                 # Version bump + tag (run before push)
 ```
 
@@ -549,8 +566,13 @@ composer install               # Install PHP dependencies
 ### Next
 
 1. **HA / scaling** — multi-worker, runner failover, queue reliability
-2. **Advanced features** — artifact management, launch surveys, relaunch/retry
+2. **Advanced features** — artifact management
 3. **LDAP/AD integration** — optional Active Directory authentication as addon (local users remain, AD users managed externally, password change disabled for AD users, optional group-to-role mapping). Approach: direct PHP ldap_* functions, `auth_source` column on user table, LoginForm checks auth_source for credential verification.
+
+### Completed (Advanced Features)
+
+- ~~**Launch surveys**~~ — survey fields on job templates with editor UI, launch-time input, merge into extra vars, API support
+- ~~**Relaunch/retry**~~ — re-launch finished jobs with same parameters (extra vars, limit, verbosity, check mode), UI button + RBAC
 
 Strengthen the core before adding new surface area.
 
