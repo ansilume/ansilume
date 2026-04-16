@@ -67,8 +67,34 @@ class E2eArtifactSeeder
                 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
             ) ?: '',
         );
+        $this->createArtifact(
+            $job->id,
+            $storagePath . '/config.xml',
+            'config.xml',
+            'application/xml',
+            '<?xml version="1.0" encoding="UTF-8"?><config><ok>true</ok></config>',
+        );
+        $this->createArtifact(
+            $job->id,
+            $storagePath . '/vars.yaml',
+            'vars.yaml',
+            'application/yaml',
+            "environment: e2e\nstatus: ok\nvalues:\n  - 1\n  - 2\n  - 3\n",
+        );
+        // Minimal valid PDF (opens as an empty one-page document in any reader).
+        $minimalPdf = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+            . "2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n"
+            . "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]>>endobj\n"
+            . "xref\n0 4\n0000000000 65535 f \n0000000010 00000 n \n0000000053 00000 n \n0000000098 00000 n \ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n150\n%%EOF";
+        $this->createArtifact(
+            $job->id,
+            $storagePath . '/report.pdf',
+            'report.pdf',
+            'application/pdf',
+            $minimalPdf,
+        );
 
-        ($this->logger)("  Created job #{$job->id} with 3 artifacts.\n");
+        ($this->logger)("  Created job #{$job->id} with 6 artifacts.\n");
     }
 
     private function createJob(int $userId, int $templateId): Job
