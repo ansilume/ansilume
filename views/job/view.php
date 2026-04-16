@@ -274,16 +274,24 @@ $isLive = !$job->isFinished();
                         <?php
                         $isImage = $artifactService->isImageType($artifact->mime_type);
                         $isText = $artifactService->isPreviewable($artifact->mime_type);
-                        if ($isImage || $isText) :
-                            $previewUrl = $isImage
-                                ? Url::to(['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id, 'inline' => 1])
-                                : Url::to(['artifact-content', 'id' => $job->id, 'artifact_id' => $artifact->id]);
+                        $isFrame = $artifactService->isInlineFrameType($artifact->mime_type);
+                        if ($isImage || $isText || $isFrame) :
+                            if ($isImage) {
+                                $previewUrl = Url::to(['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id, 'inline' => 1]);
+                                $previewKind = 'image';
+                            } elseif ($isFrame) {
+                                $previewUrl = Url::to(['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id, 'inline' => 1]);
+                                $previewKind = 'frame';
+                            } else {
+                                $previewUrl = Url::to(['artifact-content', 'id' => $job->id, 'artifact_id' => $artifact->id]);
+                                $previewKind = 'text';
+                            }
                             ?>
                             <button type="button"
                                     class="btn btn-sm btn-outline-info artifact-preview-btn"
                                     data-url="<?= Html::encode($previewUrl) ?>"
                                     data-artifact-id="<?= $artifact->id ?>"
-                                    data-preview-kind="<?= $isImage ? 'image' : 'text' ?>">Preview</button>
+                                    data-preview-kind="<?= Html::encode($previewKind) ?>">Preview</button>
                         <?php endif; ?>
                         <?= Html::a('Download', ['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
                     </td>
@@ -293,6 +301,9 @@ $isLive = !$job->isFinished();
                         <pre class="mb-0 p-2 bg-dark text-light artifact-preview-text d-none" style="max-height:400px;overflow:auto;font-size:0.8rem"><code class="artifact-preview-content"></code></pre>
                         <div class="p-2 bg-dark text-center artifact-preview-image d-none">
                             <img alt="" loading="lazy" style="max-width:100%;max-height:600px;">
+                        </div>
+                        <div class="p-2 bg-dark artifact-preview-frame d-none">
+                            <iframe sandbox="" style="width:100%;height:600px;border:0;background:white;" loading="lazy"></iframe>
                         </div>
                     </td>
                 </tr>
@@ -426,6 +437,18 @@ document.querySelectorAll('.artifact-preview-btn').forEach(function (btn) {
                 img.dataset.loaded = '1';
             }
             imgWrap.classList.remove('d-none');
+            row.classList.remove('d-none');
+            return;
+        }
+
+        if (kind === 'frame') {
+            var frameWrap = row.querySelector('.artifact-preview-frame');
+            var frame     = frameWrap.querySelector('iframe');
+            if (!frame.dataset.loaded) {
+                frame.src = url;
+                frame.dataset.loaded = '1';
+            }
+            frameWrap.classList.remove('d-none');
             row.classList.remove('d-none');
             return;
         }
