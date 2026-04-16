@@ -130,6 +130,10 @@ return [
             'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
             'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
         ],
+        'maintenanceService' => [
+            'class' => 'app\services\MaintenanceService',
+            'artifactCleanupIntervalSeconds' => (int)(getenv('MAINTENANCE_ARTIFACT_CLEANUP_INTERVAL') ?: 86400),
+        ],
         'ldapService' => [
             'class' => 'app\services\ldap\LdapService',
         ],

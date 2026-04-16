@@ -47,6 +47,22 @@ class ArtifactService extends Component
     ];
 
     /**
+     * MIME types rendered inline as <img> in the UI.
+     *
+     * SVG is intentionally excluded — SVG can carry inline <script>, so
+     * embedding untrusted SVG opens an XSS vector. Operators that need SVG
+     * artifacts can still download them.
+     *
+     * @var string[]
+     */
+    private const IMAGE_TYPES = [
+        'image/png',
+        'image/jpeg',
+        'image/gif',
+        'image/webp',
+    ];
+
+    /**
      * Collect artifacts from a directory produced by an Ansible run.
      *
      * Scans $sourceDir for files and stores them as JobArtifact records.
@@ -283,24 +299,8 @@ class ArtifactService extends Component
      */
     public function deleteExpiredArtifacts(): int
     {
-        if ($this->retentionDays <= 0) {
-            return 0;
-        }
-
-        $cutoff = time() - ($this->retentionDays * 86400);
-        $expired = JobArtifact::find()->where(['<', 'created_at', $cutoff])->all();
-        $count = 0;
-
-        foreach ($expired as $artifact) {
-            \app\helpers\FileHelper::safeUnlink($artifact->storage_path);
-            $artifact->delete();
-            $count++;
-        }
-
-        // Clean up empty job directories.
-        $this->removeEmptyJobDirs();
-
-        return $count;
+        return (new ArtifactCleanupService($this->storagePath, $this->retentionDays))
+            ->deleteExpiredArtifacts();
     }
 
     /**
@@ -310,25 +310,7 @@ class ArtifactService extends Component
      */
     public function cleanupOrphans(): int
     {
-        $base = \Yii::getAlias($this->storagePath, false);
-        if ($base === false || !is_dir($base)) {
-            return 0;
-        }
-
-        $removed = 0;
-        $jobDirs = scandir($base);
-        if ($jobDirs === false) {
-            return 0;
-        }
-
-        foreach ($jobDirs as $dir) {
-            if ($dir === '.' || $dir === '..') {
-                continue;
-            }
-            $removed += $this->cleanupOrphanDir($base . DIRECTORY_SEPARATOR . $dir);
-        }
-
-        return $removed;
+        return (new ArtifactCleanupService($this->storagePath))->cleanupOrphans();
     }
 
     /**
@@ -355,7 +337,38 @@ class ArtifactService extends Component
     }
 
     /**
-     * Check whether a MIME type can be previewed inline.
+     * Get the top N jobs by total artifact bytes.
+     *
+     * @return list<array{job_id: int, total_bytes: int, artifact_count: int}>
+     */
+    public function getTopJobsByBytes(int $limit = 10): array
+    {
+        $limit = max(1, $limit);
+        $rows = (new \yii\db\Query())
+            ->select([
+                'job_id',
+                'total_bytes' => 'SUM(size_bytes)',
+                'artifact_count' => 'COUNT(*)',
+            ])
+            ->from(JobArtifact::tableName())
+            ->groupBy('job_id')
+            ->orderBy(['total_bytes' => SORT_DESC])
+            ->limit($limit)
+            ->all();
+
+        $out = [];
+        foreach ($rows as $row) {
+            $out[] = [
+                'job_id' => (int)$row['job_id'],
+                'total_bytes' => (int)$row['total_bytes'],
+                'artifact_count' => (int)$row['artifact_count'],
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Check whether a MIME type can be previewed inline as text/JSON/XML/YAML.
      */
     public function isPreviewable(string $mimeType): bool
     {
@@ -366,6 +379,15 @@ class ArtifactService extends Component
         }
 
         return in_array($mimeType, self::PREVIEWABLE_TYPES, true);
+    }
+
+    /**
+     * Check whether a MIME type can be rendered inline as an image. SVG is
+     * deliberately not included because it can carry executable script.
+     */
+    public function isImageType(string $mimeType): bool
+    {
+        return in_array($mimeType, self::IMAGE_TYPES, true);
     }
 
     /**
@@ -436,103 +458,6 @@ class ArtifactService extends Component
     }
 
     /**
-     * Clean up orphan files in a single job directory.
-     */
-    private function cleanupOrphanDir(string $dirPath): int
-    {
-        $filePaths = $this->listFilesInDir($dirPath);
-        $removed = 0;
-        foreach ($filePaths as $filePath) {
-            $exists = JobArtifact::find()
-                ->where(['storage_path' => $filePath])
-                ->exists();
-            if (!$exists) {
-                \app\helpers\FileHelper::safeUnlink($filePath);
-                $removed++;
-            }
-        }
-
-        $this->removeDirIfEmpty($dirPath);
-
-        return $removed;
-    }
-
-    /**
-     * Remove empty job_N directories from storage.
-     */
-    private function removeEmptyJobDirs(): void
-    {
-        $base = \Yii::getAlias($this->storagePath, false);
-        if ($base === false || !is_dir($base)) {
-            return;
-        }
-
-        foreach ($this->listSubDirs($base) as $fullPath) {
-            $this->removeDirIfEmpty($fullPath);
-        }
-    }
-
-    /**
-     * List regular files in a directory (excluding . and ..).
-     * @return list<string>
-     */
-    private function listFilesInDir(string $dirPath): array
-    {
-        if (!is_dir($dirPath)) {
-            return [];
-        }
-        $entries = scandir($dirPath);
-        if ($entries === false) {
-            return [];
-        }
-        $files = [];
-        foreach ($entries as $entry) {
-            if ($entry === '.' || $entry === '..') {
-                continue;
-            }
-            $path = $dirPath . DIRECTORY_SEPARATOR . $entry;
-            if (is_file($path)) {
-                $files[] = $path;
-            }
-        }
-        return $files;
-    }
-
-    /**
-     * List subdirectories in a directory (excluding . and ..).
-     * @return list<string>
-     */
-    private function listSubDirs(string $basePath): array
-    {
-        $entries = scandir($basePath);
-        if ($entries === false) {
-            return [];
-        }
-        $dirs = [];
-        foreach ($entries as $entry) {
-            if ($entry === '.' || $entry === '..') {
-                continue;
-            }
-            $path = $basePath . DIRECTORY_SEPARATOR . $entry;
-            if (is_dir($path)) {
-                $dirs[] = $path;
-            }
-        }
-        return $dirs;
-    }
-
-    /**
-     * Remove a directory if it contains only . and .. entries.
-     */
-    private function removeDirIfEmpty(string $dirPath): void
-    {
-        $remaining = scandir($dirPath);
-        if ($remaining !== false && count($remaining) === 2) {
-            \app\helpers\FileHelper::safeRmdir($dirPath);
-        }
-    }
-
-    /**
      * Resolve the storage directory for a specific job.
      */
     protected function resolveStoragePath(Job $job): string
@@ -571,6 +496,11 @@ class ArtifactService extends Component
             'tar' => 'application/x-tar',
             'gz' => 'application/gzip',
             'zip' => 'application/zip',
+            'png' => 'image/png',
+            'jpg' => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
+            'gif' => 'image/gif',
+            'webp' => 'image/webp',
         ];
 
         if (isset($map[$ext])) {

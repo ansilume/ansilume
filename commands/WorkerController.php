@@ -6,8 +6,10 @@ namespace app\commands;
 
 use app\components\WorkerHeartbeat;
 use app\models\Job;
+use yii\base\Event;
 use yii\console\Controller;
 use yii\console\ExitCode;
+use yii\queue\cli\Queue as CliQueue;
 
 /**
  * Worker management commands.
@@ -15,6 +17,15 @@ use yii\console\ExitCode;
  * Usage:
  *   php yii worker/start       Start queue listener with heartbeat (use instead of queue/listen)
  *   php yii worker/status      Show active workers and queue depth
+ *
+ * Graceful shutdown:
+ * On SIGTERM / SIGINT / SIGQUIT / SIGHUP, yii2-queue's built-in {@see \yii\queue\cli\SignalLoop}
+ * sets an exit flag that is checked **between** queue iterations. The current
+ * job (and the Ansible subprocess it spawned) finishes uninterrupted, then the
+ * worker exits cleanly. Operators must give docker / systemd enough grace time
+ * (see `stop_grace_period: 300s` in docker-compose.yml) for the longest-running
+ * job to complete; jobs killed mid-flight are picked up by the JobReclaim sweep
+ * on the next start.
  */
 class WorkerController extends Controller
 {
@@ -29,35 +40,25 @@ class WorkerController extends Controller
         $heartbeat = new WorkerHeartbeat();
         $heartbeat->register();
 
-        $this->stdout('Worker started. PID=' . getmypid() . ' Host=' . gethostname() . PHP_EOL);
+        $this->stdout('[worker] started. PID=' . getmypid() . ' Host=' . gethostname() . PHP_EOL);
 
-        // Refresh heartbeat every HEARTBEAT_INTERVAL seconds via SIGALRM if available
-        if (function_exists('pcntl_signal') && function_exists('pcntl_alarm')) {
-            pcntl_signal(SIGALRM, function () use ($heartbeat): void {
-                $heartbeat->refresh();
-                pcntl_alarm(WorkerHeartbeat::HEARTBEAT_INTERVAL);
-            });
-            pcntl_alarm(WorkerHeartbeat::HEARTBEAT_INTERVAL);
-
-            // Clean up on graceful shutdown signals
-            foreach ([SIGTERM, SIGINT] as $sig) {
-                pcntl_signal($sig, function () use ($heartbeat): void {
-                    $heartbeat->deregister();
-                    exit(0);
-                });
-            }
-        }
+        $this->installHeartbeatRefresh($heartbeat);
+        $this->attachWorkerEvents($heartbeat);
 
         register_shutdown_function(function () use ($heartbeat): void {
             $heartbeat->deregister();
         });
 
-        // Delegate to Yii2 queue listener (loop=true, timeout=3 → blocking brpop with 3s timeout)
+        // Delegate to Yii2 queue listener (loop=true, timeout=3 → blocking brpop with 3s timeout).
+        // SignalLoop (registered by the queue itself) handles SIGTERM/INT/QUIT/HUP cooperatively:
+        // current job finishes, then the loop returns here for clean teardown.
         /** @var \yii\queue\redis\Queue $queue */
         $queue = \Yii::$app->queue;
         $queue->run(true, 3);
 
         $heartbeat->deregister();
+        $this->stdout('[worker] stopped cleanly.' . PHP_EOL);
+
         return ExitCode::OK;
     }
 
@@ -99,5 +100,41 @@ class WorkerController extends Controller
         $this->stdout("  Running jobs:        {$runningJobs}\n");
 
         return ExitCode::OK;
+    }
+
+    /**
+     * Refresh the worker heartbeat every {@see WorkerHeartbeat::HEARTBEAT_INTERVAL}
+     * seconds via a recurring SIGALRM. Does nothing if pcntl is unavailable
+     * (the heartbeat then expires after STALE_AFTER unless deregistered cleanly).
+     */
+    private function installHeartbeatRefresh(WorkerHeartbeat $heartbeat): void
+    {
+        if (!function_exists('pcntl_signal') || !function_exists('pcntl_alarm')) {
+            return;
+        }
+        pcntl_signal(SIGALRM, function () use ($heartbeat): void {
+            $heartbeat->refresh();
+            pcntl_alarm(WorkerHeartbeat::HEARTBEAT_INTERVAL);
+        });
+        pcntl_alarm(WorkerHeartbeat::HEARTBEAT_INTERVAL);
+    }
+
+    /**
+     * Attach lifecycle hooks to the queue worker so graceful shutdowns are
+     * visible in operator logs and the heartbeat is deregistered as soon as
+     * the loop exits — even before the surrounding actionStart() can clean up.
+     *
+     * Public for testability: tests trigger {@see CliQueue::EVENT_WORKER_STOP}
+     * directly to verify the cleanup hook runs without spawning a real signal.
+     */
+    public function attachWorkerEvents(WorkerHeartbeat $heartbeat): void
+    {
+        Event::on(CliQueue::class, CliQueue::EVENT_WORKER_START, function (): void {
+            \Yii::info('Worker entered listening loop.', __CLASS__);
+        });
+        Event::on(CliQueue::class, CliQueue::EVENT_WORKER_STOP, function () use ($heartbeat): void {
+            \Yii::info('Worker received stop signal — finishing current job, then exiting.', __CLASS__);
+            $heartbeat->deregister();
+        });
     }
 }

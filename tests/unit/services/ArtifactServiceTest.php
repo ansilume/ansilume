@@ -509,6 +509,31 @@ class ArtifactServiceTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
+    // Tests: isImageType
+    // -------------------------------------------------------------------------
+
+    public function testIsImageTypeReturnsTrueForRasterImages(): void
+    {
+        $service = new ArtifactService();
+        $this->assertTrue($service->isImageType('image/png'));
+        $this->assertTrue($service->isImageType('image/jpeg'));
+        $this->assertTrue($service->isImageType('image/gif'));
+        $this->assertTrue($service->isImageType('image/webp'));
+    }
+
+    public function testIsImageTypeReturnsFalseForUnsupportedAndDangerousTypes(): void
+    {
+        $service = new ArtifactService();
+        // SVG must be rejected — it can carry inline <script> and would be
+        // an XSS vector if rendered inline in the same origin.
+        $this->assertFalse($service->isImageType('image/svg+xml'));
+        $this->assertFalse($service->isImageType('text/plain'));
+        $this->assertFalse($service->isImageType('application/json'));
+        $this->assertFalse($service->isImageType('text/html'));
+        $this->assertFalse($service->isImageType('application/octet-stream'));
+    }
+
+    // -------------------------------------------------------------------------
     // Tests: getArtifactContent
     // -------------------------------------------------------------------------
 

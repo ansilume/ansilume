@@ -172,6 +172,7 @@ $active = fn (string $prefix): string =>
             <?php endif; ?>
             <a class="nav-link<?= $active('webhook') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/webhook/index']) ?>">Webhooks</a>
             <a class="nav-link<?= $active('audit-log') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/audit-log/index']) ?>">Audit Log</a>
+            <a class="nav-link<?= $active('system') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/system/artifact-stats']) ?>">Artifact Storage</a>
         </nav>
         <?php endif; ?>
         <nav class="nav flex-column">

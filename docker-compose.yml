@@ -143,7 +143,7 @@ services:
     restart: unless-stopped
     working_dir: /var/www
     command: ["/bin/sh", "-c",
-      "while true; do php yii schedule/run && touch /tmp/schedule-alive; sleep 60; done"]
+      "while true; do php yii schedule/run && php yii maintenance/run && touch /tmp/schedule-alive; sleep 60; done"]
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
@@ -173,6 +173,11 @@ services:
     restart: unless-stopped
     working_dir: /var/www
     command: ["php", "yii", "worker/start"]
+    # Allow in-flight jobs to finish on `docker compose down/restart` before the
+    # container is SIGKILLed. Default 10s is too short for any real Ansible job.
+    # Tune up if your longest playbooks routinely exceed 5 minutes.
+    stop_grace_period: 300s
+    stop_signal: SIGTERM
     volumes:
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini

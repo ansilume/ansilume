@@ -88,6 +88,10 @@ return [
             'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/test-artifacts',
         ],
+        'maintenanceService' => [
+            'class' => 'app\services\MaintenanceService',
+            'artifactCleanupIntervalSeconds' => 86400,
+        ],
         'ldapService' => [
             'class' => 'app\services\ldap\LdapService',
         ],

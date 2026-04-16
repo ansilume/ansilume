@@ -162,6 +162,7 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 |---|---|
 | [Installation](docs/installation.md) | Quickstart, manual setup, external DB, configuration reference |
 | [Runners](docs/runners.md) | Runner setup, groups, selftest |
+| [Artifacts](docs/artifacts.md) | Producing artifacts in playbooks, where they appear, retention |
 | [Deployment](docs/deployment.md) | Production Ansible role |
 | [Monitoring](docs/monitoring.md) | Prometheus metrics, health endpoint |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and the diagnostics script |

@@ -64,6 +64,10 @@ class AuditLog extends ActiveRecord
     public const ACTION_JOB_RECLAIMED = 'job.reclaimed';
     public const ACTION_JOB_REQUEUED = 'job.requeued';
 
+    // -- Artifact actions ------------------------------------------------------
+    public const ACTION_ARTIFACT_EXPIRED = 'artifact.expired';
+    public const ACTION_ARTIFACT_ORPHAN_REMOVED = 'artifact.orphan-removed';
+
     // -- Team actions ----------------------------------------------------------
     public const ACTION_TEAM_CREATED = 'team.created';
     public const ACTION_TEAM_UPDATED = 'team.updated';

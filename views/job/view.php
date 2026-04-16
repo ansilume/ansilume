@@ -271,15 +271,29 @@ $isLive = !$job->isFinished();
                     }
                     ?></td>
                     <td class="text-end text-nowrap">
-                        <?php if ($artifactService->isPreviewable($artifact->mime_type)) : ?>
-                            <button type="button" class="btn btn-sm btn-outline-info artifact-preview-btn" data-url="<?= Html::encode(Url::to(['artifact-content', 'id' => $job->id, 'artifact_id' => $artifact->id])) ?>" data-artifact-id="<?= $artifact->id ?>">Preview</button>
+                        <?php
+                        $isImage = $artifactService->isImageType($artifact->mime_type);
+                        $isText = $artifactService->isPreviewable($artifact->mime_type);
+                        if ($isImage || $isText) :
+                            $previewUrl = $isImage
+                                ? Url::to(['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id, 'inline' => 1])
+                                : Url::to(['artifact-content', 'id' => $job->id, 'artifact_id' => $artifact->id]);
+                            ?>
+                            <button type="button"
+                                    class="btn btn-sm btn-outline-info artifact-preview-btn"
+                                    data-url="<?= Html::encode($previewUrl) ?>"
+                                    data-artifact-id="<?= $artifact->id ?>"
+                                    data-preview-kind="<?= $isImage ? 'image' : 'text' ?>">Preview</button>
                         <?php endif; ?>
                         <?= Html::a('Download', ['download-artifact', 'id' => $job->id, 'artifact_id' => $artifact->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
                     </td>
                 </tr>
                 <tr class="artifact-preview-row d-none" id="artifact-preview-<?= $artifact->id ?>">
-                    <td colspan="4" class="p-0">
-                        <pre class="mb-0 p-2 bg-dark text-light" style="max-height:400px;overflow:auto;font-size:0.8rem"><code class="artifact-preview-content"></code></pre>
+                    <td colspan="4" class="p-0 artifact-preview-cell">
+                        <pre class="mb-0 p-2 bg-dark text-light artifact-preview-text d-none" style="max-height:400px;overflow:auto;font-size:0.8rem"><code class="artifact-preview-content"></code></pre>
+                        <div class="p-2 bg-dark text-center artifact-preview-image d-none">
+                            <img alt="" loading="lazy" style="max-width:100%;max-height:600px;">
+                        </div>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -392,31 +406,53 @@ if (logEl.scrollHeight > logEl.clientHeight) {
 <script>
 document.querySelectorAll('.artifact-preview-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
-        var id = btn.getAttribute('data-artifact-id');
-        var row = document.getElementById('artifact-preview-' + id);
+        var id      = btn.getAttribute('data-artifact-id');
+        var kind    = btn.getAttribute('data-preview-kind');
+        var url     = btn.getAttribute('data-url');
+        var row     = document.getElementById('artifact-preview-' + id);
         if (!row) return;
 
+        // Toggle off if already visible.
         if (!row.classList.contains('d-none')) {
             row.classList.add('d-none');
             return;
         }
 
-        var content = row.querySelector('.artifact-preview-content');
-        if (content.dataset.loaded) {
+        if (kind === 'image') {
+            var imgWrap = row.querySelector('.artifact-preview-image');
+            var img     = imgWrap.querySelector('img');
+            if (!img.dataset.loaded) {
+                img.src = url;
+                img.dataset.loaded = '1';
+            }
+            imgWrap.classList.remove('d-none');
             row.classList.remove('d-none');
             return;
         }
 
+        // text/JSON/XML/YAML — fetched as JSON, dropped into <pre>.
+        var textWrap = row.querySelector('.artifact-preview-text');
+        var content  = textWrap.querySelector('.artifact-preview-content');
+        if (content.dataset.loaded) {
+            textWrap.classList.remove('d-none');
+            row.classList.remove('d-none');
+            return;
+        }
         btn.disabled = true;
         btn.textContent = 'Loading\u2026';
-        fetch(btn.getAttribute('data-url'))
+        fetch(url)
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 content.textContent = data.content || data.error || '';
                 content.dataset.loaded = '1';
+                textWrap.classList.remove('d-none');
                 row.classList.remove('d-none');
             })
-            .catch(function () { content.textContent = 'Failed to load preview.'; row.classList.remove('d-none'); })
+            .catch(function () {
+                content.textContent = 'Failed to load preview.';
+                textWrap.classList.remove('d-none');
+                row.classList.remove('d-none');
+            })
             .finally(function () { btn.disabled = false; btn.textContent = 'Preview'; });
     });
 });

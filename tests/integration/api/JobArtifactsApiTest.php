@@ -208,6 +208,87 @@ class JobArtifactsApiTest extends WebControllerTestCase
         $this->assertTrue($artifact['previewable']);
     }
 
+    // ─── image flag and inline download ─────────────────────────────
+
+    public function testArtifactListIncludesImageFlagForRasterImage(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'screenshot.png', "\x89PNG\r\n\x1a\nfake-png-bytes");
+        $this->collectArtifacts($job, 'log.txt', 'plain text');
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionArtifacts((int)$job->id);
+
+        $byName = [];
+        foreach ($result['data'] as $row) {
+            $byName[$row['display_name']] = $row;
+        }
+
+        $this->assertArrayHasKey('image', $byName['screenshot.png']);
+        $this->assertTrue($byName['screenshot.png']['image']);
+        $this->assertFalse($byName['log.txt']['image']);
+    }
+
+    public function testDownloadArtifactInlineForImageSetsInlineDisposition(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'screenshot.png', "\x89PNG\r\n\x1a\nfake-png-bytes");
+
+        $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams(['inline' => '1']);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(\yii\web\Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('inline;', $disposition);
+        $this->assertStringContainsString('image/png', (string)$response->headers->get('Content-Type'));
+    }
+
+    public function testDownloadArtifactInlineIgnoredForNonImage(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'log.txt', 'plain text');
+
+        $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams(['inline' => '1']);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(\yii\web\Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('attachment;', $disposition);
+    }
+
+    public function testDownloadArtifactWithoutInlineParamReturnsAttachment(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'screenshot.png', "\x89PNG\r\n\x1a\nfake-png-bytes");
+
+        $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams([]);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(\yii\web\Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('attachment;', $disposition);
+    }
+
     // ─── artifact_count in job serialization ────────────────────────
 
     public function testJobViewIncludesArtifactCount(): void

@@ -32,6 +32,7 @@ $config = [
         'api/v1/webhooks' => 'app\controllers\api\v1\WebhooksController',
         'api/v1/audit-logs' => 'app\controllers\api\v1\AuditLogsController',
         'api/v1/admin/ldap' => 'app\controllers\api\v1\LdapController',
+        'api/v1/system' => 'app\controllers\api\v1\SystemController',
         'runner-api' => 'app\controllers\api\runner\JobsController',
         'runner-register' => 'app\controllers\api\runner\RegisterController',
     ],
@@ -217,6 +218,10 @@ $config = [
             'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
             'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
         ],
+        'maintenanceService' => [
+            'class' => 'app\services\MaintenanceService',
+            'artifactCleanupIntervalSeconds' => (int)(getenv('MAINTENANCE_ARTIFACT_CLEANUP_INTERVAL') ?: 86400),
+        ],
         'ldapService' => [
             'class' => 'app\services\ldap\LdapService',
         ],
@@ -343,6 +348,10 @@ $config = [
                 // LDAP admin API
                 ['pattern' => 'api/v1/admin/ldap/test', 'route' => 'api/v1/admin/ldap/test', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/admin/ldap/test', 'route' => 'api/v1/admin/ldap/test', 'verb' => 'POST'],
+                // System info API
+                ['pattern' => 'api/v1/system/artifact-stats', 'route' => 'api/v1/system/artifact-stats', 'verb' => 'GET'],
+                // System info (web)
+                ['pattern' => 'system/artifact-stats', 'route' => 'system/artifact-stats', 'verb' => 'GET'],
                 // Workflow jobs API
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/cancel', 'route' => 'api/v1/workflow-jobs/cancel', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/resume', 'route' => 'api/v1/workflow-jobs/resume', 'verb' => 'POST'],

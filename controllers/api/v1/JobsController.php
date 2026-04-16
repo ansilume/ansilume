@@ -182,12 +182,21 @@ class JobsController extends BaseApiController
             return $this->error('Artifact file no longer exists on disk.', 404);
         }
 
+        // ?inline=1 emits Content-Disposition: inline. Restricted to images
+        // so we never inline attacker-controlled HTML/SVG (XSS).
+        /** @var ArtifactService $svc */
+        $svc = \Yii::$app->get('artifactService');
+        $request = \Yii::$app->request;
+        assert($request instanceof \yii\web\Request);
+        $inline = $request->getQueryParam('inline') === '1'
+            && $svc->isImageType($artifact->mime_type);
+
         $response = \Yii::$app->response;
         assert($response instanceof \yii\web\Response);
         return $response->sendFile(
             $artifact->storage_path,
             $artifact->display_name,
-            ['mimeType' => $artifact->mime_type, 'inline' => false]
+            ['mimeType' => $artifact->mime_type, 'inline' => $inline]
         );
     }
 
@@ -322,7 +331,7 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, display_name: string, mime_type: string, size_bytes: int, previewable: bool, created_at: int}
+     * @return array{id: int, display_name: string, mime_type: string, size_bytes: int, previewable: bool, image: bool, created_at: int}
      */
     private function serializeArtifact(JobArtifact $artifact, ArtifactService $svc): array
     {
@@ -332,6 +341,7 @@ class JobsController extends BaseApiController
             'mime_type' => $artifact->mime_type,
             'size_bytes' => $artifact->size_bytes,
             'previewable' => $svc->isPreviewable($artifact->mime_type),
+            'image' => $svc->isImageType($artifact->mime_type),
             'created_at' => $artifact->created_at,
         ];
     }

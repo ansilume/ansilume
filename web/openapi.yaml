@@ -61,6 +61,7 @@ tags:
   - name: Roles
   - name: Profile
   - name: LDAP
+  - name: System
 
 # Shared query parameter list used by every analytics endpoint.
 # Defined once via a YAML anchor and referenced with `*` so we don't
@@ -467,13 +468,26 @@ paths:
     get:
       tags: [Jobs]
       summary: Download a single artifact
-      description: Requires `job.view`.
+      description: |
+        Requires `job.view`. By default the response uses
+        `Content-Disposition: attachment` so the browser saves the file.
+
+        Pass `?inline=1` to receive `Content-Disposition: inline`. This is
+        only honoured for image MIME types (`image/png`, `image/jpeg`,
+        `image/gif`, `image/webp`) so attacker-controlled HTML/SVG cannot
+        be rendered cross-origin in an authenticated session. Non-image
+        artifacts ignore the parameter and continue to download.
       parameters:
         - { $ref: '#/components/parameters/IdPath' }
         - name: artifact_id
           in: path
           required: true
           schema: { type: integer, minimum: 1 }
+        - name: inline
+          in: query
+          required: false
+          description: Set to `1` to render images inline (ignored for non-image MIME types).
+          schema: { type: string, enum: ['1'] }
       responses:
         '200':
           description: File download
@@ -982,6 +996,26 @@ paths:
                   data: { $ref: '#/components/schemas/LdapDiagnosticResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '503': { $ref: '#/components/responses/ServerError' }
+
+  # ─────────────────────────── System ───────────────────────────
+  /api/v1/system/artifact-stats:
+    get:
+      tags: [System]
+      summary: Aggregate artifact storage statistics
+      description: |
+        Admin-only. Returns total bytes/count of stored artifacts, the top
+        ten jobs by artifact size, and the active retention/quota config.
+        Requires `user.view`.
+      responses:
+        '200':
+          description: Storage stats snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/ArtifactStorageStats' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ─────────────────────────── Webhooks ───────────────────────────
   /api/v1/webhooks:
@@ -1897,8 +1931,35 @@ components:
         display_name: { type: string }
         mime_type:    { type: string }
         size_bytes:   { type: integer }
-        previewable:  { type: boolean }
+        previewable:  { type: boolean, description: "True for text/JSON/XML/YAML — fetch via /content endpoint." }
+        image:        { type: boolean, description: "True for image/png|jpeg|gif|webp — fetch via /download?inline=1 to embed as <img>." }
         created_at:   { type: integer }
+    ArtifactStorageStats:
+      type: object
+      properties:
+        stats:
+          type: object
+          properties:
+            total_bytes:    { type: integer, description: "Sum of all stored artifact bytes." }
+            artifact_count: { type: integer }
+            job_count:      { type: integer, description: "Number of distinct jobs that have at least one artifact." }
+        top_jobs:
+          type: array
+          description: Top ten jobs by total artifact bytes, descending.
+          items:
+            type: object
+            properties:
+              job_id:         { type: integer }
+              total_bytes:    { type: integer }
+              artifact_count: { type: integer }
+        config:
+          type: object
+          properties:
+            retention_days:        { type: integer, description: "0 = keep forever." }
+            max_file_size:         { type: integer, description: "Per-file byte cap." }
+            max_artifacts_per_job: { type: integer }
+            max_bytes_per_job:     { type: integer, description: "0 = unlimited." }
+            max_total_bytes:       { type: integer, description: "Global cap; 0 = unlimited." }
     JobList:
       type: object
       properties:

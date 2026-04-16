@@ -191,12 +191,23 @@ class JobController extends BaseController
             throw new NotFoundHttpException("Artifact file no longer exists on disk.");
         }
 
+        // ?inline=1 emits Content-Disposition: inline so the browser renders
+        // the file in place. Used by the <img> preview in views/job/view.php
+        // for image artifacts. Restricted to images so we never inline an
+        // attacker-controlled HTML/SVG (XSS via uploaded artifact).
+        /** @var ArtifactService $svc */
+        $svc = \Yii::$app->get('artifactService');
+        $request = \Yii::$app->request;
+        assert($request instanceof \yii\web\Request);
+        $inline = $request->getQueryParam('inline') === '1'
+            && $svc->isImageType($artifact->mime_type);
+
         $webResponse = \Yii::$app->response;
         assert($webResponse instanceof \yii\web\Response);
         return $webResponse->sendFile(
             $artifact->storage_path,
             $artifact->display_name,
-            ['mimeType' => $artifact->mime_type, 'inline' => false]
+            ['mimeType' => $artifact->mime_type, 'inline' => $inline]
         );
     }
 

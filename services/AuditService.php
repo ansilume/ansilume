@@ -48,6 +48,8 @@ class AuditService extends Component
     public const ACTION_JOB_FINISHED = AuditLog::ACTION_JOB_FINISHED;
     public const ACTION_JOB_RECLAIMED = AuditLog::ACTION_JOB_RECLAIMED;
     public const ACTION_JOB_REQUEUED = AuditLog::ACTION_JOB_REQUEUED;
+    public const ACTION_ARTIFACT_EXPIRED = AuditLog::ACTION_ARTIFACT_EXPIRED;
+    public const ACTION_ARTIFACT_ORPHAN_REMOVED = AuditLog::ACTION_ARTIFACT_ORPHAN_REMOVED;
     public const ACTION_TEAM_CREATED = AuditLog::ACTION_TEAM_CREATED;
     public const ACTION_TEAM_UPDATED = AuditLog::ACTION_TEAM_UPDATED;
     public const ACTION_TEAM_DELETED = AuditLog::ACTION_TEAM_DELETED;

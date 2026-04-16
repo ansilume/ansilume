@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\models\AuditLog;
 use app\models\JobArtifact;
 use app\services\ArtifactService;
 use app\tests\integration\DbTestCase;
@@ -175,12 +176,34 @@ class ArtifactServiceTest extends DbTestCase
 
         // Backdate the artifact to 10 days ago
         $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
-        $artifact->created_at = time() - (10 * 86400);
+        $artifactId = (int)$artifact->id;
+        $sizeBytes = (int)$artifact->size_bytes;
+        $createdAt = time() - (10 * 86400);
+        $artifact->created_at = $createdAt;
         $artifact->save(false);
 
         $deleted = $service->deleteExpiredArtifacts();
         $this->assertSame(1, $deleted);
         $this->assertCount(0, $service->getArtifacts($job));
+
+        // Audit-Trail: an "artifact.expired" entry must exist for the removed
+        // record so operators can later trace what the cleanup sweep deleted.
+        $log = AuditLog::find()
+            ->where([
+                'action' => AuditLog::ACTION_ARTIFACT_EXPIRED,
+                'object_type' => 'artifact',
+                'object_id' => $artifactId,
+            ])
+            ->one();
+        $this->assertNotNull($log, 'expected an audit entry for the expired artifact');
+        $this->assertNull($log->user_id, 'system-triggered cleanup must have no user_id');
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertSame($job->id, $metadata['job_id']);
+        $this->assertSame('old.txt', $metadata['display_name']);
+        $this->assertSame($sizeBytes, $metadata['size_bytes']);
+        $this->assertSame($createdAt, $metadata['created_at']);
+        $this->assertSame(7, $metadata['retention_days']);
+        $this->assertArrayHasKey('cutoff', $metadata);
     }
 
     public function testDeleteExpiredArtifactsKeepsRecentOnes(): void
@@ -221,11 +244,82 @@ class ArtifactServiceTest extends DbTestCase
         $service = $this->makeService();
         $storageDir = $this->tempDir . '/storage/job_999';
         mkdir($storageDir, 0750, true);
-        file_put_contents($storageDir . '/orphan.txt', 'orphaned');
+        $orphanPath = $storageDir . '/orphan.txt';
+        file_put_contents($orphanPath, 'orphaned');
 
         $removed = $service->cleanupOrphans();
         $this->assertSame(1, $removed);
-        $this->assertFalse(file_exists($storageDir . '/orphan.txt'));
+        $this->assertFalse(file_exists($orphanPath));
+
+        // Audit-Trail: orphan removals must be logged with object_id=null
+        // (no DB row by definition) and the file path captured in metadata
+        // for forensic traceability.
+        $log = AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_ORPHAN_REMOVED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log, 'expected an audit entry for the orphan removal');
+        $this->assertSame('artifact', $log->object_type);
+        $this->assertNull($log->object_id);
+        $this->assertNull($log->user_id);
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertSame($orphanPath, $metadata['storage_path']);
+        $this->assertSame(8, $metadata['size_bytes']); // strlen("orphaned")
+    }
+
+    public function testDeleteExpiredArtifactsKeepsRecentOnesEmitsNoAudit(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/recent.txt', 'recent');
+
+        $service = $this->makeService();
+        $service->retentionDays = 7;
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $countBefore = (int)AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_EXPIRED])
+            ->count();
+        $service->deleteExpiredArtifacts();
+        $countAfter = (int)AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_EXPIRED])
+            ->count();
+
+        $this->assertSame($countBefore, $countAfter, 'no audit entries should be created when nothing expired');
+    }
+
+    public function testCleanupOrphansEmitsNoAuditWhenNothingRemoved(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/keep.txt', 'keep');
+
+        $service = $this->makeService();
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $countBefore = (int)AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_ORPHAN_REMOVED])
+            ->count();
+        $service->cleanupOrphans();
+        $countAfter = (int)AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_ORPHAN_REMOVED])
+            ->count();
+
+        $this->assertSame($countBefore, $countAfter, 'no audit entries should be created when no orphans existed');
     }
 
     public function testCleanupOrphansKeepsFilesWithDbRecords(): void
@@ -288,6 +382,74 @@ class ArtifactServiceTest extends DbTestCase
         $this->assertSame(0, $stats['artifact_count']);
         $this->assertSame(0, $stats['job_count']);
         $this->assertSame(0, $stats['total_bytes']);
+    }
+
+    // -------------------------------------------------------------------------
+    // Tests: getTopJobsByBytes
+    // -------------------------------------------------------------------------
+
+    public function testGetTopJobsByBytesOrdersDescendingByBytes(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $small = $this->createJob($template->id, $user->id);
+        $large = $this->createJob($template->id, $user->id);
+
+        $dirSmall = $this->tempDir . '/small';
+        mkdir($dirSmall, 0750, true);
+        file_put_contents($dirSmall . '/s.txt', str_repeat('s', 50));
+
+        $dirLarge = $this->tempDir . '/large';
+        mkdir($dirLarge, 0750, true);
+        file_put_contents($dirLarge . '/l1.txt', str_repeat('l', 500));
+        file_put_contents($dirLarge . '/l2.txt', str_repeat('m', 300));
+
+        $service = $this->makeService();
+        $service->collectFromDirectory($small, $dirSmall);
+        $service->collectFromDirectory($large, $dirLarge);
+
+        $top = $service->getTopJobsByBytes(10);
+        $this->assertCount(2, $top);
+        $this->assertSame((int)$large->id, $top[0]['job_id']);
+        $this->assertSame(800, $top[0]['total_bytes']);
+        $this->assertSame(2, $top[0]['artifact_count']);
+        $this->assertSame((int)$small->id, $top[1]['job_id']);
+        $this->assertSame(50, $top[1]['total_bytes']);
+        $this->assertSame(1, $top[1]['artifact_count']);
+    }
+
+    public function testGetTopJobsByBytesRespectsLimit(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+
+        $service = $this->makeService();
+        for ($i = 0; $i < 5; $i++) {
+            $job = $this->createJob($template->id, $user->id);
+            $dir = $this->tempDir . '/j' . $i;
+            mkdir($dir, 0750, true);
+            file_put_contents($dir . '/x.txt', str_repeat('x', ($i + 1) * 10));
+            $service->collectFromDirectory($job, $dir);
+        }
+
+        $top = $service->getTopJobsByBytes(3);
+        $this->assertCount(3, $top);
+        // Largest first: 50, 40, 30 bytes.
+        $this->assertSame(50, $top[0]['total_bytes']);
+        $this->assertSame(40, $top[1]['total_bytes']);
+        $this->assertSame(30, $top[2]['total_bytes']);
+    }
+
+    public function testGetTopJobsByBytesEmptyWhenNoArtifacts(): void
+    {
+        $service = $this->makeService();
+        $this->assertSame([], $service->getTopJobsByBytes(10));
     }
 
     // -------------------------------------------------------------------------

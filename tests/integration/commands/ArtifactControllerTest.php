@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\integration\commands;
 
 use app\commands\ArtifactController;
+use app\models\AuditLog;
 use app\models\JobArtifact;
 use app\services\ArtifactService;
 use app\tests\integration\DbTestCase;
@@ -105,6 +106,7 @@ class ArtifactControllerTest extends DbTestCase
 
         // Backdate
         $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+        $artifactId = (int)$artifact->id;
         $artifact->created_at = time() - (10 * 86400);
         $artifact->save(false);
 
@@ -114,6 +116,16 @@ class ArtifactControllerTest extends DbTestCase
 
         $this->assertSame(ExitCode::OK, $result);
         $this->assertStringContainsString('Deleted 1 expired', $ctrl->captured);
+
+        // Verify the cleanup left an audit trail referencing the deleted row.
+        $log = AuditLog::find()
+            ->where([
+                'action' => AuditLog::ACTION_ARTIFACT_EXPIRED,
+                'object_id' => $artifactId,
+            ])
+            ->one();
+        $this->assertNotNull($log, 'expected audit entry from console cleanup');
+        $this->assertNull($log->user_id);
     }
 
     public function testCleanupRemovesOrphanFiles(): void
@@ -123,7 +135,8 @@ class ArtifactControllerTest extends DbTestCase
         // Create orphan file
         $orphanDir = $this->tempDir . '/storage/job_999';
         mkdir($orphanDir, 0750, true);
-        file_put_contents($orphanDir . '/orphan.txt', 'orphan');
+        $orphanPath = $orphanDir . '/orphan.txt';
+        file_put_contents($orphanPath, 'orphan');
 
         \Yii::$app->set('artifactService', $service);
         $ctrl = $this->makeController();
@@ -131,6 +144,16 @@ class ArtifactControllerTest extends DbTestCase
 
         $this->assertSame(ExitCode::OK, $result);
         $this->assertStringContainsString('Removed 1 orphan', $ctrl->captured);
+
+        // Verify the cleanup left an audit trail so operators can later
+        // trace what the scheduled maintenance command removed.
+        $log = AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_ORPHAN_REMOVED])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log, 'expected audit entry from console cleanup');
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertSame($orphanPath, $metadata['storage_path']);
     }
 
     // ─── stats ──────────────────────────────────────────────────────

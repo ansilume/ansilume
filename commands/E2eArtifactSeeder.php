@@ -57,8 +57,18 @@ class E2eArtifactSeeder
             'application/json',
             '{"status":"ok","tests_passed":42,"tests_failed":0}',
         );
+        // 1x1 transparent PNG so the image preview path is exercised end-to-end.
+        $this->createArtifact(
+            $job->id,
+            $storagePath . '/screenshot.png',
+            'screenshot.png',
+            'image/png',
+            base64_decode(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+            ) ?: '',
+        );
 
-        ($this->logger)("  Created job #{$job->id} with 2 artifacts.\n");
+        ($this->logger)("  Created job #{$job->id} with 3 artifacts.\n");
     }
 
     private function createJob(int $userId, int $templateId): Job

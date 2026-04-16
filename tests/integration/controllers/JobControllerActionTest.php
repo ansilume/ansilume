@@ -156,6 +156,96 @@ class JobControllerActionTest extends WebControllerTestCase
         $ctrl->actionArtifactContent((int)$job->id, 999999);
     }
 
+    // ─── download-artifact (inline image preview) ──────────────────
+
+    public function testDownloadArtifactInlineForImageSetsInlineDisposition(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $service = $this->makeArtifactService();
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/screenshot.png', "\x89PNG\r\n\x1a\nfake-png-bytes");
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+
+        \Yii::$app->set('artifactService', $service);
+        \Yii::$app->request->setQueryParams(['inline' => '1']);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('inline;', $disposition);
+        $this->assertStringContainsString('image/png', (string)$response->headers->get('Content-Type'));
+    }
+
+    public function testDownloadArtifactInlineIgnoredForNonImage(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $service = $this->makeArtifactService();
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/log.txt', 'plain text');
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+
+        \Yii::$app->set('artifactService', $service);
+        \Yii::$app->request->setQueryParams(['inline' => '1']);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('attachment;', $disposition);
+    }
+
+    public function testDownloadArtifactWithoutInlineReturnsAttachment(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $service = $this->makeArtifactService();
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/screenshot.png', "\x89PNG\r\n\x1a\nfake-png-bytes");
+        $service->collectFromDirectory($job, $sourceDir);
+
+        $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+
+        \Yii::$app->set('artifactService', $service);
+        \Yii::$app->request->setQueryParams([]);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('attachment;', $disposition);
+    }
+
     // ─── download-all-artifacts ─────────────────────────────────────
 
     public function testDownloadAllArtifactsReturnsZip(): void

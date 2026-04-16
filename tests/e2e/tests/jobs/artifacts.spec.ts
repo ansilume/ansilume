@@ -75,6 +75,27 @@ test.describe('Job Artifacts', () => {
     await expect(previewContent).not.toBeEmpty({ timeout: 5_000 });
   });
 
+  test('image preview renders inline <img>', async ({ page }) => {
+    const found = await goToJobWithArtifacts(page);
+    if (!found) {
+      test.skip(true, 'No job with artifacts found in e2e data');
+      return;
+    }
+    const imageBtn = page.locator('button.artifact-preview-btn[data-preview-kind="image"]').first();
+    if (!(await imageBtn.isVisible({ timeout: 2_000 }).catch(() => false))) {
+      test.skip(true, 'No image artifact seeded for this run');
+      return;
+    }
+    await imageBtn.click();
+
+    const previewRow = page.locator('.artifact-preview-row:not(.d-none)').first();
+    await expect(previewRow).toBeVisible({ timeout: 5_000 });
+    const imageWrap = previewRow.locator('.artifact-preview-image:not(.d-none)');
+    await expect(imageWrap).toBeVisible({ timeout: 5_000 });
+    const img = imageWrap.locator('img');
+    await expect(img).toHaveAttribute('src', /\/job\/\d+\/artifact\/\d+.*inline=1/);
+  });
+
   test('download all button visible when multiple artifacts', async ({ page }) => {
     const found = await goToJobWithArtifacts(page);
     if (!found) {
