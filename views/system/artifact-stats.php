@@ -89,7 +89,7 @@ $humanBytes = static function (int $bytes): string {
                 </tr>
                 <tr>
                     <th class="ps-3">Max jobs with artifacts</th>
-                    <td><?= $maxJobsWithArtifacts === 0 ? '<em>unlimited</em>' : number_format($maxJobsWithArtifacts) ?></td>
+                    <td><?= $maxJobsWithArtifacts === 0 ? '<span class="text-muted">Unlimited</span>' : number_format($maxJobsWithArtifacts) ?></td>
                 </tr>
                 <tr>
                     <th class="ps-3">Max bytes per job</th>
