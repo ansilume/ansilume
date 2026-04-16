@@ -67,6 +67,7 @@ class AuditLog extends ActiveRecord
     // -- Artifact actions ------------------------------------------------------
     public const ACTION_ARTIFACT_EXPIRED = 'artifact.expired';
     public const ACTION_ARTIFACT_ORPHAN_REMOVED = 'artifact.orphan-removed';
+    public const ACTION_ARTIFACT_QUOTA_TRIMMED = 'artifact.quota_trimmed';
 
     // -- Team actions ----------------------------------------------------------
     public const ACTION_TEAM_CREATED = 'team.created';
