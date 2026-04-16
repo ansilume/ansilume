@@ -681,4 +681,85 @@ class ArtifactServiceTest extends DbTestCase
         $this->assertSame(0, $service->deleteByJobCount());
         $this->assertCount(1, JobArtifact::find()->where(['job_id' => $jobWith->id])->all());
     }
+
+    // -------------------------------------------------------------------------
+    // Tests: trimToTotalBytes
+    // -------------------------------------------------------------------------
+
+    public function testTrimToTotalBytesDeletesOldestJobsFirst(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+
+        $service = $this->makeService();
+        $sizes = [100, 200, 300]; // oldest → newest
+        $jobIds = [];
+        foreach ($sizes as $i => $size) {
+            $job = $this->createJob($template->id, $user->id);
+            $jobIds[] = $job->id;
+            $dir = $this->tempDir . '/src' . $i;
+            mkdir($dir, 0750, true);
+            file_put_contents($dir . '/a.bin', str_repeat('x', $size));
+            $service->collectFromDirectory($job, $dir);
+            $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+            $artifact->created_at = 1_000_000 + $i; // deterministic ordering
+            $artifact->save(false);
+        }
+
+        // Total = 600. Limit = 400 → need to free 200+ bytes.
+        // Oldest (100) deleted → 500 still over. Next oldest (200) deleted → 300 ≤ 400. Stop.
+        $service->maxTotalBytes = 400;
+        $deleted = $service->trimToTotalBytes();
+
+        $this->assertSame(2, $deleted);
+        $this->assertCount(0, JobArtifact::find()->where(['job_id' => $jobIds[0]])->all());
+        $this->assertCount(0, JobArtifact::find()->where(['job_id' => $jobIds[1]])->all());
+        $this->assertCount(1, JobArtifact::find()->where(['job_id' => $jobIds[2]])->all());
+
+        $logs = AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_QUOTA_TRIMMED])
+            ->all();
+        $this->assertCount(2, $logs);
+        foreach ($logs as $log) {
+            $meta = json_decode((string)$log->metadata, true);
+            $this->assertSame('global_quota', $meta['reason']);
+        }
+    }
+
+    public function testTrimToTotalBytesUnderLimitDoesNothing(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $dir = $this->tempDir . '/src';
+        mkdir($dir, 0750, true);
+        file_put_contents($dir . '/a.txt', 'x');
+
+        $service = $this->makeService();
+        $service->collectFromDirectory($job, $dir);
+        $service->maxTotalBytes = 1_000_000;
+
+        $countBefore = (int)AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_QUOTA_TRIMMED])
+            ->count();
+        $this->assertSame(0, $service->trimToTotalBytes());
+        $countAfter = (int)AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_QUOTA_TRIMMED])
+            ->count();
+        $this->assertSame($countBefore, $countAfter);
+    }
+
+    public function testTrimToTotalBytesReturnsZeroWhenDisabled(): void
+    {
+        $service = $this->makeService();
+        $service->maxTotalBytes = 0;
+        $this->assertSame(0, $service->trimToTotalBytes());
+    }
 }

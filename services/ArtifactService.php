@@ -341,6 +341,21 @@ class ArtifactService extends Component
     }
 
     /**
+     * Retroactively enforce the global byte quota. Deletes oldest jobs' artifacts
+     * until the total is back under maxTotalBytes. Returns the number of artifacts
+     * deleted (0 if already under the limit or quota disabled).
+     */
+    public function trimToTotalBytes(): int
+    {
+        return (new ArtifactCleanupService(
+            $this->storagePath,
+            $this->retentionDays,
+            $this->maxJobsWithArtifacts,
+            $this->maxTotalBytes,
+        ))->trimToTotalBytes();
+    }
+
+    /**
      * Remove orphan files from the storage directory that have no DB record.
      *
      * @return int Number of orphan files removed.

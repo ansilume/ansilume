@@ -242,6 +242,62 @@ class ArtifactCleanupService
     }
 
     /**
+     * Trim whole jobs' artifacts, oldest first, until SUM(size_bytes) <= maxTotalBytes.
+     *
+     * Runs only if a positive quota is set AND the current total exceeds it.
+     * Each trimmed job gets one audit entry.
+     */
+    public function trimToTotalBytes(): int
+    {
+        if ($this->maxTotalBytes <= 0) {
+            return 0;
+        }
+
+        $current = $this->currentTotalBytes();
+        if ($current <= $this->maxTotalBytes) {
+            return 0;
+        }
+
+        $excess = $current - $this->maxTotalBytes;
+        $count = 0;
+        foreach ($this->iterateJobsOldestFirst() as $row) {
+            if ($excess <= 0) {
+                break;
+            }
+            $count += $this->deleteJobArtifacts((int)$row['job_id'], 'global_quota');
+            $excess -= (int)$row['total_bytes'];
+        }
+
+        $this->removeEmptyJobDirs();
+        return $count;
+    }
+
+    private function currentTotalBytes(): int
+    {
+        return (int)(new \yii\db\Query())
+            ->select(['COALESCE(SUM(size_bytes), 0)'])
+            ->from(JobArtifact::tableName())
+            ->scalar();
+    }
+
+    /**
+     * @return iterable<array{job_id: int, total_bytes: int}>
+     */
+    private function iterateJobsOldestFirst(): iterable
+    {
+        return (new \yii\db\Query())
+            ->select([
+                'job_id',
+                'total_bytes' => 'SUM(size_bytes)',
+                'newest' => 'MAX(created_at)',
+            ])
+            ->from(JobArtifact::tableName())
+            ->groupBy('job_id')
+            ->orderBy(['newest' => SORT_ASC])
+            ->each();
+    }
+
+    /**
      * Remove empty job_N directories from storage.
      */
     private function removeEmptyJobDirs(): void
