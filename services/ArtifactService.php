@@ -36,6 +36,13 @@ class ArtifactService extends Component
     /** @var int Days to retain artifacts. 0 = keep forever. */
     public int $retentionDays = 0;
 
+    /**
+     * Maximum number of jobs (with at least one artifact) to retain.
+     * 0 = unlimited. Combined with retentionDays as OR: a job's artifacts
+     * are removed if either rule matches.
+     */
+    public int $maxJobsWithArtifacts = 0;
+
     /** @var string[] MIME types that can be previewed inline. */
     private const PREVIEWABLE_PREFIXES = ['text/'];
 

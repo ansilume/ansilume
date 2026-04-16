@@ -217,6 +217,7 @@ $config = [
             'maxBytesPerJob' => (int)(getenv('ARTIFACT_MAX_BYTES_PER_JOB') ?: 52428800),
             'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
             'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
+            'maxJobsWithArtifacts' => (int)(getenv('ARTIFACT_MAX_JOBS_WITH_ARTIFACTS') ?: 0),
         ],
         'maintenanceService' => [
             'class' => 'app\services\MaintenanceService',
