@@ -117,4 +117,59 @@ test.describe('Job Artifacts', () => {
       await expect(page.locator('body')).toContainText(/job|status/i);
     }
   });
+
+  async function openPreviewByExtension(page: import('@playwright/test').Page, ext: string) {
+    const found = await goToJobWithArtifacts(page);
+    if (!found) {
+      test.skip(true, 'No job with artifacts found in e2e data');
+      return null;
+    }
+    const row = page.locator('table.table tbody tr').filter({
+      has: page.locator(`code:has-text(".${ext}")`),
+    }).first();
+    if (!(await row.isVisible({ timeout: 2_000 }).catch(() => false))) {
+      test.skip(true, `No .${ext} artifact seeded`);
+      return null;
+    }
+    await row.locator('button.artifact-preview-btn').click();
+    return page.locator('.artifact-preview-row:not(.d-none)').first();
+  }
+
+  test('previews TXT artifact inline', async ({ page }) => {
+    const previewRow = await openPreviewByExtension(page, 'txt');
+    if (!previewRow) return;
+    await expect(previewRow).toBeVisible({ timeout: 5_000 });
+    await expect(previewRow.locator('.artifact-preview-content')).not.toBeEmpty({ timeout: 5_000 });
+  });
+
+  test('previews JSON artifact inline', async ({ page }) => {
+    const previewRow = await openPreviewByExtension(page, 'json');
+    if (!previewRow) return;
+    await expect(previewRow).toBeVisible({ timeout: 5_000 });
+    await expect(previewRow.locator('.artifact-preview-content')).toContainText('tests_passed', { timeout: 5_000 });
+  });
+
+  test('previews XML artifact inline', async ({ page }) => {
+    const previewRow = await openPreviewByExtension(page, 'xml');
+    if (!previewRow) return;
+    await expect(previewRow).toBeVisible({ timeout: 5_000 });
+    await expect(previewRow.locator('.artifact-preview-content')).toContainText('<config>', { timeout: 5_000 });
+  });
+
+  test('previews YAML artifact inline', async ({ page }) => {
+    const previewRow = await openPreviewByExtension(page, 'yaml');
+    if (!previewRow) return;
+    await expect(previewRow).toBeVisible({ timeout: 5_000 });
+    await expect(previewRow.locator('.artifact-preview-content')).toContainText('environment:', { timeout: 5_000 });
+  });
+
+  test('previews PDF artifact in sandboxed iframe', async ({ page }) => {
+    const previewRow = await openPreviewByExtension(page, 'pdf');
+    if (!previewRow) return;
+    await expect(previewRow).toBeVisible({ timeout: 5_000 });
+    const frame = previewRow.locator('.artifact-preview-frame:not(.d-none) iframe');
+    await expect(frame).toBeVisible({ timeout: 5_000 });
+    await expect(frame).toHaveAttribute('sandbox', '');
+    await expect(frame).toHaveAttribute('src', /\/job\/\d+\/artifact\/\d+.*inline=1/);
+  });
 });
