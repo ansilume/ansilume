@@ -43,7 +43,7 @@ class MaintenanceService extends Component
      * @return array{
      *     ran: list<string>,
      *     skipped: list<array{task: string, reason: string}>,
-     *     results: array<string, array<string, int|string>>,
+     *     results: array<string, array{expired: int, by_count: int, quota_trimmed: int, orphans: int}>,
      * }
      */
     public function runIfDue(): array
@@ -62,32 +62,45 @@ class MaintenanceService extends Component
     }
 
     /**
-     * @return array{ran: bool, reason: string, result: array{expired: int, orphans: int}}
+     * @return array{
+     *     ran: bool,
+     *     reason: string,
+     *     result: array{expired: int, by_count: int, quota_trimmed: int, orphans: int},
+     * }
      */
     private function maybeRunArtifactCleanup(): array
     {
+        $empty = ['expired' => 0, 'by_count' => 0, 'quota_trimmed' => 0, 'orphans' => 0];
+
         if ($this->artifactCleanupIntervalSeconds <= 0) {
-            return ['ran' => false, 'reason' => 'disabled', 'result' => ['expired' => 0, 'orphans' => 0]];
+            return ['ran' => false, 'reason' => 'disabled', 'result' => $empty];
         }
 
         if (!$this->acquireCooldown('maintenance:artifact-cleanup', $this->artifactCleanupIntervalSeconds)) {
-            return ['ran' => false, 'reason' => 'cooldown', 'result' => ['expired' => 0, 'orphans' => 0]];
+            return ['ran' => false, 'reason' => 'cooldown', 'result' => $empty];
         }
 
         /** @var ArtifactService $svc */
         $svc = \Yii::$app->get('artifactService');
         $expired = $svc->retentionDays > 0 ? $svc->deleteExpiredArtifacts() : 0;
+        $byCount = $svc->maxJobsWithArtifacts > 0 ? $svc->deleteByJobCount() : 0;
+        $quotaTrimmed = $svc->maxTotalBytes > 0 ? $svc->trimToTotalBytes() : 0;
         $orphans = $svc->cleanupOrphans();
 
         \Yii::info(
-            "MaintenanceService: artifact cleanup ran (expired={$expired}, orphans={$orphans})",
+            "MaintenanceService: artifact cleanup ran (expired={$expired}, by_count={$byCount}, quota_trimmed={$quotaTrimmed}, orphans={$orphans})",
             __CLASS__
         );
 
         return [
             'ran' => true,
             'reason' => 'due',
-            'result' => ['expired' => $expired, 'orphans' => $orphans],
+            'result' => [
+                'expired' => $expired,
+                'by_count' => $byCount,
+                'quota_trimmed' => $quotaTrimmed,
+                'orphans' => $orphans,
+            ],
         ];
     }
 

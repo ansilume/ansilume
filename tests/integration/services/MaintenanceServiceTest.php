@@ -88,6 +88,8 @@ class MaintenanceServiceTest extends DbTestCase
         $this->assertSame(['artifact-cleanup'], $report['ran']);
         $this->assertSame([], $report['skipped']);
         $this->assertSame(1, $report['results']['artifact-cleanup']['expired']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['by_count']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['orphans']);
 
         // The cleanup actually executed — the expired row is gone and an
@@ -143,7 +145,62 @@ class MaintenanceServiceTest extends DbTestCase
 
         $this->assertSame(['artifact-cleanup'], $report['ran']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['expired']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['by_count']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
         $this->assertSame(1, $report['results']['artifact-cleanup']['orphans']);
         $this->assertFalse(file_exists($orphanDir . '/orphan.txt'));
+    }
+
+    public function testRunIfDueReportsAllFourCounters(): void
+    {
+        \Yii::$app->set('artifactService', $this->makeArtifactService(0));
+
+        $maintenance = new MaintenanceService();
+        $maintenance->artifactCleanupIntervalSeconds = 3600;
+
+        $report = $maintenance->runIfDue();
+
+        $this->assertSame(['artifact-cleanup'], $report['ran']);
+        $this->assertSame(
+            ['expired', 'by_count', 'quota_trimmed', 'orphans'],
+            array_keys($report['results']['artifact-cleanup'])
+        );
+        $this->assertSame(0, $report['results']['artifact-cleanup']['expired']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['by_count']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['orphans']);
+    }
+
+    public function testRunIfDueActuallyInvokesJobCountAndQuotaTrim(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+
+        $svc = $this->makeArtifactService(0);
+        // Seed three jobs with one artifact each, deterministic ordering.
+        for ($i = 0; $i < 3; $i++) {
+            $job = $this->createJob($template->id, $user->id);
+            $dir = $this->tempDir . '/src' . $i;
+            mkdir($dir, 0750, true);
+            file_put_contents($dir . '/a.txt', str_repeat('x', 100));
+            $svc->collectFromDirectory($job, $dir);
+            $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+            $artifact->created_at = 1_000_000 + $i;
+            $artifact->save(false);
+        }
+        $svc->maxJobsWithArtifacts = 2; // Oldest job will be trimmed.
+
+        \Yii::$app->set('artifactService', $svc);
+
+        $maintenance = new MaintenanceService();
+        $maintenance->artifactCleanupIntervalSeconds = 3600;
+
+        $report = $maintenance->runIfDue();
+
+        $this->assertSame(1, $report['results']['artifact-cleanup']['by_count']);
+        $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
     }
 }
