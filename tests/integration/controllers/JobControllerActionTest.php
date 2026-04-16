@@ -288,4 +288,130 @@ class JobControllerActionTest extends WebControllerTestCase
         $this->expectException(NotFoundHttpException::class);
         $ctrl->actionDownloadAllArtifacts((int)$job->id);
     }
+
+    // ─── PDF inline with sandbox CSP ───────────────────────────────────
+
+    /**
+     * PDF + ?inline=1 must emit Content-Disposition: inline, sandbox CSP,
+     * X-Content-Type-Options, and X-Frame-Options headers.
+     */
+    public function testPdfDownloadWithInlineSetsSandboxCsp(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0750, true);
+        $storedPath = $storageDir . '/report.pdf';
+        file_put_contents($storedPath, '%PDF-1.4 fake content');
+
+        $artifact = new JobArtifact();
+        $artifact->job_id = $job->id;
+        $artifact->filename = 'report.pdf';
+        $artifact->display_name = 'report.pdf';
+        $artifact->mime_type = 'application/pdf';
+        $artifact->size_bytes = 20;
+        $artifact->storage_path = $storedPath;
+        $artifact->created_at = time();
+        $artifact->save(false);
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams(['inline' => '1']);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('inline;', $disposition);
+        $csp = (string)$response->headers->get('Content-Security-Policy');
+        $this->assertStringContainsString('sandbox', $csp);
+        $this->assertSame('nosniff', $response->headers->get('X-Content-Type-Options'));
+        $this->assertSame('SAMEORIGIN', $response->headers->get('X-Frame-Options'));
+    }
+
+    /**
+     * PDF without ?inline=1 must use attachment disposition and no CSP headers.
+     */
+    public function testPdfDownloadWithoutInlineIsAttachment(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0750, true);
+        $storedPath = $storageDir . '/report.pdf';
+        file_put_contents($storedPath, '%PDF-1.4 fake content');
+
+        $artifact = new JobArtifact();
+        $artifact->job_id = $job->id;
+        $artifact->filename = 'report.pdf';
+        $artifact->display_name = 'report.pdf';
+        $artifact->mime_type = 'application/pdf';
+        $artifact->size_bytes = 20;
+        $artifact->storage_path = $storedPath;
+        $artifact->created_at = time();
+        $artifact->save(false);
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams([]);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('attachment;', $disposition);
+        $this->assertNull($response->headers->get('Content-Security-Policy'));
+    }
+
+    /**
+     * text/plain + ?inline=1 must still use attachment disposition.
+     * Text preview goes through /artifact-content, not inline download.
+     */
+    public function testTextArtifactIgnoresInlineFlag(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0750, true);
+        $storedPath = $storageDir . '/notes.txt';
+        file_put_contents($storedPath, 'plain text content');
+
+        $artifact = new JobArtifact();
+        $artifact->job_id = $job->id;
+        $artifact->filename = 'notes.txt';
+        $artifact->display_name = 'notes.txt';
+        $artifact->mime_type = 'text/plain';
+        $artifact->size_bytes = 18;
+        $artifact->storage_path = $storedPath;
+        $artifact->created_at = time();
+        $artifact->save(false);
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams(['inline' => '1']);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('attachment;', $disposition);
+    }
 }

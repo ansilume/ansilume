@@ -191,19 +191,32 @@ class JobController extends BaseController
             throw new NotFoundHttpException("Artifact file no longer exists on disk.");
         }
 
-        // ?inline=1 emits Content-Disposition: inline so the browser renders
-        // the file in place. Used by the <img> preview in views/job/view.php
-        // for image artifacts. Restricted to images so we never inline an
-        // attacker-controlled HTML/SVG (XSS via uploaded artifact).
         /** @var ArtifactService $svc */
         $svc = \Yii::$app->get('artifactService');
         $request = \Yii::$app->request;
         assert($request instanceof \yii\web\Request);
-        $inline = $request->getQueryParam('inline') === '1'
-            && $svc->isImageType($artifact->mime_type);
+        $inlineRequested = $request->getQueryParam('inline') === '1';
+        $isImage = $svc->isImageType($artifact->mime_type);
+        $isFrame = $svc->isInlineFrameType($artifact->mime_type);
+        $inline = $inlineRequested && ($isImage || $isFrame);
 
         $webResponse = \Yii::$app->response;
         assert($webResponse instanceof \yii\web\Response);
+
+        // PDF + inline: serve with a hardened CSP so embedded JavaScript in the
+        // document cannot escape the sandboxed <iframe> into the parent page.
+        // The empty "sandbox" directive disables scripts, forms, top-navigation
+        // and pointer-lock. X-Frame-Options keeps the response framable from
+        // our own origin (the job-view page) but blocks cross-origin embedding.
+        if ($inline && $isFrame) {
+            $webResponse->headers->set(
+                'Content-Security-Policy',
+                "default-src 'none'; object-src 'self'; plugin-types application/pdf; sandbox;"
+            );
+            $webResponse->headers->set('X-Content-Type-Options', 'nosniff');
+            $webResponse->headers->set('X-Frame-Options', 'SAMEORIGIN');
+        }
+
         return $webResponse->sendFile(
             $artifact->storage_path,
             $artifact->display_name,
