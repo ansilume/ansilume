@@ -166,9 +166,15 @@ log. Per row you get:
 | **Preview** (image) | Inline `<img>` for PNG / JPEG / GIF / WebP via `?inline=1` download |
 | **Download** | Stream the single file with `Content-Disposition: attachment` |
 
-SVG is **not** previewable inline — it can carry executable script and
-would be an XSS vector. SVG artifacts can still be downloaded and opened
-locally.
+PDFs are rendered inline in a sandboxed `<iframe>` on the job view. The
+server response sets `Content-Security-Policy: default-src 'none';
+object-src 'self'; plugin-types application/pdf; sandbox;` together with
+`X-Content-Type-Options: nosniff` and `X-Frame-Options: SAMEORIGIN`. The
+empty `sandbox` directive disables script execution, form submission,
+top-navigation, and pointer-lock, so any JavaScript embedded in the PDF
+cannot run. SVG is **not** previewable inline — it can carry executable
+script and would be an XSS vector. SVG artifacts can still be downloaded
+and opened locally.
 
 The card header offers **Download All (zip)** when the job has more than
 one artifact. The zip is created on demand into the system temp dir and
@@ -240,6 +246,14 @@ ARTIFACT_MAX_TOTAL_BYTES=0
 # Days to keep artifacts. 0 = forever (default — safe for upgrades).
 # Expired artifacts are deleted by `php yii artifact/cleanup`.
 ARTIFACT_RETENTION_DAYS=0
+
+# Keep only the N most recent jobs that have artifacts. 0 = unlimited (default).
+# Combined with ARTIFACT_RETENTION_DAYS as an OR rule: an artifact is removed
+# if either trigger matches.
+# Warning: when you reduce this from 0 to N, or lower an existing N, the next
+# maintenance sweep will delete every artifact belonging to the older jobs.
+# Pick a value with headroom.
+ARTIFACT_MAX_JOBS_WITH_ARTIFACTS=0
 ```
 
 Hard-coded defaults that are not env-tunable today:
@@ -274,6 +288,20 @@ audit-log entry (`artifact.expired` / `artifact.orphan-removed`) with
 `user_id=null` so operators can later trace what the maintenance job
 deleted and why. Orphan entries store the file path in `metadata.storage_path`
 because, by definition, no `job_artifact` row exists to point at.
+
+### Retroactive global quota enforcement
+
+When `ARTIFACT_MAX_TOTAL_BYTES` is set to a non-zero value and the current
+total storage exceeds that limit, the next maintenance sweep trims whole jobs
+oldest-first (by the latest `created_at` among each job's artifacts) until the
+total is back under the ceiling. Each trim is audit-logged as
+`artifact.quota_trimmed` with metadata including `job_id`, `artifact_count`,
+`bytes_freed`, and `reason: 'global_quota'`, so the sweep is fully traceable.
+
+Per-job limits (`ARTIFACT_MAX_BYTES_PER_JOB`) are not enforced retroactively
+— they apply only during collection. Retroactively choosing which individual
+files inside a completed job to remove would have unclear semantics and is
+therefore deliberately excluded.
 
 ### Automatic scheduling
 
