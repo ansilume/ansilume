@@ -46,6 +46,25 @@ $config = [
                 'application/json' => 'yii\web\JsonParser',
             ],
         ],
+        'response' => [
+            'on beforeSend' => static function (\yii\base\Event $event): void {
+                /** @var \yii\web\Response $response */
+                $response = $event->sender;
+                $headers = $response->headers;
+                // Clickjacking protection
+                $headers->set('X-Frame-Options', 'SAMEORIGIN');
+                // MIME sniffing protection
+                $headers->set('X-Content-Type-Options', 'nosniff');
+                // Limit cross-origin referrer leakage
+                $headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
+                // Basic Permissions-Policy — block powerful features by default
+                $headers->set('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=()');
+                // HSTS is set by nginx only on https; app-level header is harmless on http (browsers ignore it)
+                if (\Yii::$app->request->isSecureConnection) {
+                    $headers->set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+                }
+            },
+        ],
         'cache' => [
             'class' => 'yii\redis\Cache',
             'redis' => [
@@ -61,6 +80,14 @@ $config = [
                 'port' => (int)($_ENV['REDIS_PORT'] ?? 6379),
                 'database' => (int)($_ENV['REDIS_DB'] ?? 0),
             ],
+            'cookieParams' => [
+                'httponly' => true,
+                'secure' => filter_var(getenv('SESSION_COOKIE_SECURE'), FILTER_VALIDATE_BOOLEAN),
+                'samesite' => 'Lax',
+                'path' => '/',
+            ],
+            // 12h idle timeout; resets on every request
+            'timeout' => (int)(getenv('SESSION_TIMEOUT') ?: 43200),
         ],
         'user' => [
             'identityClass' => 'app\models\User',
@@ -179,6 +206,8 @@ $config = [
             'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/artifacts',
             'maxFileSize' => (int)(getenv('ARTIFACT_MAX_FILE_SIZE') ?: 10485760),
+            'maxBytesPerJob' => (int)(getenv('ARTIFACT_MAX_BYTES_PER_JOB') ?: 52428800),
+            'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
             'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
         ],
         'urlManager' => [

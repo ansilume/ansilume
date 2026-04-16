@@ -120,6 +120,8 @@ return [
             'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/artifacts',
             'maxFileSize' => (int)(getenv('ARTIFACT_MAX_FILE_SIZE') ?: 10485760),
+            'maxBytesPerJob' => (int)(getenv('ARTIFACT_MAX_BYTES_PER_JOB') ?: 52428800),
+            'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
             'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
         ],
         'queue' => [

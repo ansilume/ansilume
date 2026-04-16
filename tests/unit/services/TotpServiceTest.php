@@ -6,6 +6,7 @@ namespace app\tests\unit\services;
 
 use app\services\TotpRateLimiter;
 use app\services\TotpService;
+use app\tests\unit\services\FakeRedisConnection;
 use app\tests\unit\services\TestableTotpService;
 use OTPHP\TOTP;
 use PHPUnit\Framework\TestCase;
@@ -418,14 +419,93 @@ class TotpServiceTest extends TestCase
         $cache = \Yii::$app->cache;
         $userId = 90909;
         $key = 'totp_rate_limit_' . $userId;
-        // Set an array without the 'attempts' key
+        // Store an array — the current implementation treats anything
+        // non-int as 0, so the user is not locked out.
         $cache->set($key, ['other_key' => 'value'], 300);
 
         $limiter = new TotpRateLimiter();
-        // (int)(null ?? 0) = 0, which is < 5, so not locked out
         $this->assertFalse($limiter->isLockedOut($userId));
 
         $cache->delete($key);
+    }
+
+    // ── Atomic Redis branch (INCR/EXPIRE/GET/DEL) ────────────────────────────
+
+    public function testRedisBranchUsesAtomicIncrementAndExpire(): void
+    {
+        $limiter = $this->makeRedisLimiter();
+
+        $remaining = $limiter->recordFailedAttempt(12345);
+        $this->assertSame(4, $remaining);
+
+        /** @var array<int, array{0: string, 1: array<int, mixed>}> $commands */
+        $commands = $limiter->getCommands();
+        $this->assertSame('INCR', $commands[0][0]);
+        $this->assertSame('totp_rate_limit_12345', $commands[0][1][0]);
+        $this->assertSame('EXPIRE', $commands[1][0]);
+        $this->assertSame('totp_rate_limit_12345', $commands[1][1][0]);
+        $this->assertSame(300, $commands[1][1][1]);
+    }
+
+    public function testRedisBranchLocksOutAfterFiveAttempts(): void
+    {
+        $limiter = $this->makeRedisLimiter();
+
+        for ($i = 0; $i < 5; $i++) {
+            $limiter->recordFailedAttempt(23456);
+        }
+
+        $this->assertTrue($limiter->isLockedOut(23456));
+    }
+
+    public function testRedisBranchReportsNotLockedOutWhenCounterMissing(): void
+    {
+        $limiter = $this->makeRedisLimiter();
+
+        // GET on a non-existent key returns null in yii\redis\Connection
+        $this->assertFalse($limiter->isLockedOut(34567));
+    }
+
+    public function testRedisBranchClearsViaDel(): void
+    {
+        $limiter = $this->makeRedisLimiter();
+
+        $limiter->recordFailedAttempt(45678);
+        $limiter->clearRateLimit(45678);
+
+        $this->assertFalse($limiter->isLockedOut(45678));
+
+        $commands = $limiter->getCommands();
+        $lastCommand = end($commands);
+        $this->assertNotFalse($lastCommand);
+        $this->assertSame('GET', $lastCommand[0]); // last is from isLockedOut check
+        // The DEL call happened before the GET.
+        $commandNames = array_column($commands, 0);
+        $this->assertContains('DEL', $commandNames);
+    }
+
+    private function makeRedisLimiter(): TotpRateLimiter
+    {
+        $connection = new FakeRedisConnection();
+        return new class ($connection) extends TotpRateLimiter {
+            public function __construct(private FakeRedisConnection $connection)
+            {
+                parent::__construct();
+            }
+
+            protected function getRedisConnection(): \yii\redis\Connection
+            {
+                return $this->connection;
+            }
+
+            /**
+             * @return array<int, array{0: string, 1: array<int, mixed>}>
+             */
+            public function getCommands(): array
+            {
+                return $this->connection->commands;
+            }
+        };
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

@@ -108,6 +108,35 @@ class ProfileControllerChangePasswordTest extends WebControllerTestCase
         $this->assertTrue($refreshed->validatePassword('oldpassword'));
     }
 
+    public function testChangePasswordRotatesAuthKey(): void
+    {
+        // Regression: a stolen session cookie (bound to auth_key) must not
+        // survive a password change. setPassword() must rotate auth_key so
+        // old cookies fail validateAuthKey() afterwards.
+        $user = $this->createUser();
+        $user->setPassword('oldpassword');
+        $user->save(false);
+        $oldAuthKey = (string)$user->auth_key;
+        $this->assertNotSame('', $oldAuthKey);
+        $this->loginAs($user);
+
+        $this->setPost([
+            'ChangePasswordForm' => [
+                'current_password' => 'oldpassword',
+                'new_password' => 'newpassword123',
+                'new_password_confirm' => 'newpassword123',
+            ],
+        ]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionChangePassword();
+
+        $refreshed = User::findOne($user->id);
+        $this->assertNotNull($refreshed);
+        $this->assertNotSame($oldAuthKey, (string)$refreshed->auth_key, 'auth_key must change on password change');
+        $this->assertFalse($refreshed->validateAuthKey($oldAuthKey), 'stolen cookie bound to old auth_key must be rejected');
+    }
+
     public function testChangePasswordCreatesAuditLog(): void
     {
         $user = $this->createUser();

@@ -340,4 +340,83 @@ class ArtifactServiceTest extends DbTestCase
         $service = $this->makeService();
         $this->assertNull($service->createZipArchive($job));
     }
+
+    // -------------------------------------------------------------------------
+    // Tests: quota enforcement
+    // -------------------------------------------------------------------------
+
+    public function testMaxBytesPerJobSkipsFilesOncePerJobCapIsExceeded(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        // Three files of 100 bytes each.
+        file_put_contents($sourceDir . '/a.txt', str_repeat('a', 100));
+        file_put_contents($sourceDir . '/b.txt', str_repeat('b', 100));
+        file_put_contents($sourceDir . '/c.txt', str_repeat('c', 100));
+
+        $service = $this->makeService();
+        $service->maxBytesPerJob = 150; // fits one 100-byte file, second would exceed.
+
+        $artifacts = $service->collectFromDirectory($job, $sourceDir);
+
+        // Only one should be persisted; further files skipped without aborting loop.
+        $this->assertCount(1, $artifacts);
+        $this->assertSame(1, JobArtifact::find()->where(['job_id' => $job->id])->count());
+    }
+
+    public function testMaxBytesPerJobZeroMeansUnlimited(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $sourceDir = $this->tempDir . '/source';
+        mkdir($sourceDir, 0750, true);
+        file_put_contents($sourceDir . '/a.txt', str_repeat('a', 1000));
+        file_put_contents($sourceDir . '/b.txt', str_repeat('b', 1000));
+
+        $service = $this->makeService();
+        $service->maxBytesPerJob = 0; // explicit unlimited
+
+        $artifacts = $service->collectFromDirectory($job, $sourceDir);
+        $this->assertCount(2, $artifacts);
+    }
+
+    public function testMaxTotalBytesSkipsNewArtifactsOnceGlobalQuotaIsHit(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+
+        $job1 = $this->createJob($template->id, $user->id);
+        $job2 = $this->createJob($template->id, $user->id);
+
+        $dir1 = $this->tempDir . '/source1';
+        $dir2 = $this->tempDir . '/source2';
+        mkdir($dir1, 0750, true);
+        mkdir($dir2, 0750, true);
+        file_put_contents($dir1 . '/fill.bin', str_repeat('x', 400));
+        file_put_contents($dir2 . '/extra.bin', str_repeat('y', 400));
+
+        $service = $this->makeService();
+        $service->maxTotalBytes = 500; // room for the first 400-byte file only.
+
+        $a1 = $service->collectFromDirectory($job1, $dir1);
+        $a2 = $service->collectFromDirectory($job2, $dir2);
+
+        $this->assertCount(1, $a1, 'first job fits inside global quota');
+        $this->assertCount(0, $a2, 'second job is rejected because global quota is exhausted');
+    }
 }

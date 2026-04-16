@@ -57,6 +57,22 @@ class UserTest extends TestCase
         $this->assertNotSame($user1->password_hash, $user2->password_hash);
     }
 
+    public function testSetPasswordRotatesAuthKey(): void
+    {
+        // Regression: stolen session cookies (bound to auth_key) must be
+        // invalidated on password change, so setPassword() must also rotate
+        // auth_key — not just password_hash.
+        $user = $this->makeUser();
+        $user->generateAuthKey();
+        $before = (string)$user->auth_key;
+        $this->assertNotSame('', $before);
+
+        $user->setPassword('anynewpassword');
+
+        $this->assertNotSame($before, (string)$user->auth_key, 'setPassword() must rotate auth_key');
+        $this->assertFalse($user->validateAuthKey($before), 'old auth_key must no longer validate');
+    }
+
     // ── generateAuthKey ───────────────────────────────────────────────────────
 
     public function testGenerateAuthKeyCreatesNonEmptyKey(): void

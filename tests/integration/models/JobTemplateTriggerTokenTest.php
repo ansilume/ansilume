@@ -21,15 +21,29 @@ class JobTemplateTriggerTokenTest extends DbTestCase
         $this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/', $raw);
     }
 
-    public function testGenerateTriggerTokenStoresRawToken(): void
+    public function testGenerateTriggerTokenStoresSha256Hash(): void
     {
         $template = $this->makeTemplate();
 
         $raw = $template->generateTriggerToken();
 
-        // The token is stored as plain text (not hashed) — findByTriggerToken uses equality
+        // The raw value must never hit the DB — only its SHA-256 hash is persisted.
         $template->refresh();
-        $this->assertSame($raw, $template->trigger_token);
+        $this->assertNotSame($raw, $template->trigger_token);
+        $this->assertSame(hash('sha256', $raw), $template->trigger_token);
+    }
+
+    public function testFindByTriggerTokenRejectsStoredHash(): void
+    {
+        // Passing the hash itself must NOT match — only the raw token matches.
+        // This is the whole point of hashing at rest.
+        $template = $this->makeTemplate();
+        $template->generateTriggerToken();
+        $template->refresh();
+
+        $found = JobTemplate::findByTriggerToken((string)$template->trigger_token);
+
+        $this->assertNull($found);
     }
 
     public function testRevokeTriggerTokenClearsToken(): void

@@ -28,7 +28,7 @@ use yii\db\ActiveRecord;
  * @property int|null    $runner_group_id
  * @property int|null    $approval_rule_id
  * @property string|null $survey_fields     JSON array of SurveyField definitions
- * @property string|null $trigger_token     Hashed trigger token (bcrypt)
+ * @property string|null $trigger_token     SHA-256 hex of the raw trigger token; null = disabled
  * @property string|null $lint_output       Last ansible-lint output
  * @property int|null    $lint_at           Unix timestamp of last lint run
  * @property int|null    $lint_exit_code    Exit code of last ansible-lint run (0 = clean)
@@ -180,15 +180,16 @@ class JobTemplate extends ActiveRecord
     }
 
     /**
-     * Generate and persist a new random trigger token.
-     * Returns the raw token string.
+     * Generate a new random trigger token. The raw value is returned once and
+     * must be shown to the operator immediately — only its SHA-256 hash is
+     * persisted, so the raw value cannot be recovered afterwards.
      */
     public function generateTriggerToken(): string
     {
-        $token = bin2hex(random_bytes(32));
-        $this->trigger_token = $token;
+        $raw = bin2hex(random_bytes(32));
+        $this->trigger_token = hash('sha256', $raw);
         $this->save(false, ['trigger_token']);
-        return $token;
+        return $raw;
     }
 
     /**
@@ -201,7 +202,8 @@ class JobTemplate extends ActiveRecord
     }
 
     /**
-     * Look up a template by its trigger token.
+     * Look up a template by its raw trigger token. The raw value is hashed
+     * and compared against the stored SHA-256 hex.
      */
     public static function findByTriggerToken(string $token): ?self
     {
@@ -209,7 +211,7 @@ class JobTemplate extends ActiveRecord
             return null;
         }
         /** @var static|null $result */
-        $result = static::findOne(['trigger_token' => $token]);
+        $result = static::findOne(['trigger_token' => hash('sha256', $token)]);
         return $result;
     }
 }

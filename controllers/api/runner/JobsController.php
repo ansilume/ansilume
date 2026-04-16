@@ -6,9 +6,12 @@ namespace app\controllers\api\runner;
 
 use app\models\Job;
 use app\models\JobLog;
+use app\models\Runner;
+use app\models\RunnerGroup;
 use app\services\JobClaimService;
 use app\services\JobCompletionService;
 use yii\web\NotFoundHttpException;
+use yii\web\ServerErrorHttpException;
 use yii\web\Response;
 
 /**
@@ -31,7 +34,7 @@ class JobsController extends BaseRunnerApiController
     public function actionHeartbeat(): array
     {
         $runner = $this->runner();
-        $group = $runner->group;
+        $group = $this->requireGroup($runner);
 
         return $this->ok([
             'runner_id' => $runner->id,
@@ -52,7 +55,7 @@ class JobsController extends BaseRunnerApiController
     public function actionClaim(): array|Response
     {
         $runner = $this->runner();
-        $group = $runner->group;
+        $group = $this->requireGroup($runner);
 
         /** @var JobClaimService $svc */
         $svc = \Yii::$app->get('jobClaimService');
@@ -150,5 +153,19 @@ class JobsController extends BaseRunnerApiController
             throw new \yii\web\ForbiddenHttpException('This job belongs to a different runner.');
         }
         return $job;
+    }
+
+    /**
+     * Resolve the runner's group, guarding against the edge case where the
+     * group was deleted mid-request (CASCADE delete also removes the runner,
+     * but this request has already authenticated with the in-memory record).
+     */
+    private function requireGroup(Runner $runner): RunnerGroup
+    {
+        $group = $runner->group;
+        if ($group === null) {
+            throw new ServerErrorHttpException('Runner has no group (was the group deleted?). Retry after re-registering.');
+        }
+        return $group;
     }
 }

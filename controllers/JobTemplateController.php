@@ -160,7 +160,7 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        $model->generateTriggerToken();
+        $rawToken = $model->generateTriggerToken();
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED,
             'job_template',
@@ -169,8 +169,8 @@ class JobTemplateController extends BaseController
             ['name' => $model->name]
         );
         $this->session()->setFlash('success', 'Trigger token generated. Copy it now — it will not be shown again.');
-        // Flash the raw token once so the view can display it
-        $this->session()->setFlash('trigger_token_raw', $model->trigger_token);
+        // Flash the raw token once so the view can display it. The DB stores only the hash.
+        $this->session()->setFlash('trigger_token_raw', $rawToken);
         return $this->redirect(['view', 'id' => $id]);
     }
 

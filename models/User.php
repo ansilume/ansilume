@@ -116,6 +116,10 @@ class User extends ActiveRecord implements IdentityInterface
         /** @var \yii\base\Security $security */
         $security = \Yii::$app->security;
         $this->password_hash = $security->generatePasswordHash($password);
+        // Rotate auth_key so any existing session cookies (bound to the old
+        // auth_key) become invalid on password change. Protects against a
+        // stolen cookie surviving a password reset.
+        $this->auth_key = $security->generateRandomString();
     }
 
     public function generateAuthKey(): void

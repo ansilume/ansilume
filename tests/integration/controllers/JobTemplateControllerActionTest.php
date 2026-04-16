@@ -395,6 +395,12 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
 
         $flashes = \Yii::$app->session->getAllFlashes();
         $this->assertArrayHasKey('trigger_token_raw', $flashes);
+
+        // The flashed raw token must match the stored hash and must NOT be
+        // what is stored on the row — a DB dump must not reveal the trigger URL.
+        $rawToken = (string)$flashes['trigger_token_raw'];
+        $this->assertNotSame($rawToken, $reloaded->trigger_token);
+        $this->assertSame(hash('sha256', $rawToken), $reloaded->trigger_token);
     }
 
     public function testRevokeTriggerTokenAudits(): void

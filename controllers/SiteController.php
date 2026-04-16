@@ -244,6 +244,11 @@ class SiteController extends BaseController
 
             // No TOTP — log in directly
             if ($model->login()) {
+                // Regenerate session ID to prevent session fixation
+                /** @var \yii\web\Session $session */
+                $session = \Yii::$app->session;
+                $session->regenerateID(true);
+
                 \Yii::$app->get('auditService')->log(
                     AuditLog::ACTION_USER_LOGIN,
                     null,

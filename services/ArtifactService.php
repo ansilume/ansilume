@@ -27,6 +27,12 @@ class ArtifactService extends Component
     /** @var int Maximum number of artifacts per job. */
     public int $maxArtifactsPerJob = 50;
 
+    /** @var int Maximum total artifact bytes per job. 0 = unlimited. Default 50 MB. */
+    public int $maxBytesPerJob = 52428800;
+
+    /** @var int Global cap on total artifact bytes across all jobs. 0 = unlimited. */
+    public int $maxTotalBytes = 0;
+
     /** @var int Days to retain artifacts. 0 = keep forever. */
     public int $retentionDays = 0;
 
@@ -49,13 +55,8 @@ class ArtifactService extends Component
      */
     public function collectFromDirectory(Job $job, string $sourceDir): array
     {
-        if (!is_dir($sourceDir)) {
-            return [];
-        }
-
-        $basePath = $this->resolveStoragePath($job);
-        if (!is_dir($basePath) && !mkdir($basePath, 0750, true)) {
-            \Yii::error("ArtifactService: failed to create storage directory: {$basePath}", __CLASS__);
+        $basePath = $this->prepareStorageDir($job, $sourceDir);
+        if ($basePath === null) {
             return [];
         }
 
@@ -67,11 +68,14 @@ class ArtifactService extends Component
         $realSourceDir = realpath($sourceDir);
         $artifacts = [];
         $count = 0;
+        $bytesThisJob = 0;
+        $globalBytes = $this->maxTotalBytes > 0 ? $this->getTotalStoredBytes() : 0;
+        $globalQuotaHit = false;
 
         foreach ($iterator as $file) {
             /** @var \SplFileInfo $file */
             if ($count >= $this->maxArtifactsPerJob) {
-                \Yii::warning("ArtifactService: artifact limit ({$this->maxArtifactsPerJob}) reached for job #{$job->id}", __CLASS__);
+                \Yii::warning("ArtifactService: artifact count limit ({$this->maxArtifactsPerJob}) reached for job #{$job->id}", __CLASS__);
                 break;
             }
 
@@ -79,14 +83,83 @@ class ArtifactService extends Component
                 continue;
             }
 
+            $size = (int)$file->getSize();
+            if (!$this->withinByteQuotas($file, $job->id, $size, $bytesThisJob, $globalBytes, $globalQuotaHit)) {
+                continue;
+            }
+
             $artifact = $this->collectSingleFile($job, $file, $sourceDir, $basePath);
             if ($artifact !== null) {
                 $artifacts[] = $artifact;
                 $count++;
+                $bytesThisJob += $size;
+                $globalBytes += $size;
             }
         }
 
         return $artifacts;
+    }
+
+    /**
+     * Validate the source directory and ensure the per-job storage directory
+     * exists. Returns the destination base path, or null if setup failed.
+     */
+    private function prepareStorageDir(Job $job, string $sourceDir): ?string
+    {
+        if (!is_dir($sourceDir)) {
+            return null;
+        }
+
+        $basePath = $this->resolveStoragePath($job);
+        if (!is_dir($basePath) && !mkdir($basePath, 0750, true)) {
+            \Yii::error("ArtifactService: failed to create storage directory: {$basePath}", __CLASS__);
+            return null;
+        }
+
+        return $basePath;
+    }
+
+    /**
+     * Check per-job and global byte quotas before collecting a file.
+     *
+     * $globalQuotaHit is passed by reference so the "global quota exhausted"
+     * warning is only logged once per collectFromDirectory call.
+     */
+    private function withinByteQuotas(
+        \SplFileInfo $file,
+        int $jobId,
+        int $size,
+        int $bytesThisJob,
+        int $globalBytes,
+        bool &$globalQuotaHit,
+    ): bool {
+        if ($this->maxBytesPerJob > 0 && ($bytesThisJob + $size) > $this->maxBytesPerJob) {
+            \Yii::warning("ArtifactService: per-job byte limit ({$this->maxBytesPerJob}) reached for job #{$jobId}; skipping {$file->getFilename()}", __CLASS__);
+            return false;
+        }
+
+        if ($this->maxTotalBytes > 0 && ($globalBytes + $size) > $this->maxTotalBytes) {
+            if (!$globalQuotaHit) {
+                \Yii::warning("ArtifactService: global byte quota ({$this->maxTotalBytes}) exhausted; skipping further artifacts for job #{$jobId}", __CLASS__);
+                $globalQuotaHit = true;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Sum of all persisted artifact sizes. Used to enforce global quota.
+     */
+    protected function getTotalStoredBytes(): int
+    {
+        $total = (new \yii\db\Query())
+            ->select(['total' => 'COALESCE(SUM(size_bytes), 0)'])
+            ->from(JobArtifact::tableName())
+            ->scalar();
+
+        return (int)$total;
     }
 
     /**
