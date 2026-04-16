@@ -473,10 +473,15 @@ paths:
         `Content-Disposition: attachment` so the browser saves the file.
 
         Pass `?inline=1` to receive `Content-Disposition: inline`. This is
-        only honoured for image MIME types (`image/png`, `image/jpeg`,
-        `image/gif`, `image/webp`) so attacker-controlled HTML/SVG cannot
-        be rendered cross-origin in an authenticated session. Non-image
-        artifacts ignore the parameter and continue to download.
+        honoured for two MIME categories:
+        - Image types (`image/png`, `image/jpeg`, `image/gif`, `image/webp`)
+          — rendered as `<img>` in the UI.
+        - PDF (`application/pdf`) — served with a hardened
+          `Content-Security-Policy: ... sandbox;` header so the document can
+          be embedded in a sandboxed `<iframe>` without script execution.
+
+        Non-image / non-PDF artifacts ignore the parameter and continue to
+        download.
       parameters:
         - { $ref: '#/components/parameters/IdPath' }
         - name: artifact_id
@@ -1933,6 +1938,7 @@ components:
         size_bytes:   { type: integer }
         previewable:  { type: boolean, description: "True for text/JSON/XML/YAML — fetch via /content endpoint." }
         image:        { type: boolean, description: "True for image/png|jpeg|gif|webp — fetch via /download?inline=1 to embed as <img>." }
+        inline_frame: { type: boolean, description: "True for application/pdf — fetch via /download?inline=1 to embed in sandboxed <iframe>." }
         created_at:   { type: integer }
     ArtifactStorageStats:
       type: object
@@ -1960,6 +1966,7 @@ components:
             max_artifacts_per_job: { type: integer }
             max_bytes_per_job:     { type: integer, description: "0 = unlimited." }
             max_total_bytes:       { type: integer, description: "Global cap; 0 = unlimited." }
+            max_jobs_with_artifacts: { type: integer, description: "Keep only the N most recent jobs with artifacts; 0 = unlimited." }
     JobList:
       type: object
       properties:
