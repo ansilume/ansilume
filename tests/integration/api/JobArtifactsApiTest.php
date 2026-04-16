@@ -289,6 +289,153 @@ class JobArtifactsApiTest extends WebControllerTestCase
         $this->assertStringStartsWith('attachment;', $disposition);
     }
 
+    // ─── PDF inline download with security headers ───────────────────
+
+    public function testApiPdfDownloadInlineSetsSandboxCsp(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0750, true);
+        $storedPath = $storageDir . '/report.pdf';
+        file_put_contents($storedPath, '%PDF-1.4 fake-pdf-content');
+
+        $artifact = new JobArtifact();
+        $artifact->job_id = $job->id;
+        $artifact->filename = 'report.pdf';
+        $artifact->display_name = 'report.pdf';
+        $artifact->mime_type = 'application/pdf';
+        $artifact->size_bytes = 24;
+        $artifact->storage_path = $storedPath;
+        $artifact->created_at = time();
+        $artifact->save(false);
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams(['inline' => '1']);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(\yii\web\Response::class, $response);
+
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('inline;', $disposition);
+
+        $this->assertStringContainsString('application/pdf', (string)$response->headers->get('Content-Type'));
+
+        $csp = (string)$response->headers->get('Content-Security-Policy');
+        $this->assertStringContainsString('sandbox', $csp);
+
+        $this->assertSame('nosniff', $response->headers->get('X-Content-Type-Options'));
+        $this->assertSame('SAMEORIGIN', $response->headers->get('X-Frame-Options'));
+    }
+
+    public function testApiPdfDownloadWithoutInlineIsAttachment(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0750, true);
+        $storedPath = $storageDir . '/report.pdf';
+        file_put_contents($storedPath, '%PDF-1.4 fake-pdf-content');
+
+        $artifact = new JobArtifact();
+        $artifact->job_id = $job->id;
+        $artifact->filename = 'report.pdf';
+        $artifact->display_name = 'report.pdf';
+        $artifact->mime_type = 'application/pdf';
+        $artifact->size_bytes = 24;
+        $artifact->storage_path = $storedPath;
+        $artifact->created_at = time();
+        $artifact->save(false);
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        \Yii::$app->request->setQueryParams([]);
+
+        $ctrl = $this->makeController();
+        $response = $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(\yii\web\Response::class, $response);
+        $disposition = (string)$response->headers->get('Content-Disposition');
+        $this->assertStringStartsWith('attachment;', $disposition);
+    }
+
+    // ─── inline_frame flag in artifact list ─────────────────────────
+
+    public function testApiArtifactListIncludesInlineFrameFlag(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0750, true);
+
+        // Seed PDF artifact
+        $pdfPath = $storageDir . '/doc.pdf';
+        file_put_contents($pdfPath, '%PDF-1.4');
+        $pdfArtifact = new JobArtifact();
+        $pdfArtifact->job_id = $job->id;
+        $pdfArtifact->filename = 'doc.pdf';
+        $pdfArtifact->display_name = 'doc.pdf';
+        $pdfArtifact->mime_type = 'application/pdf';
+        $pdfArtifact->size_bytes = 8;
+        $pdfArtifact->storage_path = $pdfPath;
+        $pdfArtifact->created_at = time();
+        $pdfArtifact->save(false);
+
+        // Seed PNG artifact
+        $pngPath = $storageDir . '/pic.png';
+        file_put_contents($pngPath, "\x89PNG\r\n\x1a\n");
+        $pngArtifact = new JobArtifact();
+        $pngArtifact->job_id = $job->id;
+        $pngArtifact->filename = 'pic.png';
+        $pngArtifact->display_name = 'pic.png';
+        $pngArtifact->mime_type = 'image/png';
+        $pngArtifact->size_bytes = 8;
+        $pngArtifact->storage_path = $pngPath;
+        $pngArtifact->created_at = time();
+        $pngArtifact->save(false);
+
+        // Seed TXT artifact
+        $txtPath = $storageDir . '/notes.txt';
+        file_put_contents($txtPath, 'hello');
+        $txtArtifact = new JobArtifact();
+        $txtArtifact->job_id = $job->id;
+        $txtArtifact->filename = 'notes.txt';
+        $txtArtifact->display_name = 'notes.txt';
+        $txtArtifact->mime_type = 'text/plain';
+        $txtArtifact->size_bytes = 5;
+        $txtArtifact->storage_path = $txtPath;
+        $txtArtifact->created_at = time();
+        $txtArtifact->save(false);
+
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionArtifacts((int)$job->id);
+
+        $this->assertArrayHasKey('data', $result);
+
+        $byName = [];
+        foreach ($result['data'] as $row) {
+            $byName[$row['display_name']] = $row;
+        }
+
+        // PDF: inline_frame=true, image=false, previewable=false
+        $this->assertTrue($byName['doc.pdf']['inline_frame']);
+        $this->assertFalse($byName['doc.pdf']['image']);
+        $this->assertFalse($byName['doc.pdf']['previewable']);
+
+        // PNG: inline_frame=false, image=true
+        $this->assertFalse($byName['pic.png']['inline_frame']);
+        $this->assertTrue($byName['pic.png']['image']);
+
+        // TXT: inline_frame=false, previewable=true
+        $this->assertFalse($byName['notes.txt']['inline_frame']);
+        $this->assertTrue($byName['notes.txt']['previewable']);
+    }
+
     // ─── artifact_count in job serialization ────────────────────────
 
     public function testJobViewIncludesArtifactCount(): void

@@ -182,17 +182,32 @@ class JobsController extends BaseApiController
             return $this->error('Artifact file no longer exists on disk.', 404);
         }
 
-        // ?inline=1 emits Content-Disposition: inline. Restricted to images
-        // so we never inline attacker-controlled HTML/SVG (XSS).
         /** @var ArtifactService $svc */
         $svc = \Yii::$app->get('artifactService');
         $request = \Yii::$app->request;
         assert($request instanceof \yii\web\Request);
-        $inline = $request->getQueryParam('inline') === '1'
-            && $svc->isImageType($artifact->mime_type);
+        $inlineRequested = $request->getQueryParam('inline') === '1';
+        $isImage = $svc->isImageType($artifact->mime_type);
+        $isFrame = $svc->isInlineFrameType($artifact->mime_type);
+        $inline = $inlineRequested && ($isImage || $isFrame);
 
         $response = \Yii::$app->response;
         assert($response instanceof \yii\web\Response);
+
+        // PDF + inline: serve with a hardened CSP so embedded JavaScript in the
+        // document cannot escape the sandboxed <iframe> into the parent page.
+        // The empty "sandbox" directive disables scripts, forms, top-navigation
+        // and pointer-lock. X-Frame-Options keeps the response framable from
+        // our own origin (the job-view page) but blocks cross-origin embedding.
+        if ($inline && $isFrame) {
+            $response->headers->set(
+                'Content-Security-Policy',
+                "default-src 'none'; object-src 'self'; plugin-types application/pdf; sandbox;"
+            );
+            $response->headers->set('X-Content-Type-Options', 'nosniff');
+            $response->headers->set('X-Frame-Options', 'SAMEORIGIN');
+        }
+
         return $response->sendFile(
             $artifact->storage_path,
             $artifact->display_name,
@@ -331,7 +346,7 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, display_name: string, mime_type: string, size_bytes: int, previewable: bool, image: bool, created_at: int}
+     * @return array{id: int, display_name: string, mime_type: string, size_bytes: int, previewable: bool, image: bool, inline_frame: bool, created_at: int}
      */
     private function serializeArtifact(JobArtifact $artifact, ArtifactService $svc): array
     {
@@ -342,6 +357,7 @@ class JobsController extends BaseApiController
             'size_bytes' => $artifact->size_bytes,
             'previewable' => $svc->isPreviewable($artifact->mime_type),
             'image' => $svc->isImageType($artifact->mime_type),
+            'inline_frame' => $svc->isInlineFrameType($artifact->mime_type),
             'created_at' => $artifact->created_at,
         ];
     }
