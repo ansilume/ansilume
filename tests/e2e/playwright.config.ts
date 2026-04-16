@@ -33,7 +33,7 @@ export default defineConfig({
         storageState: '.auth/admin.json',
       },
       dependencies: ['setup'],
-      testIgnore: /auth\.setup\.ts|rbac\.spec\.ts|site\/login\.spec\.ts|site\/forgot-password\.spec\.ts|trigger\/fire\.spec\.ts/,
+      testIgnore: /auth\.setup\.ts|rbac\.spec\.ts|login\.spec\.ts|site\/forgot-password\.spec\.ts|trigger\/fire\.spec\.ts/,
     },
 
     // Operator tests — only runs rbac specs whose title starts with "operator".

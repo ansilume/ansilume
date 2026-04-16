@@ -106,6 +106,12 @@ return [
         'jobClaimService' => [
             'class' => 'app\services\JobClaimService',
         ],
+        'jobReclaimService' => [
+            'class' => 'app\services\JobReclaimService',
+            'progressTimeoutSeconds' => (int)(getenv('JOB_PROGRESS_TIMEOUT') ?: 600),
+            'mode' => getenv('JOB_RECLAIM_MODE') ?: 'fail',
+            'queueTimeoutSeconds' => (int)(getenv('JOB_QUEUE_TIMEOUT') ?: 1800),
+        ],
         'totpService' => [
             'class' => 'app\services\TotpService',
             'rateLimiter' => [
@@ -123,6 +129,12 @@ return [
             'maxBytesPerJob' => (int)(getenv('ARTIFACT_MAX_BYTES_PER_JOB') ?: 52428800),
             'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
             'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
+        ],
+        'ldapService' => [
+            'class' => 'app\services\ldap\LdapService',
+        ],
+        'ldapUserProvisioner' => [
+            'class' => 'app\services\ldap\LdapUserProvisioner',
         ],
         'queue' => [
             'class' => 'yii\queue\redis\Queue',

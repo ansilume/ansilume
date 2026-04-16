@@ -63,6 +63,12 @@ return [
         'jobCompletionService' => [
             'class' => 'app\services\JobCompletionService',
         ],
+        'jobReclaimService' => [
+            'class' => 'app\services\JobReclaimService',
+            'progressTimeoutSeconds' => (int)(getenv('JOB_PROGRESS_TIMEOUT') ?: 600),
+            'mode' => getenv('JOB_RECLAIM_MODE') ?: 'fail',
+            'queueTimeoutSeconds' => (int)(getenv('JOB_QUEUE_TIMEOUT') ?: 1800),
+        ],
         'projectAccessChecker' => [
             'class' => 'app\services\ProjectAccessChecker',
         ],
@@ -81,6 +87,12 @@ return [
         'artifactService' => [
             'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/test-artifacts',
+        ],
+        'ldapService' => [
+            'class' => 'app\services\ldap\LdapService',
+        ],
+        'ldapUserProvisioner' => [
+            'class' => 'app\services\ldap\LdapUserProvisioner',
         ],
         'mailer' => [
             'class' => 'yii\swiftmailer\SwiftMailer',

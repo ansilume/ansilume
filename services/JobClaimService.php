@@ -53,6 +53,7 @@ class JobClaimService extends Component
                     'worker_id' => $runner->name,
                     'status' => Job::STATUS_RUNNING,
                     'started_at' => time(),
+                    'last_progress_at' => time(),
                     'updated_at' => time(),
                 ],
                 ['id' => $job->id, 'runner_id' => null, 'status' => Job::STATUS_QUEUED]

@@ -60,6 +60,7 @@ tags:
   - name: Triggers
   - name: Roles
   - name: Profile
+  - name: LDAP
 
 # Shared query parameter list used by every analytics endpoint.
 # Defined once via a YAML anchor and referenced with `*` so we don't
@@ -922,6 +923,66 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
+  # ───────────────────────────── LDAP ─────────────────────────────
+  /api/v1/admin/ldap/test:
+    get:
+      tags: [LDAP]
+      summary: Run an LDAP connection diagnostic
+      description: |
+        Admin-only. Performs a service-account bind against the configured
+        directory and returns connection-level diagnostics. Never returns the
+        bind password or any other secret.
+      responses:
+        '200':
+          description: Diagnostic snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/LdapDiagnosticResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServerError' }
+    post:
+      tags: [LDAP]
+      summary: Run a diagnostic and verify a directory user
+      description: |
+        Admin-only. Same as `GET /admin/ldap/test`, plus an optional user
+        lookup. If `password` is included the call performs a full
+        authenticate (bind as user); otherwise it performs a search-only
+        lookup. Useful for verifying the search filter, group mapping,
+        and the resulting Ansilume role assignment for a candidate user.
+
+        Audited via `ldap.test.performed`. The submitted password is **never**
+        logged, persisted, or returned.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  description: Directory username to look up (sAMAccountName / uid).
+                password:
+                  type: string
+                  description: Optional. If set, performs a full authenticate.
+            example:
+              username: jdoe
+              password: optional-only-for-bind-verification
+      responses:
+        '200':
+          description: Diagnostic snapshot with optional user lookup
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/LdapDiagnosticResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/ServerError' }
+
   # ─────────────────────────── Webhooks ───────────────────────────
   /api/v1/webhooks:
     get:
@@ -1545,6 +1606,9 @@ components:
     ValidationError:
       description: Invalid input
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    ServerError:
+      description: Server-side failure (e.g. directory unreachable)
+      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
     DeletedResponse:
       description: Deletion confirmed
       content:
@@ -2049,6 +2113,16 @@ components:
         is_superadmin: { type: boolean }
         totp_enabled: { type: boolean }
         role: { type: string, nullable: true }
+        auth_source:
+          type: string
+          enum: [local, ldap]
+          description: |
+            Where the account authenticates. `local` uses the bcrypt password
+            stored in Ansilume; `ldap` binds against the configured directory.
+            Immutable once the user exists.
+        ldap_dn: { type: string, nullable: true, description: Distinguished name set after the first directory bind (LDAP users only). }
+        ldap_uid: { type: string, nullable: true, description: Stable directory identifier (objectGUID/entryUUID). LDAP users only. }
+        last_synced_at: { type: integer, nullable: true, description: Unix timestamp of the most recent LDAP attribute sync. }
         created_at: { type: integer }
         updated_at: { type: integer }
     UserInput:
@@ -2060,15 +2134,63 @@ components:
         password:
           type: string
           minLength: 5
-          description: Required on create, optional on update
+          description: Required on create for local users; rejected for LDAP users. Optional on update.
         status: { type: integer }
         is_superadmin: { type: boolean }
         role: { type: string, description: RBAC role name to assign }
+        auth_source:
+          type: string
+          enum: [local, ldap]
+          default: local
+          description: |
+            Authentication source. Set on create; immutable thereafter — sending
+            a different value on update returns 422. Defaults to `local`.
+        ldap_dn:
+          type: string
+          nullable: true
+          description: Optional DN. If omitted, the directory bind fills it on first login.
+        ldap_uid:
+          type: string
+          nullable: true
+          description: Optional stable directory identifier. Filled by directory sync if omitted.
     UserList:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/User' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    LdapDiagnosticResult:
+      type: object
+      description: |
+        LDAP connection diagnostic and optional user-lookup result.
+        Never includes secrets — passwords are not echoed.
+      properties:
+        connection:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            host: { type: string }
+            encryption:
+              type: string
+              enum: [none, starttls, ldaps]
+            base_dn: { type: string }
+            bind_dn_configured: { type: boolean, description: True if a service account DN is set; the password itself is never returned. }
+            service_bind: { type: boolean, description: Whether the service-account bind succeeded. }
+            error: { type: string, nullable: true, description: Human-readable error if the bind failed. }
+        user:
+          type: object
+          nullable: true
+          description: Present only when the request supplies a username.
+          properties:
+            found: { type: boolean }
+            dn: { type: string, nullable: true }
+            uid: { type: string, nullable: true }
+            username: { type: string, nullable: true }
+            email: { type: string, nullable: true }
+            display_name: { type: string, nullable: true }
+            groups: { type: array, items: { type: string } }
+            mapped_roles: { type: array, items: { type: string } }
+            error: { type: string, nullable: true, description: Set when found=false. }
 
     Webhook:
       type: object

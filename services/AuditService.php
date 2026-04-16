@@ -46,6 +46,8 @@ class AuditService extends Component
     public const ACTION_JOB_CANCELED = AuditLog::ACTION_JOB_CANCELED;
     public const ACTION_JOB_STARTED = AuditLog::ACTION_JOB_STARTED;
     public const ACTION_JOB_FINISHED = AuditLog::ACTION_JOB_FINISHED;
+    public const ACTION_JOB_RECLAIMED = AuditLog::ACTION_JOB_RECLAIMED;
+    public const ACTION_JOB_REQUEUED = AuditLog::ACTION_JOB_REQUEUED;
     public const ACTION_TEAM_CREATED = AuditLog::ACTION_TEAM_CREATED;
     public const ACTION_TEAM_UPDATED = AuditLog::ACTION_TEAM_UPDATED;
     public const ACTION_TEAM_DELETED = AuditLog::ACTION_TEAM_DELETED;
@@ -98,6 +100,13 @@ class AuditService extends Component
     public const ACTION_ROLE_CREATED = AuditLog::ACTION_ROLE_CREATED;
     public const ACTION_ROLE_UPDATED = AuditLog::ACTION_ROLE_UPDATED;
     public const ACTION_ROLE_DELETED = AuditLog::ACTION_ROLE_DELETED;
+    public const ACTION_LDAP_USER_PROVISIONED = AuditLog::ACTION_LDAP_USER_PROVISIONED;
+    public const ACTION_LDAP_USER_SYNCED = AuditLog::ACTION_LDAP_USER_SYNCED;
+    public const ACTION_LDAP_USER_DISABLED = AuditLog::ACTION_LDAP_USER_DISABLED;
+    public const ACTION_LDAP_USER_REENABLED = AuditLog::ACTION_LDAP_USER_REENABLED;
+    public const ACTION_LDAP_LOGIN_FAILED = AuditLog::ACTION_LDAP_LOGIN_FAILED;
+    public const ACTION_LDAP_ROLES_CHANGED = AuditLog::ACTION_LDAP_ROLES_CHANGED;
+    public const ACTION_LDAP_TEST_PERFORMED = AuditLog::ACTION_LDAP_TEST_PERFORMED;
 
     /**
      * @var AuditTargetInterface[] Dispatch targets. Populated in init() from

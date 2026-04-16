@@ -17,6 +17,10 @@ use yii\web\IdentityInterface;
  * @property string|null $totp_secret       Encrypted TOTP shared secret
  * @property bool        $totp_enabled      Whether TOTP 2FA is active
  * @property string|null $recovery_codes    JSON array of bcrypt-hashed recovery codes
+ * @property string $auth_source            'local' = bcrypt password; 'ldap' = external directory bind
+ * @property string|null $ldap_dn           Distinguished name from the directory (set after bind)
+ * @property string|null $ldap_uid          Stable directory identifier (objectGUID/entryUUID)
+ * @property int|null    $last_synced_at    Unix timestamp of the last LDAP attribute sync
  * @property int    $status
  * @property bool   $is_superadmin
  * @property int    $created_at
@@ -26,6 +30,17 @@ class User extends ActiveRecord implements IdentityInterface
 {
     public const STATUS_INACTIVE = 0;
     public const STATUS_ACTIVE = 10;
+
+    public const AUTH_SOURCE_LOCAL = 'local';
+    public const AUTH_SOURCE_LDAP = 'ldap';
+
+    /**
+     * Sentinel value stored in password_hash for LDAP users. Bcrypt's
+     * password_verify() returns false for any input against this string,
+     * so even if auth_source is tampered with, no plaintext can ever
+     * unlock the account through the local password path.
+     */
+    public const LDAP_PASSWORD_SENTINEL = '!ldap';
 
     public static function tableName(): string
     {
@@ -42,6 +57,10 @@ class User extends ActiveRecord implements IdentityInterface
             [['username', 'email'], 'unique'],
             [['status'], 'in', 'range' => [self::STATUS_INACTIVE, self::STATUS_ACTIVE]],
             [['is_superadmin'], 'boolean'],
+            [['auth_source'], 'in', 'range' => [self::AUTH_SOURCE_LOCAL, self::AUTH_SOURCE_LDAP]],
+            [['ldap_dn'], 'string', 'max' => 512],
+            [['ldap_uid'], 'string', 'max' => 255],
+            [['last_synced_at'], 'integer'],
         ];
     }
 
@@ -106,6 +125,13 @@ class User extends ActiveRecord implements IdentityInterface
 
     public function validatePassword(string $password): bool
     {
+        // LDAP-backed users never authenticate through the local bcrypt path.
+        // The stored password_hash is the LDAP_PASSWORD_SENTINEL, against
+        // which password_verify() always returns false anyway, but we
+        // short-circuit here for defense in depth.
+        if ($this->isLdap()) {
+            return false;
+        }
         /** @var \yii\base\Security $security */
         $security = \Yii::$app->security;
         return $security->validatePassword($password, $this->password_hash);
@@ -113,6 +139,14 @@ class User extends ActiveRecord implements IdentityInterface
 
     public function setPassword(string $password): void
     {
+        // Local-account-only operation. LDAP users have their password
+        // managed in the directory; setting one here would either be
+        // discarded by the sentinel or — worse — open a parallel local
+        // login path. Callers that handle LDAP users must check isLdap()
+        // first and refuse password changes via the application UI/API.
+        if ($this->isLdap()) {
+            throw new \LogicException('Cannot set password for LDAP-backed user.');
+        }
         /** @var \yii\base\Security $security */
         $security = \Yii::$app->security;
         $this->password_hash = $security->generatePasswordHash($password);
@@ -120,6 +154,18 @@ class User extends ActiveRecord implements IdentityInterface
         // auth_key) become invalid on password change. Protects against a
         // stolen cookie surviving a password reset.
         $this->auth_key = $security->generateRandomString();
+    }
+
+    /**
+     * Mark the password_hash column with the sentinel value so that the
+     * local password path can never authenticate this user, even if
+     * auth_source is later tampered with. Use when provisioning an
+     * LDAP-backed account.
+     */
+    public function markAsLdapManaged(): void
+    {
+        $this->auth_source = self::AUTH_SOURCE_LDAP;
+        $this->password_hash = self::LDAP_PASSWORD_SENTINEL;
     }
 
     public function generateAuthKey(): void
@@ -134,6 +180,22 @@ class User extends ActiveRecord implements IdentityInterface
         return $this->status === self::STATUS_ACTIVE;
     }
 
+    /**
+     * True for accounts authenticated against the local bcrypt password.
+     */
+    public function isLocal(): bool
+    {
+        return $this->auth_source === self::AUTH_SOURCE_LOCAL;
+    }
+
+    /**
+     * True for accounts authenticated against an external LDAP/AD directory.
+     */
+    public function isLdap(): bool
+    {
+        return $this->auth_source === self::AUTH_SOURCE_LDAP;
+    }
+
     // --- Password reset token ---
 
     /** Token validity in seconds (60 minutes). */
@@ -141,9 +203,16 @@ class User extends ActiveRecord implements IdentityInterface
 
     /**
      * Generate a time-stamped password reset token and persist it.
+     *
+     * Disallowed for LDAP-backed accounts — their password is managed in
+     * the directory, so a local reset would be misleading and the token
+     * would unlock a sentinel-protected hash anyway.
      */
     public function generatePasswordResetToken(): void
     {
+        if ($this->isLdap()) {
+            throw new \LogicException('Cannot generate password reset token for LDAP-backed user.');
+        }
         /** @var \yii\base\Security $security */
         $security = \Yii::$app->security;
         $this->password_reset_token = $security->generateRandomString() . '_' . time();

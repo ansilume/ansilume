@@ -29,6 +29,7 @@ class ChangePasswordForm extends Model
     {
         return [
             [['current_password', 'new_password', 'new_password_confirm'], 'required'],
+            [['current_password'], 'validateNotLdap'],
             [['current_password'], 'validateCurrentPassword'],
             [['new_password'], 'string', 'min' => 8, 'max' => 72],
             [['new_password_confirm'], 'compare', 'compareAttribute' => 'new_password', 'message' => 'Passwords do not match.'],
@@ -48,6 +49,21 @@ class ChangePasswordForm extends Model
     {
         if (!$this->hasErrors() && !$this->_user->validatePassword($this->current_password)) {
             $this->addError($attribute, 'Current password is incorrect.');
+        }
+    }
+
+    /**
+     * Block password change for LDAP-managed accounts. The directory owns
+     * the credential — letting users edit it locally would create the
+     * misleading impression that it sticks.
+     */
+    public function validateNotLdap(string $attribute): void
+    {
+        if ($this->_user->isLdap()) {
+            $this->addError(
+                $attribute,
+                'This account is managed by an external directory. Change your password there.',
+            );
         }
     }
 

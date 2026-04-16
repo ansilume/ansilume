@@ -35,6 +35,12 @@ class PasswordResetRequestForm extends Model
         if ($user === null) {
             return true;
         }
+        // LDAP-managed accounts cannot reset their password through Ansilume —
+        // the directory owns the credential. We silently skip rather than
+        // surface "this user is LDAP" so the request stays enumeration-safe.
+        if ($user->isLdap()) {
+            return true;
+        }
 
         // Re-use existing token if still valid (prevents token flooding)
         if (!$user->isPasswordResetTokenValid()) {

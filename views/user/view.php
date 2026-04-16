@@ -46,6 +46,32 @@ $isSelf = ($user->id === (int)\Yii::$app->user?->id);
                 <dl class="row mb-0">
                     <dt class="col-5">Email</dt>
                     <dd class="col-7"><?= Html::encode($user->email) ?></dd>
+                    <dt class="col-5">Source</dt>
+                    <dd class="col-7">
+                        <?php if ($user->isLdap()) : ?>
+                            <span class="badge text-bg-info">LDAP / Active Directory</span>
+                        <?php else : ?>
+                            <span class="badge text-bg-secondary">Local</span>
+                        <?php endif; ?>
+                    </dd>
+                    <?php if ($user->isLdap()) : ?>
+                        <?php if ($user->ldap_dn !== null && $user->ldap_dn !== '') : ?>
+                            <dt class="col-5">LDAP DN</dt>
+                            <dd class="col-7"><code class="small"><?= Html::encode($user->ldap_dn) ?></code></dd>
+                        <?php endif; ?>
+                        <?php if ($user->ldap_uid !== null && $user->ldap_uid !== '') : ?>
+                            <dt class="col-5">Directory UID</dt>
+                            <dd class="col-7"><code class="small"><?= Html::encode($user->ldap_uid) ?></code></dd>
+                        <?php endif; ?>
+                        <dt class="col-5">Last synced</dt>
+                        <dd class="col-7">
+                            <?php if ($user->last_synced_at !== null) : ?>
+                                <?= date('Y-m-d H:i', $user->last_synced_at) ?>
+                            <?php else : ?>
+                                <span class="text-muted">Never</span>
+                            <?php endif; ?>
+                        </dd>
+                    <?php endif; ?>
                     <dt class="col-5">Status</dt>
                     <dd class="col-7">
                         <?php if ($user->status === User::STATUS_ACTIVE) : ?>

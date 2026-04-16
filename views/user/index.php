@@ -28,7 +28,7 @@ $this->title = 'Users';
 <div class="table-responsive">
     <table class="table table-hover" id="user-table">
         <thead class="table-light">
-            <tr><th>#</th><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>MFA</th><th>Superadmin</th><th>Created</th><th></th></tr>
+            <tr><th>#</th><th>Username</th><th>Email</th><th>Source</th><th>Role</th><th>Status</th><th>MFA</th><th>Superadmin</th><th>Created</th><th></th></tr>
         </thead>
         <tbody>
         <?php foreach ($dataProvider->getModels() as $user) : ?>
@@ -41,6 +41,13 @@ $this->title = 'Users';
                 <td><?= $user->id ?></td>
                 <td><?= Html::a(Html::encode($user->username), ['view', 'id' => $user->id]) ?></td>
                 <td><?= Html::encode($user->email) ?></td>
+                <td>
+                    <?php if ($user->isLdap()) : ?>
+                        <span class="badge text-bg-info">LDAP</span>
+                    <?php else : ?>
+                        <span class="badge text-bg-secondary">Local</span>
+                    <?php endif; ?>
+                </td>
                 <td>
                     <?php foreach ($roles as $role) : ?>
                         <span class="badge text-bg-secondary"><?= Html::encode($role->name) ?></span>

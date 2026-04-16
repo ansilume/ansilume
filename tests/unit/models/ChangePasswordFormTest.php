@@ -116,4 +116,44 @@ class ChangePasswordFormTest extends TestCase
         $this->assertSame('New Password', $labels['new_password']);
         $this->assertSame('Confirm New Password', $labels['new_password_confirm']);
     }
+
+    public function testLdapUserCannotChangePassword(): void
+    {
+        // LDAP-managed accounts must be rejected by validateNotLdap, even when
+        // every other input would otherwise be valid. The directory owns the
+        // credential; touching it locally would silently break login.
+        $user = $this->makeUser('oldpassword');
+        $user->markAsLdapManaged();
+        $user->save(false);
+
+        $model = new ChangePasswordForm($user);
+        $model->current_password = 'oldpassword';
+        $model->new_password = 'newpassword123';
+        $model->new_password_confirm = 'newpassword123';
+
+        $this->assertFalse($model->validate());
+        $this->assertArrayHasKey('current_password', $model->getErrors());
+        $errors = $model->getErrors('current_password');
+        $this->assertNotEmpty($errors);
+        $this->assertStringContainsString('external directory', $errors[0]);
+    }
+
+    public function testLdapUserChangePasswordReturnsFalse(): void
+    {
+        $user = $this->makeUser('oldpassword');
+        $user->markAsLdapManaged();
+        $user->save(false);
+
+        $model = new ChangePasswordForm($user);
+        $model->current_password = 'oldpassword';
+        $model->new_password = 'newpassword123';
+        $model->new_password_confirm = 'newpassword123';
+
+        $this->assertFalse($model->changePassword());
+
+        // Sentinel hash must remain — LDAP login flow never validates against it.
+        $refreshed = User::findOne($user->id);
+        $this->assertNotNull($refreshed);
+        $this->assertSame(User::LDAP_PASSWORD_SENTINEL, $refreshed->password_hash);
+    }
 }

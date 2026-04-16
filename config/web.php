@@ -31,6 +31,7 @@ $config = [
         'api/v1/users' => 'app\controllers\api\v1\UsersController',
         'api/v1/webhooks' => 'app\controllers\api\v1\WebhooksController',
         'api/v1/audit-logs' => 'app\controllers\api\v1\AuditLogsController',
+        'api/v1/admin/ldap' => 'app\controllers\api\v1\LdapController',
         'runner-api' => 'app\controllers\api\runner\JobsController',
         'runner-register' => 'app\controllers\api\runner\RegisterController',
     ],
@@ -192,6 +193,12 @@ $config = [
         'jobClaimService' => [
             'class' => 'app\services\JobClaimService',
         ],
+        'jobReclaimService' => [
+            'class' => 'app\services\JobReclaimService',
+            'progressTimeoutSeconds' => (int)(getenv('JOB_PROGRESS_TIMEOUT') ?: 600),
+            'mode' => getenv('JOB_RECLAIM_MODE') ?: 'fail',
+            'queueTimeoutSeconds' => (int)(getenv('JOB_QUEUE_TIMEOUT') ?: 1800),
+        ],
         'totpService' => [
             'class' => 'app\services\TotpService',
             'rateLimiter' => [
@@ -209,6 +216,12 @@ $config = [
             'maxBytesPerJob' => (int)(getenv('ARTIFACT_MAX_BYTES_PER_JOB') ?: 52428800),
             'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
             'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
+        ],
+        'ldapService' => [
+            'class' => 'app\services\ldap\LdapService',
+        ],
+        'ldapUserProvisioner' => [
+            'class' => 'app\services\ldap\LdapUserProvisioner',
         ],
         'urlManager' => [
             'enablePrettyUrl' => true,
@@ -327,6 +340,9 @@ $config = [
                 // Audit logs API
                 ['pattern' => 'api/v1/audit-logs/<id:\d+>', 'route' => 'api/v1/audit-logs/view', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/audit-logs', 'route' => 'api/v1/audit-logs/index', 'verb' => 'GET'],
+                // LDAP admin API
+                ['pattern' => 'api/v1/admin/ldap/test', 'route' => 'api/v1/admin/ldap/test', 'verb' => 'GET'],
+                ['pattern' => 'api/v1/admin/ldap/test', 'route' => 'api/v1/admin/ldap/test', 'verb' => 'POST'],
                 // Workflow jobs API
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/cancel', 'route' => 'api/v1/workflow-jobs/cancel', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/workflow-jobs/<id:\d+>/resume', 'route' => 'api/v1/workflow-jobs/resume', 'verb' => 'POST'],

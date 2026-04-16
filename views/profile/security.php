@@ -18,38 +18,45 @@ $this->title = 'Security';
     <div class="card mb-4">
         <div class="card-body">
             <h5 class="card-title mb-3">Change Password</h5>
-            <?= Html::beginForm(['change-password'], 'post') ?>
-                <div class="mb-3">
-                    <?= Html::label('Current Password', 'current_password', ['class' => 'form-label']) ?>
-                    <?= Html::passwordInput('ChangePasswordForm[current_password]', '', [
-                        'class' => 'form-control',
-                        'id' => 'current_password',
-                        'required' => true,
-                        'autocomplete' => 'current-password',
-                    ]) ?>
-                </div>
-                <div class="mb-3">
-                    <?= Html::label('New Password', 'new_password', ['class' => 'form-label']) ?>
-                    <?= Html::passwordInput('ChangePasswordForm[new_password]', '', [
-                        'class' => 'form-control',
-                        'id' => 'new_password',
-                        'required' => true,
-                        'minlength' => 8,
-                        'autocomplete' => 'new-password',
-                    ]) ?>
-                    <div class="form-text">Minimum 8 characters.</div>
-                </div>
-                <div class="mb-3">
-                    <?= Html::label('Confirm New Password', 'new_password_confirm', ['class' => 'form-label']) ?>
-                    <?= Html::passwordInput('ChangePasswordForm[new_password_confirm]', '', [
-                        'class' => 'form-control',
-                        'id' => 'new_password_confirm',
-                        'required' => true,
-                        'autocomplete' => 'new-password',
-                    ]) ?>
-                </div>
-                <?= Html::submitButton('Change Password', ['class' => 'btn btn-primary']) ?>
-            <?= Html::endForm() ?>
+            <?php if ($user->isLdap()) : ?>
+                <p class="text-muted mb-0">
+                    This account is managed by an external directory.
+                    Change your password where your IT team manages directory accounts.
+                </p>
+            <?php else : ?>
+                <?= Html::beginForm(['change-password'], 'post') ?>
+                    <div class="mb-3">
+                        <?= Html::label('Current Password', 'current_password', ['class' => 'form-label']) ?>
+                        <?= Html::passwordInput('ChangePasswordForm[current_password]', '', [
+                            'class' => 'form-control',
+                            'id' => 'current_password',
+                            'required' => true,
+                            'autocomplete' => 'current-password',
+                        ]) ?>
+                    </div>
+                    <div class="mb-3">
+                        <?= Html::label('New Password', 'new_password', ['class' => 'form-label']) ?>
+                        <?= Html::passwordInput('ChangePasswordForm[new_password]', '', [
+                            'class' => 'form-control',
+                            'id' => 'new_password',
+                            'required' => true,
+                            'minlength' => 8,
+                            'autocomplete' => 'new-password',
+                        ]) ?>
+                        <div class="form-text">Minimum 8 characters.</div>
+                    </div>
+                    <div class="mb-3">
+                        <?= Html::label('Confirm New Password', 'new_password_confirm', ['class' => 'form-label']) ?>
+                        <?= Html::passwordInput('ChangePasswordForm[new_password_confirm]', '', [
+                            'class' => 'form-control',
+                            'id' => 'new_password_confirm',
+                            'required' => true,
+                            'autocomplete' => 'new-password',
+                        ]) ?>
+                    </div>
+                    <?= Html::submitButton('Change Password', ['class' => 'btn btn-primary']) ?>
+                <?= Html::endForm() ?>
+            <?php endif; ?>
         </div>
     </div>
 

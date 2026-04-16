@@ -55,9 +55,11 @@ class LoginFormTest extends TestCase
         // Create a real User stub that validates password
         $user = $this->getMockBuilder(User::class)
             ->disableOriginalConstructor()
-            ->onlyMethods(['validatePassword'])
+            ->onlyMethods(['validatePassword', 'isLocal', 'isLdap'])
             ->getMock();
         $user->method('validatePassword')->willReturn(false);
+        $user->method('isLocal')->willReturn(true);
+        $user->method('isLdap')->willReturn(false);
 
         $form = new LoginForm();
         $form->username = 'admin';
@@ -76,9 +78,11 @@ class LoginFormTest extends TestCase
     {
         $user = $this->getMockBuilder(User::class)
             ->disableOriginalConstructor()
-            ->onlyMethods(['validatePassword'])
+            ->onlyMethods(['validatePassword', 'isLocal', 'isLdap'])
             ->getMock();
         $user->method('validatePassword')->willReturn(true);
+        $user->method('isLocal')->willReturn(true);
+        $user->method('isLdap')->willReturn(false);
 
         $form = new LoginForm();
         $form->username = 'admin';
@@ -90,5 +94,16 @@ class LoginFormTest extends TestCase
 
         $form->validate(['password']);
         $this->assertFalse($form->hasErrors('password'));
+    }
+
+    public function testRequiresTotpReturnsFalseWhenNoUser(): void
+    {
+        $form = new class extends LoginForm {
+            protected function getUser(): ?User
+            {
+                return null;
+            }
+        };
+        $this->assertFalse($form->requiresTotp());
     }
 }

@@ -75,17 +75,20 @@ class UsersController extends BaseApiController
 
         $model = new User();
         $body = (array)\Yii::$app->request->bodyParams;
+
+        // auth_source is set on insert and frozen thereafter — see actionUpdate.
+        $authSource = isset($body['auth_source']) ? (string)$body['auth_source'] : User::AUTH_SOURCE_LOCAL;
+        if (!in_array($authSource, [User::AUTH_SOURCE_LOCAL, User::AUTH_SOURCE_LDAP], true)) {
+            return $this->error('Invalid auth_source. Must be "local" or "ldap".', 422);
+        }
+
         $this->applyBody($model, $body);
         $model->generateAuthKey();
 
-        $password = (string)($body['password'] ?? '');
-        if ($password === '') {
-            return $this->error('Password is required.', 422);
+        $err = $this->applyAuthSourceOnCreate($model, $body, $authSource);
+        if ($err !== null) {
+            return $err;
         }
-        if (strlen($password) < 5) {
-            return $this->error('Password must be at least 5 characters.', 422);
-        }
-        $model->setPassword($password);
 
         if (!$model->validate()) {
             return $this->error($this->firstError($model), 422);
@@ -108,6 +111,76 @@ class UsersController extends BaseApiController
     }
 
     /**
+     * Apply auth-source-specific fields on a fresh User. Returns an error
+     * response array if validation fails, or null on success.
+     *
+     * @param array<string, mixed> $body
+     * @return array{error: array{message: string}}|null
+     */
+    private function applyAuthSourceOnCreate(User $model, array $body, string $authSource): ?array
+    {
+        if ($authSource === User::AUTH_SOURCE_LDAP) {
+            $model->markAsLdapManaged();
+            $this->applyLdapMetadata($model, $body);
+            if (isset($body['password'])) {
+                return $this->error('Password is not accepted for LDAP-backed accounts.', 422);
+            }
+            return null;
+        }
+
+        $model->auth_source = User::AUTH_SOURCE_LOCAL;
+        $password = (string)($body['password'] ?? '');
+        if ($password === '') {
+            return $this->error('Password is required.', 422);
+        }
+        if (strlen($password) < 5) {
+            return $this->error('Password must be at least 5 characters.', 422);
+        }
+        $model->setPassword($password);
+        return null;
+    }
+
+    /**
+     * Copy ldap_dn / ldap_uid from request body if present (empty string → null).
+     *
+     * @param array<string, mixed> $body
+     */
+    private function applyLdapMetadata(User $model, array $body): void
+    {
+        if (array_key_exists('ldap_dn', $body)) {
+            $dn = (string)$body['ldap_dn'];
+            $model->ldap_dn = $dn !== '' ? $dn : null;
+        }
+        if (array_key_exists('ldap_uid', $body)) {
+            $uid = (string)$body['ldap_uid'];
+            $model->ldap_uid = $uid !== '' ? $uid : null;
+        }
+    }
+
+    /**
+     * Validate and apply a password change on an existing user. No-op when
+     * the body has no password. Returns an error response array on rejection.
+     *
+     * @param array<string, mixed> $body
+     * @return array{error: array{message: string}}|null
+     */
+    private function applyPasswordOnUpdate(User $model, array $body): ?array
+    {
+        $password = $body['password'] ?? null;
+        if (!is_string($password) || $password === '') {
+            return null;
+        }
+        if ($model->isLdap()) {
+            return $this->error('Cannot set password for LDAP-backed user.', 422);
+        }
+        if (strlen($password) < 5) {
+            return $this->error('Password must be at least 5 characters.', 422);
+        }
+        $model->setPassword($password);
+        return null;
+    }
+
+    /**
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionUpdate(int $id): array
@@ -120,14 +193,28 @@ class UsersController extends BaseApiController
 
         $model = $this->findModel($id);
         $body = (array)\Yii::$app->request->bodyParams;
+
+        // Reject any attempt to switch auth_source after creation. Allowing
+        // a flip would either orphan the bcrypt hash (local→ldap) or expose
+        // a directory-managed account to local password login (ldap→local).
+        if (array_key_exists('auth_source', $body)) {
+            $requested = (string)$body['auth_source'];
+            if ($requested !== $model->auth_source) {
+                return $this->error('auth_source is immutable once the user exists.', 422);
+            }
+        }
+
         $this->applyBody($model, $body);
 
-        $password = $body['password'] ?? null;
-        if (is_string($password) && $password !== '') {
-            if (strlen($password) < 5) {
-                return $this->error('Password must be at least 5 characters.', 422);
-            }
-            $model->setPassword($password);
+        $err = $this->applyPasswordOnUpdate($model, $body);
+        if ($err !== null) {
+            return $err;
+        }
+
+        // Allow updating directory metadata only for LDAP-backed accounts.
+        // Setting these on a local account would be a confusing no-op.
+        if ($model->isLdap()) {
+            $this->applyLdapMetadata($model, $body);
         }
 
         if (!$model->validate()) {
@@ -235,7 +322,7 @@ class UsersController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, username: string, email: string, status: int, is_superadmin: bool, totp_enabled: bool, role: string|null, created_at: int, updated_at: int}
+     * @return array{id: int, username: string, email: string, status: int, is_superadmin: bool, totp_enabled: bool, role: string|null, auth_source: string, ldap_dn: string|null, ldap_uid: string|null, last_synced_at: int|null, created_at: int, updated_at: int}
      */
     private function serialize(User $u): array
     {
@@ -252,6 +339,10 @@ class UsersController extends BaseApiController
             'is_superadmin' => (bool)$u->is_superadmin,
             'totp_enabled' => (bool)$u->totp_enabled,
             'role' => $roleName,
+            'auth_source' => $u->auth_source,
+            'ldap_dn' => $u->ldap_dn,
+            'ldap_uid' => $u->ldap_uid,
+            'last_synced_at' => $u->last_synced_at !== null ? (int)$u->last_synced_at : null,
             'created_at' => $u->created_at,
             'updated_at' => $u->updated_at,
         ];

@@ -20,8 +20,11 @@ use yii\db\ActiveRecord;
  * @property int|null    $queued_at
  * @property int|null    $started_at
  * @property int|null    $finished_at
+ * @property int|null    $last_progress_at  Bumped by runner log/status posts; used for stale-job reclaim.
  * @property int|null    $timeout_minutes
  * @property int|null    $exit_code
+ * @property int         $attempt_count    Incremented each time JobReclaimService re-queues a stuck job.
+ * @property int         $max_attempts     Hard limit on attempt_count; reclaim falls back to FAILED at this ceiling.
  * @property int|null    $pid
  * @property string|null $worker_id
  * @property int|null    $runner_id
@@ -64,6 +67,7 @@ class Job extends ActiveRecord
             [['launched_by'], 'required'],
             [['job_template_id', 'launched_by'], 'integer'],
             [['exit_code'], 'integer', 'min' => -256, 'max' => 255],
+            [['attempt_count', 'max_attempts'], 'integer', 'min' => 1],
             [['pid'], 'integer', 'min' => 0],
             [['timeout_minutes'], 'integer', 'min' => 0, 'max' => 1440],
             [['status'], 'in', 'range' => self::statuses()],

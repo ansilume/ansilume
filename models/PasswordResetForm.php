@@ -23,6 +23,13 @@ class PasswordResetForm extends Model
         if ($user === null) {
             throw new InvalidArgumentException('Invalid or expired password reset token.');
         }
+        // Defense in depth: User::generatePasswordResetToken() already rejects
+        // LDAP users, so a token tied to an LDAP account should never exist —
+        // but if one does (manual DB write, schema migration glitch), refuse
+        // to honour it rather than overwrite the sentinel hash.
+        if ($user->isLdap()) {
+            throw new InvalidArgumentException('Invalid or expired password reset token.');
+        }
         $this->_user = $user;
         parent::__construct($config);
     }

@@ -143,6 +143,71 @@ class UserFormTest extends TestCase
         $this->assertSame('operator', $form->role);
     }
 
+    public function testAuthSourceOptionsContainsBothChoices(): void
+    {
+        $opts = UserForm::authSourceOptions();
+        $this->assertArrayHasKey(User::AUTH_SOURCE_LOCAL, $opts);
+        $this->assertArrayHasKey(User::AUTH_SOURCE_LDAP, $opts);
+    }
+
+    public function testInvalidAuthSourceFailsValidation(): void
+    {
+        $form = $this->makeForm(['auth_source' => 'wat']);
+        $form->validate(['auth_source']);
+        $this->assertTrue($form->hasErrors('auth_source'));
+    }
+
+    public function testLocalUserStillRequiresPasswordOnCreate(): void
+    {
+        $form = $this->makeForm(['auth_source' => User::AUTH_SOURCE_LOCAL, 'password' => '']);
+        $form->validate();
+        $this->assertTrue($form->hasErrors('password'));
+    }
+
+    public function testLdapUserDoesNotRequirePasswordOnCreate(): void
+    {
+        $form = $this->makeForm([
+            'auth_source' => User::AUTH_SOURCE_LDAP,
+            'username' => 'ldapuser',
+            'email' => 'ldap@example.com',
+            'role' => 'viewer',
+            'password' => '',
+        ]);
+        $form->validate();
+        $this->assertFalse($form->hasErrors('password'));
+    }
+
+    public function testLdapDnLengthIsValidated(): void
+    {
+        $form = $this->makeForm(['ldap_dn' => str_repeat('x', 513)]);
+        $form->validate(['ldap_dn']);
+        $this->assertTrue($form->hasErrors('ldap_dn'));
+    }
+
+    public function testLdapUidLengthIsValidated(): void
+    {
+        $form = $this->makeForm(['ldap_uid' => str_repeat('x', 256)]);
+        $form->validate(['ldap_uid']);
+        $this->assertTrue($form->hasErrors('ldap_uid'));
+    }
+
+    public function testFromUserPopulatesLdapFields(): void
+    {
+        $user = $this->makeUser(11, 'ldapuser', 'l@x.com');
+        $user->auth_source = User::AUTH_SOURCE_LDAP;
+        $user->ldap_dn = 'uid=ldapuser,dc=test';
+        $user->ldap_uid = 'guid-1';
+
+        $auth = $this->getMockBuilder(\yii\rbac\ManagerInterface::class)->getMock();
+        $auth->method('getRolesByUser')->willReturn([]);
+        \Yii::$app->set('authManager', $auth);
+
+        $form = UserForm::fromUser($user);
+        $this->assertSame(User::AUTH_SOURCE_LDAP, $form->auth_source);
+        $this->assertSame('uid=ldapuser,dc=test', $form->ldap_dn);
+        $this->assertSame('guid-1', $form->ldap_uid);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /**
@@ -171,16 +236,23 @@ class UserFormTest extends TestCase
             ->disableOriginalConstructor()
             ->onlyMethods(['attributes', 'save'])
             ->getMock();
-        $user->method('attributes')->willReturn(['id', 'username', 'email', 'status', 'is_superadmin']);
+        $user->method('attributes')->willReturn([
+            'id', 'username', 'email', 'status', 'is_superadmin',
+            'auth_source', 'ldap_dn', 'ldap_uid', 'last_synced_at',
+        ]);
         $user->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
         $ref->setAccessible(true);
         $ref->setValue($user, [
-            'id'           => $id,
-            'username'     => $username,
-            'email'        => $email,
-            'status'       => User::STATUS_ACTIVE,
-            'is_superadmin' => false,
+            'id'             => $id,
+            'username'       => $username,
+            'email'          => $email,
+            'status'         => User::STATUS_ACTIVE,
+            'is_superadmin'  => false,
+            'auth_source'    => User::AUTH_SOURCE_LOCAL,
+            'ldap_dn'        => null,
+            'ldap_uid'       => null,
+            'last_synced_at' => null,
         ]);
         return $user;
     }

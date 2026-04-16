@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     libonig-dev \
     libxml2-dev \
     libzip-dev \
+    libldap2-dev \
     zip \
     unzip \
     openssh-client \
@@ -26,7 +27,8 @@ RUN docker-php-ext-install \
     bcmath \
     gd \
     zip \
-    sockets
+    sockets \
+    ldap
 
 RUN pecl install redis && docker-php-ext-enable redis
 

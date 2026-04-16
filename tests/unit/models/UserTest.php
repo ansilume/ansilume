@@ -121,6 +121,57 @@ class UserTest extends TestCase
         $this->assertFalse($user->isActive());
     }
 
+    // ── isLocal / isLdap / markAsLdapManaged ──────────────────────────────────
+
+    public function testIsLocalReturnsTrueForLocalAuthSource(): void
+    {
+        $user = $this->makeUser();
+        $user->auth_source = User::AUTH_SOURCE_LOCAL;
+        $this->assertTrue($user->isLocal());
+        $this->assertFalse($user->isLdap());
+    }
+
+    public function testIsLdapReturnsTrueForLdapAuthSource(): void
+    {
+        $user = $this->makeUser();
+        $user->auth_source = User::AUTH_SOURCE_LDAP;
+        $this->assertTrue($user->isLdap());
+        $this->assertFalse($user->isLocal());
+    }
+
+    public function testMarkAsLdapManagedSetsAuthSourceAndSentinel(): void
+    {
+        $user = $this->makeUser();
+        $user->markAsLdapManaged();
+        $this->assertSame(User::AUTH_SOURCE_LDAP, $user->auth_source);
+        $this->assertSame(User::LDAP_PASSWORD_SENTINEL, $user->password_hash);
+        $this->assertTrue($user->isLdap());
+    }
+
+    public function testValidatePasswordAlwaysFailsForLdapUser(): void
+    {
+        $user = $this->makeUser();
+        $user->markAsLdapManaged();
+        $this->assertFalse($user->validatePassword('anything'));
+        $this->assertFalse($user->validatePassword(User::LDAP_PASSWORD_SENTINEL));
+    }
+
+    public function testSetPasswordThrowsForLdapUser(): void
+    {
+        $user = $this->makeUser();
+        $user->markAsLdapManaged();
+        $this->expectException(\LogicException::class);
+        $user->setPassword('whatever');
+    }
+
+    public function testGeneratePasswordResetTokenThrowsForLdapUser(): void
+    {
+        $user = $this->makeUser();
+        $user->markAsLdapManaged();
+        $this->expectException(\LogicException::class);
+        $user->generatePasswordResetToken();
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private function makeUser(int $status = User::STATUS_ACTIVE): User
@@ -131,7 +182,8 @@ class UserTest extends TestCase
             ->getMock();
         $user->method('attributes')->willReturn(
             ['id', 'username', 'email', 'password_hash', 'auth_key',
-             'password_reset_token', 'status', 'is_superadmin', 'created_at', 'updated_at']
+             'password_reset_token', 'status', 'is_superadmin', 'auth_source',
+             'ldap_dn', 'ldap_uid', 'last_synced_at', 'created_at', 'updated_at']
         );
         $user->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
@@ -145,6 +197,10 @@ class UserTest extends TestCase
             'password_reset_token' => null,
             'status'               => $status,
             'is_superadmin'        => false,
+            'auth_source'          => User::AUTH_SOURCE_LOCAL,
+            'ldap_dn'              => null,
+            'ldap_uid'             => null,
+            'last_synced_at'       => null,
             'created_at'           => null,
             'updated_at'           => null,
         ]);

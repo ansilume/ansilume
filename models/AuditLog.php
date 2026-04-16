@@ -61,6 +61,8 @@ class AuditLog extends ActiveRecord
     public const ACTION_JOB_CANCELED = 'job.canceled';
     public const ACTION_JOB_STARTED = 'job.started';
     public const ACTION_JOB_FINISHED = 'job.finished';
+    public const ACTION_JOB_RECLAIMED = 'job.reclaimed';
+    public const ACTION_JOB_REQUEUED = 'job.requeued';
 
     // -- Team actions ----------------------------------------------------------
     public const ACTION_TEAM_CREATED = 'team.created';
@@ -139,6 +141,15 @@ class AuditLog extends ActiveRecord
     public const ACTION_ROLE_CREATED = 'role.created';
     public const ACTION_ROLE_UPDATED = 'role.updated';
     public const ACTION_ROLE_DELETED = 'role.deleted';
+
+    // -- LDAP / directory integration actions ----------------------------------
+    public const ACTION_LDAP_USER_PROVISIONED = 'ldap.user.provisioned';
+    public const ACTION_LDAP_USER_SYNCED = 'ldap.user.synced';
+    public const ACTION_LDAP_USER_DISABLED = 'ldap.user.disabled';
+    public const ACTION_LDAP_USER_REENABLED = 'ldap.user.reenabled';
+    public const ACTION_LDAP_LOGIN_FAILED = 'ldap.login.failed';
+    public const ACTION_LDAP_ROLES_CHANGED = 'ldap.user.roles_changed';
+    public const ACTION_LDAP_TEST_PERFORMED = 'ldap.test.performed';
 
     public static function tableName(): string
     {

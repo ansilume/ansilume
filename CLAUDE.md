@@ -376,7 +376,7 @@ Do not run tests after every task — only when the user says **"PUSH IT"**.
 
 When the user says "PUSH IT", follow this exact sequence:
 
-1. **Run all test suites in parallel** — execute every `bin/tests-*.sh` script (excluding `bin/tests-common.sh`) simultaneously using parallel Bash tool calls. Never use `--fast`.
+1. **Run all test suites in parallel via subagents** — dispatch one Agent (subagent_type=general-purpose) per `bin/tests-*.sh` script (excluding `bin/tests-common.sh`) in a single message. Each agent runs its suite, captures the result, and reports back a concise pass/fail summary plus failure details if any. This keeps the noisy multi-megabyte test output out of the main context window. Never use `--fast`.
 2. **All suites must pass.** Zero errors, zero warnings. If any suite fails, fix the issue and re-run the failing suite(s) until clean.
 3. **Commit** all changes.
 4. **Ask the user**: plain commit (no release) or a release? If release, ask: `PATCH`, `MINOR`, or `MAJOR`?
@@ -562,12 +562,12 @@ composer install               # Install PHP dependencies
 4. ~~**API CRUD endpoints**~~ — all resources (Projects, Job Templates, Schedules, Runner Groups, Teams, Users, Webhooks, Audit Logs) have full REST API with tests and OpenAPI spec
 5. ~~**Runner group assignment**~~ — runners can be moved between groups via web UI and REST API, with active-job guards and audit logging (v2.0.26)
 6. ~~**Team scoping**~~ — multi-tenant resource isolation: projects assigned to teams with viewer/operator roles; all child resources (templates, inventories, jobs, schedules) inherit access transitively; enforced across web UI and REST API
+7. ~~**LDAP/AD integration**~~ — optional Active Directory / OpenLDAP authentication as addon (local users remain alongside; password ops disabled for LDAP users; group-to-role mapping; auto-provisioning; `ldap/sync` console command for lifecycle reconciliation; admin diagnose endpoint). See `docs/ldap.md`.
 
 ### Next
 
 1. **HA / scaling** — multi-worker, runner failover, queue reliability
 2. **Advanced features** — artifact management
-3. **LDAP/AD integration** — optional Active Directory authentication as addon (local users remain, AD users managed externally, password change disabled for AD users, optional group-to-role mapping). Approach: direct PHP ldap_* functions, `auth_source` column on user table, LoginForm checks auth_source for credential verification.
 
 ### Completed (Advanced Features)
 

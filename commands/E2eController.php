@@ -7,8 +7,6 @@ namespace app\commands;
 use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Inventory;
-use app\models\Job;
-use app\models\JobArtifact;
 use app\models\JobTemplate;
 use app\models\NotificationTemplate;
 use app\models\Project;
@@ -159,6 +157,46 @@ class E2eController extends Controller
         });
         $seeder->seed($userId, $runnerGroupId);
         $this->seedCustomRole();
+        $this->seedLdapUser();
+    }
+
+    /**
+     * Seed a directory-managed user so the UI can render the LDAP badge,
+     * the locked edit form, and the "managed externally" notice on the
+     * profile page without needing a real LDAP server in CI.
+     */
+    private function seedLdapUser(): void
+    {
+        $username = self::PREFIX . 'ldap-user';
+        $existing = User::find()->where(['username' => $username])->one();
+        if ($existing !== null) {
+            $this->stdout("  LDAP user '{$username}' already exists (ID {$existing->id}).\n");
+            return;
+        }
+
+        $user = new User();
+        $user->username = $username;
+        $user->email = $username . '@example.com';
+        $user->status = User::STATUS_ACTIVE;
+        $user->is_superadmin = false;
+        $user->markAsLdapManaged();
+        $user->ldap_dn = 'uid=' . $username . ',dc=e2e,dc=test';
+        $user->ldap_uid = 'guid-e2e-ldap';
+        $user->last_synced_at = time();
+        $user->generateAuthKey();
+        if (!$user->save()) {
+            $this->stderr("  Failed to create LDAP user: " . json_encode($user->errors) . "\n");
+            return;
+        }
+
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        $role = $auth->getRole('viewer');
+        if ($role !== null) {
+            $auth->assign($role, $user->id);
+        }
+
+        $this->stdout("  Created LDAP user '{$username}' (ID {$user->id}).\n");
     }
 
     private function seedCustomRole(): void
@@ -522,64 +560,10 @@ class E2eController extends Controller
 
     private function seedJobWithArtifacts(int $userId, int $templateId): void
     {
-        // Check if we already have an e2e job with artifacts
-        $existing = Job::find()
-            ->where(['job_template_id' => $templateId, 'status' => Job::STATUS_SUCCEEDED])
-            ->andWhere(['like', 'execution_command', 'e2e-artifact'])
-            ->one();
-        if ($existing !== null) {
-            $this->stdout("  Job with artifacts already exists (ID {$existing->id}).\n");
-            return;
-        }
-
-        $job = new Job();
-        $job->job_template_id = $templateId;
-        $job->launched_by = $userId;
-        $job->status = Job::STATUS_SUCCEEDED;
-        $job->exit_code = 0;
-        $job->execution_command = 'e2e-artifact-job';
-        $job->timeout_minutes = 120;
-        $job->has_changes = 0;
-        $job->queued_at = time() - 60;
-        $job->started_at = time() - 30;
-        $job->finished_at = time();
-        $job->created_at = time();
-        $job->updated_at = time();
-        $job->save(false);
-
-        // Create artifact files on disk (world-readable so www-data can serve them)
-        $storagePath = \Yii::getAlias('@runtime/artifacts') . '/job_' . $job->id;
-        if (!is_dir($storagePath)) {
-            mkdir($storagePath, 0755, true);
-        }
-
-        // Text artifact (previewable)
-        $textFile = $storagePath . '/report.txt';
-        file_put_contents($textFile, "E2E Artifact Report\nStatus: OK\nTimestamp: " . date('c'));
-        $a1 = new JobArtifact();
-        $a1->job_id = $job->id;
-        $a1->filename = 'report.txt';
-        $a1->display_name = 'report.txt';
-        $a1->mime_type = 'text/plain';
-        $a1->size_bytes = (int)filesize($textFile);
-        $a1->storage_path = $textFile;
-        $a1->created_at = time();
-        $a1->save(false);
-
-        // JSON artifact (previewable)
-        $jsonFile = $storagePath . '/results.json';
-        file_put_contents($jsonFile, '{"status":"ok","tests_passed":42,"tests_failed":0}');
-        $a2 = new JobArtifact();
-        $a2->job_id = $job->id;
-        $a2->filename = 'results.json';
-        $a2->display_name = 'results.json';
-        $a2->mime_type = 'application/json';
-        $a2->size_bytes = (int)filesize($jsonFile);
-        $a2->storage_path = $jsonFile;
-        $a2->created_at = time();
-        $a2->save(false);
-
-        $this->stdout("  Created job #{$job->id} with 2 artifacts.\n");
+        $seeder = new E2eArtifactSeeder(function (string $msg): void {
+            $this->stdout($msg);
+        });
+        $seeder->seed($userId, $templateId);
     }
 
     private function createTeardownHelper(): E2eTeardownHelper

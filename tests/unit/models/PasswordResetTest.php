@@ -110,6 +110,33 @@ class PasswordResetTest extends TestCase
         new PasswordResetForm("abc_{$expired}");
     }
 
+    // ── LDAP defenses ────────────────────────────────────────────────────────
+
+    public function testRequestFormSilentlySkipsLdapUser(): void
+    {
+        // Create a real DB-backed LDAP user to verify the form does not even
+        // generate or save a token. The form returns true unconditionally to
+        // avoid email enumeration, so success here means "no observable side
+        // effect" — i.e. password_reset_token must remain null afterwards.
+        $user = new User();
+        $user->username = 'pwreset-ldap-' . uniqid('', true);
+        $user->email = $user->username . '@example.com';
+        $user->markAsLdapManaged();
+        $user->generateAuthKey();
+        $user->status = User::STATUS_ACTIVE;
+        $user->created_at = time();
+        $user->updated_at = time();
+        $user->save(false);
+
+        $form = new PasswordResetRequestForm();
+        $form->email = $user->email;
+        $this->assertTrue($form->sendResetEmail(), 'Must return true to stay enumeration-safe.');
+
+        $refreshed = User::findOne($user->id);
+        $this->assertNotNull($refreshed);
+        $this->assertNull($refreshed->password_reset_token, 'No token must be issued for LDAP users.');
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private function createUserStub(): User

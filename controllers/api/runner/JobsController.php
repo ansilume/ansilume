@@ -152,6 +152,16 @@ class JobsController extends BaseRunnerApiController
         if ((int)$job->runner_id !== $this->runner()->id) {
             throw new \yii\web\ForbiddenHttpException('This job belongs to a different runner.');
         }
+
+        // Liveness signal for stale-job reclaim. Bumping here makes every
+        // runner-side write (log chunk, complete, tasks) double as a per-job
+        // heartbeat, so an idle but healthy runner is never confused with a
+        // dead one. Use updateAll() — we only need the column write, not a
+        // full ActiveRecord save with TimestampBehavior side-effects.
+        $now = time();
+        Job::updateAll(['last_progress_at' => $now], ['id' => $job->id]);
+        $job->last_progress_at = $now;
+
         return $job;
     }
 
