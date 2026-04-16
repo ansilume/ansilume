@@ -597,4 +597,88 @@ class ArtifactServiceTest extends DbTestCase
         $this->assertFalse($service->isInlineFrameType('image/svg+xml'));
         $this->assertFalse($service->isInlineFrameType('application/octet-stream'));
     }
+
+    // -------------------------------------------------------------------------
+    // Tests: deleteByJobCount
+    // -------------------------------------------------------------------------
+
+    public function testDeleteByJobCountKeepsNewestN(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+
+        $service = $this->makeService();
+        $jobIds = [];
+        for ($i = 0; $i < 5; $i++) {
+            $job = $this->createJob($template->id, $user->id);
+            $jobIds[] = $job->id;
+            $dir = $this->tempDir . '/src' . $i;
+            mkdir($dir, 0750, true);
+            file_put_contents($dir . '/a.txt', 'x');
+            $service->collectFromDirectory($job, $dir);
+            // Space artifact timestamps so the order is deterministic.
+            $artifact = JobArtifact::find()->where(['job_id' => $job->id])->one();
+            $artifact->created_at = 1_000_000 + $i;
+            $artifact->save(false);
+        }
+
+        $service->maxJobsWithArtifacts = 2;
+        $deleted = $service->deleteByJobCount();
+
+        // 3 jobs should be trimmed (we kept the 2 newest).
+        $this->assertSame(3, $deleted);
+        $this->assertCount(0, JobArtifact::find()->where(['job_id' => $jobIds[0]])->all());
+        $this->assertCount(0, JobArtifact::find()->where(['job_id' => $jobIds[1]])->all());
+        $this->assertCount(0, JobArtifact::find()->where(['job_id' => $jobIds[2]])->all());
+        $this->assertCount(1, JobArtifact::find()->where(['job_id' => $jobIds[3]])->all());
+        $this->assertCount(1, JobArtifact::find()->where(['job_id' => $jobIds[4]])->all());
+
+        // Audit: exactly one entry per trimmed job with reason=job_count.
+        $logs = AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_ARTIFACT_QUOTA_TRIMMED])
+            ->all();
+        $this->assertCount(3, $logs);
+        foreach ($logs as $log) {
+            $meta = json_decode((string)$log->metadata, true);
+            $this->assertSame('job_count', $meta['reason']);
+            $this->assertArrayHasKey('job_id', $meta);
+            $this->assertArrayHasKey('artifact_count', $meta);
+            $this->assertArrayHasKey('bytes_freed', $meta);
+        }
+    }
+
+    public function testDeleteByJobCountReturnsZeroWhenDisabled(): void
+    {
+        $service = $this->makeService();
+        $service->maxJobsWithArtifacts = 0;
+        $this->assertSame(0, $service->deleteByJobCount());
+    }
+
+    public function testDeleteByJobCountIgnoresJobsWithoutArtifacts(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+
+        // One job with artifact, two jobs without.
+        $jobWith = $this->createJob($template->id, $user->id);
+        $this->createJob($template->id, $user->id);
+        $this->createJob($template->id, $user->id);
+
+        $dir = $this->tempDir . '/src';
+        mkdir($dir, 0750, true);
+        file_put_contents($dir . '/a.txt', 'x');
+
+        $service = $this->makeService();
+        $service->collectFromDirectory($jobWith, $dir);
+        $service->maxJobsWithArtifacts = 1;
+
+        $this->assertSame(0, $service->deleteByJobCount());
+        $this->assertCount(1, JobArtifact::find()->where(['job_id' => $jobWith->id])->all());
+    }
 }

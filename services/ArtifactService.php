@@ -317,8 +317,27 @@ class ArtifactService extends Component
      */
     public function deleteExpiredArtifacts(): int
     {
-        return (new ArtifactCleanupService($this->storagePath, $this->retentionDays))
-            ->deleteExpiredArtifacts();
+        return (new ArtifactCleanupService(
+            $this->storagePath,
+            $this->retentionDays,
+            $this->maxJobsWithArtifacts,
+            $this->maxTotalBytes,
+        ))->deleteExpiredArtifacts();
+    }
+
+    /**
+     * Trim artifacts for all but the most-recent N jobs with artifacts.
+     *
+     * @return int Number of artifacts deleted.
+     */
+    public function deleteByJobCount(): int
+    {
+        return (new ArtifactCleanupService(
+            $this->storagePath,
+            $this->retentionDays,
+            $this->maxJobsWithArtifacts,
+            $this->maxTotalBytes,
+        ))->deleteByJobCount();
     }
 
     /**
@@ -328,7 +347,12 @@ class ArtifactService extends Component
      */
     public function cleanupOrphans(): int
     {
-        return (new ArtifactCleanupService($this->storagePath))->cleanupOrphans();
+        return (new ArtifactCleanupService(
+            $this->storagePath,
+            $this->retentionDays,
+            $this->maxJobsWithArtifacts,
+            $this->maxTotalBytes,
+        ))->cleanupOrphans();
     }
 
     /**

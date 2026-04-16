@@ -20,6 +20,8 @@ class ArtifactCleanupService
     public function __construct(
         private string $storagePath,
         private int $retentionDays = 0,
+        private int $maxJobsWithArtifacts = 0,
+        private int $maxTotalBytes = 0,
     ) {
     }
 
@@ -150,6 +152,91 @@ class ArtifactCleanupService
             [
                 'storage_path' => $filePath,
                 'size_bytes' => $size,
+            ]
+        );
+    }
+
+    /**
+     * Delete artifacts for all but the most-recent N jobs with artifacts.
+     *
+     * "Most recent" uses MAX(created_at) per job — matching the semantics
+     * of the retention-days sweep. Emits one audit entry per trimmed job.
+     */
+    public function deleteByJobCount(): int
+    {
+        if ($this->maxJobsWithArtifacts <= 0) {
+            return 0;
+        }
+
+        $jobIds = $this->findJobIdsBeyondCountLimit();
+        $count = 0;
+        foreach ($jobIds as $jobId) {
+            $count += $this->deleteJobArtifacts($jobId, 'job_count');
+        }
+
+        $this->removeEmptyJobDirs();
+        return $count;
+    }
+
+    /**
+     * @return list<int> Job IDs whose artifacts should be trimmed by the
+     *                   count-retention rule. Newest-first DESC, skip N.
+     */
+    private function findJobIdsBeyondCountLimit(): array
+    {
+        $rows = (new \yii\db\Query())
+            ->select(['job_id', 'newest' => 'MAX(created_at)'])
+            ->from(JobArtifact::tableName())
+            ->groupBy('job_id')
+            ->orderBy(['newest' => SORT_DESC])
+            ->offset($this->maxJobsWithArtifacts)
+            ->all();
+
+        return array_map(static fn ($r) => (int)$r['job_id'], $rows);
+    }
+
+    /**
+     * Delete every artifact row + file belonging to a single job and emit
+     * one audit entry summarising the trim.
+     *
+     * @return int Number of artifacts removed for this job.
+     */
+    private function deleteJobArtifacts(int $jobId, string $reason): int
+    {
+        $artifacts = JobArtifact::find()->where(['job_id' => $jobId])->all();
+        if (empty($artifacts)) {
+            return 0;
+        }
+
+        $bytesFreed = 0;
+        foreach ($artifacts as $artifact) {
+            $bytesFreed += (int)$artifact->size_bytes;
+            \app\helpers\FileHelper::safeUnlink($artifact->storage_path);
+            $artifact->delete();
+        }
+
+        $this->auditQuotaTrim($jobId, count($artifacts), $bytesFreed, $reason);
+        return count($artifacts);
+    }
+
+    /**
+     * Emit an audit entry for a whole-job trim. One entry per job, not per file.
+     */
+    private function auditQuotaTrim(int $jobId, int $artifactCount, int $bytesFreed, string $reason): void
+    {
+        if (!\Yii::$app->has('auditService')) {
+            return;
+        }
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_ARTIFACT_QUOTA_TRIMMED,
+            'job',
+            $jobId,
+            null,
+            [
+                'job_id' => $jobId,
+                'artifact_count' => $artifactCount,
+                'bytes_freed' => $bytesFreed,
+                'reason' => $reason,
             ]
         );
     }
