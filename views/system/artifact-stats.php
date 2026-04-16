@@ -8,6 +8,7 @@ declare(strict_types=1);
 /** @var int $retentionDays */
 /** @var int $maxFileSize */
 /** @var int $maxArtifactsPerJob */
+/** @var int $maxJobsWithArtifacts */
 /** @var int $maxBytesPerJob */
 /** @var int $maxTotalBytes */
 
@@ -85,6 +86,10 @@ $humanBytes = static function (int $bytes): string {
                 <tr>
                     <th class="ps-3">Max artifacts per job</th>
                     <td><?= number_format($maxArtifactsPerJob) ?></td>
+                </tr>
+                <tr>
+                    <th class="ps-3">Max jobs with artifacts</th>
+                    <td><?= $maxJobsWithArtifacts === 0 ? '<em>unlimited</em>' : number_format($maxJobsWithArtifacts) ?></td>
                 </tr>
                 <tr>
                     <th class="ps-3">Max bytes per job</th>

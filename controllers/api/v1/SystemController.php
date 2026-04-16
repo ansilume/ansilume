@@ -39,6 +39,7 @@ class SystemController extends BaseApiController
                 'retention_days' => $svc->retentionDays,
                 'max_file_size' => $svc->maxFileSize,
                 'max_artifacts_per_job' => $svc->maxArtifactsPerJob,
+                'max_jobs_with_artifacts' => $svc->maxJobsWithArtifacts,
                 'max_bytes_per_job' => $svc->maxBytesPerJob,
                 'max_total_bytes' => $svc->maxTotalBytes,
             ],

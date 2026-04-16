@@ -49,6 +49,7 @@ class SystemControllerActionTest extends WebControllerTestCase
         $service->retentionDays = $retention;
         $service->maxFileSize = 100000;
         $service->maxArtifactsPerJob = 7;
+        $service->maxJobsWithArtifacts = 5;
         $service->maxBytesPerJob = 200000;
         $service->maxTotalBytes = 1000000;
         return $service;
@@ -84,6 +85,7 @@ class SystemControllerActionTest extends WebControllerTestCase
         $this->assertSame(30, $ctrl->capturedParams['retentionDays']);
         $this->assertSame(100000, $ctrl->capturedParams['maxFileSize']);
         $this->assertSame(7, $ctrl->capturedParams['maxArtifactsPerJob']);
+        $this->assertSame(5, $ctrl->capturedParams['maxJobsWithArtifacts']);
         $this->assertSame(200000, $ctrl->capturedParams['maxBytesPerJob']);
         $this->assertSame(1000000, $ctrl->capturedParams['maxTotalBytes']);
     }

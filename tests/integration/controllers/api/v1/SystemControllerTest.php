@@ -57,6 +57,7 @@ class SystemControllerTest extends WebControllerTestCase
         $service->retentionDays = 7;
         $service->maxFileSize = 12345;
         $service->maxArtifactsPerJob = 9;
+        $service->maxJobsWithArtifacts = 3;
         $service->maxBytesPerJob = 67890;
         $service->maxTotalBytes = 0;
         return $service;
@@ -107,6 +108,7 @@ class SystemControllerTest extends WebControllerTestCase
         $this->assertSame(7, $data['config']['retention_days']);
         $this->assertSame(12345, $data['config']['max_file_size']);
         $this->assertSame(9, $data['config']['max_artifacts_per_job']);
+        $this->assertSame(3, $data['config']['max_jobs_with_artifacts']);
         $this->assertSame(67890, $data['config']['max_bytes_per_job']);
         $this->assertSame(0, $data['config']['max_total_bytes']);
     }

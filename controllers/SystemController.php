@@ -35,6 +35,7 @@ class SystemController extends BaseController
             'retentionDays' => $svc->retentionDays,
             'maxFileSize' => $svc->maxFileSize,
             'maxArtifactsPerJob' => $svc->maxArtifactsPerJob,
+            'maxJobsWithArtifacts' => $svc->maxJobsWithArtifacts,
             'maxBytesPerJob' => $svc->maxBytesPerJob,
             'maxTotalBytes' => $svc->maxTotalBytes,
         ]);
