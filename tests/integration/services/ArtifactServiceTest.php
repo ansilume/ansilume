@@ -581,4 +581,20 @@ class ArtifactServiceTest extends DbTestCase
         $this->assertCount(1, $a1, 'first job fits inside global quota');
         $this->assertCount(0, $a2, 'second job is rejected because global quota is exhausted');
     }
+
+    public function testIsInlineFrameTypeReturnsTrueForPdf(): void
+    {
+        $service = $this->makeService();
+        $this->assertTrue($service->isInlineFrameType('application/pdf'));
+    }
+
+    public function testIsInlineFrameTypeReturnsFalseForOtherTypes(): void
+    {
+        $service = $this->makeService();
+        $this->assertFalse($service->isInlineFrameType('text/plain'));
+        $this->assertFalse($service->isInlineFrameType('application/json'));
+        $this->assertFalse($service->isInlineFrameType('image/png'));
+        $this->assertFalse($service->isInlineFrameType('image/svg+xml'));
+        $this->assertFalse($service->isInlineFrameType('application/octet-stream'));
+    }
 }

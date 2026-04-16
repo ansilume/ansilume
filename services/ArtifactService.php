@@ -63,6 +63,17 @@ class ArtifactService extends Component
     ];
 
     /**
+     * MIME types that can be embedded in a sandboxed <iframe> for inline
+     * preview. PDF is the only supported type — modern browsers render it
+     * natively in a sandboxed frame without script execution.
+     *
+     * @var string[]
+     */
+    private const INLINE_FRAME_TYPES = [
+        'application/pdf',
+    ];
+
+    /**
      * Collect artifacts from a directory produced by an Ansible run.
      *
      * Scans $sourceDir for files and stores them as JobArtifact records.
@@ -388,6 +399,15 @@ class ArtifactService extends Component
     public function isImageType(string $mimeType): bool
     {
         return in_array($mimeType, self::IMAGE_TYPES, true);
+    }
+
+    /**
+     * Check whether a MIME type can be embedded in a sandboxed <iframe>.
+     * Currently only PDF — served via ?inline=1 with sandbox CSP.
+     */
+    public function isInlineFrameType(string $mimeType): bool
+    {
+        return in_array($mimeType, self::INLINE_FRAME_TYPES, true);
     }
 
     /**
