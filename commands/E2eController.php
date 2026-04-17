@@ -99,7 +99,15 @@ class E2eController extends Controller
         foreach ($users as $data) {
             $existing = User::find()->where(['username' => $data['username']])->one();
             if ($existing !== null) {
-                $this->stdout("  User '{$data['username']}' already exists (ID {$existing->id}).\n");
+                // Re-assert the role assignment. Prior partial seeds or
+                // manual DB edits can leave an existing user without any
+                // role — in that state the web UI would hide the Launch
+                // button (and other permission-gated controls) and the
+                // e2e suite would fail in hard-to-diagnose ways. Make the
+                // seeder truly idempotent by ensuring the role exists on
+                // every run.
+                $this->ensureRoleAssigned($auth, $existing->id, $data['role']);
+                $this->stdout("  User '{$data['username']}' already exists (ID {$existing->id}, role: {$data['role']}).\n");
                 if ($data['role'] === 'admin') {
                     $adminId = $existing->id;
                 }
@@ -120,10 +128,7 @@ class E2eController extends Controller
                 return null;
             }
 
-            $role = $auth->getRole($data['role']);
-            if ($role !== null) {
-                $auth->assign($role, $user->id);
-            }
+            $this->ensureRoleAssigned($auth, $user->id, $data['role']);
 
             $this->stdout("  Created user '{$data['username']}' (ID {$user->id}, role: {$data['role']}).\n");
 
@@ -133,6 +138,22 @@ class E2eController extends Controller
         }
 
         return $adminId;
+    }
+
+    /**
+     * Ensure a named role is assigned to the given user. Safe to call on
+     * every seed run — no-op when the assignment already exists.
+     */
+    private function ensureRoleAssigned(\yii\rbac\ManagerInterface $auth, int $userId, string $roleName): void
+    {
+        $role = $auth->getRole($roleName);
+        if ($role === null) {
+            return;
+        }
+        $assigned = $auth->getAssignment($roleName, $userId);
+        if ($assigned === null) {
+            $auth->assign($role, $userId);
+        }
     }
 
     private function seedData(int $userId): void

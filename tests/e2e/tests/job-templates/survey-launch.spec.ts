@@ -1,12 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-// TODO(e2e-tranche1): Survey launch hits a session/RBAC edge case that
-// intermittently either (a) redirects the admin to /login on POST
-// /job-template/launch, or (b) renders the template view page without the
-// Launch button (admin `can('job.launch')` returning false). Skipped until
-// investigated — the seeder (E2eSurveyTemplateSeeder) and fixtures are in
-// place so a follow-up spec can enable these without re-seeding.
-test.describe.skip('Job Template Survey Launch', () => {
+test.describe('Job Template Survey Launch', () => {
   async function gotoSurveyTemplate(page: import('@playwright/test').Page): Promise<boolean> {
     await page.goto('/job-template/index');
     const row = page.locator('table.table tbody tr').filter({
@@ -52,8 +46,9 @@ test.describe.skip('Job Template Survey Launch', () => {
     await dryRun.check();
     await logLevel.selectOption('debug');
 
-    // Full-page form submission — not an AJAX modal.
-    const submit = page.locator('form button[type="submit"], form input[type="submit"]').first();
+    // Scope the submit to #launch-form — a generic `form button[type="submit"]`
+    // would match the layout's logout form first and POST to /logout instead.
+    const submit = page.locator('#launch-form button[type="submit"]');
     await submit.click();
 
     // Should land on the new job's view page.
@@ -74,7 +69,7 @@ test.describe.skip('Job Template Survey Launch', () => {
     await expect(targetEnv).toBeVisible({ timeout: 5_000 });
     await targetEnv.fill('');
 
-    const submit = page.locator('form button[type="submit"], form input[type="submit"]').first();
+    const submit = page.locator('#launch-form button[type="submit"]');
     await submit.click();
 
     // Either the HTML5 required attribute blocks submission (URL stays on
