@@ -137,6 +137,15 @@ class E2eController extends Controller
 
     private function seedData(int $userId): void
     {
+        // Wipe UI-created runners from previous Playwright runs — they carry
+        // the 'e2e-ui-' prefix set by runners/create-token.spec.ts.
+        // Using raw SQL because Yii's deleteAll LIKE escaping varies by driver
+        // and the literal trailing-wildcard pattern is clearer this way.
+        \Yii::$app->db->createCommand(
+            'DELETE FROM runner WHERE name LIKE :p',
+            [':p' => 'e2e-ui-%']
+        )->execute();
+
         $runnerGroupId = $this->seedRunnerGroup($userId);
         $this->seedSecondRunnerGroup($userId);
         $projectId = $this->seedProject($userId);
