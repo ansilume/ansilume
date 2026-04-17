@@ -153,6 +153,7 @@ class E2eController extends Controller
         $this->seedTeam($userId, $projectId);
         $this->seedJobWithArtifacts($userId, $templateId);
         $this->seedLogStreamFixtures($userId, $templateId);
+        $this->seedPausedWorkflow($userId, $templateId);
         $seeder = new E2eTeamScopingSeeder(function (string $msg): void {
             $this->stdout($msg);
         });
@@ -570,6 +571,14 @@ class E2eController extends Controller
     private function seedLogStreamFixtures(int $userId, int $templateId): void
     {
         $seeder = new E2eLogStreamSeeder(function (string $msg): void {
+            $this->stdout($msg);
+        });
+        $seeder->seed($userId, $templateId);
+    }
+
+    private function seedPausedWorkflow(int $userId, int $templateId): void
+    {
+        $seeder = new E2eWorkflowPausedSeeder(function (string $msg): void {
             $this->stdout($msg);
         });
         $seeder->seed($userId, $templateId);
