@@ -19,6 +19,16 @@ test.describe('Disabled User Login', () => {
     await page.locator(LOGIN_SUBMIT).click();
     await page.waitForURL(/\/(site\/index)?$/, { timeout: 10_000 }).catch(() => page.waitForURL('**/', { timeout: 5_000 }));
 
+    // Helper: toggle a user's status by submitting the form on their view
+    // page (includes CSRF automatically; raw page.request.post would 400).
+    const toggleViaForm = async (userId: string) => {
+      await page.goto(`/user/view?id=${userId}`);
+      page.once('dialog', (d) => d.accept().catch(() => {}));
+      const toggleForm = page.locator('form[action*="toggle-status"]').first();
+      await toggleForm.locator('button[type="submit"]').click();
+      await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+    };
+
     // Step 2: find viewer's id from the user index.
     await page.goto('/user/index');
     const row = page.locator('table.table tbody tr').filter({ hasText: 'e2e-viewer' }).first();
@@ -35,17 +45,15 @@ test.describe('Disabled User Login', () => {
     }
     const viewerId = match[1];
 
-    // Step 3: disable the viewer.
-    const toggleResponse = await page.request.post(`/user/toggle-status?id=${viewerId}`, { data: {} });
-    expect([200, 302]).toContain(toggleResponse.status());
+    // Step 3: disable the viewer via the UI form (CSRF-safe).
+    await toggleViaForm(viewerId);
 
     try {
-      // Step 4: log out admin.
-      await page.request.post('/site/logout', { data: {} }).catch(() => {});
-      // Clear any remaining admin cookies by re-visiting login.
-      await page.goto('/site/login');
+      // Step 4: drop admin session by clearing cookies (no logout POST needed).
+      await page.context().clearCookies();
 
       // Step 5: attempt login as viewer. Should FAIL.
+      await page.goto('/site/login');
       await page.locator(LOGIN_USERNAME).fill('e2e-viewer');
       await page.locator(LOGIN_PASSWORD).fill('E2eViewerPass1!');
       await page.locator(LOGIN_SUBMIT).click();
@@ -53,7 +61,6 @@ test.describe('Disabled User Login', () => {
 
       // Assert: still on login page (or re-rendered), not the dashboard.
       expect(page.url()).toMatch(/\/login|\/site\/login/);
-      // Error message should mention invalid credentials (Yii's default).
       await expect(page.locator('body')).toContainText(/incorrect|invalid|wrong/i);
     } finally {
       // Step 6 (finally): re-login as admin and re-enable viewer.
@@ -62,8 +69,7 @@ test.describe('Disabled User Login', () => {
       await page.locator(LOGIN_PASSWORD).fill('E2eAdminPass1!');
       await page.locator(LOGIN_SUBMIT).click();
       await page.waitForURL(/\/(site\/index)?$/, { timeout: 10_000 }).catch(() => page.waitForURL('**/', { timeout: 5_000 }).catch(() => {}));
-      // Toggle viewer back to active.
-      await page.request.post(`/user/toggle-status?id=${viewerId}`, { data: {} });
+      await toggleViaForm(viewerId);
     }
   });
 });

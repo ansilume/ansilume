@@ -20,7 +20,9 @@ test.describe('Audit Log Filters', () => {
 
   test('filter by non-matching action yields empty table', async ({ page }) => {
     await page.goto('/audit-log/index?action=nonexistent.action.xyzzy');
-    const count = await page.locator('table.table tbody tr').count();
-    expect(count).toBe(0);
+    // The empty-state renders "No entries found." inside a single <tr>,
+    // so row-count would be 1 (the message row). Assert the empty message
+    // appears instead of counting rows.
+    await expect(page.locator('table.table tbody')).toContainText(/no entries|no records|no data/i);
   });
 });

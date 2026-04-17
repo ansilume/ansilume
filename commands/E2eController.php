@@ -158,14 +158,8 @@ class E2eController extends Controller
 
     private function seedData(int $userId): void
     {
-        // Wipe UI-created runners from previous Playwright runs — they carry
-        // the 'e2e-ui-' prefix set by runners/create-token.spec.ts.
-        // Using raw SQL because Yii's deleteAll LIKE escaping varies by driver
-        // and the literal trailing-wildcard pattern is clearer this way.
-        \Yii::$app->db->createCommand(
-            'DELETE FROM runner WHERE name LIKE :p',
-            [':p' => 'e2e-ui-%']
-        )->execute();
+        // Wipe e2e-ui-* runners from prior Playwright runs (runners/create-token.spec.ts).
+        \Yii::$app->db->createCommand('DELETE FROM runner WHERE name LIKE :p', [':p' => 'e2e-ui-%'])->execute();
 
         $runnerGroupId = $this->seedRunnerGroup($userId);
         $this->seedSecondRunnerGroup($userId);
@@ -182,77 +176,13 @@ class E2eController extends Controller
         $this->seedApprovalWorkflow($userId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
         $this->seedJobWithArtifacts($userId, $templateId);
-        $this->seedLogStreamFixtures($userId, $templateId);
-        $this->seedPausedWorkflow($userId, $templateId);
-        $this->seedSurveyTemplate($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
-        $seeder = new E2eTeamScopingSeeder(function (string $msg): void {
-            $this->stdout($msg);
-        });
-        $seeder->seed($userId, $runnerGroupId);
-        $this->seedCustomRole();
-        $this->seedLdapUser();
-    }
-
-    /**
-     * Seed a directory-managed user so the UI can render the LDAP badge,
-     * the locked edit form, and the "managed externally" notice on the
-     * profile page without needing a real LDAP server in CI.
-     */
-    private function seedLdapUser(): void
-    {
-        $username = self::PREFIX . 'ldap-user';
-        $existing = User::find()->where(['username' => $username])->one();
-        if ($existing !== null) {
-            $this->stdout("  LDAP user '{$username}' already exists (ID {$existing->id}).\n");
-            return;
-        }
-
-        $user = new User();
-        $user->username = $username;
-        $user->email = $username . '@example.com';
-        $user->status = User::STATUS_ACTIVE;
-        $user->is_superadmin = false;
-        $user->markAsLdapManaged();
-        $user->ldap_dn = 'uid=' . $username . ',dc=e2e,dc=test';
-        $user->ldap_uid = 'guid-e2e-ldap';
-        $user->last_synced_at = time();
-        $user->generateAuthKey();
-        if (!$user->save()) {
-            $this->stderr("  Failed to create LDAP user: " . json_encode($user->errors) . "\n");
-            return;
-        }
-
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-        $role = $auth->getRole('viewer');
-        if ($role !== null) {
-            $auth->assign($role, $user->id);
-        }
-
-        $this->stdout("  Created LDAP user '{$username}' (ID {$user->id}).\n");
-    }
-
-    private function seedCustomRole(): void
-    {
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-        $name = self::PREFIX . 'custom-role';
-        if ($auth->getRole($name) !== null) {
-            $this->stdout("  Custom role '{$name}' already exists.\n");
-            return;
-        }
-
-        $role = $auth->createRole($name);
-        $role->description = 'E2E custom role';
-        $auth->add($role);
-
-        foreach (['project.view', 'job.view', 'analytics.view'] as $permName) {
-            $perm = $auth->getPermission($permName);
-            if ($perm !== null) {
-                $auth->addChild($role, $perm);
-            }
-        }
-        $this->stdout("  Created custom role '{$name}'.\n");
+        $logger = fn (string $msg) => $this->stdout($msg);
+        (new E2eLogStreamSeeder($logger))->seed($userId, $templateId);
+        (new E2eWorkflowPausedSeeder($logger))->seed($userId, $templateId);
+        (new E2eSurveyTemplateSeeder($logger))->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
+        (new E2eTeamScopingSeeder($logger))->seed($userId, $runnerGroupId);
+        (new E2eCustomRoleSeeder($logger))->seed(self::PREFIX);
+        (new E2eLdapUserSeeder($logger))->seed(self::PREFIX);
     }
 
     private function seedRunnerGroup(int $userId): int
@@ -597,35 +527,6 @@ class E2eController extends Controller
             $this->stdout($msg);
         });
         $seeder->seed($userId, $templateId);
-    }
-
-    private function seedLogStreamFixtures(int $userId, int $templateId): void
-    {
-        $seeder = new E2eLogStreamSeeder(function (string $msg): void {
-            $this->stdout($msg);
-        });
-        $seeder->seed($userId, $templateId);
-    }
-
-    private function seedPausedWorkflow(int $userId, int $templateId): void
-    {
-        $seeder = new E2eWorkflowPausedSeeder(function (string $msg): void {
-            $this->stdout($msg);
-        });
-        $seeder->seed($userId, $templateId);
-    }
-
-    private function seedSurveyTemplate(
-        int $userId,
-        int $projectId,
-        int $inventoryId,
-        int $credentialId,
-        int $runnerGroupId
-    ): void {
-        $seeder = new E2eSurveyTemplateSeeder(function (string $msg): void {
-            $this->stdout($msg);
-        });
-        $seeder->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
     }
 
     private function createTeardownHelper(): E2eTeardownHelper
