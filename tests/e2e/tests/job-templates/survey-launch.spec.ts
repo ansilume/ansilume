@@ -32,8 +32,10 @@ test.describe('Job Template Survey Launch', () => {
 
     // Survey fields use name="survey[<fieldname>]" (Yii form helper convention).
     // The [name*="target_env"] attribute selector matches that pattern.
+    // Boolean fields render as a hidden "0" input plus a visible checkbox
+    // that share the same name, so we must exclude type="hidden" for dry_run.
     const targetEnv = page.locator('[name*="target_env"]').first();
-    const dryRun = page.locator('[name*="dry_run"]').first();
+    const dryRun = page.locator('input[name*="dry_run"][type="checkbox"]');
     const logLevel = page.locator('[name*="log_level"]').first();
 
     await expect(targetEnv).toBeVisible({ timeout: 5_000 });
