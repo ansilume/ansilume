@@ -33,4 +33,9 @@ test.describe('Roles RBAC', () => {
     await page.goto('/role/update/viewer');
     await expectForbidden(page);
   });
+
+  test('operator gets 403 on role update URL', async ({ page }) => {
+    await page.goto('/role/update?name=admin');
+    await expectForbidden(page);
+  });
 });
