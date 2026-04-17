@@ -154,6 +154,7 @@ class E2eController extends Controller
         $this->seedJobWithArtifacts($userId, $templateId);
         $this->seedLogStreamFixtures($userId, $templateId);
         $this->seedPausedWorkflow($userId, $templateId);
+        $this->seedSurveyTemplate($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
         $seeder = new E2eTeamScopingSeeder(function (string $msg): void {
             $this->stdout($msg);
         });
@@ -582,6 +583,19 @@ class E2eController extends Controller
             $this->stdout($msg);
         });
         $seeder->seed($userId, $templateId);
+    }
+
+    private function seedSurveyTemplate(
+        int $userId,
+        int $projectId,
+        int $inventoryId,
+        int $credentialId,
+        int $runnerGroupId
+    ): void {
+        $seeder = new E2eSurveyTemplateSeeder(function (string $msg): void {
+            $this->stdout($msg);
+        });
+        $seeder->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
     }
 
     private function createTeardownHelper(): E2eTeardownHelper
