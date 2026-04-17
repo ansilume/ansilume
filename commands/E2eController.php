@@ -176,7 +176,9 @@ class E2eController extends Controller
         $this->seedApprovalWorkflow($userId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
         $this->seedJobWithArtifacts($userId, $templateId);
-        $logger = fn (string $msg) => $this->stdout($msg);
+        $logger = function (string $msg): void {
+            $this->stdout($msg);
+        };
         (new E2eLogStreamSeeder($logger))->seed($userId, $templateId);
         (new E2eWorkflowPausedSeeder($logger))->seed($userId, $templateId);
         (new E2eSurveyTemplateSeeder($logger))->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);

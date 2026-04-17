@@ -38,8 +38,8 @@ class PasswordResetRequestFormTest extends DbTestCase
         ]));
 
         // Swap the mailer with a test double so send() returns true without
-        // touching SMTP. Avoid calling has() + get() because the default
-        // swiftmailer class may not be installed; snapshot via getComponents().
+        // touching SMTP. Snapshot via getComponents() so we can restore the
+        // original configuration in tearDown.
         $this->originalMailer = $components['mailer'] ?? null;
         \Yii::$app->set('mailer', new class extends \yii\base\Component implements \yii\mail\MailerInterface {
             public int $sendCount = 0;

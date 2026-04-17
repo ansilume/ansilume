@@ -99,7 +99,7 @@ return [
             'class' => 'app\services\ldap\LdapUserProvisioner',
         ],
         'mailer' => [
-            'class' => 'yii\swiftmailer\SwiftMailer',
+            'class' => 'yii\symfonymailer\Mailer',
             'useFileTransport' => true,
         ],
     ],

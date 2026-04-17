@@ -36,16 +36,15 @@ return [
             'class' => 'yii\rbac\DbManager',
         ],
         'mailer' => [
-            'class' => 'yii\swiftmailer\SwiftMailer',
+            'class' => 'yii\symfonymailer\Mailer',
             'viewPath' => '@app/mail',
             'htmlLayout' => '@app/mail/layouts/html',
             'textLayout' => '@app/mail/layouts/text',
             'useFileTransport' => empty($_ENV['SMTP_HOST']),
             'transport' => empty($_ENV['SMTP_HOST']) ? [] : array_filter([
-                'class' => 'Swift_SmtpTransport',
+                'scheme' => ($_ENV['SMTP_ENCRYPTION'] ?? '') === 'ssl' ? 'smtps' : 'smtp',
                 'host' => $_ENV['SMTP_HOST'],
                 'port' => (int)($_ENV['SMTP_PORT'] ?? 587),
-                'encryption' => $_ENV['SMTP_ENCRYPTION'] ?: null,
                 'username' => $_ENV['SMTP_USER'] ?: null,
                 'password' => $_ENV['SMTP_PASSWORD'] ?: null,
             ]),
