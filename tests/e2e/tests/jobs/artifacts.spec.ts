@@ -172,4 +172,32 @@ test.describe('Job Artifacts', () => {
     await expect(frame).toHaveAttribute('sandbox', '');
     await expect(frame).toHaveAttribute('src', /\/job\/\d+\/artifact\/\d+.*inline=1/);
   });
+
+  test('download-all returns a valid ZIP archive', async ({ page }) => {
+    const found = await goToJobWithArtifacts(page);
+    if (!found) {
+      test.skip(true, 'No job with artifacts found');
+      return;
+    }
+    const downloadAllLink = page.locator('a:has-text("Download All")');
+    if (!(await downloadAllLink.isVisible({ timeout: 2_000 }).catch(() => false))) {
+      test.skip(true, 'Download-all button not visible');
+      return;
+    }
+    const href = await downloadAllLink.getAttribute('href');
+    if (!href) {
+      test.skip(true, 'Download-all link has no href');
+      return;
+    }
+
+    const response = await page.request.get(href);
+    expect(response.status()).toBe(200);
+    expect(response.headers()['content-type'] ?? '').toMatch(/zip/i);
+    const bytes = await response.body();
+    // ZIP local file header signature is "PK\x03\x04".
+    expect(bytes[0]).toBe(0x50); // P
+    expect(bytes[1]).toBe(0x4b); // K
+    expect(bytes[2]).toBe(0x03);
+    expect(bytes[3]).toBe(0x04);
+  });
 });
