@@ -376,8 +376,13 @@ Do not run tests after every task — only when the user says **"PUSH IT"**.
 
 When the user says "PUSH IT", follow this exact sequence:
 
-1. **Run all test suites in parallel via subagents** — dispatch one Agent (subagent_type=general-purpose) per `bin/tests-*.sh` script (excluding `bin/tests-common.sh`) in a single message. Each agent runs its suite, captures the result, and reports back a concise pass/fail summary plus failure details if any. This keeps the noisy multi-megabyte test output out of the main context window. Never use `--fast`.
-2. **All suites must pass.** Zero errors, zero warnings. If any suite fails, fix the issue and re-run the failing suite(s) until clean.
+1. **Always run every test suite as a subagent — never as a background `Bash` command.** Dispatch one `Agent` call (subagent_type=general-purpose) per `bin/tests-*.sh` script (excluding `bin/tests-common.sh`) in a single message so they run in parallel. Each agent runs its suite, captures the output, and reports back a concise pass/fail summary plus any failure detail. This keeps multi-megabyte test output out of the main context window.
+
+   **Never** shortcut this by calling `./bin/tests-*.sh` via `Bash(run_in_background=true)` — the output still piles into context, and multiple failed suites produce enough noise to destabilise the session. If a single suite must be re-run mid-debug (e.g. after a targeted fix), that one re-run via Bash is fine, but the full-suite runs that gate a release are agents-only.
+
+   Never use `--fast`.
+
+2. **All suites must pass.** Zero errors, zero warnings. If any suite fails, fix the issue and re-run the failing suite(s) (again as a subagent) until clean.
 3. **Commit** all changes.
 4. **Ask the user**: plain commit (no release) or a release? If release, ask: `PATCH`, `MINOR`, or `MAJOR`?
    - **Plain commit**: just `git push`.
