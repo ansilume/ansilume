@@ -92,6 +92,20 @@ $isEdit = !$model->isNewRecord;
             <label class="form-label">Token <?= $isEdit ? '<span class="text-muted small">(leave blank to keep existing)</span>' : '' ?></label>
             <input type="password" name="secrets[token]" class="form-control" autocomplete="new-password">
         </div>
+        <?= $form->field($model, 'env_var_name', ['options' => ['class' => 'mb-3']])
+                ->textInput([
+                    'maxlength' => 128,
+                    'autocomplete' => 'off',
+                    'placeholder' => \app\models\Credential::DEFAULT_TOKEN_ENV_VAR,
+                ])
+                ->label('Environment variable name')
+                ->hint(
+                    'Name of the env var exposed to the playbook at runtime. '
+                    . 'Leave blank to default to <code>' . \app\models\Credential::DEFAULT_TOKEN_ENV_VAR . '</code>. '
+                    . 'Only upper-case letters, digits, and underscores; must start with a letter or underscore. '
+                    . 'Required when attaching more than one token credential to the same template '
+                    . '(otherwise they would all collide on the default name).'
+                ) ?>
     </div>
 
     <div class="mt-3">

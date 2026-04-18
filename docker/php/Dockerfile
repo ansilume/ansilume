@@ -19,6 +19,14 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && pip3 install --break-system-packages ansible-lint
 
+# Pre-install Ansible collections that Ansilume playbooks commonly
+# rely on (community.general provides lookups like `onepassword` and
+# `hashi_vault`; ansible.posix covers the core `posix.*` modules).
+RUN ansible-galaxy collection install --force --ignore-certs \
+        community.general \
+        ansible.posix \
+        community.crypto
+
 RUN docker-php-ext-install \
     pdo_mysql \
     mbstring \

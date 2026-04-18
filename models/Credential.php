@@ -12,6 +12,7 @@ use yii\db\ActiveRecord;
  * @property string|null $description
  * @property string      $credential_type
  * @property string|null $username
+ * @property string|null $env_var_name  Optional env var name for TYPE_TOKEN injection.
  * @property string|null $secret_data   Encrypted JSON — never expose raw
  * @property int         $created_by
  * @property int         $created_at
@@ -25,6 +26,9 @@ class Credential extends ActiveRecord
     public const TYPE_USERNAME_PASSWORD = 'username_password';
     public const TYPE_VAULT = 'vault';
     public const TYPE_TOKEN = 'token';
+
+    /** Default env var name for a TYPE_TOKEN credential when none is configured. */
+    public const DEFAULT_TOKEN_ENV_VAR = 'ANSILUME_CREDENTIAL_TOKEN';
 
     public static function tableName(): string
     {
@@ -49,8 +53,21 @@ class Credential extends ActiveRecord
                 self::TYPE_TOKEN,
             ]],
             [['username'], 'string', 'max' => 128],
+            [['env_var_name'], 'string', 'max' => 128],
+            [['env_var_name'], 'match', 'pattern' => '/^[A-Z_][A-Z0-9_]*$/', 'message' =>
+                'Env var name must use upper-case letters, digits, and underscores only, and start with a letter or underscore.'],
             [['created_by'], 'integer'],
         ];
+    }
+
+    /**
+     * Resolve the runtime env var name for TYPE_TOKEN credentials.
+     * Returns the configured name when set, otherwise the historical default.
+     */
+    public function resolveTokenEnvVarName(): string
+    {
+        $name = trim((string)($this->env_var_name ?? ''));
+        return $name !== '' ? $name : self::DEFAULT_TOKEN_ENV_VAR;
     }
 
     public function getCreator(): \yii\db\ActiveQuery

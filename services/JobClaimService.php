@@ -120,6 +120,7 @@ class JobClaimService extends Component
             'check_mode' => !empty($raw['check_mode']),
             'timeout_minutes' => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
             'credential' => $this->resolveCredential($raw),
+            'credentials' => $this->resolveCredentials($raw),
         ];
 
         $builder = new RunnerCommandBuilder();
@@ -142,12 +143,51 @@ class JobClaimService extends Component
     }
 
     /**
+     * Resolve the primary credential only — kept as a convenience for code
+     * paths that still expect a single-credential shape.
+     *
      * @param array<string, mixed> $payload
-     * @return array{credential_type: string, username: string|null, secrets: array<string, string>}|null
+     * @return array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null
      */
     protected function resolveCredential(array $payload): ?array
     {
-        $credentialId = (int)($payload['credential_id'] ?? 0);
+        return $this->resolveCredentialById((int)($payload['credential_id'] ?? 0));
+    }
+
+    /**
+     * Resolve every credential attached to the template (primary FK plus
+     * pivot rows). Returns an ordered list whose elements match the
+     * {@see \app\components\CredentialInjector::injectAll()} contract.
+     *
+     * @param array<string, mixed> $payload
+     * @return list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>
+     */
+    protected function resolveCredentials(array $payload): array
+    {
+        /** @var list<int> $ids */
+        $ids = array_values(array_map('intval', (array)($payload['credential_ids'] ?? [])));
+        if ($ids === []) {
+            $primary = (int)($payload['credential_id'] ?? 0);
+            if ($primary !== 0) {
+                $ids[] = $primary;
+            }
+        }
+
+        $out = [];
+        foreach ($ids as $id) {
+            $resolved = $this->resolveCredentialById($id);
+            if ($resolved !== null) {
+                $out[] = $resolved;
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @return array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null
+     */
+    private function resolveCredentialById(int $credentialId): ?array
+    {
         if ($credentialId === 0) {
             return null;
         }
@@ -174,6 +214,7 @@ class JobClaimService extends Component
         return [
             'credential_type' => $credential->credential_type,
             'username' => $credential->username,
+            'env_var_name' => $credential->env_var_name,
             'secrets' => $secrets,
         ];
     }

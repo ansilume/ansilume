@@ -293,4 +293,154 @@ class CredentialInjectorTest extends TestCase
         CredentialInjector::cleanup(['/tmp/nonexistent_ansilume_test_file']);
         $this->assertTrue(true);
     }
+
+    // ── Token env_var_name ──────────────────────────────────────────────
+
+    public function testTokenUsesCustomEnvVarName(): void
+    {
+        $result = $this->injector->inject([
+            'credential_type' => Credential::TYPE_TOKEN,
+            'username' => null,
+            'env_var_name' => 'OP_SERVICE_ACCOUNT_TOKEN',
+            'secrets' => ['token' => 'op-token-xyz'],
+        ]);
+
+        $this->assertSame('op-token-xyz', $result->env['OP_SERVICE_ACCOUNT_TOKEN']);
+        $this->assertArrayNotHasKey('ANSILUME_CREDENTIAL_TOKEN', $result->env);
+    }
+
+    public function testTokenFallsBackToDefaultEnvVarWhenNameBlank(): void
+    {
+        $result = $this->injector->inject([
+            'credential_type' => Credential::TYPE_TOKEN,
+            'username' => null,
+            'env_var_name' => '   ',
+            'secrets' => ['token' => 'legacy'],
+        ]);
+
+        $this->assertSame('legacy', $result->env[Credential::DEFAULT_TOKEN_ENV_VAR]);
+    }
+
+    // ── injectAll (multi-credential) ────────────────────────────────────
+
+    public function testInjectAllEmptyReturnsEmpty(): void
+    {
+        $result = $this->injector->injectAll([]);
+
+        $this->assertSame([], $result->args);
+        $this->assertSame([], $result->env);
+        $this->assertSame([], $result->tempFiles);
+    }
+
+    public function testInjectAllMergesTwoTokens(): void
+    {
+        $result = $this->injector->injectAll([
+            [
+                'credential_type' => Credential::TYPE_TOKEN,
+                'username' => null,
+                'env_var_name' => 'OP_TOKEN',
+                'secrets' => ['token' => 'op-xyz'],
+            ],
+            [
+                'credential_type' => Credential::TYPE_TOKEN,
+                'username' => null,
+                'env_var_name' => 'HCLOUD_TOKEN',
+                'secrets' => ['token' => 'hc-abc'],
+            ],
+        ]);
+
+        $this->assertSame('op-xyz', $result->env['OP_TOKEN']);
+        $this->assertSame('hc-abc', $result->env['HCLOUD_TOKEN']);
+        $this->assertSame([], $result->args);
+    }
+
+    public function testInjectAllFirstWinsOnDuplicateEnvName(): void
+    {
+        $result = $this->injector->injectAll([
+            [
+                'credential_type' => Credential::TYPE_TOKEN,
+                'username' => null,
+                'env_var_name' => 'TOKEN',
+                'secrets' => ['token' => 'first'],
+            ],
+            [
+                'credential_type' => Credential::TYPE_TOKEN,
+                'username' => null,
+                'env_var_name' => 'TOKEN',
+                'secrets' => ['token' => 'second'],
+            ],
+        ]);
+
+        $this->assertSame('first', $result->env['TOKEN']);
+    }
+
+    public function testInjectAllFirstWinsOnUserFlag(): void
+    {
+        $result = $this->injector->injectAll([
+            [
+                'credential_type' => Credential::TYPE_SSH_KEY,
+                'username' => 'deploy',
+                'secrets' => ['private_key' => 'key-1'],
+            ],
+            [
+                'credential_type' => Credential::TYPE_SSH_KEY,
+                'username' => 'other',
+                'secrets' => ['private_key' => 'key-2'],
+            ],
+        ]);
+
+        // First SSH key wins on --user and --private-key. Second is dropped.
+        $this->assertContains('--user', $result->args);
+        $this->assertContains('deploy', $result->args);
+        $this->assertNotContains('other', $result->args);
+        $this->assertCount(2, $result->tempFiles, 'Both key files are written; only the duplicate args are suppressed.');
+        CredentialInjector::cleanup($result->tempFiles);
+    }
+
+    public function testInjectAllMixesSshWithTokens(): void
+    {
+        $result = $this->injector->injectAll([
+            [
+                'credential_type' => Credential::TYPE_SSH_KEY,
+                'username' => 'deploy',
+                'secrets' => ['private_key' => 'primary-key'],
+            ],
+            [
+                'credential_type' => Credential::TYPE_TOKEN,
+                'username' => null,
+                'env_var_name' => 'OP_TOKEN',
+                'secrets' => ['token' => 'op-xyz'],
+            ],
+            [
+                'credential_type' => Credential::TYPE_TOKEN,
+                'username' => null,
+                'env_var_name' => 'HCLOUD_TOKEN',
+                'secrets' => ['token' => 'hc-abc'],
+            ],
+        ]);
+
+        // Single SSH key → --user + --private-key.
+        $this->assertContains('--user', $result->args);
+        $this->assertContains('deploy', $result->args);
+        $this->assertContains('--private-key', $result->args);
+        // Both tokens exposed as env vars.
+        $this->assertSame('op-xyz', $result->env['OP_TOKEN']);
+        $this->assertSame('hc-abc', $result->env['HCLOUD_TOKEN']);
+        CredentialInjector::cleanup($result->tempFiles);
+    }
+
+    public function testInjectAllSkipsCredentialWithEmptyType(): void
+    {
+        $result = $this->injector->injectAll([
+            ['credential_type' => '', 'username' => null, 'secrets' => []],
+            [
+                'credential_type' => Credential::TYPE_TOKEN,
+                'username' => null,
+                'env_var_name' => 'ONLY_TOKEN',
+                'secrets' => ['token' => 'x'],
+            ],
+        ]);
+
+        $this->assertSame(['ONLY_TOKEN' => 'x'], $result->env);
+    }
 }

@@ -57,8 +57,42 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
             <?= $form->field($model, 'credential_id')->dropDownList(
                 ArrayHelper::map($credentials, 'id', 'name'),
                 ['prompt' => '— None —']
-            ) ?>
+            )->hint('Primary credential (e.g. SSH key). Used for <code>--user</code> / <code>--private-key</code> when connecting to target hosts.') ?>
         </div>
+    </div>
+
+    <?php
+    $selectedExtraIds = array_map(
+        static fn ($c) => (int)$c->id,
+        array_filter($model->credentials, static fn ($c) => (int)$c->id !== (int)$model->credential_id)
+    );
+    $extraCredentials = array_filter($credentials, static fn ($c) => (int)$c->id !== (int)$model->credential_id);
+    ?>
+    <div class="mb-3">
+        <label class="form-label">Additional credentials</label>
+        <?php if (empty($extraCredentials)) : ?>
+            <div class="form-text">Create more credentials to attach tokens, API keys, vault passwords, or extra secrets to this template.</div>
+        <?php else : ?>
+            <div class="border rounded p-2" style="max-height:200px;overflow-y:auto">
+                <?php foreach ($extraCredentials as $c) : ?>
+                    <?php $checked = in_array((int)$c->id, $selectedExtraIds, true); ?>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox"
+                               name="credential_ids[]" value="<?= (int)$c->id ?>"
+                               id="cred-extra-<?= (int)$c->id ?>"
+                               <?= $checked ? 'checked' : '' ?>>
+                        <label class="form-check-label" for="cred-extra-<?= (int)$c->id ?>">
+                            <?= Html::encode($c->name) ?>
+                            <span class="text-muted small">— <?= Html::encode(\app\models\Credential::typeLabel($c->credential_type)) ?></span>
+                        </label>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+            <div class="form-text">
+                Tokens are injected as environment variables (see the credential's <em>Env var name</em>).
+                Vault and SSH credentials can only claim one Ansible slot (<code>--user</code>, <code>--vault-password-file</code>); the primary credential above wins if multiple are selected.
+            </div>
+        <?php endif; ?>
     </div>
 
     <?= $form->field($model, 'extra_vars')->textarea([

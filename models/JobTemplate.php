@@ -40,6 +40,8 @@ use yii\db\ActiveRecord;
  * @property Project     $project
  * @property Inventory   $inventory
  * @property Credential|null $credential
+ * @property Credential[] $credentials
+ * @property JobTemplateCredential[] $jobTemplateCredentials
  * @property RunnerGroup|null $runnerGroup
  * @property ApprovalRule|null $approvalRule
  * @property User        $creator
@@ -142,6 +144,30 @@ class JobTemplate extends ActiveRecord
     public function getCredential(): \yii\db\ActiveQuery
     {
         return $this->hasOne(Credential::class, ['id' => 'credential_id']);
+    }
+
+    /**
+     * All credentials linked to this template via the pivot table,
+     * ordered by sort_order (so single-slot ansible args like --user or
+     * --private-key resolve to the lowest-order credential first).
+     */
+    public function getCredentials(): \yii\db\ActiveQuery
+    {
+        return $this->hasMany(Credential::class, ['id' => 'credential_id'])
+            ->viaTable('{{%job_template_credential}}', ['job_template_id' => 'id'], function ($q) {
+                /** @var \yii\db\ActiveQuery $q */
+                $q->orderBy(['sort_order' => SORT_ASC, 'credential_id' => SORT_ASC]);
+            })
+            ->orderBy(['{{%credential}}.id' => SORT_ASC]);
+    }
+
+    /**
+     * Pivot rows (for sort_order access during form rendering).
+     */
+    public function getJobTemplateCredentials(): \yii\db\ActiveQuery
+    {
+        return $this->hasMany(JobTemplateCredential::class, ['job_template_id' => 'id'])
+            ->orderBy(['sort_order' => SORT_ASC, 'credential_id' => SORT_ASC]);
     }
 
     public function getRunnerGroup(): \yii\db\ActiveQuery

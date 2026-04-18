@@ -141,9 +141,14 @@ class RunAnsibleJob extends BaseObject implements JobInterface
         }
 
         $credentialInjector = $this->createCredentialInjector();
-        /** @var array{credential_type: string, username: string|null, secrets: array<string, string>}|null $credData */
-        $credData = $payload['credential'];
-        $injection = $credentialInjector->inject($credData);
+        /** @var list<array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}> $credDataList */
+        $credDataList = $payload['credentials'] ?? [];
+        if ($credDataList === [] && !empty($payload['credential'])) {
+            // Fallback for in-flight payloads produced before the
+            // multi-credential migration — wrap the single credential.
+            $credDataList = [$payload['credential']];
+        }
+        $injection = $credentialInjector->injectAll($credDataList);
         $cmd = array_merge($cmd, $injection->args);
         $env = array_merge($env, $injection->env);
 

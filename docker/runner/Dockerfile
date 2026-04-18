@@ -34,6 +34,16 @@ RUN apt-get update && apt-get install -y \
 # Only the extensions the runner actually needs
 RUN docker-php-ext-install pcntl zip
 
+# Pre-install Ansible collections that Ansilume playbooks commonly
+# rely on. community.general carries the `onepassword` / `hashi_vault`
+# lookups, posix the `ansible.posix.*` modules — pulling them into the
+# image means operators don't have to bake their own runner just to use
+# a 1Password service-account token in an extra_var.
+RUN ansible-galaxy collection install --force --ignore-certs \
+        community.general \
+        ansible.posix \
+        community.crypto
+
 # Application source
 WORKDIR /var/www
 COPY . /var/www/

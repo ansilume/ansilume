@@ -92,6 +92,7 @@ class JobTemplateController extends BaseController
             $this->requireChildOperate($model->project_id);
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($model->save()) {
+                $this->syncCredentialPivot($model);
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_CREATED, 'job_template', $model->id, null, ['name' => $model->name]);
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
@@ -108,6 +109,7 @@ class JobTemplateController extends BaseController
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
         if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
+            $this->syncCredentialPivot($model);
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_UPDATED, 'job_template', $model->id, null, ['name' => $model->name]);
             /** @var \app\services\LintService $lintService */
             $lintService = \Yii::$app->get('lintService');
@@ -116,6 +118,43 @@ class JobTemplateController extends BaseController
             return $this->redirect(['view', 'id' => $model->id]);
         }
         return $this->render('form', $this->formData($model));
+    }
+
+    /**
+     * Reconcile the job_template_credential pivot against the submitted
+     * form state. The primary credential_id is stored first (sort_order
+     * 0), then any checked extras in stable order.
+     */
+    private function syncCredentialPivot(JobTemplate $model): void
+    {
+        /** @var array<int, mixed> $rawExtras */
+        $rawExtras = (array)\Yii::$app->request->post('credential_ids', []);
+        $extras = [];
+        foreach ($rawExtras as $id) {
+            $id = (int)$id;
+            if ($id > 0 && $id !== (int)$model->credential_id) {
+                $extras[] = $id;
+            }
+        }
+
+        $db = \Yii::$app->db;
+        $db->createCommand()->delete('{{%job_template_credential}}', ['job_template_id' => $model->id])->execute();
+
+        $sort = 0;
+        if ((int)$model->credential_id > 0) {
+            $db->createCommand()->insert('{{%job_template_credential}}', [
+                'job_template_id' => $model->id,
+                'credential_id' => (int)$model->credential_id,
+                'sort_order' => $sort++,
+            ])->execute();
+        }
+        foreach (array_unique($extras) as $extraId) {
+            $db->createCommand()->insert('{{%job_template_credential}}', [
+                'job_template_id' => $model->id,
+                'credential_id' => $extraId,
+                'sort_order' => $sort++,
+            ])->execute();
+        }
     }
 
     public function actionDelete(int $id): Response
