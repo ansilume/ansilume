@@ -289,6 +289,25 @@ merge_env() {
     local env_file="${INSTALL_DIR}/.env"
     local added=0
 
+    # Special case: COMPOSE_PROFILES. Added in the db-profile-gating patch.
+    # Existing installs must get a value that matches their historical
+    # setup — "internal-db" when they were running the containerized db,
+    # empty when they pointed DB_HOST at an external host (so a re-
+    # downloaded compose.yml with the newly profile-gated db service
+    # doesn't spin up an unwanted local MariaDB).
+    if ! grep -q "^COMPOSE_PROFILES=" "$env_file" 2>/dev/null; then
+        local existing_db_host
+        existing_db_host=$(grep "^DB_HOST=" "$env_file" | head -1 | cut -d= -f2- || true)
+        if [ "$existing_db_host" = "db" ] || [ -z "$existing_db_host" ]; then
+            echo "COMPOSE_PROFILES=internal-db" >> "$env_file"
+            ok "Added new config variable: COMPOSE_PROFILES=internal-db"
+        else
+            echo "COMPOSE_PROFILES=" >> "$env_file"
+            ok "Added new config variable: COMPOSE_PROFILES= (external DB detected)"
+        fi
+        added=$((added + 1))
+    fi
+
     # Known variables with safe defaults for new additions.
     # Only variables that have been added in newer versions need to be here.
     # Core variables (DB_HOST, NGINX_PORT, etc.) are always present from initial install.
@@ -304,11 +323,6 @@ LDAP_ENABLED=false
 JOB_PROGRESS_TIMEOUT=600
 JOB_RECLAIM_MODE=fail
 JOB_QUEUE_TIMEOUT=1800"
-
-    if [ -z "$NEW_VARS" ]; then
-        ok ".env is up to date"
-        return
-    fi
 
     while IFS='=' read -r var val; do
         [ -z "$var" ] && continue
@@ -558,6 +572,9 @@ if [ "$DB_MODE" = "2" ]; then
     ask "Database user"          "ansilume" DB_USER
     ask_secret "Database password"          DB_PASSWORD
     DB_ROOT_PASSWORD=""
+    # Disable the `internal-db` profile so `docker compose up` does not
+    # spawn a local MariaDB alongside the external one.
+    COMPOSE_PROFILES=""
     ok "External database: ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 else
     DB_HOST="db"
@@ -566,6 +583,7 @@ else
     DB_USER="ansilume"
     DB_PASSWORD="$(gen_secret | head -c 32)"
     DB_ROOT_PASSWORD="$(gen_secret | head -c 32)"
+    COMPOSE_PROFILES="internal-db"
     ok "MariaDB container will be created (credentials auto-generated)"
 fi
 
@@ -651,6 +669,11 @@ DB_NAME=${DB_NAME}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
 DB_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+
+# Docker Compose profiles. "internal-db" activates the containerized
+# MariaDB; empty disables it so an external database (DB_HOST above)
+# is used instead.
+COMPOSE_PROFILES=${COMPOSE_PROFILES}
 
 REDIS_HOST=redis
 REDIS_PORT=6379

@@ -17,6 +17,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
     healthcheck:
@@ -50,6 +51,11 @@ services:
       - ansilume
 
   db:
+    # Gated behind the "internal-db" profile so operators running against
+    # an external MariaDB/MySQL can leave COMPOSE_PROFILES empty in .env
+    # and this container never starts. The default .env sets
+    # COMPOSE_PROFILES=internal-db, matching the out-of-the-box path.
+    profiles: ["internal-db"]
     image: mariadb:10.11
     container_name: ansilume_db
     restart: unless-stopped
@@ -90,6 +96,9 @@ services:
       - ansilume
 
   adminer:
+    # Only makes sense with the containerized db — gate behind the same
+    # profile so external-DB operators don't get an orphan adminer UI.
+    profiles: ["internal-db"]
     image: adminer:4-standalone
     container_name: ansilume_adminer
     restart: unless-stopped
@@ -150,6 +159,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
     healthcheck:
@@ -184,6 +194,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       redis:
         condition: service_healthy
     healthcheck:
