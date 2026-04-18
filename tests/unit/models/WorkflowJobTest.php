@@ -41,22 +41,48 @@ class WorkflowJobTest extends TestCase
         $this->assertFalse($model->isFinished());
     }
 
-    public function testStatusLabelReturnsStringForAll(): void
+    /** @return array<int, array{0: string, 1: string}> */
+    public static function statusLabelData(): array
     {
-        foreach (WorkflowJob::statuses() as $status) {
-            $label = WorkflowJob::statusLabel($status);
-            $this->assertIsString($label);
-            $this->assertNotEmpty($label);
-        }
+        return [
+            [WorkflowJob::STATUS_RUNNING, 'Running'],
+            [WorkflowJob::STATUS_SUCCEEDED, 'Succeeded'],
+            [WorkflowJob::STATUS_FAILED, 'Failed'],
+            [WorkflowJob::STATUS_CANCELED, 'Canceled'],
+        ];
     }
 
-    public function testStatusCssClassReturnsStringForAll(): void
+    /** @dataProvider statusLabelData */
+    public function testStatusLabelMapsToHumanText(string $status, string $expected): void
     {
-        foreach (WorkflowJob::statuses() as $status) {
-            $class = WorkflowJob::statusCssClass($status);
-            $this->assertIsString($class);
-            $this->assertNotEmpty($class);
-        }
+        $this->assertSame($expected, WorkflowJob::statusLabel($status));
+    }
+
+    public function testStatusLabelFallsBackToInputForUnknownStatus(): void
+    {
+        $this->assertSame('weird', WorkflowJob::statusLabel('weird'));
+    }
+
+    /** @return array<int, array{0: string, 1: string}> */
+    public static function statusCssClassData(): array
+    {
+        return [
+            [WorkflowJob::STATUS_RUNNING, 'primary'],
+            [WorkflowJob::STATUS_SUCCEEDED, 'success'],
+            [WorkflowJob::STATUS_FAILED, 'danger'],
+            [WorkflowJob::STATUS_CANCELED, 'warning'],
+        ];
+    }
+
+    /** @dataProvider statusCssClassData */
+    public function testStatusCssClassMapsToExpectedBadge(string $status, string $expected): void
+    {
+        $this->assertSame($expected, WorkflowJob::statusCssClass($status));
+    }
+
+    public function testStatusCssClassFallsBackToSecondaryForUnknownStatus(): void
+    {
+        $this->assertSame('secondary', WorkflowJob::statusCssClass('weird'));
     }
 
     private function makeModel(string $status): WorkflowJob

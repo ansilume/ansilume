@@ -40,47 +40,38 @@ class CredentialTest extends TestCase
     }
 
     // ── sensitiveFields ───────────────────────────────────────────────────────
+    //
+    // The exact list is used by CredentialService::redact() to strip secrets
+    // from audit/log output — drift here is a real leak risk, so pin the
+    // full set rather than only the names we happen to remember.
 
-    public function testSensitiveFieldsIsNonEmptyArray(): void
+    public function testSensitiveFieldsHasTheExactKnownSet(): void
     {
-        $fields = Credential::sensitiveFields();
-        $this->assertIsArray($fields);
-        $this->assertNotEmpty($fields);
+        $this->assertSame(
+            ['secret_data', 'password', 'private_key', 'token', 'vault_password'],
+            Credential::sensitiveFields()
+        );
     }
 
-    public function testSensitiveFieldsContainsSecretData(): void
+    // ── resolveTokenEnvVarName ────────────────────────────────────────────────
+
+    public function testResolveTokenEnvVarNameUsesConfiguredName(): void
     {
-        $this->assertContains('secret_data', Credential::sensitiveFields());
+        $c = new Credential();
+        $c->env_var_name = 'OP_TOKEN';
+        $this->assertSame('OP_TOKEN', $c->resolveTokenEnvVarName());
     }
 
-    public function testSensitiveFieldsContainsPrivateKey(): void
+    public function testResolveTokenEnvVarNameFallsBackWhenBlank(): void
     {
-        $this->assertContains('private_key', Credential::sensitiveFields());
+        $c = new Credential();
+        $c->env_var_name = '   ';
+        $this->assertSame(Credential::DEFAULT_TOKEN_ENV_VAR, $c->resolveTokenEnvVarName());
     }
 
-    public function testSensitiveFieldsContainsToken(): void
+    public function testResolveTokenEnvVarNameFallsBackWhenNull(): void
     {
-        $this->assertContains('token', Credential::sensitiveFields());
-    }
-
-    // ── constants ─────────────────────────────────────────────────────────────
-
-    public function testConstantsAreStrings(): void
-    {
-        $this->assertIsString(Credential::TYPE_SSH_KEY);
-        $this->assertIsString(Credential::TYPE_USERNAME_PASSWORD);
-        $this->assertIsString(Credential::TYPE_VAULT);
-        $this->assertIsString(Credential::TYPE_TOKEN);
-    }
-
-    public function testConstantsAreUnique(): void
-    {
-        $types = [
-            Credential::TYPE_SSH_KEY,
-            Credential::TYPE_USERNAME_PASSWORD,
-            Credential::TYPE_VAULT,
-            Credential::TYPE_TOKEN,
-        ];
-        $this->assertSame(count($types), count(array_unique($types)));
+        $c = new Credential();
+        $this->assertSame(Credential::DEFAULT_TOKEN_ENV_VAR, $c->resolveTokenEnvVarName());
     }
 }

@@ -31,14 +31,16 @@ class CredentialInjectionResultTest extends TestCase
         $this->assertSame([], $result->tempFiles);
     }
 
-    public function testPropertiesAreReadonly(): void
+    public function testPropertiesActuallyRefuseMutation(): void
     {
-        $result = new CredentialInjectionResult(['--user', 'deploy'], [], []);
+        $result = new CredentialInjectionResult(['--user', 'deploy'], ['FOO' => 'bar'], ['/tmp/x']);
 
-        // Verify the object is immutable by confirming readonly properties exist
-        $ref = new \ReflectionClass($result);
-        $this->assertTrue($ref->getProperty('args')->isReadOnly());
-        $this->assertTrue($ref->getProperty('env')->isReadOnly());
-        $this->assertTrue($ref->getProperty('tempFiles')->isReadOnly());
+        // Readonly is a language feature — assert the runtime behaviour
+        // rather than re-verifying the reflection metadata. Any attempt
+        // to rewrite a readonly property throws at runtime.
+        $this->expectException(\Error::class);
+        $this->expectExceptionMessage('Cannot modify readonly property');
+        /** @phpstan-ignore-next-line */
+        $result->args = ['mutated'];
     }
 }

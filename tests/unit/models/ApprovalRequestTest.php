@@ -50,22 +50,48 @@ class ApprovalRequestTest extends TestCase
         $this->assertTrue($request->isResolved());
     }
 
-    public function testStatusLabelReturnsStringForAll(): void
+    /** @return array<int, array{0: string, 1: string}> */
+    public static function statusLabelData(): array
     {
-        foreach (ApprovalRequest::statuses() as $status) {
-            $label = ApprovalRequest::statusLabel($status);
-            $this->assertIsString($label);
-            $this->assertNotEmpty($label);
-        }
+        return [
+            [ApprovalRequest::STATUS_PENDING, 'Pending'],
+            [ApprovalRequest::STATUS_APPROVED, 'Approved'],
+            [ApprovalRequest::STATUS_REJECTED, 'Rejected'],
+            [ApprovalRequest::STATUS_TIMED_OUT, 'Timed Out'],
+        ];
     }
 
-    public function testStatusCssClassReturnsStringForAll(): void
+    /** @dataProvider statusLabelData */
+    public function testStatusLabelMapsToHumanText(string $status, string $expected): void
     {
-        foreach (ApprovalRequest::statuses() as $status) {
-            $class = ApprovalRequest::statusCssClass($status);
-            $this->assertIsString($class);
-            $this->assertNotEmpty($class);
-        }
+        $this->assertSame($expected, ApprovalRequest::statusLabel($status));
+    }
+
+    public function testStatusLabelFallsBackToInputForUnknownStatus(): void
+    {
+        $this->assertSame('weird', ApprovalRequest::statusLabel('weird'));
+    }
+
+    /** @return array<int, array{0: string, 1: string}> */
+    public static function statusCssClassData(): array
+    {
+        return [
+            [ApprovalRequest::STATUS_PENDING, 'warning'],
+            [ApprovalRequest::STATUS_APPROVED, 'success'],
+            [ApprovalRequest::STATUS_REJECTED, 'danger'],
+            [ApprovalRequest::STATUS_TIMED_OUT, 'secondary'],
+        ];
+    }
+
+    /** @dataProvider statusCssClassData */
+    public function testStatusCssClassMapsToExpectedBadge(string $status, string $expected): void
+    {
+        $this->assertSame($expected, ApprovalRequest::statusCssClass($status));
+    }
+
+    public function testStatusCssClassFallsBackToSecondaryForUnknownStatus(): void
+    {
+        $this->assertSame('secondary', ApprovalRequest::statusCssClass('weird'));
     }
 
     private function makeRequest(string $status): ApprovalRequest

@@ -58,22 +58,65 @@ class JobTest extends TestCase
         }
     }
 
-    public function testStatusLabelReturnsString(): void
+    /**
+     * Lock the status → human label map so typo changes fail loudly.
+     * @return array<int, array{0: string, 1: string}>
+     */
+    public static function statusLabelData(): array
     {
-        foreach (Job::statuses() as $status) {
-            $label = Job::statusLabel($status);
-            $this->assertIsString($label);
-            $this->assertNotEmpty($label);
-        }
+        return [
+            [Job::STATUS_PENDING, 'Pending'],
+            [Job::STATUS_QUEUED, 'Queued'],
+            [Job::STATUS_RUNNING, 'Running'],
+            [Job::STATUS_SUCCEEDED, 'Succeeded'],
+            [Job::STATUS_FAILED, 'Failed'],
+            [Job::STATUS_CANCELED, 'Canceled'],
+            [Job::STATUS_TIMED_OUT, 'Timed Out'],
+            [Job::STATUS_PENDING_APPROVAL, 'Awaiting Approval'],
+            [Job::STATUS_REJECTED, 'Rejected'],
+        ];
     }
 
-    public function testStatusCssClassReturnsString(): void
+    /** @dataProvider statusLabelData */
+    public function testStatusLabelMapsToHumanText(string $status, string $expected): void
     {
-        foreach (Job::statuses() as $status) {
-            $class = Job::statusCssClass($status);
-            $this->assertIsString($class);
-            $this->assertNotEmpty($class);
-        }
+        $this->assertSame($expected, Job::statusLabel($status));
+    }
+
+    public function testStatusLabelFallsBackToInputForUnknownStatus(): void
+    {
+        $this->assertSame('wat', Job::statusLabel('wat'));
+    }
+
+    /**
+     * Lock the status → Bootstrap badge class map. Same statuses can
+     * intentionally share a class; assert the concrete value.
+     * @return array<int, array{0: string, 1: string}>
+     */
+    public static function statusCssClassData(): array
+    {
+        return [
+            [Job::STATUS_PENDING, 'secondary'],
+            [Job::STATUS_QUEUED, 'secondary'],
+            [Job::STATUS_RUNNING, 'primary'],
+            [Job::STATUS_SUCCEEDED, 'success'],
+            [Job::STATUS_FAILED, 'danger'],
+            [Job::STATUS_CANCELED, 'warning'],
+            [Job::STATUS_TIMED_OUT, 'danger'],
+            [Job::STATUS_PENDING_APPROVAL, 'info'],
+            [Job::STATUS_REJECTED, 'danger'],
+        ];
+    }
+
+    /** @dataProvider statusCssClassData */
+    public function testStatusCssClassMapsToExpectedBadge(string $status, string $expected): void
+    {
+        $this->assertSame($expected, Job::statusCssClass($status));
+    }
+
+    public function testStatusCssClassFallsBackToSecondaryForUnknownStatus(): void
+    {
+        $this->assertSame('secondary', Job::statusCssClass('weird'));
     }
 
     private function makeJob(string $status): Job

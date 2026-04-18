@@ -43,31 +43,17 @@ class JobTaskTest extends TestCase
         $this->assertSame('secondary', JobTask::statusCssClass('something_else'));
     }
 
-    public function testStatusConstantsAreUnique(): void
+    /**
+     * Ansible callback records write these exact strings into the
+     * `status` column; pin the values so the constants can't drift
+     * away from the callback plugin without the test noticing.
+     */
+    public function testStatusConstantsMatchCallbackStrings(): void
     {
-        $statuses = [
-            JobTask::STATUS_OK,
-            JobTask::STATUS_CHANGED,
-            JobTask::STATUS_FAILED,
-            JobTask::STATUS_SKIPPED,
-            JobTask::STATUS_UNREACHABLE,
-        ];
-        $this->assertSame(count($statuses), count(array_unique($statuses)));
-    }
-
-    public function testStatusConstantsAreStrings(): void
-    {
-        foreach (
-            [
-            JobTask::STATUS_OK,
-            JobTask::STATUS_CHANGED,
-            JobTask::STATUS_FAILED,
-            JobTask::STATUS_SKIPPED,
-            JobTask::STATUS_UNREACHABLE,
-            ] as $status
-        ) {
-            $this->assertIsString($status);
-            $this->assertNotEmpty($status);
-        }
+        $this->assertSame('ok', JobTask::STATUS_OK);
+        $this->assertSame('changed', JobTask::STATUS_CHANGED);
+        $this->assertSame('failed', JobTask::STATUS_FAILED);
+        $this->assertSame('skipped', JobTask::STATUS_SKIPPED);
+        $this->assertSame('unreachable', JobTask::STATUS_UNREACHABLE);
     }
 }

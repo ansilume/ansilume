@@ -54,22 +54,50 @@ class WorkflowJobStepTest extends TestCase
         $this->assertSame(['hosts' => 'web1'], $model->getParsedOutputVars());
     }
 
-    public function testStatusLabelReturnsStringForAll(): void
+    /** @return array<int, array{0: string, 1: string}> */
+    public static function statusLabelData(): array
     {
-        foreach (['pending', 'running', 'succeeded', 'failed', 'skipped'] as $status) {
-            $label = WorkflowJobStep::statusLabel($status);
-            $this->assertIsString($label);
-            $this->assertNotEmpty($label);
-        }
+        return [
+            [WorkflowJobStep::STATUS_PENDING, 'Pending'],
+            [WorkflowJobStep::STATUS_RUNNING, 'Running'],
+            [WorkflowJobStep::STATUS_SUCCEEDED, 'Succeeded'],
+            [WorkflowJobStep::STATUS_FAILED, 'Failed'],
+            [WorkflowJobStep::STATUS_SKIPPED, 'Skipped'],
+        ];
     }
 
-    public function testStatusCssClassReturnsStringForAll(): void
+    /** @dataProvider statusLabelData */
+    public function testStatusLabelMapsToHumanText(string $status, string $expected): void
     {
-        foreach (['pending', 'running', 'succeeded', 'failed', 'skipped'] as $status) {
-            $class = WorkflowJobStep::statusCssClass($status);
-            $this->assertIsString($class);
-            $this->assertNotEmpty($class);
-        }
+        $this->assertSame($expected, WorkflowJobStep::statusLabel($status));
+    }
+
+    public function testStatusLabelFallsBackToInputForUnknownStatus(): void
+    {
+        $this->assertSame('weird', WorkflowJobStep::statusLabel('weird'));
+    }
+
+    /** @return array<int, array{0: string, 1: string}> */
+    public static function statusCssClassData(): array
+    {
+        return [
+            [WorkflowJobStep::STATUS_PENDING, 'secondary'],
+            [WorkflowJobStep::STATUS_RUNNING, 'primary'],
+            [WorkflowJobStep::STATUS_SUCCEEDED, 'success'],
+            [WorkflowJobStep::STATUS_FAILED, 'danger'],
+            [WorkflowJobStep::STATUS_SKIPPED, 'info'],
+        ];
+    }
+
+    /** @dataProvider statusCssClassData */
+    public function testStatusCssClassMapsToExpectedBadge(string $status, string $expected): void
+    {
+        $this->assertSame($expected, WorkflowJobStep::statusCssClass($status));
+    }
+
+    public function testStatusCssClassFallsBackToSecondaryForUnknownStatus(): void
+    {
+        $this->assertSame('secondary', WorkflowJobStep::statusCssClass('weird'));
     }
 
     private function makeModel(string $status): WorkflowJobStep
