@@ -38,7 +38,9 @@ $isEdit = !$model->isNewRecord;
         Credential::TYPE_TOKEN => 'Token',
     ], ['id' => 'credential-type']) ?>
 
-    <?= $form->field($model, 'username')->textInput(['maxlength' => 128, 'autocomplete' => 'off']) ?>
+    <?= $form->field($model, 'username', ['options' => ['id' => 'username-block', 'class' => 'mb-3']])
+            ->textInput(['maxlength' => 128, 'autocomplete' => 'off'])
+            ->hint('Used as <code>--user</code> when Ansible connects — only relevant for SSH Key and Username/Password credentials.') ?>
 
     <!-- Secret fields — rendered per type, posted as secrets[field] -->
 
@@ -111,11 +113,23 @@ document.addEventListener('DOMContentLoaded', function () {
     };
     var typeSelect = document.getElementById('credential-type');
     if (!typeSelect) return;
+    // `username` is only consumed at runtime for SSH Key and
+    // Username/Password credentials (rendered as `--user` on the
+    // ansible-playbook command). Vault + Token credentials ignore it
+    // entirely, so hide the field to keep the form honest.
+    var usernameVisibleFor = {
+        '<?= Credential::TYPE_SSH_KEY ?>': true,
+        '<?= Credential::TYPE_USERNAME_PASSWORD ?>': true,
+    };
+    var usernameBlock = document.getElementById('username-block');
     function update() {
         var active = map[typeSelect.value];
         document.querySelectorAll('.secret-block').forEach(function (el) {
             el.style.display = el.id === active ? '' : 'none';
         });
+        if (usernameBlock) {
+            usernameBlock.style.display = usernameVisibleFor[typeSelect.value] ? '' : 'none';
+        }
     }
     typeSelect.addEventListener('change', update);
     update();
