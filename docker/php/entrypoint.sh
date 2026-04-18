@@ -24,18 +24,29 @@ fi
 # artifacts, and logs subdirectories are required by the selftest playbook and
 # by ArtifactService / ProjectService before the first job runs.
 #
-# /tmp/ansible must also be www-data-writable: ANSIBLE_HOME=/tmp/ansible and
-# ansible-inventory refuses to start if it can't create /tmp/ansible/tmp for
-# its DEFAULT_LOCAL_TMP — that was the root cause of the "Parse Inventory"
-# button appearing to do nothing (it rendered an internal permission-denied
-# error in a red alert the operator missed).
-for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets /tmp/ansible; do
+for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets; do
     if [ ! -d "$dir" ]; then
         echo "[entrypoint] creating $dir"
         mkdir -p "$dir"
     fi
     chown -R www-data:www-data "$dir"
 done
+
+# /tmp/ansible is ANSIBLE_HOME. ansible-inventory / ansible-playbook
+# create /tmp/ansible/tmp/ansible-local-<pid>-* at run time. If the
+# parent /tmp/ansible/tmp is not world-writable they blow up with
+# EACCES. Distinct users run ansible through this container
+# (www-data via php-fpm, root via `docker compose exec`); chowning to
+# one of them is not enough because the other recreates the directory
+# after its own runs.
+#
+# Mirror /tmp's sticky-writable permission (1777) on BOTH /tmp/ansible
+# and /tmp/ansible/tmp. The `tmp` subdir is the one ansible actually
+# writes under, so forgetting it leaves the bug in place even though
+# the parent is shared. This was the root cause of the "Parse Inventory"
+# button surfacing a permission error operators frequently missed.
+mkdir -p /tmp/ansible/tmp
+chmod 1777 /tmp/ansible /tmp/ansible/tmp
 
 # Run database migrations automatically when starting the web/app container.
 # Skip for worker/runner containers (they start with a specific command, not php-fpm).

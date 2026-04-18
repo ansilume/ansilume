@@ -63,8 +63,9 @@ COPY . /var/www/
 COPY --from=composer /build/vendor /var/www/vendor
 
 # Ensure runtime directories exist
-RUN mkdir -p /var/www/runtime /var/www/web/assets /tmp/ansible \
-    && chown -R www-data:www-data /var/www/runtime /var/www/web/assets /tmp/ansible
+RUN mkdir -p /var/www/runtime /var/www/web/assets \
+    && chown -R www-data:www-data /var/www/runtime /var/www/web/assets \
+    && mkdir -p /tmp/ansible/tmp && chmod 1777 /tmp/ansible /tmp/ansible/tmp
 
 ENV ANSIBLE_HOME=/tmp/ansible
 
