@@ -45,6 +45,10 @@ test.describe('Inventory parse-hosts', () => {
     const body = await response.json();
     expect(body).toHaveProperty('groups');
     expect(body).toHaveProperty('hosts');
+    // A 200 response with `error` set means the backend silently served
+    // a failure (e.g. ANSIBLE_HOME permission issue — that was the v2.2.9
+    // fallout from the parsed_error column widening). Lock that down.
+    expect(body.error).toBeNull();
 
     // After render the result card should no longer say "Click Parse …".
     const container = page.locator('#inventory-result');

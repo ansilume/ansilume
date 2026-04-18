@@ -23,7 +23,13 @@ fi
 # These are git-ignored and must exist on every fresh checkout. The projects,
 # artifacts, and logs subdirectories are required by the selftest playbook and
 # by ArtifactService / ProjectService before the first job runs.
-for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets; do
+#
+# /tmp/ansible must also be www-data-writable: ANSIBLE_HOME=/tmp/ansible and
+# ansible-inventory refuses to start if it can't create /tmp/ansible/tmp for
+# its DEFAULT_LOCAL_TMP — that was the root cause of the "Parse Inventory"
+# button appearing to do nothing (it rendered an internal permission-denied
+# error in a red alert the operator missed).
+for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets /tmp/ansible; do
     if [ ! -d "$dir" ]; then
         echo "[entrypoint] creating $dir"
         mkdir -p "$dir"
