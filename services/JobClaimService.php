@@ -165,7 +165,10 @@ class JobClaimService extends Component
     protected function resolveCredentials(array $payload): array
     {
         /** @var list<int> $ids */
-        $ids = array_values(array_map('intval', (array)($payload['credential_ids'] ?? [])));
+        $ids = array_values(array_map(
+            static fn ($v): int => (int)$v,
+            (array)($payload['credential_ids'] ?? [])
+        ));
         if ($ids === []) {
             $primary = (int)($payload['credential_id'] ?? 0);
             if ($primary !== 0) {

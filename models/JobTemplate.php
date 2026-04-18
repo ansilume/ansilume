@@ -154,8 +154,7 @@ class JobTemplate extends ActiveRecord
     public function getCredentials(): \yii\db\ActiveQuery
     {
         return $this->hasMany(Credential::class, ['id' => 'credential_id'])
-            ->viaTable('{{%job_template_credential}}', ['job_template_id' => 'id'], function ($q) {
-                /** @var \yii\db\ActiveQuery $q */
+            ->viaTable('{{%job_template_credential}}', ['job_template_id' => 'id'], function (\yii\db\ActiveQuery $q): void {
                 $q->orderBy(['sort_order' => SORT_ASC, 'credential_id' => SORT_ASC]);
             })
             ->orderBy(['{{%credential}}.id' => SORT_ASC]);
