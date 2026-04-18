@@ -53,6 +53,11 @@ jobs:
           docker compose build
           docker compose up -d db redis
           docker compose up -d app queue-worker
+          # Mailhog is the SMTP target in e2e (notification-templates/send-test.spec.ts).
+          # It has no incoming depends_on link, so it must be started explicitly.
+          if [ "${{ matrix.suite }}" = "e2e" ]; then
+            docker compose up -d mailhog
+          fi
         env:
           UID: "1000"
           GID: "1000"
