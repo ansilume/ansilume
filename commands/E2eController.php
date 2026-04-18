@@ -99,14 +99,19 @@ class E2eController extends Controller
         foreach ($users as $data) {
             $existing = User::find()->where(['username' => $data['username']])->one();
             if ($existing !== null) {
-                // Re-assert the role assignment. Prior partial seeds or
-                // manual DB edits can leave an existing user without any
-                // role — in that state the web UI would hide the Launch
-                // button (and other permission-gated controls) and the
-                // e2e suite would fail in hard-to-diagnose ways. Make the
-                // seeder truly idempotent by ensuring the role exists on
-                // every run.
+                // Re-assert role AND active status. Prior partial seeds
+                // OR a prior disabled-login.spec.ts test that bailed in
+                // its `finally` block can leave the user without a role
+                // (→ Launch button hidden, RBAC-denied) or with status=0
+                // (→ login refused, RBAC specs then interpret the viewer
+                // session as unauthenticated and test assumptions break).
+                // Make the seed truly idempotent by normalising both.
                 $this->ensureRoleAssigned($auth, $existing->id, $data['role']);
+                if ((int)$existing->status !== User::STATUS_ACTIVE) {
+                    $existing->status = User::STATUS_ACTIVE;
+                    $existing->save(false, ['status']);
+                    $this->stdout("  Reset user '{$data['username']}' to STATUS_ACTIVE.\n");
+                }
                 $this->stdout("  User '{$data['username']}' already exists (ID {$existing->id}, role: {$data['role']}).\n");
                 if ($data['role'] === 'admin') {
                     $adminId = $existing->id;
