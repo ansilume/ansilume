@@ -73,12 +73,12 @@ LDAP_BASE_DN=DC=corp,DC=example,DC=com
 LDAP_BIND_DN=CN=svc-ansilume,OU=Service Accounts,DC=corp,DC=example,DC=com
 LDAP_BIND_PASSWORD=...
 LDAP_USER_FILTER=(&(objectClass=user)(sAMAccountName=%s))
-LDAP_USER_ATTR_USERNAME=sAMAccountName
-LDAP_USER_ATTR_EMAIL=mail
-LDAP_USER_ATTR_DISPLAYNAME=displayName
-LDAP_USER_ATTR_UID=objectGUID
+LDAP_ATTR_USERNAME=sAMAccountName
+LDAP_ATTR_EMAIL=mail
+LDAP_ATTR_DISPLAY_NAME=displayName
+LDAP_ATTR_UID=objectGUID
 LDAP_GROUP_FILTER=(&(objectClass=group)(member=%s))
-LDAP_GROUP_ATTR_NAME=cn
+LDAP_GROUP_NAME_ATTR=cn
 LDAP_AUTO_PROVISION=true
 LDAP_DEFAULT_ROLE=viewer
 LDAP_ROLE_MAPPING={"AnsilumeAdmins":"admin","AnsilumeOps":"operator"}
@@ -95,12 +95,12 @@ LDAP_BASE_DN=ou=people,dc=corp,dc=example,dc=com
 LDAP_BIND_DN=cn=svc-ansilume,ou=services,dc=corp,dc=example,dc=com
 LDAP_BIND_PASSWORD=...
 LDAP_USER_FILTER=(&(objectClass=inetOrgPerson)(uid=%s))
-LDAP_USER_ATTR_USERNAME=uid
-LDAP_USER_ATTR_EMAIL=mail
-LDAP_USER_ATTR_DISPLAYNAME=cn
-LDAP_USER_ATTR_UID=entryUUID
+LDAP_ATTR_USERNAME=uid
+LDAP_ATTR_EMAIL=mail
+LDAP_ATTR_DISPLAY_NAME=cn
+LDAP_ATTR_UID=entryUUID
 LDAP_GROUP_FILTER=(&(objectClass=groupOfNames)(member=%s))
-LDAP_GROUP_ATTR_NAME=cn
+LDAP_GROUP_NAME_ATTR=cn
 ```
 
 ### Notes
@@ -112,7 +112,7 @@ LDAP_GROUP_ATTR_NAME=cn
 - **`%s`** in the filter strings is replaced with the submitted username,
   always escaped via `ldap_escape(LDAP_ESCAPE_FILTER)` to prevent filter
   injection.
-- **`LDAP_USER_ATTR_UID`** should resolve to a stable, never-recycled
+- **`LDAP_ATTR_UID`** should resolve to a stable, never-recycled
   identifier — Active Directory's `objectGUID` or OpenLDAP's `entryUUID`.
   This is what Ansilume uses to recognise the same user across renames.
 - **`LDAP_ROLE_MAPPING`** is a JSON object; keys are directory group names
@@ -129,19 +129,19 @@ LDAP_GROUP_ATTR_NAME=cn
 
 ```bash
 # Verify the directory is reachable and the service-account bind works.
-docker compose exec php php yii ldap/test-connection
+docker compose exec app php yii ldap/test-connection
 
 # Look up a single user (no password needed). Shows DN, UID, email,
 # group membership, and the resulting Ansilume role assignment.
-docker compose exec php php yii ldap/test-user jdoe
+docker compose exec app php yii ldap/test-user jdoe
 
 # Reconcile every LDAP-backed user with the directory. Updates attributes
 # and roles, disables accounts the directory no longer recognises, and
 # re-enables ones it does.
-docker compose exec php php yii ldap/sync
+docker compose exec app php yii ldap/sync
 
 # Same as above but reports without making changes.
-docker compose exec php php yii ldap/sync --dry-run
+docker compose exec app php yii ldap/sync --dry-run
 ```
 
 Run `ldap/sync` from cron (e.g. nightly) so accounts that have been removed
@@ -150,7 +150,7 @@ or disabled in the directory lose their Ansilume access in a timely fashion.
 Suggested crontab entry:
 
 ```
-0 3 * * * cd /opt/ansilume && docker compose exec -T php php yii ldap/sync >> /var/log/ansilume/ldap-sync.log 2>&1
+0 3 * * * cd /opt/ansilume && docker compose exec -T app php yii ldap/sync >> /var/log/ansilume/ldap-sync.log 2>&1
 ```
 
 ---

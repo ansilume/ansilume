@@ -53,11 +53,15 @@ class JobPayloadBuilder
 
     private static function jobUrl(int $jobId): string
     {
+        // appBaseUrl (APP_URL) is operator-authoritative and must outrank
+        // the current request's hostInfo. Job-finalise requests arrive on
+        // the runner→nginx path (Host: nginx), so hostInfo would otherwise
+        // leak the internal docker hostname into notifications.
         $base = '';
-        if (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
-            $base = \Yii::$app->request->hostInfo;
-        } elseif (!empty(\Yii::$app->params['appBaseUrl'])) {
+        if (!empty(\Yii::$app->params['appBaseUrl'])) {
             $base = rtrim((string)\Yii::$app->params['appBaseUrl'], '/');
+        } elseif (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
+            $base = \Yii::$app->request->hostInfo;
         }
         try {
             return $base . \Yii::$app->urlManager->createUrl(['/job/view', 'id' => $jobId]);

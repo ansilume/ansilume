@@ -81,11 +81,15 @@ class PasswordResetRequestForm extends Model
 
     private function buildResetUrl(?string $token): string
     {
+        // APP_URL (→ appBaseUrl) wins over request hostInfo so reverse-proxy
+        // deployments don't mail out the internal hostname the app saw on
+        // the request. Fall back to hostInfo only when operators haven't
+        // pinned an explicit APP_URL in their env.
         $baseUrl = '';
-        if (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
-            $baseUrl = \Yii::$app->request->hostInfo;
-        } elseif (!empty(\Yii::$app->params['appBaseUrl'])) {
+        if (!empty(\Yii::$app->params['appBaseUrl'])) {
             $baseUrl = rtrim(\Yii::$app->params['appBaseUrl'], '/');
+        } elseif (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
+            $baseUrl = \Yii::$app->request->hostInfo;
         }
         return $baseUrl . \Yii::$app->urlManager->createUrl(['/site/reset-password', 'token' => $token]);
     }

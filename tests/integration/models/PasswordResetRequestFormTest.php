@@ -271,6 +271,75 @@ class PasswordResetRequestFormTest extends DbTestCase
         $this->assertSame(0, $mailer->sendCount);
     }
 
+    /**
+     * Regression: when APP_URL (→ params.appBaseUrl) is set, the reset link
+     * must use it instead of the current request's hostInfo. Otherwise
+     * reverse-proxy deployments mail out the internal hostname, and worse
+     * scenarios — a stack where a background path sets a stub web request
+     * with Host: nginx — would ship `http://nginx/site/reset-password`.
+     */
+    public function testBuildResetUrlPrefersAppBaseUrlOverRequestHostInfo(): void
+    {
+        $origParams = \Yii::$app->params;
+        \Yii::$app->params['appBaseUrl'] = 'https://ansilume.example.com';
+
+        try {
+            $form = new PasswordResetRequestForm();
+            $ref = new \ReflectionMethod(PasswordResetRequestForm::class, 'buildResetUrl');
+            $ref->setAccessible(true);
+            $url = (string)$ref->invoke($form, 'dummy-token');
+
+            $this->assertStringStartsWith(
+                'https://ansilume.example.com',
+                $url,
+                'Reset URL must use appBaseUrl when configured (regression: hostInfo leaked into reset mails).'
+            );
+            $this->assertStringNotContainsString(
+                '://ansilume.test',
+                $url,
+                'Request hostInfo must lose to an explicit APP_URL.'
+            );
+            $this->assertStringContainsString('token=dummy-token', $url);
+        } finally {
+            \Yii::$app->params = $origParams;
+        }
+    }
+
+    public function testBuildResetUrlFallsBackToHostInfoWhenAppBaseUrlMissing(): void
+    {
+        $origParams = \Yii::$app->params;
+        unset(\Yii::$app->params['appBaseUrl']);
+
+        // DbTestCase runs in console context — no web request is bound by
+        // default. Inject a stub so the hostInfo branch has something to
+        // return. Otherwise the fallback legitimately produces a relative
+        // URL (which is fine in console, just not what this test covers).
+        $origRequest = \Yii::$app->has('request') ? \Yii::$app->request : null;
+        \Yii::$app->set('request', new class extends \yii\web\Request {
+            public function getHostInfo(): string
+            {
+                return 'https://from-request.example';
+            }
+        });
+
+        try {
+            $form = new PasswordResetRequestForm();
+            $ref = new \ReflectionMethod(PasswordResetRequestForm::class, 'buildResetUrl');
+            $ref->setAccessible(true);
+            $url = (string)$ref->invoke($form, 'dummy-token');
+
+            $this->assertStringStartsWith('https://from-request.example', $url);
+            $this->assertStringContainsString('token=dummy-token', $url);
+        } finally {
+            \Yii::$app->params = $origParams;
+            if ($origRequest !== null) {
+                \Yii::$app->set('request', $origRequest);
+            } else {
+                \Yii::$app->clear('request');
+            }
+        }
+    }
+
     public function testSendHandlesMailerException(): void
     {
         // Swap in a mailer that throws on compose — sendResetEmail must

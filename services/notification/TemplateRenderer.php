@@ -72,11 +72,16 @@ class TemplateRenderer
 
     private function baseUrl(): string
     {
-        if (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
-            return (string)\Yii::$app->request->hostInfo;
-        }
+        // appBaseUrl (APP_URL in the env) is what the operator configured
+        // as the externally reachable URL — it must win over the current
+        // request's hostInfo. Otherwise notifications emitted from jobs
+        // finalising via an internal runner→nginx call ship the internal
+        // docker hostname (e.g. http://nginx) to end users.
         if (!empty(\Yii::$app->params['appBaseUrl'])) {
             return rtrim((string)\Yii::$app->params['appBaseUrl'], '/');
+        }
+        if (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
+            return (string)\Yii::$app->request->hostInfo;
         }
         return '';
     }

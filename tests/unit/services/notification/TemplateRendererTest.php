@@ -178,6 +178,67 @@ class TemplateRendererTest extends TestCase
         $this->assertStringContainsString('Job #7 failed at', $result);
     }
 
+    /**
+     * Regression: `appBaseUrl` (APP_URL in the env) must outrank the current
+     * request's hostInfo. When the runner finalises a job via the internal
+     * nginx API the Host header is "nginx" — if hostInfo won, every
+     * notification that rendered during a runner-originated request would
+     * ship `http://nginx/job/view?id=…` to end users.
+     */
+    public function testBaseUrlPrefersAppBaseUrlOverRequestHostInfo(): void
+    {
+        $origParams = \Yii::$app->params;
+        \Yii::$app->params['appBaseUrl'] = 'https://ansilume.example.com/';
+
+        // Install a stub request component whose hostInfo would be preferred
+        // by the old code. The new priority order must pick appBaseUrl.
+        $origRequest = \Yii::$app->has('request') ? \Yii::$app->request : null;
+        \Yii::$app->set('request', new class extends \yii\web\Request {
+            public function getHostInfo(): string
+            {
+                return 'http://nginx';
+            }
+        });
+
+        try {
+            $vars = $this->renderer->buildVariables([]);
+            $this->assertSame(
+                'https://ansilume.example.com',
+                $vars['app.url'],
+                'baseUrl must prefer configured appBaseUrl over request->hostInfo (regression: http://nginx leaked into notifications).'
+            );
+        } finally {
+            \Yii::$app->params = $origParams;
+            if ($origRequest !== null) {
+                \Yii::$app->set('request', $origRequest);
+            }
+        }
+    }
+
+    public function testBaseUrlFallsBackToHostInfoWhenAppBaseUrlIsEmpty(): void
+    {
+        $origParams = \Yii::$app->params;
+        unset(\Yii::$app->params['appBaseUrl']);
+
+        $origRequest = \Yii::$app->has('request') ? \Yii::$app->request : null;
+        \Yii::$app->set('request', new class extends \yii\web\Request {
+            public function getHostInfo(): string
+            {
+                return 'https://from-request.example';
+            }
+        });
+
+        try {
+            $vars = $this->renderer->buildVariables([]);
+            $this->assertSame('https://from-request.example', $vars['app.url']);
+        } finally {
+            \Yii::$app->params = $origParams;
+            if ($origRequest !== null) {
+                \Yii::$app->set('request', $origRequest);
+            }
+        }
+    }
+
     public function testBaseUrlEmptyWhenParamIsEmptyString(): void
     {
         $origParams = \Yii::$app->params;
