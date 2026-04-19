@@ -158,18 +158,42 @@ class LintService extends Component
      * ansible-compat's get_cache_dir() (isolated mode) tries $cwd/.ansible
      * for caching. If that dir is not writable it emits noisy warnings
      * before falling back to /tmp. Creating it upfront silences them.
+     *
+     * If the CWD-local cache dir exists but is not writable by the current
+     * user (e.g. it was created by a different user such as root in a prior
+     * container run, before worker processes dropped to www-data), fall
+     * back to a per-CWD temp dir. Otherwise ansible-lint fails with
+     * "[Errno 13] Permission denied" when it tries to mkdir $cache/tmp/...
      */
     protected function ensureCacheDir(string $cwd): string
     {
         $cacheDir = $cwd . '/.ansible';
-        if (is_dir($cacheDir)) {
+
+        if (is_dir($cacheDir) && is_writable($cacheDir)) {
             return $cacheDir;
         }
-        if (mkdir($cacheDir, 0o755, true) || is_dir($cacheDir)) {
+
+        // Only attempt mkdir when:
+        //   - the path is free (no file blocking it), AND
+        //   - the parent dir is writable by the current user.
+        // Calling mkdir() on a path we can't create raises a PHP warning
+        // that Yii's ErrorHandler promotes to an exception, bypassing the
+        // fallback below. The parent-writable check keeps us out of that
+        // code path for the exact scenario that caused the original bug:
+        // a www-data web process trying to create .ansible inside a
+        // root-owned project directory.
+        if (
+            !file_exists($cacheDir)
+            && is_writable($cwd)
+            && mkdir($cacheDir, 0o755, true)
+            && is_writable($cacheDir)
+        ) {
             return $cacheDir;
         }
-        // Fallback: writable temp dir
-        $fallback = sys_get_temp_dir() . '/ansible';
+
+        // Fallback: per-CWD temp dir. Deterministic (hashed) so repeat runs
+        // hit the same cache instead of leaking new dirs under /tmp.
+        $fallback = sys_get_temp_dir() . '/ansilume-ansible-' . substr(hash('sha256', $cwd), 0, 16);
         if (!is_dir($fallback)) {
             mkdir($fallback, 0o755, true);
         }

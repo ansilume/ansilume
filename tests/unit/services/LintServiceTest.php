@@ -516,6 +516,197 @@ class LintServiceTest extends TestCase
         $this->assertStringContainsString('sync the project first', $svc->stored[0]['output']);
     }
 
+    // -------------------------------------------------------------------------
+    // Regression: ensureCacheDir must survive an unusable .ansible path
+    //
+    // Original bug: queue-worker ran as root, synced an SCM project, and its
+    // auto-lint-after-sync created $cwd/.ansible owned by root mode 755.
+    // When the web (www-data) user later clicked "Run Lint" it hit
+    //   CRITICAL:root:Unhandled exception when retrieving 'DEFAULT_LOCAL_TMP':
+    //   [Errno 13] Permission denied: '.../.ansible/tmp/ansible-local-…'
+    // The infrastructure fix drops worker to www-data so both sides are the
+    // same user. These tests pin the defensive fallback in ensureCacheDir:
+    // if the CWD-local cache dir can't be used, it must fall back to a
+    // unique, writable temp dir instead of returning an unusable path.
+    //
+    // The regression scenario (dir exists but is not writable by the current
+    // user) relies on is_writable(), which is bypassed for root. To get
+    // coverage that actually executes in every environment we use a regular
+    // file at $cwd/.ansible — mkdir fails for both root and www-data in that
+    // case, exercising the same fallback branch.
+    // -------------------------------------------------------------------------
+    public function testEnsureCacheDirFallsBackWhenDotAnsiblePathIsBlockedByFile(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_blocked_' . uniqid('', true);
+        mkdir($dir);
+        file_put_contents($dir . '/.ansible', '');
+
+        try {
+            $svc = new class extends LintService {
+                public function callEnsureCacheDir(string $cwd): string
+                {
+                    return $this->ensureCacheDir($cwd);
+                }
+            };
+
+            $result = $svc->callEnsureCacheDir($dir);
+
+            $this->assertNotSame(
+                $dir . '/.ansible',
+                $result,
+                'ensureCacheDir must not return the CWD-local path when mkdir cannot succeed there.'
+            );
+            $this->assertTrue(
+                is_dir($result) && is_writable($result),
+                'Fallback cache dir must exist and be writable: ' . $result
+            );
+            $this->assertStringStartsWith(
+                sys_get_temp_dir() . '/ansilume-ansible-',
+                $result,
+                'Fallback should live under sys_get_temp_dir() with a deterministic prefix.'
+            );
+        } finally {
+            unlink($dir . '/.ansible');
+            rmdir($dir);
+        }
+    }
+
+    /**
+     * The same scenario chmod-0 a real pre-existing cache dir produces in
+     * production (non-root worker inherits a root-owned .ansible). Covered
+     * only when running as an unprivileged user, since root bypasses mode.
+     */
+    public function testEnsureCacheDirFallsBackWhenDotAnsibleDirIsNotWritable(): void
+    {
+        if (function_exists('posix_getuid') && posix_getuid() === 0) {
+            $this->markTestSkipped('is_writable() returns true for root regardless of perms.');
+        }
+
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_ro_' . uniqid('', true);
+        mkdir($dir);
+        $cache = $dir . '/.ansible';
+        mkdir($cache);
+        chmod($cache, 0);
+
+        try {
+            $svc = new class extends LintService {
+                public function callEnsureCacheDir(string $cwd): string
+                {
+                    return $this->ensureCacheDir($cwd);
+                }
+            };
+
+            $result = $svc->callEnsureCacheDir($dir);
+
+            $this->assertNotSame(
+                $cache,
+                $result,
+                'ensureCacheDir must not return the CWD-local .ansible when it is not writable.'
+            );
+            $this->assertStringStartsWith(sys_get_temp_dir() . '/ansilume-ansible-', $result);
+        } finally {
+            chmod($cache, 0o755);
+            rmdir($cache);
+            rmdir($dir);
+        }
+    }
+
+    /**
+     * The exact scenario the E2E test caught: a CWD owned by another user
+     * with no .ansible yet. mkdir would fail with a PHP warning that Yii
+     * promotes to an exception — the defensive code must detect an
+     * unwritable parent and skip straight to the fallback.
+     */
+    public function testEnsureCacheDirFallsBackWhenParentCwdIsNotWritable(): void
+    {
+        if (function_exists('posix_getuid') && posix_getuid() === 0) {
+            $this->markTestSkipped('is_writable() returns true for root regardless of perms.');
+        }
+
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_parent_' . uniqid('', true);
+        mkdir($dir);
+        chmod($dir, 0o555); // readable+executable, not writable — parent blocks mkdir
+
+        try {
+            $svc = new class extends LintService {
+                public function callEnsureCacheDir(string $cwd): string
+                {
+                    return $this->ensureCacheDir($cwd);
+                }
+            };
+
+            $result = $svc->callEnsureCacheDir($dir);
+
+            $this->assertStringStartsWith(
+                sys_get_temp_dir() . '/ansilume-ansible-',
+                $result,
+                'ensureCacheDir must fall back without raising when the parent CWD is not writable.'
+            );
+            $this->assertFileDoesNotExist($dir . '/.ansible', 'No leftover .ansible should have been attempted in the parent.');
+        } finally {
+            chmod($dir, 0o755);
+            rmdir($dir);
+        }
+    }
+
+    public function testEnsureCacheDirUsesCwdLocalDirWhenWritable(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_rw_' . uniqid('', true);
+        mkdir($dir);
+
+        try {
+            $svc = new class extends LintService {
+                public function callEnsureCacheDir(string $cwd): string
+                {
+                    return $this->ensureCacheDir($cwd);
+                }
+            };
+
+            $result = $svc->callEnsureCacheDir($dir);
+
+            $this->assertSame(
+                $dir . '/.ansible',
+                $result,
+                'When CWD is writable ensureCacheDir must return $cwd/.ansible (keeps cache per-project).'
+            );
+            $this->assertDirectoryExists($result);
+            $this->assertTrue(is_writable($result));
+        } finally {
+            if (is_dir($dir . '/.ansible')) {
+                rmdir($dir . '/.ansible');
+            }
+            rmdir($dir);
+        }
+    }
+
+    public function testEnsureCacheDirFallbackIsDeterministicPerCwd(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_det_' . uniqid('', true);
+        mkdir($dir);
+        file_put_contents($dir . '/.ansible', '');
+
+        try {
+            $svc = new class extends LintService {
+                public function callEnsureCacheDir(string $cwd): string
+                {
+                    return $this->ensureCacheDir($cwd);
+                }
+            };
+
+            $first  = $svc->callEnsureCacheDir($dir);
+            $second = $svc->callEnsureCacheDir($dir);
+
+            $this->assertSame(
+                $first,
+                $second,
+                'Fallback must hash the CWD so repeat calls reuse the same cache dir.'
+            );
+        } finally {
+            unlink($dir . '/.ansible');
+            rmdir($dir);
+        }
+    }
+
     private function removeDir(string $dir): void
     {
         if (!is_dir($dir)) {

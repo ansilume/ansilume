@@ -106,4 +106,15 @@ if [ "$1" = "php-fpm" ]; then
     echo "[entrypoint] migrations complete"
 fi
 
-exec "$@"
+# php-fpm needs root for the master process — pool config drops workers
+# to www-data automatically. Every other command (queue-worker,
+# schedule-runner, one-off `php yii ...` calls) must drop privileges
+# up front, otherwise files written by the worker (git clones, .ansible
+# cache dirs, artifacts) end up root-owned and the www-data web process
+# can't touch them later. The symptom is a "Permission denied" error
+# when clicking "Run Lint" on a freshly synced SCM project.
+if [ "$1" = "php-fpm" ]; then
+    exec "$@"
+else
+    exec gosu www-data "$@"
+fi

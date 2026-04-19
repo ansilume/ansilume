@@ -236,8 +236,17 @@ class E2eController extends Controller
 
     private function seedProject(int $userId): int
     {
+        $path = $this->seedProjectPath();
+
         $existing = Project::find()->where(['name' => self::PREFIX . 'project'])->one();
         if ($existing !== null) {
+            // Back-fill local_path on pre-existing seeds so old snapshots
+            // pick up the playbook-bearing directory too. Keeps "Run Lint"
+            // regression coverage in place across re-seeds.
+            if ($existing->local_path !== $path) {
+                $existing->local_path = $path;
+                $existing->save(false);
+            }
             $this->stdout("  Project already exists (ID {$existing->id}).\n");
             return $existing->id;
         }
@@ -246,12 +255,40 @@ class E2eController extends Controller
         $project->name = self::PREFIX . 'project';
         $project->description = 'E2E test project (manual)';
         $project->scm_type = 'manual';
+        $project->local_path = $path;
         $project->status = 'new';
         $project->created_by = $userId;
         $project->save(false);
 
-        $this->stdout("  Created project (ID {$project->id}).\n");
+        $this->stdout("  Created project (ID {$project->id}) at {$path}.\n");
         return $project->id;
+    }
+
+    /**
+     * Materialise a minimal Ansible project on disk so lint, sync, and
+     * template runs have something real to point at. Living under
+     * sys_get_temp_dir() keeps it out of any host bind mount and out of
+     * the named `runtime_projects` volume (which only the prebuilt
+     * compose file uses).
+     *
+     * This is what makes `projects/lint-run.spec.ts` exercise the actual
+     * LintService path end-to-end — without a local playbook the
+     * "Run Lint" button only hits the "no local path" guard.
+     */
+    private function seedProjectPath(): string
+    {
+        $path = sys_get_temp_dir() . '/ansilume-e2e-project';
+        if (!is_dir($path)) {
+            mkdir($path, 0o755, true);
+        }
+        $playbook = $path . '/site.yml';
+        if (!file_exists($playbook)) {
+            file_put_contents(
+                $playbook,
+                "---\n- name: E2E smoke test\n  hosts: localhost\n  gather_facts: false\n  tasks:\n    - name: Noop\n      ansible.builtin.debug:\n        msg: \"E2E lint target\"\n",
+            );
+        }
+        return $path;
     }
 
     private function seedInventory(int $userId): int

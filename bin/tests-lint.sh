@@ -389,4 +389,35 @@ else
     skip "ansible-lint not available"
 fi
 
+# =============================================================================
+# Docker privilege drop (regression: "Run Lint" EACCES on SCM projects)
+# =============================================================================
+#
+# queue-worker and schedule-runner containers run `php yii …` which, left
+# to their own devices, exec as root (the php:8.2-fpm base image's default
+# USER). When the worker clones an SCM project and runs LintService's
+# post-sync auto-lint, the cache dir ends up root-owned. The web container
+# (app) later runs as www-data via php-fpm pool config — it can no longer
+# write to that dir, so "Run Lint" in the UI fails with EACCES. The fix is
+# to gosu-drop to www-data in the entrypoint for every non-php-fpm command.
+# If this regression lands again, users only notice in production — catch
+# it at lint time instead.
+section "Docker privilege drop (gosu www-data for non-php-fpm)"
+
+for dockerfile in docker/php/Dockerfile docker/php/Dockerfile.prod; do
+    if ! grep -qE '^\s+gosu\s*\\?$' "$dockerfile"; then
+        fail "$dockerfile missing gosu in apt-get install"
+    else
+        ok "$dockerfile installs gosu"
+    fi
+done
+
+for entrypoint in docker/php/entrypoint.sh docker/php/entrypoint-prod.sh; do
+    if ! grep -qE 'exec\s+gosu\s+www-data' "$entrypoint"; then
+        fail "$entrypoint does not drop privileges to www-data for non-php-fpm commands"
+    else
+        ok "$entrypoint drops privileges to www-data"
+    fi
+done
+
 print_summary
