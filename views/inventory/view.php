@@ -115,7 +115,14 @@ function renderInventory(data) {
     var container = document.getElementById('inventory-result');
 
     if (data.error) {
-        container.innerHTML = '<div class="alert alert-danger mb-0">' + escapeHtml(data.error) + '</div>';
+        container.innerHTML =
+            '<div class="alert alert-danger mb-0" role="alert">' +
+                '<strong>ansible-inventory failed.</strong>' +
+                '<pre class="mb-0 mt-2" style="white-space:pre-wrap;word-break:break-word;font-size:.85em">' +
+                    escapeHtml(data.error) +
+                '</pre>' +
+            '</div>';
+        container.scrollIntoView({behavior: 'smooth', block: 'center'});
         return;
     }
 
@@ -199,9 +206,28 @@ if (cachedData) {
 document.getElementById('btn-parse-inventory').addEventListener('click', function() {
     var btn = this;
     var container = document.getElementById('inventory-result');
+    var originalLabel = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Parsing…';
     container.innerHTML = '<p class="text-muted">Running ansible-inventory…</p>';
+
+    function renderFailure(title, detail, statusCode) {
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+        var header = '<strong>' + escapeHtml(title) + '</strong>';
+        if (statusCode) {
+            header += ' <span class="badge text-bg-danger">HTTP ' + statusCode + '</span>';
+        }
+        container.innerHTML =
+            '<div class="alert alert-danger mb-0" role="alert">' +
+                header +
+                '<pre class="mb-0 mt-2" style="white-space:pre-wrap;word-break:break-word;font-size:.85em">' +
+                    escapeHtml(detail) +
+                '</pre>' +
+            '</div>';
+        container.scrollIntoView({behavior: 'smooth', block: 'center'});
+        console.error('[parse-inventory]', title, '—', detail);
+    }
 
     fetch('{$parseUrl}', {
         method: 'POST',
@@ -211,8 +237,25 @@ document.getElementById('btn-parse-inventory').addEventListener('click', functio
         },
         body: '{$csrf}=' + encodeURIComponent('{$csrfToken}')
     })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
+    .then(function(r) {
+        return r.text().then(function(text) { return {status: r.status, text: text}; });
+    })
+    .then(function(resp) {
+        var data;
+        try {
+            data = JSON.parse(resp.text);
+        } catch (e) {
+            renderFailure(
+                'Server response was not JSON',
+                resp.text ? resp.text.slice(0, 2000) : '(empty body)',
+                resp.status
+            );
+            return;
+        }
+        if (resp.status < 200 || resp.status >= 300) {
+            renderFailure('Server error', data.error || resp.text.slice(0, 2000), resp.status);
+            return;
+        }
         btn.disabled = false;
         btn.textContent = 'Refresh';
         var label = document.getElementById('parsed-at-label');
@@ -222,9 +265,7 @@ document.getElementById('btn-parse-inventory').addEventListener('click', functio
         renderInventory(data);
     })
     .catch(function(err) {
-        btn.disabled = false;
-        btn.textContent = 'Refresh';
-        container.innerHTML = '<div class="alert alert-danger mb-0">Request failed: ' + escapeHtml(err.message) + '</div>';
+        renderFailure('Network request failed', err.message, null);
     });
 });
 JS;

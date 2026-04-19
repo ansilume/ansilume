@@ -20,6 +20,7 @@ services:
     env_file: .env
     volumes:
       - runtime_projects:/var/www/runtime/projects
+      - web_assets:/var/www/web/assets
     depends_on:
       db:
         condition: service_healthy
@@ -41,6 +42,8 @@ services:
     restart: unless-stopped
     ports:
       - "${NGINX_PORT:-8080}:80"
+    volumes:
+      - web_assets:/var/www/web/assets:ro
     depends_on:
       app:
         condition: service_healthy
@@ -166,3 +169,7 @@ networks:
 volumes:
   db_data:
   runtime_projects:
+  # Yii2 publishes framework assets (jQuery, yii.js) to /var/www/web/assets/
+  # on first request. The app container writes them; nginx serves them.
+  # Without this shared volume, browsers get 404/HTML for /assets/... URLs.
+  web_assets:
