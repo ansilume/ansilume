@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\commands;
 
 use app\components\CredentialInjector;
+use app\components\GitEnvBuilder;
 use app\components\RunnerHttpClient;
 use app\components\RunnerProcessExecutor;
 use app\components\RunnerTokenResolver;
@@ -300,7 +301,17 @@ class RunnerController extends Controller
         $redactedUrl = $this->redactGitUrl($scmUrl);
         $this->stdout("{$action} project: {$redactedUrl} (branch: {$scmBranch}) → {$projectPath}\n");
 
-        return $this->runGitCommand($cmd, $projectPath, $isClone);
+        /** @var array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}|null $scmCredential */
+        $scmCredential = is_array($payload['scm_credential'] ?? null) ? $payload['scm_credential'] : null;
+        $sshKeyFile = null;
+        try {
+            $error = $this->runGitCommand($cmd, $projectPath, $isClone, $scmUrl, $scmCredential, $sshKeyFile);
+        } finally {
+            if ($sshKeyFile !== null && is_file($sshKeyFile)) {
+                \app\helpers\FileHelper::safeUnlink($sshKeyFile);
+            }
+        }
+        return $error;
     }
 
     /**
@@ -308,10 +319,18 @@ class RunnerController extends Controller
      * or an error message string on failure.
      *
      * @param array<int, string> $cmd
+     * @param array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}|null $scmCredential
+     * @param string|null $sshKeyFile Set to the temp path when an SSH key was written (caller unlinks).
      */
-    private function runGitCommand(array $cmd, string $projectPath, bool $isClone): ?string
-    {
-        $env = $this->buildGitEnv();
+    private function runGitCommand(
+        array $cmd,
+        string $projectPath,
+        bool $isClone,
+        string $scmUrl = '',
+        ?array $scmCredential = null,
+        ?string &$sshKeyFile = null,
+    ): ?string {
+        $env = $this->buildGitEnv($scmUrl, $scmCredential, $sshKeyFile);
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 
         $startTime = microtime(true);
@@ -360,22 +379,17 @@ class RunnerController extends Controller
     }
 
     /**
-     * Build environment variables for git subprocess.
-     * Mirrors ProjectService::baseGitEnv() to ensure consistent behavior
-     * between queue-based and pull-based runners.
+     * Build environment variables for the git subprocess. Delegates to
+     * {@see GitEnvBuilder} so the SSH-key materialisation + HTTPS
+     * credential-helper logic lives in one focused class.
      *
+     * @param array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}|null $scmCredential
+     * @param string|null $sshKeyFile Written if an SSH key was materialised — caller must unlink.
      * @return array<string, string>
      */
-    private function buildGitEnv(): array
+    private function buildGitEnv(string $scmUrl = '', ?array $scmCredential = null, ?string &$sshKeyFile = null): array
     {
-        return [
-            'HOME' => getenv('HOME') ?: '/root',
-            'PATH' => getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin',
-            'GIT_TERMINAL_PROMPT' => '0',
-            'GIT_CONFIG_COUNT' => '1',
-            'GIT_CONFIG_KEY_0' => 'safe.directory',
-            'GIT_CONFIG_VALUE_0' => '*',
-        ];
+        return (new GitEnvBuilder())->build($scmUrl, $scmCredential, $sshKeyFile);
     }
 
     /**

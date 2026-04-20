@@ -31,7 +31,7 @@ class JobClaimServiceTest extends TestCase
         ?array $scm = null,
     ): JobClaimService {
         $inv = $inventory ?? ['type' => 'static', 'content' => "localhost\n", 'path' => null];
-        $scmData = $scm ?? ['scm_type' => 'manual', 'scm_url' => null, 'scm_branch' => null];
+        $scmData = $scm ?? ['scm_type' => 'manual', 'scm_url' => null, 'scm_branch' => null, 'scm_credential' => null];
 
         return new class ($projectPath, $inv, $credential, $scmData) extends JobClaimService {
             public function __construct(
@@ -256,6 +256,7 @@ class JobClaimServiceTest extends TestCase
             'scm_type' => 'git',
             'scm_url' => 'https://github.com/example/repo.git',
             'scm_branch' => 'main',
+            'scm_credential' => null,
         ]);
 
         $payload = $service->buildExecutionPayload($job);
@@ -263,6 +264,7 @@ class JobClaimServiceTest extends TestCase
         $this->assertSame('git', $payload['scm_type']);
         $this->assertSame('https://github.com/example/repo.git', $payload['scm_url']);
         $this->assertSame('main', $payload['scm_branch']);
+        $this->assertNull($payload['scm_credential']);
     }
 
     public function testPayloadContainsScmFieldsForManualProject(): void
@@ -272,6 +274,7 @@ class JobClaimServiceTest extends TestCase
             'scm_type' => 'manual',
             'scm_url' => null,
             'scm_branch' => null,
+            'scm_credential' => null,
         ]);
 
         $payload = $service->buildExecutionPayload($job);
@@ -279,6 +282,34 @@ class JobClaimServiceTest extends TestCase
         $this->assertSame('manual', $payload['scm_type']);
         $this->assertNull($payload['scm_url']);
         $this->assertNull($payload['scm_branch']);
+    }
+
+    /**
+     * Regression: private git repos need the SCM credential to reach the
+     * runner. Before this fix the runner received scm_url but no
+     * credential, so the clone failed with "Host key verification failed"
+     * (SSH) or "Authentication failed" (HTTPS), depending on the repo URL.
+     */
+    public function testPayloadCarriesScmCredentialForGitProject(): void
+    {
+        $job = $this->makeJob(1, []);
+        $service = $this->makeService(scm: [
+            'scm_type' => 'git',
+            'scm_url' => 'git@github.com:example/repo.git',
+            'scm_branch' => 'main',
+            'scm_credential' => [
+                'credential_type' => 'ssh_key',
+                'username' => 'git',
+                'env_var_name' => null,
+                'secrets' => ['private_key' => "-----BEGIN OPENSSH PRIVATE KEY-----\n…"],
+            ],
+        ]);
+
+        $payload = $service->buildExecutionPayload($job);
+
+        $this->assertIsArray($payload['scm_credential']);
+        $this->assertSame('ssh_key', $payload['scm_credential']['credential_type']);
+        $this->assertArrayHasKey('private_key', $payload['scm_credential']['secrets']);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

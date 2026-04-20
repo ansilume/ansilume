@@ -239,6 +239,23 @@ class RunnerControllerSyncProjectTest extends TestCase
                 return $this->syncProject($payload);
             }
 
+            /**
+             * Expose buildGitEnv for direct inspection so regression tests
+             * can assert that GIT_SSH_COMMAND / credential helpers get
+             * wired up when the payload carries a scm_credential.
+             *
+             * @param array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}|null $scmCredential
+             * @return array<string, string>
+             */
+            public function callBuildGitEnv(string $scmUrl, ?array $scmCredential, ?string &$sshKeyFile = null): array
+            {
+                $reflection = new \ReflectionMethod(RunnerController::class, 'buildGitEnv');
+                $reflection->setAccessible(true);
+                /** @var array<string, string> $env */
+                $env = $reflection->invokeArgs($this, [$scmUrl, $scmCredential, &$sshKeyFile]);
+                return $env;
+            }
+
             public function stdout($string): int
             {
                 return 0;
@@ -413,6 +430,142 @@ class RunnerControllerSyncProjectTest extends TestCase
             $source,
             'proc_open in syncProject must pass env as 5th argument'
         );
+    }
+
+    // ── Regression: private git URLs need credential handling ──────────────
+    //
+    // Bug: prebuilt runner image hit `git@github.com:...` with no
+    // GIT_SSH_COMMAND → ssh defaulted to StrictHostKeyChecking=ask → in
+    // batch mode (GIT_TERMINAL_PROMPT=0) that aborts with
+    // "Host key verification failed". Even with a host key, the runner
+    // had no SSH key to authenticate.
+    //
+    // Fix: buildGitEnv accepts the SCM credential from the payload,
+    // writes the private key to a 0600 tempfile, and sets GIT_SSH_COMMAND
+    // with StrictHostKeyChecking=no + BatchMode=yes. HTTPS uses a
+    // GIT_CONFIG credential helper for token / username_password creds.
+
+    public function testBuildGitEnvWiresGitSshCommandForSshUrlWithSshKeyCredential(): void
+    {
+        $ctrl = $this->makeSyncableController();
+        $sshKeyFile = null;
+        $env = $ctrl->callBuildGitEnv(
+            'git@github.com:we-push-it/ansible-master.git',
+            [
+                'credential_type' => 'ssh_key',
+                'username' => 'git',
+                'env_var_name' => null,
+                'secrets' => ['private_key' => "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n"],
+            ],
+            $sshKeyFile,
+        );
+
+        try {
+            $this->assertArrayHasKey('GIT_SSH_COMMAND', $env, 'SSH URL with ssh_key credential must produce GIT_SSH_COMMAND.');
+            $this->assertStringContainsString('-i ', $env['GIT_SSH_COMMAND']);
+            $this->assertStringContainsString('StrictHostKeyChecking=no', $env['GIT_SSH_COMMAND']);
+            $this->assertStringContainsString('BatchMode=yes', $env['GIT_SSH_COMMAND']);
+            $this->assertNotNull($sshKeyFile, 'SSH key must have been written to a tempfile.');
+            $this->assertFileExists($sshKeyFile);
+            $this->assertSame('0600', substr(sprintf('%o', fileperms($sshKeyFile)), -4));
+        } finally {
+            if ($sshKeyFile !== null && is_file($sshKeyFile)) {
+                unlink($sshKeyFile);
+            }
+        }
+    }
+
+    public function testBuildGitEnvOmitsSshCommandWhenNoCredential(): void
+    {
+        $ctrl = $this->makeSyncableController();
+        $sshKeyFile = null;
+        $env = $ctrl->callBuildGitEnv('git@github.com:example/repo.git', null, $sshKeyFile);
+
+        $this->assertArrayNotHasKey('GIT_SSH_COMMAND', $env);
+        $this->assertNull($sshKeyFile);
+    }
+
+    public function testBuildGitEnvInjectsHttpsCredentialHelperForTokenCredential(): void
+    {
+        $ctrl = $this->makeSyncableController();
+        $sshKeyFile = null;
+        $env = $ctrl->callBuildGitEnv(
+            'https://github.com/we-push-it/ansible-master.git',
+            [
+                'credential_type' => 'token',
+                'username' => null,
+                'env_var_name' => null,
+                'secrets' => ['token' => 'ghp_fake_token_value'],
+            ],
+            $sshKeyFile,
+        );
+
+        $this->assertNull($sshKeyFile, 'HTTPS path must not write an SSH key file.');
+        $this->assertArrayNotHasKey('GIT_SSH_COMMAND', $env, 'HTTPS URLs must not set GIT_SSH_COMMAND.');
+
+        // GIT_CONFIG_COUNT grew by one and the new slot is a credential.helper.
+        $count = (int)$env['GIT_CONFIG_COUNT'];
+        $this->assertGreaterThanOrEqual(2, $count);
+        $helperKey = null;
+        for ($i = 0; $i < $count; $i++) {
+            if (($env['GIT_CONFIG_KEY_' . $i] ?? '') === 'credential.helper') {
+                $helperKey = $i;
+                break;
+            }
+        }
+        $this->assertNotNull($helperKey, 'A credential.helper entry must be registered in GIT_CONFIG_*.');
+        $this->assertStringContainsString('username=x-access-token', $env['GIT_CONFIG_VALUE_' . $helperKey]);
+        $this->assertStringContainsString('password=ghp_fake_token_value', $env['GIT_CONFIG_VALUE_' . $helperKey]);
+    }
+
+    public function testBuildGitEnvInjectsHttpsCredentialHelperForUsernamePasswordCredential(): void
+    {
+        $ctrl = $this->makeSyncableController();
+        $sshKeyFile = null;
+        $env = $ctrl->callBuildGitEnv(
+            'https://gitlab.example.com/team/repo.git',
+            [
+                'credential_type' => 'username_password',
+                'username' => 'deploy-bot',
+                'env_var_name' => null,
+                'secrets' => ['password' => 'sekret'],
+            ],
+            $sshKeyFile,
+        );
+
+        $this->assertNull($sshKeyFile);
+        $count = (int)$env['GIT_CONFIG_COUNT'];
+        $helperKey = null;
+        for ($i = 0; $i < $count; $i++) {
+            if (($env['GIT_CONFIG_KEY_' . $i] ?? '') === 'credential.helper') {
+                $helperKey = $i;
+                break;
+            }
+        }
+        $this->assertNotNull($helperKey);
+        $this->assertStringContainsString('username=deploy-bot', $env['GIT_CONFIG_VALUE_' . $helperKey]);
+        $this->assertStringContainsString('password=sekret', $env['GIT_CONFIG_VALUE_' . $helperKey]);
+    }
+
+    public function testBuildGitEnvIgnoresCredentialWithWrongTypeForUrlScheme(): void
+    {
+        // A token credential pointed at an SSH URL is inert — the runner
+        // must not pretend it can build a GIT_SSH_COMMAND from a token.
+        $ctrl = $this->makeSyncableController();
+        $sshKeyFile = null;
+        $env = $ctrl->callBuildGitEnv(
+            'git@github.com:example/repo.git',
+            [
+                'credential_type' => 'token',
+                'username' => null,
+                'env_var_name' => null,
+                'secrets' => ['token' => 'ghp_fake'],
+            ],
+            $sshKeyFile,
+        );
+
+        $this->assertNull($sshKeyFile);
+        $this->assertArrayNotHasKey('GIT_SSH_COMMAND', $env);
     }
 }
 

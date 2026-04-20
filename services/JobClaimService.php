@@ -85,7 +85,7 @@ class JobClaimService extends Component
      * Resolves IDs to actual paths/content so the runner needs no DB access.
      * Also builds and stores the canonical execution command on the job record.
      *
-     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null, command: array<int, string>}
+     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null, command: array<int, string>}
      */
     public function buildExecutionPayload(Job $job): array
     {
@@ -105,6 +105,7 @@ class JobClaimService extends Component
             'scm_type' => $scm['scm_type'],
             'scm_url' => $scm['scm_url'],
             'scm_branch' => $scm['scm_branch'],
+            'scm_credential' => $scm['scm_credential'],
             'inventory_type' => $inventory['type'],
             'inventory_content' => $inventory['content'], // for static
             'inventory_path' => $inventory['path'], // for file-based
@@ -234,7 +235,12 @@ class JobClaimService extends Component
 
     /**
      * @param array<string, mixed> $payload
-     * @return array{scm_type: string, scm_url: string|null, scm_branch: string|null}
+     * @return array{
+     *     scm_type: string,
+     *     scm_url: string|null,
+     *     scm_branch: string|null,
+     *     scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null,
+     * }
      */
     protected function resolveProjectScm(array $payload): array
     {
@@ -244,6 +250,10 @@ class JobClaimService extends Component
             'scm_type' => $project?->scm_type ?? Project::SCM_TYPE_MANUAL,
             'scm_url' => $project?->scm_url,
             'scm_branch' => $project?->scm_branch,
+            // Resolve the project-level SCM credential so the runner can
+            // authenticate to git. Distinct from the ansible-execution
+            // credential(s) carried under `credential` / `credentials`.
+            'scm_credential' => $this->resolveCredentialById((int)($project?->scm_credential_id ?? 0)),
         ];
     }
 
