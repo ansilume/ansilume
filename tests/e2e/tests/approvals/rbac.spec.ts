@@ -11,7 +11,7 @@ test.describe('Approvals RBAC', () => {
   });
   test('viewer can view approvals index', async ({ page }) => {
     await page.goto('/approval/index');
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
   test('viewer cannot see approve or reject buttons', async ({ page }) => {

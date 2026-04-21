@@ -21,6 +21,6 @@ test.describe('Schedules RBAC', () => {
 
   test('operator can access schedules', async ({ page }) => {
     await page.goto('/schedule/index');
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 });

@@ -11,7 +11,7 @@ test.describe('Runner Groups RBAC', () => {
   });
   test('viewer can view index', async ({ page }) => {
     await page.goto('/runner-group/index');
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
   test('viewer gets 403 on create', async ({ page }) => {
@@ -21,6 +21,6 @@ test.describe('Runner Groups RBAC', () => {
 
   test('operator can create runner groups', async ({ page }) => {
     await page.goto('/runner-group/create');
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 });

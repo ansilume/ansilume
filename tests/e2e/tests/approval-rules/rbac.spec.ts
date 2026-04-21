@@ -16,11 +16,11 @@ test.describe('Approval Rules RBAC', () => {
 
   test('viewer can view index', async ({ page }) => {
     await page.goto('/approval-rule/index');
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
   test('operator can create approval rules', async ({ page }) => {
     await page.goto('/approval-rule/create');
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 });

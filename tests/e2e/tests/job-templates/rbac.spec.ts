@@ -16,14 +16,18 @@ test.describe('Job Templates RBAC', () => {
 
   test('viewer can view template index', async ({ page }) => {
     await page.goto('/job-template/index');
-    // \b prevents false positives from the Yii debug toolbar's memory
-    // readouts like "Memory 2.403 MB" which otherwise match "403".
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    // Match only "Forbidden" as a word — the Yii debug toolbar's
+    // "Memory 2.403 MB" readout gives "403" a word boundary on both
+    // sides, so checking for the numeric code produces false positives
+    // on any page. "Forbidden" is unambiguous: Yii's 403 error view has
+    // both `<title>Forbidden (#403)` and a visible heading containing
+    // "Forbidden", neither of which appear on normal pages.
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
   test('operator can create templates', async ({ page }) => {
     await page.goto('/job-template/create');
-    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
   test('viewer gets 403 on template launch URL', async ({ page }) => {
