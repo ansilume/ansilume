@@ -368,6 +368,23 @@ When given a feature request:
 
 If the request is underspecified, make reasonable assumptions that fit this file and document them briefly. Do not get stuck asking unnecessary questions when a sensible default exists.
 
+### Dev checkout AND prebuilt image — both paths must stay working
+
+Every change has to run correctly for **both** deployment paths. They diverge in subtle ways that break silently if only one is considered:
+
+- **Dev / git checkout** — `docker-compose.yml` with `.:/var/www` bind-mounted into `app`, `queue-worker`, `schedule-runner`, `runner-1`, `runner-2`. Containers are built locally from `docker/php/Dockerfile` (with `USER_ID`/`GROUP_ID` build args that remap `www-data` to the host UID). Code is read live from the host; `composer install` runs in the entrypoint on every start. Operators can't pick up updated `Dockerfile` or `entrypoint.sh` changes without `docker compose up -d --build`.
+- **Prebuilt images** — `docker-compose.prebuilt.yml` pulls `ghcr.io/ansilume/ansilume:latest`, `ghcr.io/ansilume/ansilume-nginx:latest`, `ghcr.io/ansilume/ansilume-runner:latest`. The runner image has its **own** `/var/www` and no bind mount, so anything the server writes to `/var/www/runtime/projects/` is **not visible** to the runner; the runner must clone the project itself. Operators pick up updates via `docker compose pull && docker compose up -d`, not `up --build`.
+
+Keep these in sync:
+
+- When `commands/RunnerController.php` changes, check `docker/runner/Dockerfile` still ships what the runner needs (packages, collections), and `docker/php/Dockerfile` / `Dockerfile.prod` match for the shared container image.
+- When the server payload grows a new field (`JobClaimService::buildExecutionPayload`), **the runner must consume it** and **no runner can legitimately assume the field is always present** — old runner images may still connect to a new server after upgrade.
+- When `docker-compose.yml` gets a new service or volume, check if `docker-compose.prebuilt.yml` needs the same treatment (and vice-versa). The `web_assets` volume that was missing from the prebuilt compose — letting nginx 404 on `/assets/<hash>/jquery.js` — is the canonical case of this failure mode.
+- When a runtime directory gets a new ownership requirement (chown in entrypoint), make sure `docker/php/entrypoint.sh`, `docker/php/entrypoint-prod.sh`, and `docker/runner/entrypoint.sh` all agree.
+- When changing a subprocess env contract (`GIT_CONFIG_*`, `ANSIBLE_*`), verify that both the server-side path (`ProjectService`) and the runner-side path (`RunnerController` → `GitEnvBuilder`) stay in sync — they serve the same operation from two places and must not drift.
+
+"Works on my dev checkout" is not a ship-gate. Before finishing a change that touches process startup, filesystem layout, subprocess env, or inter-container contracts, think through what the operator sees in both modes.
+
 ---
 
 ## Push Workflow
