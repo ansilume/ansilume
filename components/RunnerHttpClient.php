@@ -34,11 +34,19 @@ class RunnerHttpClient
     /**
      * POST JSON to the ansilume API with Bearer authentication.
      *
+     * Every request automatically carries `software_version` from the
+     * local VERSION file (read via `Yii::$app->params['version']`) so the
+     * server can track which version each runner is actually running.
+     * Callers can override the value by passing their own
+     * `software_version` key in $body — useful for tests; in practice
+     * nothing does.
+     *
      * @param array<string, mixed> $body
      * @return array<string, mixed>|null
      */
     public function post(string $path, array $body): ?array
     {
+        $body = array_merge(['software_version' => $this->softwareVersion()], $body);
         return $this->httpPost($path, $body, [
             'Authorization: Bearer ' . $this->token,
         ]);
@@ -120,5 +128,24 @@ class RunnerHttpClient
         }
 
         return $raw;
+    }
+
+    /**
+     * Runner's own build version. Reads from the VERSION file baked into
+     * the image by `./bin/release`. Falls back to "dev" on a source
+     * checkout where the file is absent or in test fixtures where no Yii
+     * app is wired. Capped at 32 chars to match the column width on the
+     * server side.
+     */
+    private function softwareVersion(): string
+    {
+        $version = 'dev';
+        if (\Yii::$app !== null) {
+            $paramsValue = \Yii::$app->params['version'] ?? null;
+            if (is_string($paramsValue) && $paramsValue !== '') {
+                $version = $paramsValue;
+            }
+        }
+        return substr($version, 0, 32);
     }
 }

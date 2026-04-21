@@ -96,6 +96,7 @@ class RunnerTokenResolver
         $payload = [
             'name' => $name,
             'bootstrap_secret' => $bootstrapSecret,
+            'software_version' => substr((string)(\Yii::$app->params['version'] ?? 'dev'), 0, 32),
         ];
         if ($group !== '') {
             $payload['group'] = $group;

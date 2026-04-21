@@ -189,6 +189,7 @@ class RunnersController extends BaseApiController
             'runner_group_name' => $group?->name,
             'is_online' => $r->isOnline(),
             'last_seen_at' => $r->last_seen_at,
+            'software_version' => $r->software_version,
             'created_at' => $r->created_at,
         ];
     }

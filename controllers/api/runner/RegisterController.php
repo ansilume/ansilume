@@ -85,7 +85,12 @@ class RegisterController extends Controller
             return ['ok' => false, 'error' => "Runner group \"{$groupName}\" not found."];
         }
 
-        [$runner, $rawToken] = $this->upsertRunner($group->id, $name, $systemUserId);
+        [$runner, $rawToken] = $this->upsertRunner(
+            $group->id,
+            $name,
+            $systemUserId,
+            $this->extractReportedVersion($body),
+        );
 
         return [
             'ok' => true,
@@ -178,7 +183,28 @@ class RegisterController extends Controller
      *
      * @return array{0: Runner, 1: string}  [runner, rawToken]
      */
-    private function upsertRunner(int $groupId, string $name, int $createdBy): array
+    /**
+     * Pull `software_version` out of the registration body, trimmed and
+     * bounded to the 32-char column width. Returns null when the field
+     * is missing, non-string, empty, or too long — the DB row then stays
+     * at NULL ("unknown") and the first real heartbeat fills it in.
+     *
+     * @param array<string, mixed> $body
+     */
+    private function extractReportedVersion(array $body): ?string
+    {
+        $value = $body['software_version'] ?? null;
+        if (!is_string($value)) {
+            return null;
+        }
+        $trimmed = trim($value);
+        if ($trimmed === '' || strlen($trimmed) > 32) {
+            return null;
+        }
+        return $trimmed;
+    }
+
+    private function upsertRunner(int $groupId, string $name, int $createdBy, ?string $softwareVersion = null): array
     {
         $token = Runner::generateToken();
 
@@ -192,6 +218,9 @@ class RegisterController extends Controller
         }
 
         $runner->token_hash = $token['hash'];
+        if ($softwareVersion !== null) {
+            $runner->software_version = $softwareVersion;
+        }
         if (!$runner->save()) {
             throw new \RuntimeException('Failed to save runner: ' . json_encode($runner->errors));
         }

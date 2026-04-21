@@ -93,4 +93,80 @@ class RunnerTest extends TestCase
         $this->assertArrayHasKey('name', $runner->errors);
         $this->assertArrayHasKey('runner_group_id', $runner->errors);
     }
+
+    // --- isOutdated() / hasKnownVersion() ---
+    //
+    // Regression coverage for the runner-version telemetry feature:
+    // operators need to see when a runner is lagging behind the server
+    // so they know to pull a newer image or rebuild. version_compare()
+    // is semver-aware (2.2.9 < 2.2.10 correctly); these tests pin that
+    // the wiring around it matches what the UI relies on.
+
+    public function testIsOutdatedReturnsFalseWhenVersionIsNull(): void
+    {
+        $this->setServerVersion('2.2.16');
+        $runner = $this->makeRunner(['software_version' => null]);
+        $this->assertFalse($runner->isOutdated(), 'Null version is "unknown", not "outdated".');
+        $this->assertFalse($runner->hasKnownVersion());
+    }
+
+    public function testIsOutdatedReturnsFalseWhenVersionIsEmpty(): void
+    {
+        $this->setServerVersion('2.2.16');
+        $runner = $this->makeRunner(['software_version' => '']);
+        $this->assertFalse($runner->isOutdated());
+        $this->assertFalse($runner->hasKnownVersion());
+    }
+
+    public function testIsOutdatedReturnsTrueWhenRunnerIsOlderThanServer(): void
+    {
+        $this->setServerVersion('2.2.16');
+        $runner = $this->makeRunner(['software_version' => '2.2.15']);
+        $this->assertTrue($runner->isOutdated());
+        $this->assertTrue($runner->hasKnownVersion());
+    }
+
+    public function testIsOutdatedUsesSemverComparison(): void
+    {
+        // version_compare is semver-aware — 2.2.9 < 2.2.10, not the other way.
+        $this->setServerVersion('2.2.10');
+        $runner = $this->makeRunner(['software_version' => '2.2.9']);
+        $this->assertTrue($runner->isOutdated());
+    }
+
+    public function testIsOutdatedReturnsFalseWhenVersionsMatch(): void
+    {
+        $this->setServerVersion('2.2.16');
+        $runner = $this->makeRunner(['software_version' => '2.2.16']);
+        $this->assertFalse($runner->isOutdated());
+    }
+
+    public function testIsOutdatedReturnsFalseWhenRunnerIsNewer(): void
+    {
+        // Shouldn't happen in practice, but treat a newer runner as "not
+        // outdated" — the operator can decide whether that's a problem.
+        $this->setServerVersion('2.2.15');
+        $runner = $this->makeRunner(['software_version' => '2.2.16']);
+        $this->assertFalse($runner->isOutdated());
+    }
+
+    public function testIsOutdatedReturnsFalseOnDevServer(): void
+    {
+        // A dev checkout has no meaningful version ("dev"); every numbered
+        // runner would otherwise look outdated. Mute the badge in that case.
+        $this->setServerVersion('dev');
+        $runner = $this->makeRunner(['software_version' => '2.2.0']);
+        $this->assertFalse($runner->isOutdated());
+    }
+
+    private function setServerVersion(string $version): void
+    {
+        if (\Yii::$app !== null) {
+            \Yii::$app->params['version'] = $version;
+        } else {
+            // RunnerTest runs in pure-unit mode without a Yii app; fall
+            // back to a stub so ['version'] is always readable.
+            new \yii\console\Application(['id' => 'test', 'basePath' => sys_get_temp_dir(), 'params' => ['version' => $version]]);
+        }
+    }
 }

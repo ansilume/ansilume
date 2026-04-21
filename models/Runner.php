@@ -14,6 +14,7 @@ use yii\db\ActiveRecord;
  * @property string|null $description
  * @property int|null    $last_seen_at
  * @property int|null    $offline_notified_at
+ * @property string|null $software_version    Semver reported by the runner on each heartbeat; null for pre-upgrade runners
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at
@@ -42,6 +43,7 @@ class Runner extends ActiveRecord
             [['name'], 'string', 'max' => 128],
             [['description'], 'string', 'max' => 1000],
             [['token_hash'], 'string', 'max' => 64],
+            [['software_version'], 'string', 'max' => 32],
         ];
     }
 
@@ -64,6 +66,32 @@ class Runner extends ActiveRecord
     {
         return $this->last_seen_at !== null
             && (time() - $this->last_seen_at) < RunnerGroup::STALE_AFTER;
+    }
+
+    /**
+     * Is this runner running an older version than the server?
+     * Returns false when the runner has not reported a version yet
+     * (pre-upgrade runners) — callers use {@see hasKnownVersion()}
+     * to distinguish "unknown" from "current".
+     */
+    public function isOutdated(): bool
+    {
+        if ($this->software_version === null || $this->software_version === '') {
+            return false;
+        }
+        $serverVersion = (string)(\Yii::$app->params['version'] ?? 'dev');
+        if ($serverVersion === 'dev') {
+            // A dev server build has no meaningful version to compare against
+            // — every numbered runner looks "newer" by version_compare, but
+            // that's not a real upgrade signal to surface to operators.
+            return false;
+        }
+        return version_compare($this->software_version, $serverVersion, '<');
+    }
+
+    public function hasKnownVersion(): bool
+    {
+        return $this->software_version !== null && $this->software_version !== '';
     }
 
     /**

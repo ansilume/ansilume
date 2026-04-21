@@ -12,6 +12,7 @@ declare(strict_types=1);
 /** @var app\models\WorkflowTemplate[] $workflowTemplates */
 /** @var int $onlineRunners */
 /** @var int $totalRunners */
+/** @var int $outdatedRunners */
 /** @var app\models\ApprovalRequest[] $pendingApprovals */
 /** @var app\models\WorkflowJob[] $runningWorkflows */
 /** @var app\models\Schedule[] $upcomingSchedules */
@@ -68,13 +69,28 @@ $this->title = 'Dashboard';
     </div>
     <div class="col-sm-6 col-xl-3">
         <?php
-        $runnerBg = $totalRunners === 0 ? 'text-bg-secondary'
-            : ($onlineRunners === 0 ? 'text-bg-danger' : 'text-bg-success');
+        if ($totalRunners === 0) {
+            $runnerBg = 'text-bg-secondary';
+        } elseif ($onlineRunners === 0) {
+            $runnerBg = 'text-bg-danger';
+        } elseif ($outdatedRunners > 0) {
+            // Online but one or more runners are lagging behind the server
+            // version — something to act on, but not an outage.
+            $runnerBg = 'text-bg-warning';
+        } else {
+            $runnerBg = 'text-bg-success';
+        }
+        $runnerTitle = $outdatedRunners > 0
+            ? sprintf('%d runner%s need%s an update (pull the latest image or rebuild).', $outdatedRunners, $outdatedRunners === 1 ? '' : 's', $outdatedRunners === 1 ? 's' : '')
+            : '';
         ?>
-        <div class="card h-100 <?= $runnerBg // xss-ok: controller-computed CSS class?>">
+        <div class="card h-100 <?= $runnerBg // xss-ok: controller-computed CSS class?>"<?= $runnerTitle !== '' ? ' title="' . Html::encode($runnerTitle) . '"' : '' // xss-ok: encoded title?>>
             <div class="card-body">
                 <div class="fs-2 fw-bold"><?= $onlineRunners // xss-ok: integer?>/<?= $totalRunners // xss-ok: integer?></div>
                 <div><?= Html::a('Runners Online', Url::to(['/runner-group/index']), ['class' => 'text-white text-decoration-none']) ?></div>
+                <?php if ($outdatedRunners > 0) : ?>
+                    <div class="small mt-1"><?= $outdatedRunners // xss-ok: integer?> outdated</div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -98,6 +114,18 @@ if ($totalRunners > 0 && $onlineRunners === 0) {
     $alerts[] = [
         'type' => 'danger',
         'message' => 'No runners are online. Jobs cannot be executed.',
+        'link' => Url::to(['/runner-group/index']),
+        'linkText' => 'View Runners',
+    ];
+}
+if ($outdatedRunners > 0) {
+    $alerts[] = [
+        'type' => 'warning',
+        'message' => sprintf(
+            '%d runner%s running an older version than the server. Pull the latest image or rebuild so the runner matches.',
+            $outdatedRunners,
+            $outdatedRunners === 1 ? ' is' : 's are',
+        ),
         'link' => Url::to(['/runner-group/index']),
         'linkText' => 'View Runners',
     ];

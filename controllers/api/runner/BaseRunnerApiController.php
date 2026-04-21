@@ -55,11 +55,42 @@ abstract class BaseRunnerApiController extends Controller
             throw new UnauthorizedHttpException('Invalid runner token.');
         }
 
-        // Update heartbeat
-        Runner::updateAll(['last_seen_at' => time(), 'updated_at' => time()], ['id' => $runner->id]);
+        // Update heartbeat. Runners post their own software_version in the
+        // JSON body on every request; persist it alongside last_seen_at so
+        // the UI can flag runners that lag behind the server version.
+        // Pre-upgrade runners without the field stay at NULL ("unknown").
+        $updates = ['last_seen_at' => time(), 'updated_at' => time()];
+        $reportedVersion = $this->readReportedVersion();
+        if ($reportedVersion !== null && $reportedVersion !== $runner->software_version) {
+            $updates['software_version'] = $reportedVersion;
+            $runner->software_version = $reportedVersion;
+        }
+        Runner::updateAll($updates, ['id' => $runner->id]);
         $runner->last_seen_at = time();
 
         $this->currentRunner = $runner;
+    }
+
+    /**
+     * Pull `software_version` from the JSON body, if present and sane.
+     * Bounded to 32 chars to match the column width and to keep a
+     * hostile runner from stuffing arbitrary strings into the DB.
+     */
+    private function readReportedVersion(): ?string
+    {
+        $body = \Yii::$app->request->bodyParams;
+        if (!is_array($body)) {
+            return null;
+        }
+        $value = $body['software_version'] ?? null;
+        if (!is_string($value)) {
+            return null;
+        }
+        $trimmed = trim($value);
+        if ($trimmed === '' || strlen($trimmed) > 32) {
+            return null;
+        }
+        return $trimmed;
     }
 
     /**

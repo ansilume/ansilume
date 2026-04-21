@@ -75,6 +75,12 @@ class SiteController extends BaseController
         $cutoff = time() - RunnerGroup::STALE_AFTER;
         $totalRunners = (int)Runner::find()->count();
         $onlineRunners = (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count();
+        $outdatedRunners = 0;
+        foreach (Runner::find()->all() as $runner) {
+            if ($runner->isOutdated()) {
+                $outdatedRunners++;
+            }
+        }
 
         $pendingApprovals = ApprovalRequest::find()
             ->with(['approvalRule', 'job.jobTemplate'])
@@ -121,6 +127,7 @@ class SiteController extends BaseController
             'workflowTemplates' => $workflowTemplates,
             'onlineRunners' => $onlineRunners,
             'totalRunners' => $totalRunners,
+            'outdatedRunners' => $outdatedRunners,
             'pendingApprovals' => $pendingApprovals,
             'runningWorkflows' => $runningWorkflows,
             'upcomingSchedules' => $upcomingSchedules,

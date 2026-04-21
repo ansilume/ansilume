@@ -2115,6 +2115,14 @@ components:
         runner_group_name: { type: string, nullable: true }
         is_online: { type: boolean }
         last_seen_at: { type: integer, nullable: true }
+        software_version:
+          type: string
+          nullable: true
+          description: >-
+            Semver version the runner reported on its most recent heartbeat.
+            `null` for runners that have not yet reported (pre-upgrade
+            images). Capped at 32 characters on the server side.
+          example: "2.2.16"
         created_at: { type: integer }
     RunnerMoveInput:
       type: object

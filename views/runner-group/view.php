@@ -118,6 +118,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                 <tr>
                     <th>Name</th>
                     <th>Status</th>
+                    <th>Version</th>
                     <th>Last seen</th>
                     <th>Description</th>
                     <th></th>
@@ -134,6 +135,20 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                             <span class="badge text-bg-secondary">Offline</span>
                         <?php else : ?>
                             <span class="badge text-bg-warning">Never seen</span>
+                        <?php endif; ?>
+                    </td>
+                    <td>
+                        <?php if ($runner->hasKnownVersion()) : ?>
+                            <?php if ($runner->isOutdated()) : ?>
+                                <span class="badge text-bg-warning" title="Server is on <?= Html::encode((string)(\Yii::$app->params['version'] ?? 'dev')) ?> — pull latest image or rebuild this runner.">
+                                    <?= Html::encode((string)$runner->software_version) ?>
+                                    <span class="ms-1">↑</span>
+                                </span>
+                            <?php else : ?>
+                                <span class="badge text-bg-success" title="Up to date with server version."><?= Html::encode((string)$runner->software_version) ?></span>
+                            <?php endif; ?>
+                        <?php else : ?>
+                            <span class="badge text-bg-secondary" title="Runner has not yet reported a version — probably a pre-upgrade image.">unknown</span>
                         <?php endif; ?>
                     </td>
                     <td class="text-muted small">
