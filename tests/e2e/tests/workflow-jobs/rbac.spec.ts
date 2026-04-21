@@ -10,7 +10,7 @@ test.describe('Workflow Jobs RBAC', () => {
   });
   test('viewer can view workflow jobs index', async ({ page }) => {
     await page.goto('/workflow-job/index');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('viewer cannot see cancel or resume forms', async ({ page }) => {

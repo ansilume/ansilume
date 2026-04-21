@@ -52,7 +52,7 @@ export async function fillForm(page: Page, model: string, fields: Record<string,
  * Assert the page shows a 403 Forbidden response.
  */
 export async function expectForbidden(page: Page) {
-  await expect(page.locator('body')).toContainText(/403|Forbidden/i, { timeout: 5_000 });
+  await expect(page.locator('body')).toContainText(/\b403\b|\bForbidden\b/i, { timeout: 5_000 });
 }
 
 /**

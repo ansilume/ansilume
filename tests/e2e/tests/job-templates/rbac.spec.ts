@@ -16,12 +16,14 @@ test.describe('Job Templates RBAC', () => {
 
   test('viewer can view template index', async ({ page }) => {
     await page.goto('/job-template/index');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    // \b prevents false positives from the Yii debug toolbar's memory
+    // readouts like "Memory 2.403 MB" which otherwise match "403".
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('operator can create templates', async ({ page }) => {
     await page.goto('/job-template/create');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('viewer gets 403 on template launch URL', async ({ page }) => {

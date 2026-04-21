@@ -16,11 +16,11 @@ test.describe('Notification Templates RBAC', () => {
 
   test('viewer can view index', async ({ page }) => {
     await page.goto('/notification-template/index');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('operator can create notification templates', async ({ page }) => {
     await page.goto('/notification-template/create');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 });

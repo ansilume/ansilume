@@ -22,6 +22,6 @@ test.describe('Inventories RBAC', () => {
 
   test('operator can access index', async ({ page }) => {
     await page.goto('/inventory/index');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 });

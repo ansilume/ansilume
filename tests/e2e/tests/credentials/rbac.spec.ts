@@ -16,7 +16,7 @@ test.describe('Credentials RBAC', () => {
 
   test('viewer can view index', async ({ page }) => {
     await page.goto('/credential/index');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('secrets are never visible in DOM', async ({ page }) => {
@@ -32,6 +32,6 @@ test.describe('Credentials RBAC', () => {
 
   test('operator can access credential create form', async ({ page }) => {
     await page.goto('/credential/create');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 });

@@ -16,11 +16,11 @@ test.describe('Workflow Templates RBAC', () => {
 
   test('viewer can view index', async ({ page }) => {
     await page.goto('/workflow-template/index');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('operator can create workflow templates', async ({ page }) => {
     await page.goto('/workflow-template/create');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 });

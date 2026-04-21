@@ -22,12 +22,12 @@ test.describe('Projects RBAC', () => {
 
   test('operator can access project index', async ({ page }) => {
     await page.goto('/project/index');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('operator can create projects', async ({ page }) => {
     await page.goto('/project/create');
-    await expect(page.locator('body')).not.toContainText(/403|Forbidden/i);
+    await expect(page.locator('body')).not.toContainText(/\b403\b|\bForbidden\b/i);
   });
 
   test('viewer cannot see edit/delete buttons on project view', async ({ page }) => {
