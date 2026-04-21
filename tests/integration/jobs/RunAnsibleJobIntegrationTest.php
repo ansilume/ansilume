@@ -215,13 +215,27 @@ class RunAnsibleJobIntegrationTest extends DbTestCase
         $runner = new class (['jobId' => $job->id]) extends RunAnsibleJob {
             protected function runPlaybook(Job $job): int
             {
+                // Seed a JobTask inside the playbook stub so the no-op
+                // safeguard in JobCompletionService::complete() doesn't flip
+                // this to FAILED. A real playbook run produces task rows
+                // via the callback plugin before complete() is called.
+                $task = new JobTask();
+                $task->job_id = $job->id;
+                $task->sequence = 0;
+                $task->task_name = 'seeded';
+                $task->task_action = 'debug';
+                $task->host = 'localhost';
+                $task->status = 'ok';
+                $task->changed = 0;
+                $task->duration_ms = 0;
+                $task->save(false);
                 return 0;
             }
         };
         $runner->execute(null);
 
         $job->refresh();
-        // JobCompletionService sets succeeded when exitCode=0.
+        // JobCompletionService sets succeeded when exitCode=0 and at least one host actually ran.
         $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
         $this->assertNotNull($job->started_at);
         $this->assertNotNull($job->worker_id);

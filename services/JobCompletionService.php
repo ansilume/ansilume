@@ -28,6 +28,22 @@ class JobCompletionService extends Component
         if ($hasChanges) {
             $job->has_changes = 1;
         }
+
+        // ansible-playbook exits 0 when the playbook's `hosts:` pattern
+        // matches nothing in the inventory — it prints a "Could not match
+        // supplied host pattern" warning, produces an empty PLAY RECAP,
+        // and returns cleanly. From an operator's perspective this is a
+        // misconfiguration, not a success: nothing ran. Surface it as a
+        // failure so the UI doesn't silently lie about what happened.
+        if ($job->status === Job::STATUS_SUCCEEDED && $this->didNothing($job)) {
+            $job->status = Job::STATUS_FAILED;
+            $this->appendSystemLog(
+                $job,
+                "Job did not execute against any host.\n"
+                    . "The playbook's `hosts:` pattern did not match any entries in the inventory.\n"
+                    . "Check that the inventory contains the hosts/groups the playbook targets."
+            );
+        }
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(
@@ -47,6 +63,34 @@ class JobCompletionService extends Component
 
         $this->dispatchNotifications($job);
         $this->advanceWorkflow($job);
+    }
+
+    /**
+     * Did the job execute any work against any host? The callback plugin
+     * only writes a JobTask row per matched host+task pair, and the
+     * runner only emits a JobHostSummary per host that ansible touched.
+     * Zero of both means ansible ran a playbook but produced nothing —
+     * almost always because the `hosts:` pattern didn't match.
+     */
+    protected function didNothing(Job $job): bool
+    {
+        $hasTasks = JobTask::find()->where(['job_id' => $job->id])->exists();
+        if ($hasTasks) {
+            return false;
+        }
+        $hasHostSummary = JobHostSummary::find()->where(['job_id' => $job->id])->exists();
+        return !$hasHostSummary;
+    }
+
+    /**
+     * Append a system-level log line after the runner-streamed logs.
+     * Uses a sequence one past the max so it renders at the end of the
+     * Output panel. `stream=stderr` so the UI picks the warning colour.
+     */
+    private function appendSystemLog(Job $job, string $message): void
+    {
+        $nextSequence = (int)JobLog::find()->where(['job_id' => $job->id])->max('sequence') + 1;
+        $this->appendLog($job, 'stderr', $message, $nextSequence);
     }
 
     public function completeTimedOut(Job $job): void

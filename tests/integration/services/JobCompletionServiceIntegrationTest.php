@@ -32,6 +32,62 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
     public function testCompleteSetsSucceededStatusOnExitZero(): void
     {
         $job = $this->makeRunningJob();
+        // Without at least one task or host summary, complete() now treats
+        // exit-0 as "no hosts matched" and flips the status to FAILED.
+        // This test exercises the normal succeeded path, so seed a task.
+        $this->seedTaskFor($job, 'ok');
+
+        $this->service->complete($job, 0);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
+    }
+
+    /**
+     * Regression: ansible-playbook returns exit 0 and an empty PLAY RECAP
+     * when the `hosts:` pattern matches nothing. With the old behaviour
+     * this showed up as "succeeded" in the UI even though nothing ran.
+     * complete() must now flip these runs to FAILED and append a clear
+     * log line so the operator sees why.
+     */
+    public function testCompleteWithNoTasksAndNoHostSummariesIsMarkedFailed(): void
+    {
+        $job = $this->makeRunningJob();
+
+        $this->service->complete($job, 0);
+
+        $job->refresh();
+        $this->assertSame(
+            Job::STATUS_FAILED,
+            $job->status,
+            'A run with no executed tasks and no host summary must not report as succeeded.',
+        );
+
+        $logs = JobLog::find()
+            ->where(['job_id' => $job->id, 'stream' => 'stderr'])
+            ->orderBy(['sequence' => SORT_DESC])
+            ->limit(1)
+            ->one();
+        $this->assertNotNull($logs, 'An explanatory stderr log entry must be appended.');
+        $this->assertStringContainsString('did not execute against any host', (string)$logs->content);
+    }
+
+    public function testCompleteWithOnlyHostSummaryIsStillSucceeded(): void
+    {
+        // A host summary alone (e.g. fact-gathering play with no tasks) is
+        // still "something happened" — the safeguard must not fire.
+        $job = $this->makeRunningJob();
+        $summary = new JobHostSummary();
+        $summary->job_id = $job->id;
+        $summary->host = 'localhost';
+        $summary->ok = 1;
+        $summary->changed = 0;
+        $summary->failed = 0;
+        $summary->unreachable = 0;
+        $summary->skipped = 0;
+        $summary->rescued = 0;
+        $summary->created_at = time();
+        $summary->save(false);
 
         $this->service->complete($job, 0);
 
@@ -216,5 +272,20 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $inv      = $this->createInventory($user->id);
         $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
         return $this->createJob($template->id, $user->id, Job::STATUS_RUNNING);
+    }
+
+    /** Seed a minimal JobTask row — enough to clear the "did nothing" gate. */
+    private function seedTaskFor(Job $job, string $status): void
+    {
+        $task = new JobTask();
+        $task->job_id = $job->id;
+        $task->sequence = 0;
+        $task->task_name = 'seeded';
+        $task->task_action = 'debug';
+        $task->host = 'localhost';
+        $task->status = $status;
+        $task->changed = 0;
+        $task->duration_ms = 0;
+        $task->save(false);
     }
 }

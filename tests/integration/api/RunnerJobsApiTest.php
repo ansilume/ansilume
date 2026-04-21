@@ -6,6 +6,7 @@ namespace app\tests\integration\api;
 
 use app\models\Job;
 use app\models\JobLog;
+use app\models\JobTask;
 use app\tests\integration\DbTestCase;
 
 /**
@@ -63,6 +64,10 @@ class RunnerJobsApiTest extends DbTestCase
 
         $claim = \Yii::$app->get('jobClaimService');
         $job = $claim->claim($group, $runner);
+
+        // Seed a task row so the no-op safeguard in complete() doesn't flip
+        // this to FAILED — this test covers the normal succeeded path.
+        $this->seedTaskFor($job);
 
         /** @var \app\services\JobCompletionService $complete */
         $complete = \Yii::$app->get('jobCompletionService');
@@ -145,5 +150,20 @@ class RunnerJobsApiTest extends DbTestCase
         $this->assertArrayHasKey('playbook_path', $payload);
         $this->assertArrayHasKey('command', $payload);
         $this->assertSame($claimed->id, $payload['job_id']);
+    }
+
+    /** Seed a minimal JobTask row — enough to clear the "did nothing" gate. */
+    private function seedTaskFor(Job $job): void
+    {
+        $task = new JobTask();
+        $task->job_id = $job->id;
+        $task->sequence = 0;
+        $task->task_name = 'seeded';
+        $task->task_action = 'debug';
+        $task->host = 'localhost';
+        $task->status = 'ok';
+        $task->changed = 0;
+        $task->duration_ms = 0;
+        $task->save(false);
     }
 }
