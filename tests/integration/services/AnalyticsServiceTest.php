@@ -101,6 +101,159 @@ class AnalyticsServiceTest extends DbTestCase
         $this->assertSame(1, $result['total_jobs']);
     }
 
+    // ─── avg_failure_duration + MTTR (real) ─────────────────────────────
+    //
+    // The summary exposes two duration-ish fields that answer different
+    // questions. These tests pin both:
+    //
+    //   avg_failure_duration_seconds — mean wall-clock runtime of failed
+    //   jobs (finished_at - started_at). This was mislabelled "mttr"
+    //   before v2.3.2.
+    //
+    //   mttr_seconds — DORA-style Mean Time To Recovery: time from a
+    //   failure finishing until the next succeeded run of the same
+    //   template. Failures with no recovery in the window are excluded.
+
+    public function testSummaryComputesAvgFailureDurationAcrossFailedJobsOnly(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+
+        // Two successes (90s, 30s) — must be ignored by the failure metric.
+        $this->finishJob($this->createJob($tpl->id, $user->id), 'succeeded', 90);
+        $this->finishJob($this->createJob($tpl->id, $user->id), 'succeeded', 30);
+
+        // Three failures of durations 60s, 120s, 300s → mean 160.0s
+        $this->finishJob($this->createJob($tpl->id, $user->id), 'failed', 60);
+        $this->finishJob($this->createJob($tpl->id, $user->id), 'failed', 120);
+        $this->finishJob($this->createJob($tpl->id, $user->id), 'timed_out', 300);
+
+        $result = $this->service->summary($this->makeQuery());
+
+        $this->assertEqualsWithDelta(160.0, $result['avg_failure_duration_seconds'], 0.1);
+        // avg_duration covers ALL finished jobs, so it must differ.
+        $this->assertNotEqualsWithDelta(
+            160.0,
+            $result['avg_duration_seconds'],
+            0.1,
+            'avg_duration must not equal avg_failure_duration when there are successes in the window.',
+        );
+    }
+
+    public function testMttrAveragesTimeFromFailureToNextSuccessOnSameTemplate(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+
+        // Failure A: finished 300s ago, recovered by success that started 200s ago → recovery = 100s
+        $failA = $this->createJob($tpl->id, $user->id);
+        $failA->status = 'failed';
+        $failA->started_at = time() - 400;
+        $failA->finished_at = time() - 300;
+        $failA->save(false);
+
+        $recoveryA = $this->createJob($tpl->id, $user->id);
+        $recoveryA->status = 'succeeded';
+        $recoveryA->started_at = time() - 200;
+        $recoveryA->finished_at = time() - 180;
+        $recoveryA->save(false);
+
+        // Failure B: finished 150s ago, recovered by success that started 100s ago → recovery = 50s
+        $failB = $this->createJob($tpl->id, $user->id);
+        $failB->status = 'timed_out';
+        $failB->started_at = time() - 170;
+        $failB->finished_at = time() - 150;
+        $failB->save(false);
+
+        $recoveryB = $this->createJob($tpl->id, $user->id);
+        $recoveryB->status = 'succeeded';
+        $recoveryB->started_at = time() - 100;
+        $recoveryB->finished_at = time() - 80;
+        $recoveryB->save(false);
+
+        $result = $this->service->summary($this->makeQuery());
+
+        // (100 + 50) / 2 = 75
+        $this->assertEqualsWithDelta(75.0, $result['mttr_seconds'], 0.5);
+    }
+
+    public function testMttrExcludesFailuresThatNeverRecovered(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+
+        // One recoverable failure: 200s → 100s → recovery = 100s
+        $failA = $this->createJob($tpl->id, $user->id);
+        $failA->status = 'failed';
+        $failA->started_at = time() - 300;
+        $failA->finished_at = time() - 200;
+        $failA->save(false);
+
+        $recoveryA = $this->createJob($tpl->id, $user->id);
+        $recoveryA->status = 'succeeded';
+        $recoveryA->started_at = time() - 100;
+        $recoveryA->finished_at = time() - 80;
+        $recoveryA->save(false);
+
+        // Unrecovered failure — no subsequent success. Must not pull
+        // the average to infinity or inject NULL.
+        $failB = $this->createJob($tpl->id, $user->id);
+        $failB->status = 'failed';
+        $failB->started_at = time() - 60;
+        $failB->finished_at = time() - 30;
+        $failB->save(false);
+
+        $result = $this->service->summary($this->makeQuery());
+
+        $this->assertEqualsWithDelta(
+            100.0,
+            $result['mttr_seconds'],
+            0.5,
+            'Unrecovered failures must be excluded from the MTTR average.',
+        );
+    }
+
+    public function testMttrIsZeroWhenNothingRecoveredInWindow(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+
+        // Only failures, no successes.
+        $this->finishJob($this->createJob($tpl->id, $user->id), 'failed', 30);
+        $this->finishJob($this->createJob($tpl->id, $user->id), 'timed_out', 60);
+
+        $result = $this->service->summary($this->makeQuery());
+        $this->assertSame(0.0, $result['mttr_seconds']);
+    }
+
+    public function testMttrDoesNotCrossTemplates(): void
+    {
+        // A success on template B must not count as recovery for a failure
+        // on template A. Otherwise MTTR would get artificially low on
+        // stacks with many unrelated templates.
+        [$user, $tplA] = $this->scaffold();
+        $group = $this->createRunnerGroup($user->id);
+        $inv = $this->createInventory($user->id);
+        $proj = $this->createProject($user->id);
+        $tplB = $this->createJobTemplate($proj->id, $inv->id, $group->id, $user->id);
+
+        $failA = $this->createJob($tplA->id, $user->id);
+        $failA->status = 'failed';
+        $failA->started_at = time() - 300;
+        $failA->finished_at = time() - 200;
+        $failA->save(false);
+
+        // Unrelated success on tplB — must NOT count as recovery for tplA.
+        $okB = $this->createJob($tplB->id, $user->id);
+        $okB->status = 'succeeded';
+        $okB->started_at = time() - 100;
+        $okB->finished_at = time() - 80;
+        $okB->save(false);
+
+        $result = $this->service->summary($this->makeQuery());
+        $this->assertSame(
+            0.0,
+            $result['mttr_seconds'],
+            'Cross-template successes must not count as recovery.',
+        );
+    }
+
     // ─── templateReliability ────────────────────────────────────────────
 
     public function testTemplateReliabilityGroupsByTemplate(): void

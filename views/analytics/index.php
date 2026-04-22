@@ -125,7 +125,7 @@ $this->title = 'Analytics';
             </div>
         </div>
         <div class="col-md-2">
-            <div class="card text-center">
+            <div class="card text-center" title="Average wall-clock time from started_at to finished_at across ALL finished jobs in the selected window. Counts successes, failures and timeouts alike.">
                 <div class="card-body py-2">
                     <div class="text-muted small">Avg Duration</div>
                     <div class="fs-4 fw-bold"><?= Html::encode((string)$s['avg_duration_seconds']) ?>s</div>
@@ -133,7 +133,15 @@ $this->title = 'Analytics';
             </div>
         </div>
         <div class="col-md-2">
-            <div class="card text-center">
+            <div class="card text-center" title="Average wall-clock runtime of FAILED jobs only (failed, error, timed_out). Low value = fast failures (syntax errors, unreachable hosts). High value = jobs that ran a long time before giving up. This is NOT MTTR — see the next tile.">
+                <div class="card-body py-2">
+                    <div class="text-muted small">Avg Failure Runtime</div>
+                    <div class="fs-4 fw-bold"><?= Html::encode((string)$s['avg_failure_duration_seconds']) ?>s</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2">
+            <div class="card text-center" title="Mean Time To Recovery (DORA). For each failed job in the window, the time until the next succeeded run of the same template. Failures that never recovered in the selected window are excluded. Zero when nothing has recovered.">
                 <div class="card-body py-2">
                     <div class="text-muted small">MTTR</div>
                     <div class="fs-4 fw-bold"><?= Html::encode((string)$s['mttr_seconds']) ?>s</div>

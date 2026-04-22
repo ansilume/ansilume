@@ -18,9 +18,20 @@ use yii\db\Connection;
 class AnalyticsService extends Component
 {
     /**
-     * High-level summary: total jobs, success rate, avg duration, MTTR.
+     * High-level summary: total jobs, success rate, avg duration,
+     * avg failure-run duration, and MTTR (mean time to recovery).
      *
-     * @return array{total_jobs: int, succeeded: int, failed: int, success_rate: float, avg_duration_seconds: float, mttr_seconds: float}
+     * The two duration fields answer different questions:
+     *   - avg_failure_duration_seconds: on average, how long did a
+     *     FAILED job run before it finally gave up? (Fast syntax
+     *     errors → low value. Slow post-play failures → high value.)
+     *     This was labelled "MTTR" before v2.3.2; it never was MTTR.
+     *   - mttr_seconds: mean time from a failure finishing until the
+     *     next successful run on the SAME template — the DORA-style
+     *     recovery time. Failures with no subsequent success in the
+     *     window are excluded from the average.
+     *
+     * @return array{total_jobs: int, succeeded: int, failed: int, success_rate: float, avg_duration_seconds: float, avg_failure_duration_seconds: float, mttr_seconds: float}
      */
     public function summary(AnalyticsQuery $query): array
     {
@@ -36,7 +47,7 @@ class AnalyticsService extends Component
             . '   THEN finished_at - started_at ELSE NULL END) AS avg_duration,'
             . ' AVG(CASE WHEN status IN (:failed2, :error2, :timed_out2)'
             . '   AND finished_at IS NOT NULL AND started_at IS NOT NULL'
-            . '   THEN finished_at - started_at ELSE NULL END) AS mttr'
+            . '   THEN finished_at - started_at ELSE NULL END) AS avg_failure_duration'
             . ' FROM {{%job}}'
             . ' WHERE ' . $where['sql'],
             array_merge($where['params'], [
@@ -59,8 +70,50 @@ class AnalyticsService extends Component
             'failed' => (int)($row['failed'] ?? 0),
             'success_rate' => $total > 0 ? round($succeeded / $total * 100, 2) : 0.0,
             'avg_duration_seconds' => round((float)($row['avg_duration'] ?? 0), 1),
-            'mttr_seconds' => round((float)($row['mttr'] ?? 0), 1),
+            'avg_failure_duration_seconds' => round((float)($row['avg_failure_duration'] ?? 0), 1),
+            'mttr_seconds' => $this->computeMttr($query),
         ];
+    }
+
+    /**
+     * Mean Time To Recovery: for every failed job in the window, find
+     * the next succeeded job for the same template and take the delta
+     * between the failure's finished_at and the recovery's started_at.
+     * Average those deltas. Failures that never recovered within the
+     * observable data are excluded (they can't contribute a finite value).
+     *
+     * Returned in seconds, rounded to one decimal. Zero when no failure
+     * in the window has a subsequent success.
+     */
+    private function computeMttr(AnalyticsQuery $query): float
+    {
+        $db = $this->getDb();
+        $where = $this->buildWhere($query, 'f');
+
+        $row = $db->createCommand(
+            'SELECT AVG(recovery_seconds) AS mttr FROM ('
+            . '  SELECT'
+            . '    (SELECT MIN(s.started_at) FROM {{%job}} s'
+            . '       WHERE s.job_template_id = f.job_template_id'
+            . '         AND s.status = :succ'
+            . '         AND s.started_at > f.finished_at'
+            . '    ) - f.finished_at AS recovery_seconds'
+            . '  FROM {{%job}} f'
+            . '  WHERE f.status IN (:failed, :error, :timed_out)'
+            . '    AND f.finished_at IS NOT NULL'
+            . '    AND f.job_template_id IS NOT NULL'
+            . '    AND ' . $where['sql']
+            . ') AS r'
+            . ' WHERE r.recovery_seconds IS NOT NULL',
+            array_merge($where['params'], [
+                ':succ' => 'succeeded',
+                ':failed' => 'failed',
+                ':error' => 'error',
+                ':timed_out' => 'timed_out',
+            ])
+        )->queryOne();
+
+        return round((float)($row['mttr'] ?? 0), 1);
     }
 
     /**
