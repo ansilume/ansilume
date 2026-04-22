@@ -203,16 +203,22 @@ class RunnerController extends Controller
         try {
             $executor = new RunnerProcessExecutor($this->http(), $this);
             $timeoutMinutes = (int)($payload['timeout_minutes'] ?? 120);
-            [$exitCode] = $executor->run($jobId, $cmd, $payload, $env, $timeoutMinutes);
+            [$exitCode, , $timedOut] = $executor->run($jobId, $cmd, $payload, $env, $timeoutMinutes);
 
             $this->collectAndSendTasks($jobId, $callbackFile);
 
             $this->http()->post("/api/runner/v1/jobs/{$jobId}/complete", [
                 'exit_code' => $exitCode,
                 'has_changes' => false,
+                // Lets the server distinguish a genuine non-zero exit from
+                // a deadline-exceeded kill. Without this the job would land
+                // on STATUS_FAILED and the "timed_out" filter wouldn't find it.
+                'timed_out' => $timedOut,
             ]);
 
-            $this->stdout("Job #{$jobId} finished with exit code {$exitCode}.\n");
+            $this->stdout(
+                sprintf("Job #%d finished with exit code %d%s.\n", $jobId, $exitCode, $timedOut ? ' (timed out)' : ''),
+            );
         } finally {
             CredentialInjector::cleanup($injection->tempFiles);
             if ($inventoryTmpFile) {

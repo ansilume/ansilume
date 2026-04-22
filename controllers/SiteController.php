@@ -105,7 +105,7 @@ class SiteController extends BaseController
 
         $failedJobs = Job::find()
             ->with(['jobTemplate', 'launcher'])
-            ->where(['status' => Job::STATUS_FAILED])
+            ->where(['status' => Job::terminalFailureStatuses()])
             ->andWhere(['>=', 'finished_at', $yesterday])
             ->orderBy(['finished_at' => SORT_DESC])
             ->limit(5)
@@ -146,7 +146,7 @@ class SiteController extends BaseController
             'jobs_today' => (int)Job::find()->where(['>=', 'created_at', $today])->count(),
             'jobs_today_failed' => (int)Job::find()
                 ->where(['>=', 'created_at', $today])
-                ->andWhere(['status' => Job::STATUS_FAILED])
+                ->andWhere(['status' => Job::terminalFailureStatuses()])
                 ->count(),
             'queued' => (int)Job::find()->where(['status' => Job::STATUS_QUEUED])->count(),
             'running' => (int)Job::find()->where(['status' => Job::STATUS_RUNNING])->count(),
@@ -201,7 +201,7 @@ class SiteController extends BaseController
 
             // Job outcomes
             $jobOk[] = (int)Job::find()->where(['status' => Job::STATUS_SUCCEEDED])->andWhere(['between', 'finished_at', $dayStart, $dayEnd])->count();
-            $jobFailed[] = (int)Job::find()->where(['status' => Job::STATUS_FAILED])->andWhere(['between', 'finished_at', $dayStart, $dayEnd])->count();
+            $jobFailed[] = (int)Job::find()->where(['status' => Job::terminalFailureStatuses()])->andWhere(['between', 'finished_at', $dayStart, $dayEnd])->count();
 
             // Host recap sums: join job_host_summary → job to get finished_at date
             $row = $db->createCommand('

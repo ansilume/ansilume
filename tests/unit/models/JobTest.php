@@ -119,6 +119,38 @@ class JobTest extends TestCase
         $this->assertSame('secondary', Job::statusCssClass('weird'));
     }
 
+    // ── isTerminalFailure() ────────────────────────────────────────────────
+    // Groups failed + timed_out together so the dashboard's "failed jobs"
+    // list surfaces timeouts alongside genuine failures. Regression target:
+    // prior to this helper, a job killed by the runner-deadline only showed
+    // up under the dedicated timed_out filter and was missing from the
+    // aggregate failure view.
+
+    public function testIsTerminalFailureForFailed(): void
+    {
+        $this->assertTrue($this->makeJob('failed')->isTerminalFailure());
+    }
+
+    public function testIsTerminalFailureForTimedOut(): void
+    {
+        $this->assertTrue($this->makeJob('timed_out')->isTerminalFailure());
+    }
+
+    public function testIsNotTerminalFailureForOtherStatuses(): void
+    {
+        foreach (['pending', 'queued', 'running', 'succeeded', 'canceled', 'pending_approval', 'rejected'] as $status) {
+            $this->assertFalse(
+                $this->makeJob($status)->isTerminalFailure(),
+                "Status {$status} must not count as a terminal failure",
+            );
+        }
+    }
+
+    public function testTerminalFailureStatusesReturnsFailedAndTimedOut(): void
+    {
+        $this->assertSame(['failed', 'timed_out'], Job::terminalFailureStatuses());
+    }
+
     private function makeJob(string $status): Job
     {
         $job = $this->getMockBuilder(Job::class)

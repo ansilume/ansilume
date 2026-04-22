@@ -124,6 +124,32 @@ class Job extends ActiveRecord
         return $this->status === self::STATUS_RUNNING;
     }
 
+    /**
+     * Whether this job reached a terminal negative outcome. Used by the
+     * dashboard's "failed jobs" list and by the daily-failure stat so
+     * timed-out runs show up alongside regular failures instead of being
+     * invisible. The dedicated `timed_out` filter on /job/index still
+     * matches the exact status so forensic filtering keeps working.
+     */
+    public function isTerminalFailure(): bool
+    {
+        return in_array($this->status, self::terminalFailureStatuses(), true);
+    }
+
+    /**
+     * Status values that count as a terminal failure for aggregate views.
+     * Keep in sync with the list above.
+     *
+     * @return string[]
+     */
+    public static function terminalFailureStatuses(): array
+    {
+        return [
+            self::STATUS_FAILED,
+            self::STATUS_TIMED_OUT,
+        ];
+    }
+
     public function isCancelable(): bool
     {
         return in_array($this->status, [

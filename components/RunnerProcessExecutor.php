@@ -32,13 +32,13 @@ class RunnerProcessExecutor
      * @param string[] $cmd
      * @param array<string, mixed> $payload
      * @param array<string, string> $env
-     * @return array{0: int, 1: int}  [exit code, final sequence number]
+     * @return array{0: int, 1: int, 2: bool}  [exit code, final sequence number, timed-out flag]
      */
     public function run(int $jobId, array $cmd, array $payload, array $env, int $timeoutMinutes): array
     {
         $process = $this->startProcess($jobId, $cmd, $payload, $env);
         if ($process === null) {
-            return [-1, 0];
+            return [-1, 0, false];
         }
 
         [$pipes, $proc] = $process;
@@ -86,7 +86,7 @@ class RunnerProcessExecutor
      *
      * @param resource $process
      * @param array<int, resource> $pipes
-     * @return array{0: int, 1: int}  [exit code, final sequence number]
+     * @return array{0: int, 1: int, 2: bool}  [exit code, final sequence number, timed-out flag]
      */
     private function streamProcessOutput(int $jobId, $process, array $pipes, int $timeoutMinutes): array
     {
@@ -114,7 +114,7 @@ class RunnerProcessExecutor
             $exitCode = -1;
         }
 
-        return [$exitCode, $sequence];
+        return [$exitCode, $sequence, $timedOut];
     }
 
     /**

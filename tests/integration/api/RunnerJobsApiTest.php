@@ -97,6 +97,108 @@ class RunnerJobsApiTest extends DbTestCase
         $this->assertSame(1, (int)$job->exit_code);
     }
 
+    /**
+     * Regression: when the runner signals timed_out=true on /complete, the
+     * job must land on STATUS_TIMED_OUT, not STATUS_FAILED. Otherwise the
+     * dedicated "timed out" job filter would miss timeouts and operators
+     * couldn't tell deadlines from real failures.
+     */
+    public function testCompleteJobRoutesTimedOutFlagToCompleteTimedOut(): void
+    {
+        [$user, $tpl, $group, $runner] = $this->scaffold();
+
+        $launch = \Yii::$app->get('jobLaunchService');
+        $job = $launch->launch($tpl, $user->id);
+        $claim = \Yii::$app->get('jobClaimService');
+        $job = $claim->claim($group, $runner);
+
+        $this->invokeCompleteEndpoint($runner, $job->id, [
+            'exit_code' => -1,
+            'has_changes' => false,
+            'timed_out' => true,
+        ]);
+
+        $job->refresh();
+        $this->assertSame(
+            Job::STATUS_TIMED_OUT,
+            $job->status,
+            'A runner signalling timed_out=true must land on STATUS_TIMED_OUT, not STATUS_FAILED.',
+        );
+        $this->assertSame(-1, (int)$job->exit_code);
+        $this->assertNotNull($job->finished_at);
+    }
+
+    public function testCompleteJobWithoutTimedOutFlagStaysOnFailedMapping(): void
+    {
+        // Non-zero exit without the timed_out flag must still land on FAILED
+        // — the safeguard must not accidentally reroute genuine failures.
+        [$user, $tpl, $group, $runner] = $this->scaffold();
+
+        $launch = \Yii::$app->get('jobLaunchService');
+        $job = $launch->launch($tpl, $user->id);
+        $claim = \Yii::$app->get('jobClaimService');
+        $job = $claim->claim($group, $runner);
+
+        $this->invokeCompleteEndpoint($runner, $job->id, [
+            'exit_code' => 2,
+            'has_changes' => false,
+        ]);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_FAILED, $job->status);
+        $this->assertSame(2, (int)$job->exit_code);
+    }
+
+    /**
+     * Drive actionComplete via a staged request so the dispatch logic
+     * (timed_out→completeTimedOut vs plain→complete) is covered end-to-end.
+     * Uses reflection to bypass Yii's behaviors (ContentNegotiator sets a
+     * `format` property that the console Response doesn't have).
+     *
+     * @param array<string, mixed> $body
+     */
+    private function invokeCompleteEndpoint(\app\models\Runner $runner, int $jobId, array $body): void
+    {
+        // The /complete path reads the raw runner token from the
+        // Authorization header, so we need to know it — regenerate here.
+        $token = \app\models\Runner::generateToken();
+        $runner->token_hash = $token['hash'];
+        $runner->save(false, ['token_hash']);
+
+        $originalRequest = \Yii::$app->has('request') ? \Yii::$app->request : null;
+        \Yii::$app->set('request', new class ($token['raw'], $body) extends \yii\web\Request {
+            /** @param array<string, mixed> $body */
+            public function __construct(private readonly string $token, private readonly array $bodyParamsValue)
+            {
+                parent::__construct();
+            }
+            public function getBodyParams(): array
+            {
+                return $this->bodyParamsValue;
+            }
+            public function getHeaders(): \yii\web\HeaderCollection
+            {
+                $h = new \yii\web\HeaderCollection();
+                $h->set('Authorization', 'Bearer ' . $this->token);
+                return $h;
+            }
+        });
+
+        try {
+            $controller = new \app\controllers\api\runner\JobsController('runner-jobs', \Yii::$app);
+            // authenticateRunner is private — invoke via reflection to
+            // populate $currentRunner without running ContentNegotiator.
+            $authRef = new \ReflectionMethod($controller, 'authenticateRunner');
+            $authRef->setAccessible(true);
+            $authRef->invoke($controller);
+            $controller->actionComplete($jobId);
+        } finally {
+            if ($originalRequest !== null) {
+                \Yii::$app->set('request', $originalRequest);
+            }
+        }
+    }
+
     public function testAppendLogCreatesLogRecord(): void
     {
         [$user, $tpl, $group, $runner] = $this->scaffold();

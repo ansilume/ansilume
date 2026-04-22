@@ -178,12 +178,6 @@ class RegisterController extends Controller
     }
 
     /**
-     * Find or create a runner by name within the given group.
-     * Always generates a fresh token so the caller gets one valid credential.
-     *
-     * @return array{0: Runner, 1: string}  [runner, rawToken]
-     */
-    /**
      * Pull `software_version` out of the registration body, trimmed and
      * bounded to the 32-char column width. Returns null when the field
      * is missing, non-string, empty, or too long — the DB row then stays
@@ -204,6 +198,12 @@ class RegisterController extends Controller
         return $trimmed;
     }
 
+    /**
+     * Find or create a runner by name within the given group.
+     * Always generates a fresh token so the caller gets one valid credential.
+     *
+     * @return array{0: Runner, 1: string}  [runner, rawToken]
+     */
     private function upsertRunner(int $groupId, string $name, int $createdBy, ?string $softwareVersion = null): array
     {
         $token = Runner::generateToken();

@@ -101,7 +101,13 @@ class JobsController extends BaseRunnerApiController
 
     /**
      * POST /api/runner/v1/jobs/<id>/complete
-     * Body: { exit_code: N, has_changes: bool }
+     * Body: { exit_code: N, has_changes: bool, timed_out?: bool }
+     *
+     * When `timed_out` is true the job is marked STATUS_TIMED_OUT via
+     * completeTimedOut(). The runner sets it after killing a process
+     * that exceeded its deadline — without the flag the server would
+     * only see exit_code=-1 and map it to STATUS_FAILED, indistinguishable
+     * from a real failure and invisible to the "timed out" filter.
      *
      * @return array<string, mixed>
      */
@@ -111,10 +117,15 @@ class JobsController extends BaseRunnerApiController
         $body = (array)\Yii::$app->request->bodyParams;
         $exitCode = (int)($body['exit_code'] ?? 0);
         $hasChanges = !empty($body['has_changes']);
+        $timedOut = !empty($body['timed_out']);
 
         /** @var JobCompletionService $svc */
         $svc = \Yii::$app->get('jobCompletionService');
-        $svc->complete($job, $exitCode, $hasChanges);
+        if ($timedOut) {
+            $svc->completeTimedOut($job);
+        } else {
+            $svc->complete($job, $exitCode, $hasChanges);
+        }
 
         return $this->ok(['status' => $job->status]);
     }
