@@ -187,20 +187,31 @@ foreach ($steps as $s) {
             // Build options with "next step" (NULL) as default and "end workflow" (-1) as explicit choice
             $branchOptions = [WorkflowStep::END_WORKFLOW => '— end workflow —'] + $stepOptions;
             ?>
+            <div id="ws-routing-explainer" class="form-text small mb-1">
+                <span id="ws-routing-help-job" class="d-none">
+                    <strong>Job step:</strong> success = exit code 0. Failure = any non-zero exit, timeout, or unreachable host. <em>Always</em> overrides both.
+                </span>
+                <span id="ws-routing-help-approval" class="d-none">
+                    <strong>Approval step:</strong> success = approved, failure = rejected. <em>Always</em> overrides both (rarely useful here — skips the decision).
+                </span>
+                <span id="ws-routing-help-pause" class="d-none">
+                    <strong>Pause step:</strong> pauses only resume via the operator clicking <em>Resume</em>, which counts as success — so only the "Next step" (on-success) field applies. <em>On Failure</em> and <em>Always</em> are ignored for pause.
+                </span>
+            </div>
             <div class="row g-2">
-                <div class="col-md-4">
+                <div class="col-md-4" id="ws-route-success" data-label-default="On Success → go to" data-label-pause="Next step →">
                     <?= $form->field($step, 'on_success_step_id')->dropDownList(
                         $branchOptions,
                         ['prompt' => '— next step (default) —']
                     )->label('On Success → go to') ?>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-4" id="ws-route-failure">
                     <?= $form->field($step, 'on_failure_step_id')->dropDownList(
                         $branchOptions,
                         ['prompt' => '— next step (default) —']
                     )->label('On Failure → go to') ?>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-4" id="ws-route-always">
                     <?= $form->field($step, 'on_always_step_id')->dropDownList(
                         $stepOptions,
                         ['prompt' => '— use success/failure above —']
@@ -215,8 +226,35 @@ foreach ($steps as $s) {
             (function () {
                 function syncTargets() {
                     var type = document.getElementById('ws-step-type').value;
+                    var isPause = type === 'pause';
                     document.getElementById('ws-target-job').style.display = type === 'job' ? '' : 'none';
                     document.getElementById('ws-target-approval').style.display = type === 'approval' ? '' : 'none';
+
+                    // Pause steps only advance via on_success (resume counts as success).
+                    // on_failure and on_always are dead code for pauses — hide them to
+                    // keep the form honest.
+                    document.getElementById('ws-route-failure').style.display = isPause ? 'none' : '';
+                    document.getElementById('ws-route-always').style.display = isPause ? 'none' : '';
+
+                    // When pause is active, expand the remaining field to full width
+                    // and swap the label from "On Success → go to" to "Next step →".
+                    var successCol = document.getElementById('ws-route-success');
+                    if (successCol) {
+                        successCol.classList.toggle('col-md-4', !isPause);
+                        successCol.classList.toggle('col-md-12', isPause);
+                        var successLabel = successCol.querySelector('label');
+                        if (successLabel) {
+                            successLabel.textContent = isPause
+                                ? successCol.getAttribute('data-label-pause')
+                                : successCol.getAttribute('data-label-default');
+                        }
+                    }
+
+                    // Show only the help blurb that matches the current step type.
+                    ['job', 'approval', 'pause'].forEach(function (t) {
+                        var help = document.getElementById('ws-routing-help-' + t);
+                        if (help) { help.classList.toggle('d-none', t !== type); }
+                    });
                 }
                 document.addEventListener('DOMContentLoaded', function () {
                     var sel = document.getElementById('ws-step-type');
