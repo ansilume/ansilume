@@ -119,7 +119,7 @@ $hasSurvey = !empty($surveyFields);
         <div class="card-body">
             <div class="mb-3">
                 <label class="form-label">Extra Vars <span class="text-muted small">(JSON, merged with template defaults<?= $hasSurvey ? ' and survey answers' : '' // xss-ok: hardcoded strings?>)</span></label>
-                <textarea name="overrides[extra_vars]" class="form-control font-monospace" rows="4"><?= Html::encode(!$hasSurvey ? ($template->extra_vars ?? '') : '') ?></textarea>
+                <textarea name="overrides[extra_vars]" class="form-control font-monospace" rows="6" data-extra-vars-editor="1"><?= Html::encode(!$hasSurvey ? ($template->extra_vars ?? '') : '') ?></textarea>
                 <div class="form-text">Example: <code>{"env": "staging"}</code></div>
             </div>
             <div class="mb-3">
@@ -160,3 +160,13 @@ $hasSurvey = !empty($surveyFields);
 
 </div>
 </div>
+
+<link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
+<script src="/js/vendor/codemirror/codemirror.js"></script>
+<script src="/js/vendor/codemirror/mode/javascript/javascript.js"></script>
+<script src="/js/vendor/codemirror/mode/yaml/yaml.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/matchbrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/closebrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/selection/active-line.js"></script>
+<script src="/js/vendor/js-yaml/js-yaml.min.js"></script>
+<script src="/js/extra-vars-editor.js"></script>

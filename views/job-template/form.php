@@ -96,10 +96,11 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     </div>
 
     <?= $form->field($model, 'extra_vars')->textarea([
-        'rows' => 4,
+        'rows' => 6,
         'class' => 'form-control font-monospace',
         'placeholder' => '{"env": "production", "version": "1.2.3"}',
-    ])->hint('JSON object. Overridable at launch time.') ?>
+        'data-extra-vars-editor' => '1',
+    ])->hint('Stored as JSON. Toggle to YAML for easier editing — the editor converts in-place. Overridable at launch time.') ?>
 
     <h5 class="mt-3 text-muted">Runner</h5>
     <div class="row g-2">
@@ -171,3 +172,13 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
 <?php ActiveForm::end(); ?>
 </div>
 </div>
+
+<link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
+<script src="/js/vendor/codemirror/codemirror.js"></script>
+<script src="/js/vendor/codemirror/mode/javascript/javascript.js"></script>
+<script src="/js/vendor/codemirror/mode/yaml/yaml.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/matchbrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/closebrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/selection/active-line.js"></script>
+<script src="/js/vendor/js-yaml/js-yaml.min.js"></script>
+<script src="/js/extra-vars-editor.js"></script>
