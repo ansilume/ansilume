@@ -42,5 +42,5 @@ $this->title = 'Workflow Jobs';
             <?php endforeach; ?>
         </tbody>
     </table>
-    <?= \yii\widgets\LinkPager::widget(['pagination' => $dataProvider->pagination]) ?>
+    <?= \yii\widgets\LinkPager::widget(['pagination' => $dataProvider->pagination, 'firstPageLabel' => '«', 'lastPageLabel' => '»']) ?>
 <?php endif; ?>

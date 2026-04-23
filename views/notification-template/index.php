@@ -57,7 +57,7 @@ $this->title = 'Notification Templates';
     <?php
     $pagination = $dataProvider->getPagination();
     if ($pagination !== false && $pagination->pageCount > 1) {
-        echo \yii\widgets\LinkPager::widget(['pagination' => $pagination]);
+        echo \yii\widgets\LinkPager::widget(['pagination' => $pagination, 'firstPageLabel' => '«', 'lastPageLabel' => '»']);
     }
     ?>
 <?php endif; ?>

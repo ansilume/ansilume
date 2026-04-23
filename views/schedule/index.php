@@ -87,5 +87,5 @@ $this->title = 'Schedules';
             </tbody>
         </table>
     </div>
-    <?= LinkPager::widget(['pagination' => $dataProvider->pagination]) ?>
+    <?= LinkPager::widget(['pagination' => $dataProvider->pagination, 'firstPageLabel' => '«', 'lastPageLabel' => '»']) ?>
 <?php endif; ?>

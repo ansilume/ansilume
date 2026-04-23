@@ -31,8 +31,10 @@ test.describe('Workflow Launch', () => {
     await expect(launchBtn).toBeVisible();
     await launchBtn.click();
 
-    // Should NOT get a 400 Bad Request — should redirect to workflow job or show success
-    await expect(page).not.toHaveURL(/400/);
+    // Should NOT get a 400 Bad Request — should redirect to workflow job or
+    // show success. Don't match bare "400" in the URL: a workflow-job URL
+    // like /workflow-job/view?id=400 legitimately contains those digits.
+    await expect(page).not.toHaveURL(/\/error.*400|400\/bad-request|errorHandler/i);
     const flash = page.locator('.alert-success, .alert-danger');
     if (await flash.isVisible({ timeout: 5_000 }).catch(() => false)) {
       // Success flash or a meaningful error (like "no steps") — not a 400

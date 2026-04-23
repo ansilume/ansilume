@@ -86,7 +86,8 @@ class JobTemplateController extends BaseController
 
         // Relational sorts need the parent tables joined; inject them only
         // when the operator actually sorts on a relational column.
-        $requested = \Yii::$app->request->getQueryParam('sort', '');
+        $request = \Yii::$app->request;
+        $requested = $request instanceof \yii\web\Request ? $request->getQueryParam('sort', '') : '';
         $sortAttr = ltrim((string)$requested, '-');
         if ($sortAttr === 'project') {
             $query->leftJoin('{{%project}}', '{{%project}}.id = {{%job_template}}.project_id');

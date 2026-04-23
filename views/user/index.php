@@ -77,5 +77,5 @@ $this->title = 'Users';
         </tbody>
     </table>
 </div>
-    <?= LinkPager::widget(['pagination' => $dataProvider->pagination]) ?>
+    <?= LinkPager::widget(['pagination' => $dataProvider->pagination, 'firstPageLabel' => '«', 'lastPageLabel' => '»']) ?>
 <?php endif; ?>

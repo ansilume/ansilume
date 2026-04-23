@@ -28,14 +28,18 @@ test.describe('Localhost warning', () => {
   });
 
   test('shown on the job template detail page when inventory targets localhost', async ({ page }) => {
-    await page.goto('/job-template/index');
+    // Force id-DESC so the e2e-seeded template stays on page 1 regardless
+    // of the new default name-sort (many Demo/e2e templates share prefixes).
+    await page.goto('/job-template/index?sort=-id');
     await page.getByRole('link', { name: 'e2e-template', exact: true }).click();
     await expect(page.locator(WARNING_LOCATOR)).toBeVisible();
     await expect(page.locator(WARNING_LOCATOR)).toContainText(WARNING_TEXT);
   });
 
   test('shown on the launch page when inventory targets localhost', async ({ page }) => {
-    await page.goto('/job-template/index');
+    // Force id-DESC so the e2e-seeded template stays on page 1 regardless
+    // of the new default name-sort (many Demo/e2e templates share prefixes).
+    await page.goto('/job-template/index?sort=-id');
     await page.getByRole('link', { name: 'e2e-template', exact: true }).click();
     await page.getByRole('link', { name: /launch/i }).first().click();
     await expect(page).toHaveURL(/job-template\/launch/);
