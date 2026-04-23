@@ -87,9 +87,9 @@
         });
 
         // Keep the editor a reasonable height — auto-sizing is too jumpy.
+        // Border + background colours are set by /css/extra-vars-editor.css
+        // so the editor matches the app's dark-mode theme.
         editorDiv.querySelector('.CodeMirror').style.height = '200px';
-        editorDiv.querySelector('.CodeMirror').style.border = '1px solid var(--bs-border-color, #dee2e6)';
-        editorDiv.querySelector('.CodeMirror').style.borderRadius = '0.375rem';
 
         // Sync editor → hidden textarea on every keystroke. When YAML mode is
         // active, parse YAML then dump JSON; when invalid, leave the textarea

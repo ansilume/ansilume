@@ -162,6 +162,7 @@ $hasSurvey = !empty($surveyFields);
 </div>
 
 <link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
+<link rel="stylesheet" href="/css/extra-vars-editor.css">
 <script src="/js/vendor/codemirror/codemirror.js"></script>
 <script src="/js/vendor/codemirror/mode/javascript/javascript.js"></script>
 <script src="/js/vendor/codemirror/mode/yaml/yaml.js"></script>

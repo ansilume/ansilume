@@ -1,0 +1,63 @@
+/*
+ * Dark theme tweaks for the CodeMirror-backed extra_vars editor.
+ *
+ * The app is always rendered under data-bs-theme="dark", so CM5's
+ * default light theme looks jarring. This sheet pulls the editor into
+ * Bootstrap's dark palette without having to vendor a whole third-party
+ * CM theme (~5-10 KB extra per theme). Mirrors the colours Bootstrap
+ * uses for form-control, border-color, and the .bg-body variants.
+ */
+
+.extra-vars-editor .CodeMirror {
+    background: var(--bs-body-bg, #212529);
+    color: var(--bs-body-color, #dee2e6);
+    border: 1px solid var(--bs-border-color, #495057);
+    border-radius: 0.375rem;
+}
+
+.extra-vars-editor .CodeMirror-gutters {
+    background: var(--bs-tertiary-bg, #2b3035);
+    border-right: 1px solid var(--bs-border-color, #495057);
+}
+
+.extra-vars-editor .CodeMirror-linenumber {
+    color: var(--bs-secondary-color, #adb5bd);
+}
+
+.extra-vars-editor .CodeMirror-cursor {
+    border-left-color: var(--bs-body-color, #dee2e6);
+}
+
+/* Bootstrap-ish selection + active-line backgrounds. rgba so the
+ * syntax highlighting stays legible through the overlay. */
+.extra-vars-editor .CodeMirror ::selection,
+.extra-vars-editor .CodeMirror-selected {
+    background: rgba(13, 110, 253, 0.30);
+}
+.extra-vars-editor .CodeMirror-focused .CodeMirror-selected {
+    background: rgba(13, 110, 253, 0.40);
+}
+.extra-vars-editor .CodeMirror-activeline-background {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.extra-vars-editor .CodeMirror-matchingbracket {
+    color: var(--bs-warning, #ffc107) !important;
+    font-weight: bold;
+}
+
+/* Syntax highlighting — enough JSON/YAML tokens to look intentional.
+ * Keep contrast ratios WCAG-readable against the dark background. */
+.extra-vars-editor .cm-string,
+.extra-vars-editor .cm-string-2 { color: #9ece6a; }   /* green   — strings */
+.extra-vars-editor .cm-number,
+.extra-vars-editor .cm-atom     { color: #e0af68; }   /* amber   — numbers/true/false/null */
+.extra-vars-editor .cm-property,
+.extra-vars-editor .cm-keyword  { color: #7aa2f7; }   /* blue    — keys/keywords */
+.extra-vars-editor .cm-comment  { color: #6c757d; font-style: italic; }
+.extra-vars-editor .cm-operator { color: #bb9af7; }   /* purple  — : , etc */
+.extra-vars-editor .cm-meta     { color: #f7768e; }   /* red     — YAML anchors/tags */
+.extra-vars-editor .cm-variable,
+.extra-vars-editor .cm-variable-2 { color: var(--bs-body-color, #dee2e6); }
+.extra-vars-editor .cm-def      { color: #7aa2f7; }
+.extra-vars-editor .cm-error    { color: var(--bs-danger, #dc3545); background: rgba(220, 53, 69, 0.10); }
