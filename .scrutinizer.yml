@@ -49,5 +49,8 @@ filter:
     - runtime/*
     - web/assets/*
     - web/js/cronstrue.min.js
+    # Vendored third-party JS (CodeMirror, js-yaml, …) — not ours to review,
+    # and their size/complexity skews the metrics for our own code.
+    - web/js/vendor/*
     - docker/*
     - migrations/*
