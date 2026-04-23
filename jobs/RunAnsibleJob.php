@@ -207,6 +207,11 @@ class RunAnsibleJob extends BaseObject implements JobInterface
             'ANSILUME_ARTIFACT_DIR' => $artifactDir,
             'ANSIBLE_FORCE_COLOR' => '1',
             'PYTHONUNBUFFERED' => '1',
+            // Writable home for any lookup plugin that shells out to a CLI
+            // needing ~/.config (op, hcloud, aws, gh, …). The default
+            // /var/www is root-owned and breaks them. See the matching
+            // RunnerController::buildProcessEnv comment for full context.
+            'HOME' => '/var/www/runtime/ansible-home',
         ]);
     }
 

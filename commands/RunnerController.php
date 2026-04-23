@@ -241,6 +241,13 @@ class RunnerController extends Controller
             'ANSILUME_CALLBACK_FILE' => $callbackFile,
             'ANSIBLE_FORCE_COLOR' => '1',
             'PYTHONUNBUFFERED' => '1',
+            // Many lookup plugins shell out to CLIs that expect a writable
+            // $HOME for their config/cache (1Password's `op` creates
+            // ~/.config/op; hcloud's CLI writes to ~/.config/hcloud; etc).
+            // The default home for www-data (/var/www) is root-owned, so
+            // any such CLI fails with "permission denied". Point HOME at
+            // the dedicated ansible-home dir the entrypoint chowns.
+            'HOME' => '/var/www/runtime/ansible-home',
         ]);
     }
 

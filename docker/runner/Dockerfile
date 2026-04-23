@@ -55,8 +55,14 @@ COPY --from=composer /build/vendor /var/www/vendor
 RUN echo 'www-data ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/www-data \
     && chmod 0440 /etc/sudoers.d/www-data
 
-# Runtime directories: token cache + Ansible tmp (www-data home is /var/www)
-RUN mkdir -p /var/www/runtime /var/www/.ansible/tmp \
+# Runtime directories:
+#   - /var/www/runtime         — token cache, project checkouts, artifacts
+#   - /var/www/runtime/ansible-home — $HOME for ansible-playbook subprocesses
+#     so lookup plugins that shell out to CLIs (op, hcloud, aws, …) can
+#     write their ~/.config / ~/.cache without hitting the root-owned
+#     /var/www. Matching buildProcessEnv() sets HOME to this dir.
+#   - /var/www/.ansible        — ansible-compat's isolated cache dir
+RUN mkdir -p /var/www/runtime/ansible-home /var/www/.ansible/tmp \
     && chown -R www-data:www-data /var/www/runtime /var/www/.ansible
 
 COPY docker/runner/entrypoint.sh /usr/local/bin/entrypoint.sh

@@ -45,6 +45,22 @@ class RunAnsibleJobTest extends TestCase
         $this->assertStringEndsWith('ansible/callback_plugins', $env['ANSIBLE_CALLBACK_PLUGINS']);
     }
 
+    /**
+     * Regression: lookup plugins like community.general.onepassword shell
+     * out to a CLI (`op`) that wants to write ~/.config/op. The default
+     * home for www-data (/var/www) is root-owned, so that write fails
+     * with "permission denied". The subprocess env must point HOME at a
+     * www-data-writable directory so any lookup plugin with a cache/
+     * config dir works out of the box. The matching directory is created
+     * and chowned by the container entrypoints.
+     */
+    public function testBuildProcessEnvSetsWritableHome(): void
+    {
+        $job = new TestableRunAnsibleJob();
+        $env = $job->buildProcessEnv('/tmp/cb', '/tmp/art');
+        $this->assertSame('/var/www/runtime/ansible-home', $env['HOME']);
+    }
+
     // -------------------------------------------------------------------------
     // DockerCommandWrapper::wrap
     // -------------------------------------------------------------------------
