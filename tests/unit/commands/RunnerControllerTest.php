@@ -203,6 +203,38 @@ class RunnerControllerTest extends TestCase
 
         $this->assertSame(ExitCode::OK, $result);
     }
+
+    /**
+     * Regression: the pull-runner path previously called injector->inject()
+     * with only the primary credential, so additional template credentials
+     * (e.g. a 1Password service-account token attached alongside an SSH
+     * key) were silently dropped from the ansible-playbook env. Operators
+     * got interactive-signin errors from 1Password lookups because
+     * lookup('env', 'OP_SERVICE_ACCOUNT_TOKEN') returned empty.
+     *
+     * Fix: call injectAll() on the full $payload['credentials'] list,
+     * mirroring what the queue-worker path (RunAnsibleJob) already does.
+     * Source-level check — executeJob() drives too many side effects to
+     * drive from a unit test; pin the shape of the injection call.
+     */
+    public function testExecuteJobInjectsAllCredentialsFromPayload(): void
+    {
+        $source = file_get_contents(
+            dirname(__DIR__, 3) . '/commands/RunnerController.php'
+        );
+        $this->assertNotFalse($source);
+
+        $this->assertStringContainsString(
+            'injectAll(',
+            $source,
+            'RunnerController must call CredentialInjector::injectAll() so additional credentials reach ansible-playbook env.',
+        );
+        $this->assertStringContainsString(
+            "'credentials'",
+            $source,
+            'RunnerController must read the full credentials list from the runner payload, not only the primary credential.',
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

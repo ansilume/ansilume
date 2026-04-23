@@ -192,11 +192,23 @@ class RunnerController extends Controller
             );
         }
 
-        // Inject credential (SSH key, vault password, etc.) into command and env
+        // Inject every template credential (primary + additional) into
+        // command args and env. The queue-worker path
+        // (jobs/RunAnsibleJob) has always called injectAll(); the pull-
+        // runner was stuck on inject() with only the primary credential,
+        // so operators who attached a secondary token credential (e.g. a
+        // 1Password service account) got their SSH key injected but not
+        // the token — and lookup('env', 'OP_SERVICE_ACCOUNT_TOKEN') came
+        // back empty in playbooks running on the pull runner.
         $credentialInjector = new CredentialInjector();
-        /** @var array{credential_type: string, username: string|null, secrets: array<string, string>}|null $credData */
-        $credData = $payload['credential'] ?? null;
-        $injection = $credentialInjector->inject(is_array($credData) ? $credData : null);
+        /** @var list<array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}> $credDataList */
+        $credDataList = is_array($payload['credentials'] ?? null) ? $payload['credentials'] : [];
+        if ($credDataList === [] && is_array($payload['credential'] ?? null)) {
+            // Server didn't ship a credentials list (pre-multi-credential
+            // runner API response shape) — fall back to the primary.
+            $credDataList = [$payload['credential']];
+        }
+        $injection = $credentialInjector->injectAll($credDataList);
         $cmd = array_merge($cmd, $injection->args);
         $env = array_merge($env, $injection->env);
 
