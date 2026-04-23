@@ -52,7 +52,7 @@ class JobTemplateController extends BaseController
 
     public function actionIndex(): string
     {
-        $query = JobTemplate::find()->with(['project', 'inventory', 'creator'])->orderBy(['id' => SORT_DESC]);
+        $query = JobTemplate::find()->with(['project', 'inventory', 'creator']);
 
         $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
         if ($filter !== null) {
@@ -62,7 +62,40 @@ class JobTemplateController extends BaseController
         $dataProvider = new ActiveDataProvider([
             'query' => $query,
             'pagination' => ['pageSize' => 20],
+            'sort' => [
+                'defaultOrder' => ['name' => SORT_ASC],
+                'attributes' => [
+                    'id',
+                    'name',
+                    'playbook',
+                    'project' => [
+                        'asc' => ['{{%project}}.name' => SORT_ASC],
+                        'desc' => ['{{%project}}.name' => SORT_DESC],
+                    ],
+                    'inventory' => [
+                        'asc' => ['{{%inventory}}.name' => SORT_ASC],
+                        'desc' => ['{{%inventory}}.name' => SORT_DESC],
+                    ],
+                    'runner_group' => [
+                        'asc' => ['{{%runner_group}}.name' => SORT_ASC],
+                        'desc' => ['{{%runner_group}}.name' => SORT_DESC],
+                    ],
+                ],
+            ],
         ]);
+
+        // Relational sorts need the parent tables joined; inject them only
+        // when the operator actually sorts on a relational column.
+        $requested = \Yii::$app->request->getQueryParam('sort', '');
+        $sortAttr = ltrim((string)$requested, '-');
+        if ($sortAttr === 'project') {
+            $query->leftJoin('{{%project}}', '{{%project}}.id = {{%job_template}}.project_id');
+        } elseif ($sortAttr === 'inventory') {
+            $query->leftJoin('{{%inventory}}', '{{%inventory}}.id = {{%job_template}}.inventory_id');
+        } elseif ($sortAttr === 'runner_group') {
+            $query->leftJoin('{{%runner_group}}', '{{%runner_group}}.id = {{%job_template}}.runner_group_id');
+        }
+
         return $this->render('index', ['dataProvider' => $dataProvider]);
     }
 

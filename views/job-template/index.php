@@ -26,9 +26,18 @@ $this->title = 'Job Templates';
                data-table-filter="template-table" style="max-width:300px">
     </div>
     <div class="table-responsive">
+        <?php $sort = $dataProvider->getSort(); ?>
         <table class="table table-hover" id="template-table">
             <thead class="table-light">
-                <tr><th>#</th><th>Name</th><th>Project</th><th>Playbook</th><th>Inventory</th><th>Runner</th><th></th></tr>
+                <tr>
+                    <th><?= $sort ? $sort->link('id', ['label' => '#']) : '#' ?></th>
+                    <th><?= $sort ? $sort->link('name', ['label' => 'Name']) : 'Name' ?></th>
+                    <th><?= $sort ? $sort->link('project', ['label' => 'Project']) : 'Project' ?></th>
+                    <th><?= $sort ? $sort->link('playbook', ['label' => 'Playbook']) : 'Playbook' ?></th>
+                    <th><?= $sort ? $sort->link('inventory', ['label' => 'Inventory']) : 'Inventory' ?></th>
+                    <th><?= $sort ? $sort->link('runner_group', ['label' => 'Runner']) : 'Runner' ?></th>
+                    <th></th>
+                </tr>
             </thead>
             <tbody>
             <?php foreach ($models as $model) : ?>

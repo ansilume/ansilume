@@ -54,7 +54,10 @@ test.describe('Job Templates CRUD', () => {
   });
 
   test('update job template', async ({ page }) => {
-    await page.goto('/job-template/index');
+    // The index defaults to name-sort, which pushes the freshly-created
+    // e2e-crud-template past page 1 when many Demo/e2e templates share
+    // a common prefix. Force id-desc so the newest row stays on page 1.
+    await page.goto('/job-template/index?sort=-id');
     const row = page.locator('table.table tbody tr', { hasText: 'e2e-crud-template' });
     await row.locator('a:has-text("Update"), a:has-text("Edit"), a[title="Update"]').first().click();
     await page.locator('#jobtemplate-description').fill('Updated by E2E test');
@@ -63,7 +66,7 @@ test.describe('Job Templates CRUD', () => {
   });
 
   test('delete job template', async ({ page }) => {
-    await deleteByRowText(page, '/job-template/index', 'e2e-crud-template');
+    await deleteByRowText(page, '/job-template/index?sort=-id', 'e2e-crud-template');
     await expectFlash(page, 'success');
   });
 });
