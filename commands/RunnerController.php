@@ -201,14 +201,7 @@ class RunnerController extends Controller
         // the token — and lookup('env', 'OP_SERVICE_ACCOUNT_TOKEN') came
         // back empty in playbooks running on the pull runner.
         $credentialInjector = new CredentialInjector();
-        /** @var list<array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}> $credDataList */
-        $credDataList = is_array($payload['credentials'] ?? null) ? $payload['credentials'] : [];
-        if ($credDataList === [] && is_array($payload['credential'] ?? null)) {
-            // Server didn't ship a credentials list (pre-multi-credential
-            // runner API response shape) — fall back to the primary.
-            $credDataList = [$payload['credential']];
-        }
-        $injection = $credentialInjector->injectAll($credDataList);
+        $injection = $credentialInjector->injectAll($this->resolveCredentialList($payload));
         $cmd = array_merge($cmd, $injection->args);
         $env = array_merge($env, $injection->env);
 
@@ -237,6 +230,30 @@ class RunnerController extends Controller
                 \app\helpers\FileHelper::safeUnlink($inventoryTmpFile);
             }
         }
+    }
+
+    /**
+     * Collect every credential attached to the template (primary plus
+     * pivot rows) from the runner payload. Falls back to the single
+     * `credential` field for pre-multi-credential server responses so
+     * older runners talking to older servers still work.
+     *
+     * @param array<string, mixed> $payload
+     * @return list<array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}>
+     */
+    private function resolveCredentialList(array $payload): array
+    {
+        $list = $payload['credentials'] ?? null;
+        if (is_array($list) && $list !== []) {
+            /** @var list<array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}> $list */
+            return array_values($list);
+        }
+        $primary = $payload['credential'] ?? null;
+        if (is_array($primary)) {
+            /** @var array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>} $primary */
+            return [$primary];
+        }
+        return [];
     }
 
     /**
