@@ -84,6 +84,16 @@ runtime using a service-account token.
 
 ### 3. Use the env var in your playbook
 
+> ⚠️ **Token credentials set a process-level environment variable,
+> not a Jinja variable.** Reference them via
+> `{{ lookup('env', 'OP_SERVICE_ACCOUNT_TOKEN') }}`. A bare
+> reference like `OP_SERVICE_ACCOUNT_TOKEN` inside a Jinja
+> expression is undefined and will fail with
+> `'OP_SERVICE_ACCOUNT_TOKEN' is undefined`. This catches a lot
+> of operators who see the `env_var_name` field and expect it to
+> produce an Ansible variable directly.
+
+
 ```yaml
 - name: Configure MariaDB
   hosts: dbservers

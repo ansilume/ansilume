@@ -105,6 +105,13 @@ $isEdit = !$model->isNewRecord;
                     . 'Only upper-case letters, digits, and underscores; must start with a letter or underscore. '
                     . 'Required when attaching more than one token credential to the same template '
                     . '(otherwise they would all collide on the default name).'
+                    . '<br><br><strong>Access from playbooks / inventory:</strong> this sets a '
+                    . 'process-level <em>environment</em> variable, not a Jinja variable. Reference it via '
+                    . '<code>{{ lookup(\'env\', \'' . \app\models\Credential::DEFAULT_TOKEN_ENV_VAR . '\') }}</code>. '
+                    . 'A bare reference like <code>' . \app\models\Credential::DEFAULT_TOKEN_ENV_VAR . '</code> '
+                    . 'in Jinja will be <em>undefined</em>. '
+                    . 'Example with the 1Password lookup: '
+                    . '<code>service_account_token=lookup(\'env\', \'' . \app\models\Credential::DEFAULT_TOKEN_ENV_VAR . '\')</code>.'
                 ) ?>
     </div>
 
