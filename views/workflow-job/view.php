@@ -54,7 +54,14 @@ $steps = $model->stepExecutions;
         <table class="table table-bordered mb-4">
             <tr>
                 <th style="width:180px">Status</th>
-                <td><span class="badge text-bg-<?= WorkflowJob::statusCssClass($model->status) ?>"><?= Html::encode(WorkflowJob::statusLabel($model->status)) ?></span></td>
+                <td>
+                    <span id="wj-status" class="badge text-bg-<?= WorkflowJob::statusCssClass($model->status) ?>">
+                        <?= Html::encode(WorkflowJob::statusLabel($model->status)) ?>
+                    </span>
+                    <?php if (!$model->isFinished()) : ?>
+                        <span id="wj-live" class="badge text-bg-primary ms-2">Live</span>
+                    <?php endif; ?>
+                </td>
             </tr>
             <tr>
                 <th>Workflow</th>
@@ -70,7 +77,7 @@ $steps = $model->stepExecutions;
             </tr>
             <tr>
                 <th>Finished</th>
-                <td><?= $model->finished_at ? Html::encode(date('Y-m-d H:i:s', (int)$model->finished_at)) : '—' ?></td>
+                <td id="wj-finished"><?= $model->finished_at ? Html::encode(date('Y-m-d H:i:s', (int)$model->finished_at)) : '—' ?></td>
             </tr>
         </table>
 
@@ -96,15 +103,15 @@ $steps = $model->stepExecutions;
                         $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
                         $label = WorkflowJobStep::statusLabel($wjs->status);
                         ?>
-                        <tr class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
+                        <tr data-wjs-step-id="<?= (int)$wjs->workflow_step_id // xss-ok: int ?>" class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
                             <td><?= Html::encode((string)($i + 1)) ?></td>
                             <td><?= Html::encode($wjs->workflowStep?->name ?? '—') ?></td>
-                            <td>
+                            <td data-wjs-status-cell>
                                 <span class="badge text-bg-<?= Html::encode($cssClass) ?>">
                                     <?= Html::encode($label) ?>
                                 </span>
                             </td>
-                            <td>
+                            <td data-wjs-job-cell>
                                 <?php if ($wjs->job_id) : ?>
                                     <?= Html::a(
                                         '#' . Html::encode((string)$wjs->job_id),
@@ -114,12 +121,12 @@ $steps = $model->stepExecutions;
                                     —
                                 <?php endif; ?>
                             </td>
-                            <td>
+                            <td data-wjs-started-cell>
                                 <?= $wjs->started_at
                                     ? Html::encode(date('H:i:s', (int)$wjs->started_at))
                                     : '—' ?>
                             </td>
-                            <td>
+                            <td data-wjs-finished-cell>
                                 <?= $wjs->finished_at
                                     ? Html::encode(date('H:i:s', (int)$wjs->finished_at))
                                     : '—' ?>
@@ -131,3 +138,86 @@ $steps = $model->stepExecutions;
         <?php endif; ?>
     </div>
 </div>
+
+<?php if (!$model->isFinished()) : ?>
+<script>
+(function () {
+    // Poll /workflow-job/status every 3s while the workflow is running,
+    // updating the overall status badge, finished timestamp, and per-step
+    // status / started / finished / job-link / current-row highlight in
+    // place. Stops polling when the status becomes terminal.
+    var pollUrl = <?= json_encode(\yii\helpers\Url::to(['status', 'id' => $model->id])) ?>;
+    var jobViewUrl = <?= json_encode(\yii\helpers\Url::to(['/job/view', 'id' => 'JOBID'])) ?>;
+    var statusEl = document.getElementById('wj-status');
+    var liveEl = document.getElementById('wj-live');
+    var finishedEl = document.getElementById('wj-finished');
+
+    function updateRow(step) {
+        var row = document.querySelector('tr[data-wjs-step-id="' + step.workflow_step_id + '"]');
+        if (!row) { return; }
+        row.classList.toggle('table-active', !!step.is_current);
+
+        var badge = row.querySelector('[data-wjs-status-cell] .badge');
+        if (badge) {
+            badge.textContent = step.status_label;
+            badge.className = 'badge text-bg-' + step.status_css;
+        }
+
+        var jobCell = row.querySelector('[data-wjs-job-cell]');
+        if (jobCell) {
+            if (step.job_id !== null) {
+                var href = jobViewUrl.replace('JOBID', step.job_id);
+                jobCell.innerHTML = '';
+                var a = document.createElement('a');
+                a.href = href;
+                a.textContent = '#' + step.job_id;
+                jobCell.appendChild(a);
+            } else {
+                jobCell.textContent = '—';
+            }
+        }
+
+        var startedCell = row.querySelector('[data-wjs-started-cell]');
+        if (startedCell) {
+            startedCell.textContent = step.started_label || '—';
+        }
+        var finishedCell = row.querySelector('[data-wjs-finished-cell]');
+        if (finishedCell) {
+            finishedCell.textContent = step.finished_label || '—';
+        }
+    }
+
+    function tick() {
+        fetch(pollUrl, { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (data) {
+                if (!data) { return; }
+
+                if (statusEl) {
+                    statusEl.textContent = data.status_label;
+                    statusEl.className = 'badge text-bg-' + data.status_css;
+                }
+                if (finishedEl && data.finished_label) {
+                    finishedEl.textContent = data.finished_label;
+                }
+
+                (data.steps || []).forEach(updateRow);
+
+                if (data.is_finished) {
+                    // Stop polling and drop the live badge — the page will
+                    // now show the final state; operators can refresh to
+                    // see resume buttons / flash messages rendered server-
+                    // side.
+                    if (liveEl) { liveEl.remove(); }
+                    clearInterval(timer);
+                }
+            })
+            .catch(function () { /* swallow transient network errors */ });
+    }
+
+    var timer = setInterval(tick, 3000);
+    // One immediate tick so the first refresh lands faster than 3s.
+    tick();
+})();
+</script>
+<?php endif; ?>
