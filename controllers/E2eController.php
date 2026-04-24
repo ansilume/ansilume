@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\models\Job;
+use app\models\JobTemplate;
 use app\models\Schedule;
 use app\services\ScheduleService;
 use yii\web\NotFoundHttpException;
@@ -34,7 +35,7 @@ class E2eController extends BaseController
         // session cookie (kept unauthenticated on purpose — the YII_DEBUG
         // + prefix combination is the guard, not user identity).
         return [
-            ['actions' => ['fire-schedule'], 'allow' => true, 'roles' => ['?', '@']],
+            ['actions' => ['fire-schedule', 'create-cancelable-job'], 'allow' => true, 'roles' => ['?', '@']],
         ];
     }
 
@@ -43,7 +44,10 @@ class E2eController extends BaseController
      */
     protected function verbRules(): array
     {
-        return ['fire-schedule' => ['POST']];
+        return [
+            'fire-schedule' => ['POST'],
+            'create-cancelable-job' => ['POST'],
+        ];
     }
 
     public function beforeAction($action): bool
@@ -104,5 +108,43 @@ class E2eController extends BaseController
             'launched' => $launched,
             'latest_job_id' => $latestJobId,
         ]);
+    }
+
+    /**
+     * POST /e2e/create-cancelable-job?template=e2e-template
+     *
+     * Inserts a Job row in STATUS_QUEUED against the named e2e-* template
+     * without going through the full launch pipeline (no queue push, no
+     * runner pickup). The cancel-walk spec needs a guaranteed-cancelable
+     * target on every run — re-using the seeded running job would make
+     * the test single-shot because the first cancel leaves the fixture in
+     * STATUS_CANCELED forever.
+     */
+    public function actionCreateCancelableJob(string $template = 'e2e-template'): Response
+    {
+        \Yii::$app->response->format = Response::FORMAT_JSON;
+
+        if (!str_starts_with($template, self::PREFIX)) {
+            \Yii::$app->response->statusCode = 400;
+            return $this->asJson(['error' => 'non-e2e template name']);
+        }
+
+        $tpl = JobTemplate::find()->where(['name' => $template])->one();
+        if ($tpl === null) {
+            throw new NotFoundHttpException("Template '{$template}' not found.");
+        }
+
+        $job = new Job();
+        $job->job_template_id = $tpl->id;
+        $job->launched_by = (int)$tpl->created_by;
+        $job->status = Job::STATUS_QUEUED;
+        $job->timeout_minutes = 120;
+        $job->has_changes = 0;
+        $job->queued_at = time();
+        $job->created_at = time();
+        $job->updated_at = time();
+        $job->save(false);
+
+        return $this->asJson(['job_id' => (int)$job->id]);
     }
 }

@@ -22,6 +22,22 @@ class JobCompletionService extends Component
 {
     public function complete(Job $job, int $exitCode, bool $hasChanges = false): void
     {
+        if ($job->isFinished()) {
+            // Runner races with an earlier terminal decision — operator cancel,
+            // server-side timeout, approval rejection. Honouring a late
+            // complete() would overwrite that decision (e.g. resurrect a
+            // canceled job as succeeded) and would redundantly dispatch
+            // webhooks/notifications that the cancel path already fired.
+            // Keep the prior status/finished_at/audit; leave a forensic log
+            // line so operators can see the runner eventually reported back.
+            $this->appendSystemLog(
+                $job,
+                "Runner reported completion (exit_code={$exitCode}) after job "
+                    . "was already in terminal status \"{$job->status}\" — ignored.",
+            );
+            return;
+        }
+
         $job->exit_code = $exitCode;
         $job->finished_at = time();
         $job->status = $exitCode === 0 ? Job::STATUS_SUCCEEDED : Job::STATUS_FAILED;
@@ -95,6 +111,18 @@ class JobCompletionService extends Component
 
     public function completeTimedOut(Job $job): void
     {
+        if ($job->isFinished()) {
+            // Same race-guard as complete(): an operator cancel / approval
+            // rejection must not be overwritten by the runner's belated
+            // timeout report.
+            $this->appendSystemLog(
+                $job,
+                "Runner reported timeout after job was already in terminal status "
+                    . "\"{$job->status}\" — ignored.",
+            );
+            return;
+        }
+
         $job->exit_code = -1;
         $job->finished_at = time();
         $job->status = Job::STATUS_TIMED_OUT;

@@ -147,6 +147,67 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
     }
 
     // -------------------------------------------------------------------------
+    // Late-report race guard (regression): complete() / completeTimedOut()
+    // must not overwrite an already-terminal status (cancel, timeout, reject).
+    // -------------------------------------------------------------------------
+
+    public function testCompleteOnCanceledJobLeavesStatusUntouched(): void
+    {
+        $job = $this->makeCanceledJob();
+        $originalFinishedAt = (int)$job->finished_at;
+
+        $this->service->complete($job, 0, hasChanges: true);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_CANCELED, $job->status, 'Cancel decision must survive a late runner complete() call.');
+        $this->assertSame($originalFinishedAt, (int)$job->finished_at, 'finished_at must not shift on the late report.');
+        $this->assertNull($job->exit_code, 'exit_code from the late report must not be stored.');
+        $this->assertSame(0, (int)$job->has_changes);
+    }
+
+    public function testCompleteOnCanceledJobAppendsForensicLog(): void
+    {
+        $job = $this->makeCanceledJob();
+
+        $this->service->complete($job, 0);
+
+        $log = JobLog::find()
+            ->where(['job_id' => $job->id, 'stream' => JobLog::STREAM_STDERR])
+            ->orderBy(['sequence' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString('terminal status', (string)$log->content);
+        $this->assertStringContainsString('canceled', (string)$log->content);
+    }
+
+    public function testCompleteOnCanceledJobDoesNotWriteFinishedAudit(): void
+    {
+        $job = $this->makeCanceledJob();
+        $auditBefore = (int)\app\models\AuditLog::find()
+            ->where(['object_type' => 'job', 'object_id' => $job->id, 'action' => 'job.finished'])
+            ->count();
+
+        $this->service->complete($job, 0);
+
+        $auditAfter = (int)\app\models\AuditLog::find()
+            ->where(['object_type' => 'job', 'object_id' => $job->id, 'action' => 'job.finished'])
+            ->count();
+        $this->assertSame($auditBefore, $auditAfter, 'Late complete() must not emit a second job.finished audit entry.');
+    }
+
+    public function testCompleteTimedOutOnCanceledJobLeavesStatusUntouched(): void
+    {
+        $job = $this->makeCanceledJob();
+        $originalFinishedAt = (int)$job->finished_at;
+
+        $this->service->completeTimedOut($job);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
+        $this->assertSame($originalFinishedAt, (int)$job->finished_at);
+    }
+
+    // -------------------------------------------------------------------------
     // appendLog()
     // -------------------------------------------------------------------------
 
@@ -272,6 +333,22 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $inv      = $this->createInventory($user->id);
         $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
         return $this->createJob($template->id, $user->id, Job::STATUS_RUNNING);
+    }
+
+    /**
+     * Build a job that has already been canceled through the normal
+     * JobController::actionCancel flow — status + finished_at set, but no
+     * exit_code. The race-guard tests use this to simulate a runner that
+     * finishes the playbook after the operator already pulled the plug.
+     */
+    private function makeCanceledJob(): Job
+    {
+        $job = $this->makeRunningJob();
+        $job->status = Job::STATUS_CANCELED;
+        $job->finished_at = time();
+        $job->save(false);
+        $job->refresh();
+        return $job;
     }
 
     /** Seed a minimal JobTask row — enough to clear the "did nothing" gate. */
