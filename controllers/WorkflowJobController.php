@@ -63,22 +63,6 @@ class WorkflowJobController extends BaseController
         $model = $this->findModel($id);
         \Yii::$app->response->format = Response::FORMAT_JSON;
 
-        $steps = [];
-        foreach ($model->stepExecutions as $wjs) {
-            $steps[] = [
-                'workflow_step_id' => (int)$wjs->workflow_step_id,
-                'job_id' => $wjs->job_id !== null ? (int)$wjs->job_id : null,
-                'is_current' => (int)$model->current_step_id === (int)$wjs->workflow_step_id,
-                'status' => (string)$wjs->status,
-                'status_label' => \app\models\WorkflowJobStep::statusLabel($wjs->status),
-                'status_css' => \app\models\WorkflowJobStep::statusCssClass($wjs->status),
-                'started_at' => $wjs->started_at !== null ? (int)$wjs->started_at : null,
-                'started_label' => $wjs->started_at !== null ? date('H:i:s', (int)$wjs->started_at) : null,
-                'finished_at' => $wjs->finished_at !== null ? (int)$wjs->finished_at : null,
-                'finished_label' => $wjs->finished_at !== null ? date('H:i:s', (int)$wjs->finished_at) : null,
-            ];
-        }
-
         return [
             'id' => (int)$model->id,
             'status' => (string)$model->status,
@@ -86,12 +70,41 @@ class WorkflowJobController extends BaseController
             'status_css' => WorkflowJob::statusCssClass($model->status),
             'is_finished' => $model->isFinished(),
             'started_at' => $model->started_at !== null ? (int)$model->started_at : null,
-            'started_label' => $model->started_at !== null ? date('Y-m-d H:i:s', (int)$model->started_at) : null,
+            'started_label' => $this->tsLabel($model->started_at, 'Y-m-d H:i:s'),
             'finished_at' => $model->finished_at !== null ? (int)$model->finished_at : null,
-            'finished_label' => $model->finished_at !== null ? date('Y-m-d H:i:s', (int)$model->finished_at) : null,
+            'finished_label' => $this->tsLabel($model->finished_at, 'Y-m-d H:i:s'),
             'current_step_id' => $model->current_step_id !== null ? (int)$model->current_step_id : null,
-            'steps' => $steps,
+            'steps' => $this->serializeSteps($model),
         ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function serializeSteps(WorkflowJob $model): array
+    {
+        $out = [];
+        $currentStepId = $model->current_step_id !== null ? (int)$model->current_step_id : null;
+        foreach ($model->stepExecutions as $wjs) {
+            $out[] = [
+                'workflow_step_id' => (int)$wjs->workflow_step_id,
+                'job_id' => $wjs->job_id !== null ? (int)$wjs->job_id : null,
+                'is_current' => $currentStepId === (int)$wjs->workflow_step_id,
+                'status' => (string)$wjs->status,
+                'status_label' => \app\models\WorkflowJobStep::statusLabel($wjs->status),
+                'status_css' => \app\models\WorkflowJobStep::statusCssClass($wjs->status),
+                'started_at' => $wjs->started_at !== null ? (int)$wjs->started_at : null,
+                'started_label' => $this->tsLabel($wjs->started_at, 'H:i:s'),
+                'finished_at' => $wjs->finished_at !== null ? (int)$wjs->finished_at : null,
+                'finished_label' => $this->tsLabel($wjs->finished_at, 'H:i:s'),
+            ];
+        }
+        return $out;
+    }
+
+    private function tsLabel(?int $ts, string $fmt): ?string
+    {
+        return $ts !== null ? date($fmt, $ts) : null;
     }
 
     public function actionCancel(int $id): Response

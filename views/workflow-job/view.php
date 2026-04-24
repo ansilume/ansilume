@@ -103,7 +103,7 @@ $steps = $model->stepExecutions;
                         $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
                         $label = WorkflowJobStep::statusLabel($wjs->status);
                         ?>
-                        <tr data-wjs-step-id="<?= (int)$wjs->workflow_step_id // xss-ok: int ?>" class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
+                        <tr data-wjs-step-id="<?= (int)$wjs->workflow_step_id // xss-ok: int?>" class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
                             <td><?= Html::encode((string)($i + 1)) ?></td>
                             <td><?= Html::encode($wjs->workflowStep?->name ?? '—') ?></td>
                             <td data-wjs-status-cell>

@@ -225,7 +225,8 @@ class JobTemplateController extends BaseController
 
         $clone = new JobTemplate();
         foreach ($source->attributes as $attr => $value) {
-            if (in_array($attr, [
+            if (
+                in_array($attr, [
                 'id',
                 'created_at',
                 'updated_at',
@@ -234,7 +235,8 @@ class JobTemplateController extends BaseController
                 'lint_at',
                 'lint_exit_code',
                 'deleted_at',
-            ], true)) {
+                ], true)
+            ) {
                 continue;
             }
             $clone->$attr = $value;
