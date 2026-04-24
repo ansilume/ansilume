@@ -33,7 +33,7 @@ export default defineConfig({
         storageState: '.auth/admin.json',
       },
       dependencies: ['setup'],
-      testIgnore: /auth\.setup\.ts|rbac\.spec\.ts|login\.spec\.ts|site\/forgot-password\.spec\.ts|trigger\/fire\.spec\.ts/,
+      testIgnore: /auth\.setup\.ts|rbac\.spec\.ts|login\.spec\.ts|site\/forgot-password\.spec\.ts|site\/totp-login\.spec\.ts|trigger\/fire\.spec\.ts/,
     },
 
     // Operator tests — only runs rbac specs whose title starts with "operator".
@@ -64,7 +64,7 @@ export default defineConfig({
     {
       name: 'unauthenticated',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: /login\.spec\.ts|forgot-password\.spec\.ts|fire\.spec\.ts/,
+      testMatch: /login\.spec\.ts|forgot-password\.spec\.ts|totp-login\.spec\.ts|fire\.spec\.ts/,
     },
   ],
 });

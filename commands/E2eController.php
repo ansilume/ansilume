@@ -190,6 +190,8 @@ class E2eController extends Controller
         (new E2eTeamScopingSeeder($logger))->seed($userId, $runnerGroupId);
         (new E2eCustomRoleSeeder($logger))->seed(self::PREFIX);
         (new E2eLdapUserSeeder($logger))->seed(self::PREFIX);
+        (new E2eTotpUserSeeder($logger))->seed(self::PREFIX);
+        (new E2ePaginationSeeder($logger))->seed($userId);
     }
 
     private function seedRunnerGroup(int $userId): int
