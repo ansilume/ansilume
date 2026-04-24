@@ -28,7 +28,7 @@ class JobTemplateController extends BaseController
     {
         return [
             ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['job-template.view']],
-            ['actions' => ['create'], 'allow' => true, 'roles' => ['job-template.create']],
+            ['actions' => ['create', 'clone'], 'allow' => true, 'roles' => ['job-template.create']],
             ['actions' => ['update'], 'allow' => true, 'roles' => ['job-template.update']],
             ['actions' => ['delete'], 'allow' => true, 'roles' => ['job-template.delete']],
             ['actions' => ['launch'], 'allow' => true, 'roles' => ['job.launch']],
@@ -47,6 +47,7 @@ class JobTemplateController extends BaseController
             'launch' => ['POST', 'GET'],
             'generate-trigger-token' => ['POST'],
             'revoke-trigger-token' => ['POST'],
+            'clone' => ['POST'],
         ];
     }
 
@@ -200,6 +201,113 @@ class JobTemplateController extends BaseController
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_DELETED, 'job_template', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', "Template \"{$name}\" deleted.");
         return $this->redirect(['index']);
+    }
+
+    /**
+     * POST /job-template/clone?id=<source_id>
+     *
+     * Duplicates a template 1:1 — all config fields, the full credential
+     * attachment list (primary + pivot), and survey_fields — under a new
+     * name "<source> (copy)". Stale and security-sensitive fields are
+     * stripped (trigger_token, lint_output/lint_at/lint_exit_code).
+     *
+     * Redirects straight to /job-template/update so the operator can
+     * adjust the name and any other fields before committing.
+     *
+     * Audit: emits a plain ACTION_TEMPLATE_CREATED event with
+     * meta.cloned_from pointing at the source template's id and name,
+     * so lineage stays discoverable without a dedicated event type.
+     */
+    public function actionClone(int $id): Response
+    {
+        $source = $this->findModel($id);
+        $this->requireChildView($source->project_id);
+
+        $clone = new JobTemplate();
+        foreach ($source->attributes as $attr => $value) {
+            if (in_array($attr, [
+                'id',
+                'created_at',
+                'updated_at',
+                'trigger_token',
+                'lint_output',
+                'lint_at',
+                'lint_exit_code',
+                'deleted_at',
+            ], true)) {
+                continue;
+            }
+            $clone->$attr = $value;
+        }
+        $clone->name = $this->resolveCloneName($source->name);
+        $clone->created_by = (int)(\Yii::$app->user->id ?? 0);
+
+        if (!$clone->save()) {
+            $this->session()->setFlash('danger', 'Clone failed: ' . json_encode($clone->errors));
+            return $this->redirect(['view', 'id' => $source->id]);
+        }
+
+        $this->copyCredentialPivot($source->id, $clone->id);
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_TEMPLATE_CREATED,
+            'job_template',
+            $clone->id,
+            null,
+            [
+                'name' => $clone->name,
+                'cloned_from' => $source->id,
+                'cloned_from_name' => $source->name,
+            ],
+        );
+
+        $this->session()->setFlash(
+            'success',
+            "Cloned \"{$source->name}\" → \"{$clone->name}\". Rename or adjust as needed, then save.",
+        );
+        return $this->redirect(['update', 'id' => $clone->id]);
+    }
+
+    /**
+     * Pick a non-colliding name for the clone. Starts with
+     * "<source> (copy)", then "(copy 2)", "(copy 3)", … up to 100
+     * attempts before giving up with a timestamped suffix.
+     */
+    private function resolveCloneName(string $sourceName): string
+    {
+        // Strip an existing "(copy)" / "(copy N)" suffix so cloning a
+        // clone doesn't produce "Foo (copy) (copy)".
+        $base = preg_replace('/\s*\(copy(?:\s+\d+)?\)\s*$/u', '', $sourceName) ?? $sourceName;
+        $candidate = "{$base} (copy)";
+        for ($i = 2; $i <= 100; $i++) {
+            if (!JobTemplate::find()->where(['name' => $candidate])->exists()) {
+                return $candidate;
+            }
+            $candidate = "{$base} (copy {$i})";
+        }
+        return "{$base} (copy " . time() . ')';
+    }
+
+    /**
+     * Duplicate every job_template_credential row from $sourceId onto
+     * $cloneId, preserving sort_order. The primary credential_id on the
+     * clone was already set via the attribute copy — these are the
+     * additional attachments.
+     */
+    private function copyCredentialPivot(int $sourceId, int $cloneId): void
+    {
+        $db = \Yii::$app->db;
+        $rows = $db->createCommand(
+            'SELECT credential_id, sort_order FROM {{%job_template_credential}} WHERE job_template_id = :id ORDER BY sort_order',
+            [':id' => $sourceId],
+        )->queryAll();
+        foreach ($rows as $row) {
+            $db->createCommand()->insert('{{%job_template_credential}}', [
+                'job_template_id' => $cloneId,
+                'credential_id' => (int)$row['credential_id'],
+                'sort_order' => (int)$row['sort_order'],
+            ])->execute();
+        }
     }
 
     public function actionLaunch(): Response|string

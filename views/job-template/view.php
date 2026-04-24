@@ -26,6 +26,12 @@ $this->title = $model->name;
         <?php if (\Yii::$app->user?->can('job-template.update')) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary ms-1']) ?>
         <?php endif; ?>
+        <?php if (\Yii::$app->user?->can('job-template.create')) : ?>
+            <form method="post" action="<?= \yii\helpers\Url::to(['clone', 'id' => $model->id]) ?>" style="display:inline">
+                <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
+                <button type="submit" class="btn btn-outline-secondary ms-1" title="Duplicate this template — you'll land on the edit form for the copy">Clone</button>
+            </form>
+        <?php endif; ?>
         <?php if (\Yii::$app->user?->can('job-template.delete')) : ?>
             <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this template?')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">

@@ -282,6 +282,117 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $ctrl->actionDelete(9999999);
     }
 
+    // ── actionClone() ────────────────────────────────────────────────────────
+
+    public function testClonePersistsDuplicateAndAuditsWithLineage(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $source = $this->makeTemplate($user->id);
+        // Exercise a few fields that must round-trip through the clone.
+        $source->extra_vars = '{"env":"staging"}';
+        $source->forks = 12;
+        $source->become = true;
+        $source->timeout_minutes = 30;
+        $source->save(false);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionClone((int)$source->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+
+        /** @var JobTemplate|null $clone */
+        $clone = JobTemplate::find()
+            ->where(['name' => $source->name . ' (copy)'])
+            ->one();
+        $this->assertNotNull($clone, 'Clone must be persisted under "<source> (copy)".');
+        $this->assertNotSame((int)$source->id, (int)$clone->id);
+
+        // Config carried over.
+        $this->assertSame('{"env":"staging"}', $clone->extra_vars);
+        $this->assertSame(12, (int)$clone->forks);
+        $this->assertSame(1, (int)$clone->become);
+        $this->assertSame(30, (int)$clone->timeout_minutes);
+
+        // created_by belongs to the cloning user, not the source's creator.
+        $this->assertSame($user->id, (int)$clone->created_by);
+
+        // Audit entry is plain CREATED with lineage in meta.
+        $audit = AuditLog::findOne([
+            'action' => AuditLog::ACTION_TEMPLATE_CREATED,
+            'object_id' => $clone->id,
+        ]);
+        $this->assertNotNull($audit);
+        $meta = json_decode((string)$audit->metadata, true);
+        $this->assertIsArray($meta);
+        $this->assertSame((int)$source->id, (int)$meta['cloned_from']);
+        $this->assertSame($source->name, (string)$meta['cloned_from_name']);
+    }
+
+    public function testCloneStripsStaleAndSensitiveFields(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $source = $this->makeTemplate($user->id);
+        $source->trigger_token = hash('sha256', 'some-raw-token');
+        $source->lint_output = 'fake lint output';
+        $source->lint_at = time();
+        $source->lint_exit_code = 2;
+        $source->save(false);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionClone((int)$source->id);
+
+        /** @var JobTemplate $clone */
+        $clone = JobTemplate::find()->where(['name' => $source->name . ' (copy)'])->one();
+        $this->assertNull($clone->trigger_token, 'Trigger token must not leak to the clone.');
+        $this->assertNull($clone->lint_output);
+        $this->assertNull($clone->lint_at);
+        $this->assertNull($clone->lint_exit_code);
+    }
+
+    public function testClonePicksNonCollidingNameAcrossRepeatedClones(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $source = $this->makeTemplate($user->id);
+        $base = $source->name;
+
+        $ctrl = $this->makeController();
+        $ctrl->actionClone((int)$source->id);
+        $ctrl->actionClone((int)$source->id);
+        $ctrl->actionClone((int)$source->id);
+
+        $this->assertNotNull(JobTemplate::findOne(['name' => "{$base} (copy)"]));
+        $this->assertNotNull(JobTemplate::findOne(['name' => "{$base} (copy 2)"]));
+        $this->assertNotNull(JobTemplate::findOne(['name' => "{$base} (copy 3)"]));
+    }
+
+    public function testCloneStripsExistingCopySuffixSoItDoesntStack(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $source = $this->makeTemplate($user->id);
+        $source->name = 'my-template (copy)';
+        $source->save(false);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionClone((int)$source->id);
+
+        // Must end up as "my-template (copy 2)", not "my-template (copy) (copy)".
+        $this->assertNotNull(JobTemplate::findOne(['name' => 'my-template (copy 2)']));
+        $this->assertNull(JobTemplate::findOne(['name' => 'my-template (copy) (copy)']));
+    }
+
+    public function testCloneThrowsNotFound(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionClone(9999999);
+    }
+
     // ── actionLaunch() ───────────────────────────────────────────────────────
 
     public function testLaunchRendersFormOnGet(): void

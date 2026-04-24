@@ -56,6 +56,12 @@ $this->title = 'Job Templates';
                         <?php if (\Yii::$app->user?->can('job-template.update')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                         <?php endif; ?>
+                        <?php if (\Yii::$app->user?->can('job-template.create')) : ?>
+                            <form method="post" action="<?= \yii\helpers\Url::to(['clone', 'id' => $model->id]) ?>" style="display:inline">
+                                <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
+                                <button type="submit" class="btn btn-sm btn-outline-secondary ms-1" title="Clone this template">Clone</button>
+                            </form>
+                        <?php endif; ?>
                     </td>
                 </tr>
             <?php endforeach; ?>
