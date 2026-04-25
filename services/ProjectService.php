@@ -88,7 +88,9 @@ class ProjectService extends Component
     /**
      * Run git clone or pull with SSH key handling and error recovery.
      *
-     * @throws \RuntimeException on failure.
+     * @throws \RuntimeException on failure (also when the underlying error
+     *         was a \Throwable — wrapped in RuntimeException so callers
+     *         can rely on a single exception type).
      */
     private function executeGitSync(Project $project, string $dest): void
     {
@@ -101,7 +103,13 @@ class ProjectService extends Component
             $project->status = Project::STATUS_SYNCED;
             $project->last_synced_at = time();
             $project->last_sync_error = null;
-        } catch (\RuntimeException $e) {
+        } catch (\Throwable $e) {
+            // Anything thrown while syncing — RuntimeException from
+            // proc_open/non-zero exit, Error from a malformed credential, a
+            // type juggling slip — must flip the project to STATUS_ERROR.
+            // The previous narrower `catch (RuntimeException)` left the row
+            // on STATUS_SYNCING for any other exception class, which made
+            // the operator's project look "still working" forever.
             $project->status = Project::STATUS_ERROR;
             $project->last_sync_error = $e->getMessage();
             $threw = $e;
@@ -114,7 +122,13 @@ class ProjectService extends Component
         $this->notifySyncTransition($project);
 
         if ($threw !== null) {
-            throw $threw;
+            // Re-throw as RuntimeException so the SyncProjectJob outer
+            // try/catch (which already targets RuntimeException) handles
+            // every error class uniformly.
+            if ($threw instanceof \RuntimeException) {
+                throw $threw;
+            }
+            throw new \RuntimeException($threw->getMessage(), 0, $threw);
         }
     }
 
@@ -193,8 +207,14 @@ class ProjectService extends Component
             $sshKeyFile = $this->writeSshKeyFile($project);
             if ($sshKeyFile !== null) {
                 $keyFile = $sshKeyFile;
+                // UserKnownHostsFile=/dev/null skips the known_hosts write
+                // entirely — without this the worker tried to update HOME's
+                // ~/.ssh/known_hosts and surfaced a "Permission denied"
+                // warning that confused operators (and was the symptom of
+                // a follow-on hang when SSH refused to proceed).
                 $env['GIT_SSH_COMMAND'] = 'ssh -i ' . escapeshellarg($sshKeyFile)
-                    . ' -o StrictHostKeyChecking=no'
+                    . ' -o StrictHostKeyChecking=accept-new'
+                    . ' -o UserKnownHostsFile=/dev/null'
                     . ' -o BatchMode=yes';
             }
         } elseif ($project->isHttpsScmUrl()) {
@@ -205,12 +225,25 @@ class ProjectService extends Component
     }
 
     /**
+     * Writable HOME for the git subprocess. The default www-data home in the
+     * php:8.2-fpm image is `/var/www`, which is root-owned and not writable
+     * by the worker. Anything that probes `~/.gitconfig`, `~/.config/git`,
+     * or — crucially — SSH's `~/.ssh/known_hosts` blows up with
+     * "Permission denied". The matching directory is created and chowned in
+     * docker/php/entrypoint*.sh and docker/runner/entrypoint.sh.
+     *
+     * Mirrors the equivalent constant for ansible (see RunAnsibleJob and
+     * RunnerController).
+     */
+    public const GIT_HOME = '/var/www/runtime/git-home';
+
+    /**
      * @return array<string, string>
      */
     private function baseGitEnv(): array
     {
         return [
-            'HOME' => getenv('HOME') ?: '/root',
+            'HOME' => self::GIT_HOME,
             'GIT_TERMINAL_PROMPT' => '0',
             'GIT_CONFIG_COUNT' => '1',
             'GIT_CONFIG_KEY_0' => 'safe.directory',

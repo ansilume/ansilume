@@ -27,6 +27,34 @@ class GitEnvBuilderTest extends TestCase
         $this->assertNull($sshKeyFile);
     }
 
+    /**
+     * Regression: the runner used to inherit HOME from `getenv('HOME')`,
+     * which on the www-data fpm pool resolves to `/var/www` — root-owned,
+     * not writable. Anything that probed `~/.gitconfig` or SSH's
+     * `~/.ssh/known_hosts` then failed with EACCES. Pin the writable
+     * location so this can never come back.
+     */
+    public function testBaseEnvHomePointsAtWritableRuntimeDirectory(): void
+    {
+        $builder = new GitEnvBuilder();
+        $sshKeyFile = null;
+        $env = $builder->build('', null, $sshKeyFile);
+
+        $this->assertSame(GitEnvBuilder::GIT_HOME, $env['HOME']);
+        $this->assertSame('/var/www/runtime/git-home', $env['HOME']);
+        $this->assertNotSame('/var/www', $env['HOME']);
+        $this->assertNotSame('/root', $env['HOME']);
+    }
+
+    public function testBaseEnvSetsPath(): void
+    {
+        $builder = new GitEnvBuilder();
+        $sshKeyFile = null;
+        $env = $builder->build('', null, $sshKeyFile);
+        $this->assertArrayHasKey('PATH', $env);
+        $this->assertNotSame('', $env['PATH']);
+    }
+
     public function testSshUrlWithSshKeyCredentialWritesKeyAndSetsGitSshCommand(): void
     {
         $builder = new GitEnvBuilder();
@@ -46,8 +74,11 @@ class GitEnvBuilderTest extends TestCase
             $this->assertArrayHasKey('GIT_SSH_COMMAND', $env);
             // Regression: the four options that together make batch-mode SSH
             // work against a previously-unknown host with a single key.
+            // UserKnownHostsFile=/dev/null is the load-bearing one — without
+            // it, ssh tries to update a known_hosts under HOME and fails
+            // with "Permission denied" on a non-writable home directory.
             $this->assertStringContainsString('-i ', $env['GIT_SSH_COMMAND']);
-            $this->assertStringContainsString('StrictHostKeyChecking=no', $env['GIT_SSH_COMMAND']);
+            $this->assertStringContainsString('StrictHostKeyChecking=accept-new', $env['GIT_SSH_COMMAND']);
             $this->assertStringContainsString('UserKnownHostsFile=/dev/null', $env['GIT_SSH_COMMAND']);
             $this->assertStringContainsString('BatchMode=yes', $env['GIT_SSH_COMMAND']);
             $this->assertNotNull($sshKeyFile);

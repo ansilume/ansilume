@@ -260,4 +260,98 @@ class ProjectSyncTest extends TestCase
 
         $this->assertStringContainsString('42', $project->local_path);
     }
+
+    // -------------------------------------------------------------------------
+    // Throwable fence: any exception class must flip the project to ERROR.
+    // The original narrow `catch (RuntimeException)` was the bug class that
+    // surfaced as "stuck on syncing" — anything else (\Error from a missing
+    // method, \TypeError from a bad cast, etc.) escaped the catch and left
+    // the row on STATUS_SYNCING forever.
+    // -------------------------------------------------------------------------
+
+    public function testSyncFlipsToErrorWhenGitClonePullThrowsError(): void
+    {
+        $project = $this->makeProject([]);
+        $service = $this->makeServiceThatThrows(new \Error('boom: missing method'));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/boom: missing method/');
+
+        try {
+            $service->sync($project);
+        } finally {
+            $this->assertSame(Project::STATUS_ERROR, $project->status);
+            $this->assertStringContainsString('boom: missing method', (string)$project->last_sync_error);
+            $this->assertNull($project->sync_started_at, 'sync_started_at must be cleared in the finally block.');
+        }
+    }
+
+    public function testSyncFlipsToErrorWhenGitClonePullThrowsTypeError(): void
+    {
+        $project = $this->makeProject([]);
+        $service = $this->makeServiceThatThrows(new \TypeError('expected string, got null'));
+
+        $this->expectException(\RuntimeException::class);
+
+        try {
+            $service->sync($project);
+        } finally {
+            $this->assertSame(Project::STATUS_ERROR, $project->status);
+            $this->assertStringContainsString('expected string', (string)$project->last_sync_error);
+        }
+    }
+
+    public function testSyncFlipsToErrorWhenGitClonePullThrowsLogicException(): void
+    {
+        $project = $this->makeProject([]);
+        $service = $this->makeServiceThatThrows(new \LogicException('bad state'));
+
+        $this->expectException(\RuntimeException::class);
+
+        try {
+            $service->sync($project);
+        } finally {
+            $this->assertSame(Project::STATUS_ERROR, $project->status);
+        }
+    }
+
+    /**
+     * Build a service whose gitClone always throws the given Throwable, so
+     * we can prove every exception class flips the row to ERROR.
+     */
+    private function makeServiceThatThrows(\Throwable $toThrow): ProjectService
+    {
+        $tmpDir = $this->tmpDir;
+        return new class ($tmpDir, $toThrow) extends ProjectService {
+            private string $tmpDir;
+            private \Throwable $toThrow;
+
+            public function __construct(string $tmpDir, \Throwable $toThrow)
+            {
+                $this->tmpDir = $tmpDir;
+                $this->toThrow = $toThrow;
+                $this->workspacePath = $tmpDir;
+            }
+
+            public function localPath(\app\models\Project $project): string
+            {
+                return $this->tmpDir . '/' . $project->id;
+            }
+
+            protected function gitClone(\app\models\Project $project, string $url, string $dest, string $branch, array $env): void
+            {
+                throw $this->toThrow;
+            }
+
+            protected function gitPull(\app\models\Project $project, string $dest, string $branch, array $env): void
+            {
+                throw $this->toThrow;
+            }
+
+            protected function buildGitEnv(\app\models\Project $project, ?string &$keyFile): array
+            {
+                return ['HOME' => self::GIT_HOME, 'GIT_TERMINAL_PROMPT' => '0'];
+            }
+        };
+    }
 }

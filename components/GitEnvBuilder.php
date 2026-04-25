@@ -23,6 +23,15 @@ namespace app\components;
 final class GitEnvBuilder
 {
     /**
+     * Writable HOME for the runner-side git subprocess. Same rationale as
+     * ProjectService::GIT_HOME on the server side: the default www-data
+     * home (`/var/www`) is root-owned, so any tool that probes `~/.gitconfig`
+     * or SSH's `~/.ssh/known_hosts` blows up with EACCES. The matching
+     * directory is created and chowned in docker/runner/entrypoint.sh.
+     */
+    public const GIT_HOME = '/var/www/runtime/git-home';
+
+    /**
      * @param array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}|null $scmCredential
      * @param string|null $sshKeyFile Filled in with the temp path when an SSH key was materialised.
      * @return array<string, string>
@@ -40,7 +49,7 @@ final class GitEnvBuilder
             if ($keyFile !== null) {
                 $sshKeyFile = $keyFile;
                 $env['GIT_SSH_COMMAND'] = 'ssh -i ' . escapeshellarg($keyFile)
-                    . ' -o StrictHostKeyChecking=no'
+                    . ' -o StrictHostKeyChecking=accept-new'
                     . ' -o UserKnownHostsFile=/dev/null'
                     . ' -o BatchMode=yes';
             }
@@ -57,7 +66,7 @@ final class GitEnvBuilder
     private function baseEnv(): array
     {
         return [
-            'HOME' => getenv('HOME') ?: '/root',
+            'HOME' => self::GIT_HOME,
             'PATH' => getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin',
             'GIT_TERMINAL_PROMPT' => '0',
             'GIT_CONFIG_COUNT' => '1',

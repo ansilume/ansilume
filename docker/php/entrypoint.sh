@@ -24,7 +24,7 @@ fi
 # artifacts, and logs subdirectories are required by the selftest playbook and
 # by ArtifactService / ProjectService before the first job runs.
 #
-for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/runtime/ansible-home /var/www/web/assets; do
+for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/runtime/ansible-home /var/www/runtime/git-home /var/www/web/assets; do
     if [ ! -d "$dir" ]; then
         echo "[entrypoint] creating $dir"
         mkdir -p "$dir"

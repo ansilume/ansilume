@@ -420,4 +420,34 @@ for entrypoint in docker/php/entrypoint.sh docker/php/entrypoint-prod.sh; do
     fi
 done
 
+# =============================================================================
+# Writable subprocess HOME (regression: SSH/git/ansible permission denied)
+#
+# The php:8.2-fpm image's default www-data home is /var/www, which on our
+# bind-mounted compose layout is root-owned. Anything that probes
+# ~/.ssh/known_hosts (git-via-SSH), ~/.gitconfig, or ~/.ansible (lookup
+# plugins, op CLI, etc.) blows up with EACCES. The fix is two-sided:
+# the application sets HOME to a runtime dir (constants in ProjectService /
+# GitEnvBuilder / AnsibleInventoryRunner / RunAnsibleJob), and the
+# entrypoints create + chown that dir. Both halves must agree, otherwise
+# operators see "Permission denied" at runtime even though every PHPUnit
+# test passes.
+# =============================================================================
+section "Subprocess HOME directories prepared by entrypoints"
+
+REQUIRED_HOMES="/var/www/runtime/ansible-home /var/www/runtime/git-home"
+for entrypoint in docker/php/entrypoint.sh docker/php/entrypoint-prod.sh docker/runner/entrypoint.sh; do
+    if [ ! -f "$entrypoint" ]; then
+        skip "$entrypoint not found"
+        continue
+    fi
+    for home_dir in $REQUIRED_HOMES; do
+        if ! grep -qF "$home_dir" "$entrypoint"; then
+            fail "$entrypoint does not prepare $home_dir (mkdir/chown)"
+        else
+            ok "$entrypoint prepares $home_dir"
+        fi
+    done
+done
+
 print_summary

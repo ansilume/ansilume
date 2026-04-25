@@ -15,6 +15,15 @@ use yii\base\Component;
  */
 class AnsibleInventoryRunner extends Component
 {
+    /**
+     * Writable HOME for the subprocess. ansible plugins (and tools like
+     * ansible-vault helpers) probe `~/.ansible*` and similar paths; the
+     * default www-data home `/var/www` is root-owned, so anything that
+     * writes there fails with EACCES. Same fix as RunAnsibleJob and
+     * ProjectService — point at a runtime dir prepared by the entrypoints.
+     */
+    public const ANSIBLE_HOME = '/var/www/runtime/ansible-home';
+
     /** @var int Timeout in seconds for ansible-inventory execution. */
     public int $timeout = 30;
 
@@ -73,7 +82,8 @@ class AnsibleInventoryRunner extends Component
             2 => ['pipe', 'w'],
         ];
 
-        $process = proc_open($cmd, $descriptors, $pipes, $cwd);
+        $env = $this->buildProcessEnv();
+        $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
         if (!is_resource($process)) {
             return null;
         }
@@ -83,6 +93,21 @@ class AnsibleInventoryRunner extends Component
         stream_set_blocking($pipes[2], false);
 
         return $process;
+    }
+
+    /**
+     * Subprocess environment. Pinned HOME + propagated PATH so the child
+     * can find `ansible-inventory` and any plugin caches it wants to write.
+     *
+     * @return array<string, string>
+     */
+    protected function buildProcessEnv(): array
+    {
+        return [
+            'HOME' => self::ANSIBLE_HOME,
+            'PATH' => getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin',
+            'LANG' => 'C.UTF-8',
+        ];
     }
 
     /**

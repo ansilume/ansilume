@@ -59,4 +59,54 @@ class AnsibleInventoryRunnerTest extends TestCase
             }
         }
     }
+
+    /**
+     * Regression: the inventory subprocess used to inherit HOME from the
+     * parent php-fpm worker, which on www-data resolves to /var/www
+     * (root-owned). Any plugin that wanted to write a `~/.ansible*` cache
+     * dir then failed with EACCES. The fix pins HOME to a writable runtime
+     * dir prepared by the entrypoints — same shape as the git-side fix.
+     */
+    public function testBuildProcessEnvPointsHomeAtAnsibleHome(): void
+    {
+        $runner = new ExposingAnsibleInventoryRunner();
+        $env = $runner->envForTests();
+
+        $this->assertSame(AnsibleInventoryRunner::ANSIBLE_HOME, $env['HOME']);
+        $this->assertSame('/var/www/runtime/ansible-home', $env['HOME']);
+        $this->assertNotSame('/var/www', $env['HOME']);
+    }
+
+    public function testBuildProcessEnvPropagatesPath(): void
+    {
+        $runner = new ExposingAnsibleInventoryRunner();
+        $env = $runner->envForTests();
+
+        $this->assertArrayHasKey('PATH', $env);
+        $this->assertNotSame('', $env['PATH']);
+    }
+
+    public function testBuildProcessEnvSetsUtf8Locale(): void
+    {
+        // Without LANG=C.UTF-8 ansible-inventory has historically blown up
+        // with locale-related encoding errors when the host shell didn't
+        // export a proper locale. Pin it.
+        $runner = new ExposingAnsibleInventoryRunner();
+        $env = $runner->envForTests();
+
+        $this->assertSame('C.UTF-8', $env['LANG']);
+    }
+}
+
+/**
+ * Test-only subclass that exposes the protected env builder so the
+ * regression assertions above can read what we hand to proc_open.
+ */
+class ExposingAnsibleInventoryRunner extends AnsibleInventoryRunner
+{
+    /** @return array<string, string> */
+    public function envForTests(): array
+    {
+        return $this->buildProcessEnv();
+    }
 }
