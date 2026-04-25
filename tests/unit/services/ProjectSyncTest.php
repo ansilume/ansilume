@@ -62,6 +62,7 @@ class ProjectSyncTest extends TestCase
             'local_path'        => null,
             'status'            => Project::STATUS_NEW,
             'last_synced_at'    => null,
+            'sync_started_at'   => null,
             'last_sync_error'   => null,
             'last_sync_event'   => null,
             'created_by'        => 1,
@@ -116,7 +117,7 @@ class ProjectSyncTest extends TestCase
                 return $dest;
             }
 
-            protected function gitClone(string $url, string $dest, string $branch, array $env): void
+            protected function gitClone(\app\models\Project $project, string $url, string $dest, string $branch, array $env): void
             {
                 $this->cloneCalls[] = ['url' => $url, 'dest' => $dest, 'branch' => $branch];
                 if ($this->failGit) {
@@ -124,7 +125,7 @@ class ProjectSyncTest extends TestCase
                 }
             }
 
-            protected function gitPull(string $dest, string $branch, array $env): void
+            protected function gitPull(\app\models\Project $project, string $dest, string $branch, array $env): void
             {
                 $this->pullCalls[] = ['dest' => $dest, 'branch' => $branch];
                 if ($this->failGit) {

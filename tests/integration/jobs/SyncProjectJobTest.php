@@ -115,4 +115,46 @@ class SyncProjectJobTest extends DbTestCase
             \Yii::$app->set('lintService', $originalLintService);
         }
     }
+
+    /**
+     * Regression: a Throwable from the lint phase used to bubble out and
+     * leave the rest of the job dangling. The fix wraps the lint block in
+     * its own try/catch so a successful sync stays committed and only a
+     * warning gets logged.
+     */
+    public function testExecuteSwallowsLintThrowableAfterSuccessfulSync(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+
+        $originalProjectService = \Yii::$app->getComponents(true)['projectService'] ?? null;
+        $originalLintService = \Yii::$app->getComponents(true)['lintService'] ?? null;
+
+        \Yii::$app->set('projectService', new class extends \yii\base\Component {
+            public function sync(\app\models\Project $p): void
+            {
+                $p->status = \app\models\Project::STATUS_SYNCED;
+                $p->save(false);
+            }
+        });
+        \Yii::$app->set('lintService', new class extends \yii\base\Component {
+            public function runForProject(\app\models\Project $p): void
+            {
+                throw new \Error('ansible-lint exploded');
+            }
+            public function runForTemplate(\app\models\JobTemplate $t): void
+            {
+            }
+        });
+
+        try {
+            $job = new SyncProjectJob(['projectId' => $project->id]);
+            $job->execute(null); // must not throw
+            $project->refresh();
+            $this->assertSame(\app\models\Project::STATUS_SYNCED, $project->status);
+        } finally {
+            \Yii::$app->set('projectService', $originalProjectService);
+            \Yii::$app->set('lintService', $originalLintService);
+        }
+    }
 }

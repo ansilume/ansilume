@@ -8,6 +8,7 @@ use app\jobs\SyncProjectJob;
 use app\models\Credential;
 use app\models\NotificationTemplate;
 use app\models\Project;
+use app\models\ProjectSyncLog;
 use yii\base\Component;
 
 /**
@@ -22,13 +23,27 @@ class ProjectService extends Component
     public string $workspacePath = '/var/www/runtime/projects';
 
     /**
+     * Hard timeout (seconds) applied to every git subprocess. Defaults to
+     * five minutes — long enough for any reasonable clone/pull on a slow
+     * network, short enough that an unreachable host doesn't wedge the
+     * queue worker. Override via component config (`gitTimeoutSeconds`).
+     */
+    public int $gitTimeoutSeconds = 300;
+
+    /**
      * Queue a sync job for the given project.
      * Transitions status to 'syncing' immediately.
      */
     public function queueSync(Project $project): void
     {
         $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time();
         $project->save(false);
+
+        // Each sync run starts with a fresh log buffer — operators care
+        // about the current attempt, not history. Retention/forensics for
+        // older runs would belong in a separate table with run_id.
+        ProjectSyncLog::deleteAll(['project_id' => $project->id]);
 
         /** @var \yii\queue\Queue $queue */
         $queue = \Yii::$app->queue;
@@ -66,6 +81,7 @@ class ProjectService extends Component
     {
         $project->status = Project::STATUS_SYNCED;
         $project->last_synced_at = time();
+        $project->sync_started_at = null;
         $project->save(false);
     }
 
@@ -90,6 +106,7 @@ class ProjectService extends Component
             $project->last_sync_error = $e->getMessage();
             $threw = $e;
         } finally {
+            $project->sync_started_at = null;
             $project->save(false);
             $this->cleanupKeyFile($keyFile);
         }
@@ -139,9 +156,9 @@ class ProjectService extends Component
     private function cloneOrPull(Project $project, string $dest, array $env): void
     {
         if (is_dir($dest . '/.git')) {
-            $this->gitPull($dest, $project->scm_branch, $env);
+            $this->gitPull($project, $dest, $project->scm_branch, $env);
         } else {
-            $this->gitClone((string)$project->scm_url, $dest, $project->scm_branch, $env);
+            $this->gitClone($project, (string)$project->scm_url, $dest, $project->scm_branch, $env);
         }
     }
 
@@ -294,18 +311,25 @@ class ProjectService extends Component
     /**
      * @param array<string, string> $env
      */
-    protected function gitClone(string $url, string $dest, string $branch, array $env): void
+    protected function gitClone(Project $project, string $url, string $dest, string $branch, array $env): void
     {
-        $this->runGit(['git', 'clone', '--branch', $branch, '--depth', '1', '--', $url, $dest], $env);
+        // --progress forces git to emit per-percent progress lines on stderr
+        // even when it detects a non-tty — that's what makes the streamed
+        // sync log feel alive in the UI.
+        $this->runGit(
+            $project,
+            ['git', 'clone', '--progress', '--branch', $branch, '--depth', '1', '--', $url, $dest],
+            $env,
+        );
     }
 
     /**
      * @param array<string, string> $env
      */
-    protected function gitPull(string $dest, string $branch, array $env): void
+    protected function gitPull(Project $project, string $dest, string $branch, array $env): void
     {
-        $this->runGit(['git', '-C', $dest, 'fetch', '--depth', '1', 'origin', $branch], $env);
-        $this->runGit(['git', '-C', $dest, 'reset', '--hard', 'FETCH_HEAD'], $env);
+        $this->runGit($project, ['git', '-C', $dest, 'fetch', '--progress', '--depth', '1', 'origin', $branch], $env);
+        $this->runGit($project, ['git', '-C', $dest, 'reset', '--hard', 'FETCH_HEAD'], $env);
     }
 
     // -------------------------------------------------------------------------
@@ -313,18 +337,22 @@ class ProjectService extends Component
     // -------------------------------------------------------------------------
 
     /**
-     * Execute a git command as a subprocess.
-     * All arguments are passed as an array — never shell-interpolated.
+     * Execute a git command via ProjectSyncProcessRunner with the configured
+     * timeout. The runner streams every chunk of output into project_sync_log
+     * for the live UI panel and throws a clear RuntimeException on timeout.
      *
      * @param string[] $cmd
      * @param array<string, string> $env
-     * @throws \RuntimeException on non-zero exit code.
+     * @throws \RuntimeException on non-zero exit code or timeout.
      */
-    private function runGit(array $cmd, array $env = []): void
+    private function runGit(Project $project, array $cmd, array $env = []): void
     {
         \Yii::info('ProjectService: ' . implode(' ', $cmd), __CLASS__);
 
-        [$stdout, $stderr, $exitCode] = $this->execProcess($cmd, $env);
+        $runner = $this->processRunner();
+        $runner->appendSystem($project, '$ ' . implode(' ', $cmd) . "\n");
+
+        [$stdout, $stderr, $exitCode] = $runner->run($project, $cmd, $env, $this->gitTimeoutSeconds);
         $this->logProcessOutput($stdout, $stderr);
 
         if ($exitCode !== 0) {
@@ -335,32 +363,12 @@ class ProjectService extends Component
     }
 
     /**
-     * Run a command and return [stdout, stderr, exitCode].
-     *
-     * @param string[] $cmd
-     * @param array<string, string> $env
-     * @return array{0: string, 1: string, 2: int}
+     * Indirection point so tests can swap in a fake runner without touching
+     * the rest of ProjectService.
      */
-    private function execProcess(array $cmd, array $env): array
+    protected function processRunner(): ProjectSyncProcessRunner
     {
-        $descriptors = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
-
-        $process = proc_open($cmd, $descriptors, $pipes, null, $env ?: null);
-        if (!is_resource($process)) {
-            throw new \RuntimeException('proc_open failed for git command.');
-        }
-
-        fclose($pipes[0]);
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-
-        return [$stdout ?: '', $stderr ?: '', proc_close($process)];
+        return new ProjectSyncProcessRunner();
     }
 
     private function logProcessOutput(string $stdout, string $stderr): void

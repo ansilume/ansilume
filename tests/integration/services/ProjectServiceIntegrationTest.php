@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\integration\services;
 
 use app\models\Project;
+use app\models\ProjectSyncLog;
 use app\services\ProjectService;
 use app\tests\integration\DbTestCase;
 
@@ -159,5 +160,55 @@ class ProjectServiceIntegrationTest extends DbTestCase
 
         $project->validateScmCredentialType();
         $this->assertFalse($project->hasErrors('scm_credential_id'));
+    }
+
+    // -------------------------------------------------------------------------
+    // queueSync(): status flip + sync_started_at + log buffer reset
+    // -------------------------------------------------------------------------
+
+    public function testQueueSyncStampsSyncStartedAtAndClearsPreviousLogs(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+
+        // Pretend a previous sync left logs around.
+        $stale = new ProjectSyncLog();
+        $stale->project_id = $project->id;
+        $stale->stream = ProjectSyncLog::STREAM_STDOUT;
+        $stale->content = 'old run\n';
+        $stale->sequence = 1;
+        $stale->created_at = time() - 3600;
+        $stale->save(false);
+
+        $this->withQueueStub(function () use ($project): void {
+            $this->service->queueSync($project);
+        });
+
+        $project->refresh();
+        $this->assertSame(Project::STATUS_SYNCING, $project->status);
+        $this->assertNotNull($project->sync_started_at);
+        $this->assertSame(
+            0,
+            (int)ProjectSyncLog::find()->where(['project_id' => $project->id])->count(),
+            'queueSync must wipe the previous run\'s log buffer.',
+        );
+    }
+
+    private function withQueueStub(callable $fn): void
+    {
+        $previous = \Yii::$app->getComponents(true)['queue'] ?? null;
+        \Yii::$app->set('queue', new class extends \yii\base\Component {
+            public int $pushed = 0;
+            public function push($job)
+            {
+                $this->pushed++;
+                return null;
+            }
+        });
+        try {
+            $fn();
+        } finally {
+            \Yii::$app->set('queue', $previous);
+        }
     }
 }

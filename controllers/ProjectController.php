@@ -7,6 +7,7 @@ namespace app\controllers;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Project;
+use app\models\ProjectSyncLog;
 use app\services\LintService;
 use app\services\ProjectAccessChecker;
 use app\services\ProjectService;
@@ -22,7 +23,7 @@ class ProjectController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['project.view']],
+            ['actions' => ['index', 'view', 'sync-status'], 'allow' => true, 'roles' => ['project.view']],
             ['actions' => ['create'], 'allow' => true, 'roles' => ['project.create']],
             ['actions' => ['update', 'sync', 'lint'], 'allow' => true, 'roles' => ['project.update']],
             ['actions' => ['delete'], 'allow' => true, 'roles' => ['project.delete']],
@@ -206,6 +207,52 @@ class ProjectController extends BaseController
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_SYNCED, 'project', $model->id, null, ['name' => $model->name]);
         $this->session()->setFlash('success', "Sync queued for \"{$model->name}\".");
         return $this->redirect(['view', 'id' => $id]);
+    }
+
+    /**
+     * GET /project/sync-status?id=N&since=SEQ
+     *
+     * JSON snapshot for the live-polling sync log on /project/view. Returns
+     * the project's current sync status plus any project_sync_log rows the
+     * client has not yet seen, so the panel can append them in place
+     * without reloading the page. Caller passes the highest sequence it
+     * has rendered as `since`; the server sends only newer rows.
+     *
+     * @return array<string, mixed>
+     */
+    public function actionSyncStatus(int $id, int $since = 0): array
+    {
+        $model = $this->findModel($id);
+        $this->requireAccess($model, false);
+        \Yii::$app->response->format = Response::FORMAT_JSON;
+
+        $rows = ProjectSyncLog::find()
+            ->where(['project_id' => $model->id])
+            ->andWhere(['>', 'sequence', $since])
+            ->orderBy(['sequence' => SORT_ASC])
+            ->limit(500)
+            ->all();
+
+        $logs = [];
+        foreach ($rows as $row) {
+            /** @var ProjectSyncLog $row */
+            $logs[] = [
+                'sequence' => (int)$row->sequence,
+                'stream' => (string)$row->stream,
+                'content' => (string)$row->content,
+                'created_at' => (int)$row->created_at,
+            ];
+        }
+
+        return [
+            'id' => (int)$model->id,
+            'status' => (string)$model->status,
+            'is_syncing' => $model->status === Project::STATUS_SYNCING,
+            'sync_started_at' => $model->sync_started_at !== null ? (int)$model->sync_started_at : null,
+            'last_synced_at' => $model->last_synced_at !== null ? (int)$model->last_synced_at : null,
+            'last_sync_error' => $model->last_sync_error !== null ? (string)$model->last_sync_error : null,
+            'logs' => $logs,
+        ];
     }
 
     /**

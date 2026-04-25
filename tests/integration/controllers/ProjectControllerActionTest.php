@@ -8,6 +8,7 @@ use app\controllers\ProjectController;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Project;
+use app\models\ProjectSyncLog;
 use app\services\ProjectService;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
@@ -472,6 +473,73 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $ctrl = $this->makeController();
         $this->expectException(NotFoundHttpException::class);
         $ctrl->actionSync(9999999);
+    }
+
+    // ── actionSyncStatus() — JSON polling endpoint ───────────────────────────
+
+    public function testSyncStatusReturnsCurrentStatusAndLogs(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time() - 5;
+        $project->save(false);
+
+        $this->seedSyncLog($project->id, 1, 'cloning into …');
+        $this->seedSyncLog($project->id, 2, 'remote: 100% done');
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionSyncStatus((int)$project->id);
+
+        $this->assertSame((int)$project->id, $result['id']);
+        $this->assertTrue($result['is_syncing']);
+        $this->assertSame(Project::STATUS_SYNCING, $result['status']);
+        $this->assertCount(2, $result['logs']);
+        $this->assertSame(1, $result['logs'][0]['sequence']);
+        $this->assertStringContainsString('cloning', $result['logs'][0]['content']);
+    }
+
+    public function testSyncStatusFiltersBySinceSequence(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+
+        $this->seedSyncLog($project->id, 1, 'old');
+        $this->seedSyncLog($project->id, 2, 'old');
+        $this->seedSyncLog($project->id, 3, 'fresh');
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionSyncStatus((int)$project->id, 2);
+
+        $this->assertCount(1, $result['logs']);
+        $this->assertSame(3, $result['logs'][0]['sequence']);
+    }
+
+    public function testSyncStatusForbiddenForUserWithoutAccess(): void
+    {
+        $owner = $this->createUser('status-owner');
+        $outsider = $this->createUser('status-outsider');
+        $project = $this->createProject($owner->id);
+        $team = $this->createTeam($owner->id);
+        $this->createTeamProject($team->id, $project->id);
+        $this->loginAs($outsider);
+
+        $ctrl = $this->makeController();
+        $this->expectException(ForbiddenHttpException::class);
+        $ctrl->actionSyncStatus((int)$project->id);
+    }
+
+    private function seedSyncLog(int $projectId, int $sequence, string $content): void
+    {
+        $row = new ProjectSyncLog();
+        $row->project_id = $projectId;
+        $row->sequence = $sequence;
+        $row->stream = ProjectSyncLog::STREAM_STDOUT;
+        $row->content = $content;
+        $row->created_at = time();
+        $row->save(false);
     }
 
     // ── actionLint() — additional branches ───────────────────────────────────

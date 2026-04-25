@@ -17,6 +17,7 @@ use yii\db\ActiveRecord;
  * @property int|null    $scm_credential_id
  * @property string      $status
  * @property int|null    $last_synced_at
+ * @property int|null    $sync_started_at  UNIX timestamp when status last flipped to SYNCING
  * @property string|null $last_sync_error
  * @property string|null $last_sync_event
  * @property string|null $lint_output       Last ansible-lint output (full project)

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\models\Project;
+use app\models\ProjectSyncLog;
 use yii\base\Component;
 
 /**
@@ -35,6 +37,13 @@ class MaintenanceService extends Component
     public int $artifactCleanupIntervalSeconds = 86400; // daily
 
     /**
+     * Maximum time a project may stay in STATUS_SYNCING before the sweeper
+     * declares it dead and flips it to STATUS_ERROR. Five minutes of git
+     * timeout + a comfortable buffer.
+     */
+    public int $staleSyncThresholdSeconds = 900; // 15 minutes
+
+    /**
      * Run every task whose cooldown has expired and report what happened.
      *
      * The shape is intentionally explicit so the console command and tests
@@ -43,7 +52,7 @@ class MaintenanceService extends Component
      * @return array{
      *     ran: list<string>,
      *     skipped: list<array{task: string, reason: string}>,
-     *     results: array<string, array{expired: int, by_count: int, quota_trimmed: int, orphans: int}>,
+     *     results: array<string, array<string, int>>,
      * }
      */
     public function runIfDue(): array
@@ -58,7 +67,79 @@ class MaintenanceService extends Component
             $report['skipped'][] = ['task' => 'artifact-cleanup', 'reason' => $artifact['reason']];
         }
 
+        // Stale-sync sweeping runs on every tick (no cooldown): the query is
+        // a single indexed SELECT and the typical result set is empty, so
+        // gating it would only delay recovery without saving real work.
+        $stale = $this->runStaleSyncSweep();
+        if ($stale['recovered'] > 0) {
+            $report['ran'][] = 'stale-sync-sweep';
+            $report['results']['stale-sync-sweep'] = $stale;
+        } else {
+            $report['skipped'][] = ['task' => 'stale-sync-sweep', 'reason' => 'none-stale'];
+        }
+
         return $report;
+    }
+
+    /**
+     * Find Projects in STATUS_SYNCING that haven't progressed within the
+     * threshold and mark them as ERROR with a clear last_sync_error and a
+     * `system`-stream entry in project_sync_log.
+     *
+     * Triggered on every maintenance tick; the threshold lives in
+     * {@see $staleSyncThresholdSeconds}. Returns the number of projects
+     * recovered so the dispatcher can surface it in the report.
+     *
+     * @return array{recovered: int, threshold_seconds: int}
+     */
+    public function runStaleSyncSweep(): array
+    {
+        $threshold = $this->staleSyncThresholdSeconds;
+        if ($threshold <= 0) {
+            return ['recovered' => 0, 'threshold_seconds' => 0];
+        }
+
+        $cutoff = time() - $threshold;
+        $stale = Project::find()
+            ->where(['status' => Project::STATUS_SYNCING])
+            ->andWhere(['<', 'sync_started_at', $cutoff])
+            ->all();
+
+        $recovered = 0;
+        foreach ($stale as $project) {
+            /** @var Project $project */
+            $startedAt = (int)$project->sync_started_at;
+            $message = sprintf(
+                'Sweeper recovered stuck sync after %d seconds (threshold=%d).',
+                time() - $startedAt,
+                $threshold,
+            );
+
+            $project->status = Project::STATUS_ERROR;
+            $project->last_sync_error = $message;
+            $project->sync_started_at = null;
+            $project->save(false);
+
+            $this->appendSystemLog($project, $message . "\n");
+            \Yii::warning(
+                "MaintenanceService: stale sync swept for project #{$project->id} ({$project->name}): {$message}",
+                __CLASS__,
+            );
+            $recovered++;
+        }
+
+        return ['recovered' => $recovered, 'threshold_seconds' => $threshold];
+    }
+
+    private function appendSystemLog(Project $project, string $content): void
+    {
+        $log = new ProjectSyncLog();
+        $log->project_id = $project->id;
+        $log->stream = ProjectSyncLog::STREAM_SYSTEM;
+        $log->content = $content;
+        $log->sequence = (int)ProjectSyncLog::find()->where(['project_id' => $project->id])->max('sequence') + 1;
+        $log->created_at = time();
+        $log->save(false);
     }
 
     /**

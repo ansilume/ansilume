@@ -55,6 +55,104 @@ $this->title = $model->name;
 </div>
 <?php endif; ?>
 
+<?php
+// Sync log panel: shown whenever there is captured output OR a sync is in
+// flight. The JS poller below keeps it in sync without a page reload so
+// operators no longer have to guess whether the worker is alive.
+$initialLogs = \app\models\ProjectSyncLog::find()
+    ->where(['project_id' => $model->id])
+    ->orderBy(['sequence' => SORT_ASC])
+    ->limit(500)
+    ->all();
+$showSyncPanel = $model->status === Project::STATUS_SYNCING
+    || $model->status === Project::STATUS_ERROR
+    || !empty($initialLogs);
+?>
+<?php if ($showSyncPanel) : ?>
+<div class="card mb-3" id="sync-log-card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span>
+            Sync output
+            <span id="sync-status-badge" class="badge text-bg-<?= match ($model->status) {
+                Project::STATUS_SYNCED => 'success',
+                Project::STATUS_SYNCING => 'primary',
+                Project::STATUS_ERROR => 'danger',
+                default => 'secondary',
+                                                              } ?> ms-2"><?= Html::encode(Project::statusLabel($model->status)) ?></span>
+        </span>
+        <small class="text-muted" id="sync-started-at">
+            <?php if ($model->sync_started_at) : ?>
+                running since <?= date('H:i:s', $model->sync_started_at) ?>
+            <?php elseif ($model->last_synced_at) : ?>
+                last synced <?= date('Y-m-d H:i:s', $model->last_synced_at) ?>
+            <?php endif; ?>
+        </small>
+    </div>
+    <div class="card-body p-0">
+        <pre class="job-log m-0" id="sync-log-output" style="max-height:300px;overflow-y:auto;"><?php
+        foreach ($initialLogs as $logRow) {
+            echo Html::encode($logRow->content);
+        }
+        ?></pre>
+    </div>
+</div>
+<script>
+(function () {
+    var statusUrl = <?= json_encode(\yii\helpers\Url::to(['sync-status', 'id' => $model->id])) // xss-ok: json_encode escapes?>;
+    var output = document.getElementById('sync-log-output');
+    var badge = document.getElementById('sync-status-badge');
+    var startedAt = document.getElementById('sync-started-at');
+    var lastSeq = <?= json_encode((int)($initialLogs ? end($initialLogs)->sequence : 0)) // xss-ok: int?>;
+    var initialStatus = <?= json_encode($model->status) // xss-ok: json_encode escapes?>;
+    var pollIntervalMs = 2000;
+    var stopOnTerminal = function () { /* set after first poll resolves */ };
+
+    function statusBadge(status) {
+        var map = {synced: 'success', syncing: 'primary', error: 'danger', new: 'secondary'};
+        return map[status] || 'secondary';
+    }
+
+    function statusLabel(status) {
+        return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    function poll() {
+        fetch(statusUrl + '&since=' + lastSeq, {credentials: 'same-origin'})
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (Array.isArray(data.logs) && data.logs.length > 0) {
+                    var atBottom = output.scrollTop + output.clientHeight >= output.scrollHeight - 4;
+                    data.logs.forEach(function (line) {
+                        output.appendChild(document.createTextNode(line.content));
+                        if (line.sequence > lastSeq) lastSeq = line.sequence;
+                    });
+                    if (atBottom) output.scrollTop = output.scrollHeight;
+                }
+                badge.className = 'badge text-bg-' + statusBadge(data.status) + ' ms-2';
+                badge.textContent = statusLabel(data.status);
+                if (data.is_syncing && data.sync_started_at) {
+                    startedAt.textContent = 'running since '
+                        + new Date(data.sync_started_at * 1000).toLocaleTimeString();
+                } else if (data.last_synced_at) {
+                    startedAt.textContent = 'last synced '
+                        + new Date(data.last_synced_at * 1000).toLocaleString();
+                }
+                if (!data.is_syncing) stopOnTerminal();
+            })
+            .catch(function () { /* network blip — try again */ });
+    }
+
+    var timer = null;
+    if (initialStatus === 'syncing') {
+        timer = setInterval(poll, pollIntervalMs);
+        stopOnTerminal = function () {
+            if (timer) { clearInterval(timer); timer = null; }
+        };
+    }
+})();
+</script>
+<?php endif; ?>
+
 <div class="row g-3">
     <div class="col-md-6">
         <div class="card">

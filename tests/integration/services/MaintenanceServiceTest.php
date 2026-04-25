@@ -6,6 +6,8 @@ namespace app\tests\integration\services;
 
 use app\models\AuditLog;
 use app\models\JobArtifact;
+use app\models\Project;
+use app\models\ProjectSyncLog;
 use app\services\ArtifactService;
 use app\services\MaintenanceService;
 use app\tests\integration\DbTestCase;
@@ -86,7 +88,8 @@ class MaintenanceServiceTest extends DbTestCase
         $report = $maintenance->runIfDue();
 
         $this->assertSame(['artifact-cleanup'], $report['ran']);
-        $this->assertSame([], $report['skipped']);
+        // stale-sync-sweep skips on every tick when there's nothing to recover.
+        $this->assertSame(['stale-sync-sweep'], array_column($report['skipped'], 'task'));
         $this->assertSame(1, $report['results']['artifact-cleanup']['expired']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['by_count']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
@@ -113,7 +116,12 @@ class MaintenanceServiceTest extends DbTestCase
 
         $this->assertSame(['artifact-cleanup'], $first['ran']);
         $this->assertSame([], $second['ran'], 'second invocation must be throttled');
-        $this->assertSame([['task' => 'artifact-cleanup', 'reason' => 'cooldown']], $second['skipped']);
+        // stale-sync-sweep runs on every tick, so it always shows up in `skipped`
+        // when there's nothing to recover. Match by task name only.
+        $skippedTasks = array_column($second['skipped'], 'task');
+        $this->assertContains('artifact-cleanup', $skippedTasks);
+        $artifactSkip = array_values(array_filter($second['skipped'], fn ($s) => $s['task'] === 'artifact-cleanup'));
+        $this->assertSame('cooldown', $artifactSkip[0]['reason']);
     }
 
     public function testRunIfDueReportsDisabledWhenIntervalZero(): void
@@ -126,7 +134,10 @@ class MaintenanceServiceTest extends DbTestCase
         $report = $maintenance->runIfDue();
 
         $this->assertSame([], $report['ran']);
-        $this->assertSame([['task' => 'artifact-cleanup', 'reason' => 'disabled']], $report['skipped']);
+        $skippedTasks = array_column($report['skipped'], 'task');
+        $this->assertContains('artifact-cleanup', $skippedTasks);
+        $artifactSkip = array_values(array_filter($report['skipped'], fn ($s) => $s['task'] === 'artifact-cleanup'));
+        $this->assertSame('disabled', $artifactSkip[0]['reason']);
     }
 
     public function testRunIfDueRunsOrphanCleanupEvenWithRetentionDisabled(): void
@@ -202,5 +213,79 @@ class MaintenanceServiceTest extends DbTestCase
 
         $this->assertSame(1, $report['results']['artifact-cleanup']['by_count']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
+    }
+
+    // -------------------------------------------------------------------------
+    // Stale-sync sweeper
+    // -------------------------------------------------------------------------
+
+    public function testStaleSyncSweepFlipsExceededSyncingProjectsToError(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time() - 1_000; // older than default 900s threshold
+        $project->save(false);
+
+        $maintenance = new MaintenanceService();
+        $result = $maintenance->runStaleSyncSweep();
+
+        $project->refresh();
+        $this->assertSame(1, $result['recovered']);
+        $this->assertSame(Project::STATUS_ERROR, $project->status);
+        $this->assertNull($project->sync_started_at);
+        $this->assertStringContainsString('Sweeper recovered stuck sync', (string)$project->last_sync_error);
+    }
+
+    public function testStaleSyncSweepIgnoresFreshSyncingProject(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time() - 30; // well within threshold
+        $project->save(false);
+
+        $maintenance = new MaintenanceService();
+        $result = $maintenance->runStaleSyncSweep();
+
+        $project->refresh();
+        $this->assertSame(0, $result['recovered']);
+        $this->assertSame(Project::STATUS_SYNCING, $project->status, 'Fresh sync must not be swept.');
+    }
+
+    public function testStaleSyncSweepWritesSystemLogLine(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time() - 1_000;
+        $project->save(false);
+
+        $maintenance = new MaintenanceService();
+        $maintenance->runStaleSyncSweep();
+
+        $log = ProjectSyncLog::find()
+            ->where(['project_id' => $project->id, 'stream' => ProjectSyncLog::STREAM_SYSTEM])
+            ->orderBy(['sequence' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString('Sweeper recovered stuck sync', (string)$log->content);
+    }
+
+    public function testStaleSyncSweepDisabledWhenThresholdZero(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time() - 100_000;
+        $project->save(false);
+
+        $maintenance = new MaintenanceService();
+        $maintenance->staleSyncThresholdSeconds = 0;
+        $result = $maintenance->runStaleSyncSweep();
+
+        $project->refresh();
+        $this->assertSame(0, $result['recovered']);
+        $this->assertSame(Project::STATUS_SYNCING, $project->status);
     }
 }

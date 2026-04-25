@@ -6,6 +6,8 @@ namespace app\controllers;
 
 use app\models\Job;
 use app\models\JobTemplate;
+use app\models\Project;
+use app\models\ProjectSyncLog;
 use app\models\Schedule;
 use app\services\ScheduleService;
 use yii\web\NotFoundHttpException;
@@ -35,7 +37,11 @@ class E2eController extends BaseController
         // session cookie (kept unauthenticated on purpose — the YII_DEBUG
         // + prefix combination is the guard, not user identity).
         return [
-            ['actions' => ['fire-schedule', 'create-cancelable-job'], 'allow' => true, 'roles' => ['?', '@']],
+            [
+                'actions' => ['fire-schedule', 'create-cancelable-job', 'seed-syncing-project'],
+                'allow' => true,
+                'roles' => ['?', '@'],
+            ],
         ];
     }
 
@@ -47,6 +53,7 @@ class E2eController extends BaseController
         return [
             'fire-schedule' => ['POST'],
             'create-cancelable-job' => ['POST'],
+            'seed-syncing-project' => ['POST'],
         ];
     }
 
@@ -146,5 +153,55 @@ class E2eController extends BaseController
         $job->save(false);
 
         return $this->asJson(['job_id' => (int)$job->id]);
+    }
+
+    /**
+     * POST /e2e/seed-syncing-project?name=e2e-project[&reset=1]
+     *
+     * Forces an e2e-* project into STATUS_SYNCING with sync_started_at
+     * stamped and a couple of project_sync_log rows so the live-poll panel
+     * spec has predictable content. Pass `reset=1` to flip it back to
+     * STATUS_NEW + clear the log buffer (used as the spec's teardown so
+     * subsequent project specs see a clean fixture).
+     */
+    public function actionSeedSyncingProject(string $name = 'e2e-project', int $reset = 0): Response
+    {
+        \Yii::$app->response->format = Response::FORMAT_JSON;
+
+        if (!str_starts_with($name, self::PREFIX)) {
+            \Yii::$app->response->statusCode = 400;
+            return $this->asJson(['error' => 'non-e2e project name']);
+        }
+
+        $project = Project::find()->where(['name' => $name])->one();
+        if ($project === null) {
+            throw new NotFoundHttpException("Project '{$name}' not found.");
+        }
+
+        if ($reset === 1) {
+            $project->status = Project::STATUS_NEW;
+            $project->sync_started_at = null;
+            $project->save(false);
+            ProjectSyncLog::deleteAll(['project_id' => $project->id]);
+            return $this->asJson(['project_id' => (int)$project->id, 'reset' => true]);
+        }
+
+        $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time();
+        $project->save(false);
+
+        ProjectSyncLog::deleteAll(['project_id' => $project->id]);
+        $sequence = 1;
+        foreach (['Cloning into /tmp/repo', 'Receiving objects: 100%', 'Resolving deltas: 100%'] as $line) {
+            $row = new ProjectSyncLog();
+            $row->project_id = (int)$project->id;
+            $row->stream = ProjectSyncLog::STREAM_STDOUT;
+            $row->content = $line . "\n";
+            $row->sequence = $sequence++;
+            $row->created_at = time();
+            $row->save(false);
+        }
+
+        return $this->asJson(['project_id' => (int)$project->id]);
     }
 }
