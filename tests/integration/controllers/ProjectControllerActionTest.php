@@ -500,6 +500,121 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $this->assertStringContainsString('cloning', $result['logs'][0]['content']);
     }
 
+    public function testSyncStatusReturnsWorkerSnapshotShape(): void
+    {
+        // The worker block lets the polling panel render a "no worker
+        // running" warning the operator can act on. Pin the shape so a
+        // future refactor can't drop the field silently.
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionSyncStatus((int)$project->id);
+
+        $this->assertArrayHasKey('worker', $result);
+        $worker = $result['worker'];
+        $this->assertIsBool($worker['alive']);
+        $this->assertIsInt($worker['count']);
+        $this->assertGreaterThanOrEqual(0, $worker['count']);
+        $this->assertArrayHasKey('last_seen_seconds_ago', $worker);
+        $this->assertArrayHasKey('oldest_started_seconds_ago', $worker);
+        $this->assertSame(120, $worker['stale_after_seconds']);
+        $this->assertSame(86400, $worker['stale_code_warn_seconds']);
+    }
+
+    public function testSyncStatusWorkerAliveReflectsHeartbeatPresence(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        // Plant a fixture heartbeat directly so we don't depend on the
+        // dev queue-worker container being up during tests.
+        $key = 'ansilume:worker:phpunit-' . uniqid('', true);
+        $redis = $this->connectRedisOrSkip();
+        try {
+            $redis->setex($key, 120, json_encode([
+                'worker_id' => 'phpunit-fixture',
+                'pid' => 1,
+                'hostname' => 'phpunit',
+                'started_at' => time() - 30,
+                'seen_at' => time(),
+            ]));
+
+            $alive = $ctrl->actionSyncStatus((int)$project->id);
+            $this->assertTrue($alive['worker']['alive']);
+            $this->assertGreaterThanOrEqual(1, $alive['worker']['count']);
+            $this->assertNotNull($alive['worker']['last_seen_seconds_ago']);
+            $this->assertNotNull($alive['worker']['oldest_started_seconds_ago']);
+
+            $redis->del($key);
+
+            $dead = $ctrl->actionSyncStatus((int)$project->id);
+            // A real dev queue-worker may also be running and writing its
+            // own heartbeat — only assert that removing OUR fixture
+            // shrinks the count, not that it drops to zero.
+            $this->assertLessThanOrEqual($alive['worker']['count'], $dead['worker']['count']);
+        } finally {
+            try {
+                $redis->del($key);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
+    public function testSyncStatusWorkerFlagsStaleStartedAtPastWarnThreshold(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $key = 'ansilume:worker:phpunit-stale-' . uniqid('', true);
+        $redis = $this->connectRedisOrSkip();
+        try {
+            $startedFiveDaysAgo = time() - (5 * 86400);
+            $redis->setex($key, 120, json_encode([
+                'worker_id' => 'phpunit-stale',
+                'pid' => 2,
+                'hostname' => 'phpunit',
+                'started_at' => $startedFiveDaysAgo,
+                'seen_at' => time(),
+            ]));
+
+            $result = $ctrl->actionSyncStatus((int)$project->id);
+            $this->assertTrue($result['worker']['alive']);
+            $this->assertNotNull($result['worker']['oldest_started_seconds_ago']);
+            $this->assertGreaterThan(
+                $result['worker']['stale_code_warn_seconds'],
+                $result['worker']['oldest_started_seconds_ago'],
+                'A 5-day-old worker must trip the stale-code warning so the JS panel can flag it.',
+            );
+        } finally {
+            try {
+                $redis->del($key);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
+    private function connectRedisOrSkip(): \Redis
+    {
+        if (!class_exists(\Redis::class)) {
+            $this->markTestSkipped('phpredis extension not loaded.');
+        }
+        $redis = new \Redis();
+        try {
+            $redis->connect($_ENV['REDIS_HOST'] ?? 'redis', (int)($_ENV['REDIS_PORT'] ?? 6379));
+        } catch (\Throwable $e) {
+            $this->markTestSkipped('Redis not reachable: ' . $e->getMessage());
+        }
+        return $redis;
+    }
+
     public function testSyncStatusFiltersBySinceSequence(): void
     {
         $user = $this->createSuperadmin();

@@ -32,6 +32,22 @@ test.describe('Project sync log panel', () => {
     expect(body.logs.length).toBeGreaterThanOrEqual(3);
     expect(body.logs.some((l) => l.content.includes('Cloning into'))).toBe(true);
 
+    // Worker block must always be present — operators rely on it to spot a
+    // dead worker even when the sync hasn't started yet.
+    expect(body).toHaveProperty('worker');
+    expect(typeof body.worker).toBe('object');
+    expect(body.worker).toHaveProperty('alive');
+    expect(typeof body.worker.alive).toBe('boolean');
+    expect(typeof body.worker.count).toBe('number');
+    expect(body.worker.stale_after_seconds).toBe(120);
+    expect(body.worker.stale_code_warn_seconds).toBe(86400);
+
+    // The worker indicator footer is wired into the panel and should be
+    // populated by the first poll. We don't pin alive/dead state because
+    // the dev queue-worker container may or may not be up at test time.
+    const indicator = page.locator('#sync-worker-indicator');
+    await expect(indicator).toBeVisible({ timeout: 5_000 });
+
     // Reset the seeded project so subsequent specs see a clean fixture.
     await request.post(`${baseURL}/e2e/seed-syncing-project`, {
       params: { name: 'e2e-project', reset: 1 },

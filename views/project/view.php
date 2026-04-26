@@ -95,6 +95,10 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
         }
         ?></pre>
     </div>
+    <!-- Worker liveness indicator: empty until the first poll lands. Populated
+         from the JSON snapshot's `worker` block so a dead/stale worker is
+         visually obvious next to a sync that's been queued but never picked up. -->
+    <div class="card-footer py-1 px-2 small text-muted" id="sync-worker-indicator" style="display:none;"></div>
 </div>
 <script>
 (function () {
@@ -102,6 +106,7 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
     var output = document.getElementById('sync-log-output');
     var badge = document.getElementById('sync-status-badge');
     var startedAt = document.getElementById('sync-started-at');
+    var workerEl = document.getElementById('sync-worker-indicator');
     var lastSeq = <?= json_encode((int)($initialLogs ? end($initialLogs)->sequence : 0)) // xss-ok: int?>;
     var initialStatus = <?= json_encode($model->status) // xss-ok: json_encode escapes?>;
     var pollIntervalMs = 2000;
@@ -114,6 +119,40 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
 
     function statusLabel(status) {
         return status.charAt(0).toUpperCase() + status.slice(1);
+    }
+
+    function humanSeconds(s) {
+        if (s === null || s === undefined) return 'never';
+        if (s < 60) return s + 's';
+        if (s < 3600) return Math.floor(s / 60) + 'm';
+        if (s < 86400) return Math.floor(s / 3600) + 'h';
+        return Math.floor(s / 86400) + 'd';
+    }
+
+    function renderWorker(w) {
+        if (!w) return;
+        workerEl.style.display = '';
+        if (!w.alive) {
+            workerEl.className = 'card-footer py-1 px-2 small text-danger';
+            workerEl.innerHTML = '\u26A0 No queue worker is running. Start one with: '
+                + '<code>docker compose up -d queue-worker</code>';
+            return;
+        }
+        var stale = w.oldest_started_seconds_ago !== null
+            && w.oldest_started_seconds_ago > w.stale_code_warn_seconds;
+        var className = stale
+            ? 'card-footer py-1 px-2 small text-warning'
+            : 'card-footer py-1 px-2 small text-muted';
+        var parts = [
+            'Workers: ' + w.count + ' alive',
+            'last heartbeat ' + humanSeconds(w.last_seen_seconds_ago) + ' ago',
+        ];
+        if (w.oldest_started_seconds_ago !== null) {
+            parts.push('oldest started ' + humanSeconds(w.oldest_started_seconds_ago) + ' ago'
+                + (stale ? ' \u26A0 stale code likely \u2014 restart the worker if you just deployed' : ''));
+        }
+        workerEl.className = className;
+        workerEl.textContent = parts.join(' \u00B7 ');
     }
 
     function poll() {
@@ -137,10 +176,16 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
                     startedAt.textContent = 'last synced '
                         + new Date(data.last_synced_at * 1000).toLocaleString();
                 }
+                renderWorker(data.worker);
                 if (!data.is_syncing) stopOnTerminal();
             })
             .catch(function () { /* network blip — try again */ });
     }
+
+    // Always run one poll so the worker indicator shows up even when the
+    // initial render isn't a SYNCING state — operators want to see worker
+    // health at a glance regardless of the current sync.
+    poll();
 
     var timer = null;
     if (initialStatus === 'syncing') {

@@ -45,9 +45,31 @@ class ProjectService extends Component
         // older runs would belong in a separate table with run_id.
         ProjectSyncLog::deleteAll(['project_id' => $project->id]);
 
+        // Seed log: without this, the sync-log panel renders empty for
+        // however long it takes the worker to BRPOP the job — and stays
+        // empty forever if the worker is dead. The seed line gives the
+        // operator immediate confirmation that the queue accepted the
+        // request, and the worker-heartbeat indicator next to the panel
+        // tells them whether anyone is listening.
+        $this->seedQueueLog($project);
+
         /** @var \yii\queue\Queue $queue */
         $queue = \Yii::$app->queue;
         $queue->push(new SyncProjectJob(['projectId' => $project->id]));
+    }
+
+    private function seedQueueLog(Project $project): void
+    {
+        $log = new ProjectSyncLog();
+        $log->project_id = $project->id;
+        $log->stream = ProjectSyncLog::STREAM_SYSTEM;
+        $log->content = sprintf(
+            "Sync queued at %s — waiting for queue worker to pick up the job.\n",
+            date('Y-m-d H:i:s'),
+        );
+        $log->sequence = 1;
+        $log->created_at = time();
+        $log->save(false);
     }
 
     /**

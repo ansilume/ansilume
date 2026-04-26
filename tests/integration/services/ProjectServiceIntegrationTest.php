@@ -187,11 +187,44 @@ class ProjectServiceIntegrationTest extends DbTestCase
         $project->refresh();
         $this->assertSame(Project::STATUS_SYNCING, $project->status);
         $this->assertNotNull($project->sync_started_at);
-        $this->assertSame(
-            0,
-            (int)ProjectSyncLog::find()->where(['project_id' => $project->id])->count(),
-            'queueSync must wipe the previous run\'s log buffer.',
-        );
+
+        // The previous-run STDOUT row must be gone, but queueSync now drops a
+        // single SYSTEM-stream "Sync queued at …" seed line so the live panel
+        // doesn't render empty between push and worker pickup.
+        $logs = ProjectSyncLog::find()->where(['project_id' => $project->id])->all();
+        $this->assertCount(1, $logs, 'queueSync must wipe the previous run AND seed exactly one log line.');
+        $this->assertSame(ProjectSyncLog::STREAM_SYSTEM, $logs[0]->stream);
+        $this->assertStringContainsString('Sync queued at', (string)$logs[0]->content);
+        $this->assertStringContainsString('waiting for queue worker', (string)$logs[0]->content);
+    }
+
+    public function testQueueSyncSeedLogIsAlwaysSequenceOne(): void
+    {
+        // Sequence must restart at 1 on every queue push so the polling
+        // panel's `since=` filter compares against a fresh range — without
+        // this, the seed line could land at sequence=42 and break the
+        // monotonic ordering assumed by the JS poller.
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+
+        // Seed several stale rows with high sequence numbers.
+        foreach ([10, 20, 30] as $seq) {
+            $row = new ProjectSyncLog();
+            $row->project_id = $project->id;
+            $row->stream = ProjectSyncLog::STREAM_STDOUT;
+            $row->content = 'old';
+            $row->sequence = $seq;
+            $row->created_at = time();
+            $row->save(false);
+        }
+
+        $this->withQueueStub(function () use ($project): void {
+            $this->service->queueSync($project);
+        });
+
+        $seed = ProjectSyncLog::find()->where(['project_id' => $project->id])->one();
+        $this->assertNotNull($seed);
+        $this->assertSame(1, (int)$seed->sequence);
     }
 
     private function withQueueStub(callable $fn): void

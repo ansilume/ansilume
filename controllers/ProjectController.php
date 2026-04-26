@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\WorkerHeartbeat;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Project;
@@ -252,6 +253,48 @@ class ProjectController extends BaseController
             'last_synced_at' => $model->last_synced_at !== null ? (int)$model->last_synced_at : null,
             'last_sync_error' => $model->last_sync_error !== null ? (string)$model->last_sync_error : null,
             'logs' => $logs,
+            'worker' => $this->workerSnapshot(),
+        ];
+    }
+
+    /**
+     * Snapshot of queue-worker liveness so the sync log panel can show
+     * "no worker running" or "worker is 4 days old (stale code likely)"
+     * — both are common causes of a syncing-but-empty-output card and the
+     * operator otherwise has no way to tell from the UI alone.
+     *
+     * @return array{
+     *     alive: bool,
+     *     count: int,
+     *     last_seen_seconds_ago: int|null,
+     *     oldest_started_seconds_ago: int|null,
+     *     stale_after_seconds: int,
+     *     stale_code_warn_seconds: int,
+     * }
+     */
+    private function workerSnapshot(): array
+    {
+        $workers = WorkerHeartbeat::all();
+        $now = time();
+        $latestSeen = 0;
+        $oldestStart = 0;
+        foreach ($workers as $w) {
+            $latestSeen = max($latestSeen, (int)($w['seen_at'] ?? 0));
+            $started = (int)($w['started_at'] ?? 0);
+            if ($started > 0 && ($oldestStart === 0 || $started < $oldestStart)) {
+                $oldestStart = $started;
+            }
+        }
+        return [
+            'alive' => count($workers) > 0,
+            'count' => count($workers),
+            'last_seen_seconds_ago' => $latestSeen > 0 ? $now - $latestSeen : null,
+            'oldest_started_seconds_ago' => $oldestStart > 0 ? $now - $oldestStart : null,
+            'stale_after_seconds' => WorkerHeartbeat::STALE_AFTER,
+            // 24h: arbitrary-but-safe threshold beyond which a long-running
+            // worker is statistically likely to have stale opcache/code in
+            // memory after one or more deploys.
+            'stale_code_warn_seconds' => 86400,
         ];
     }
 
