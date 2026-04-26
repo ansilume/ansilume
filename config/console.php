@@ -81,6 +81,9 @@ return [
         'workflowExecutionService' => [
             'class' => 'app\services\WorkflowExecutionService',
         ],
+        'workflowStepReorderService' => [
+            'class' => 'app\services\WorkflowStepReorderService',
+        ],
         'lintService' => [
             'class' => 'app\services\LintService',
         ],

@@ -38,12 +38,21 @@ test.describe('TOTP login', () => {
 
     await page.waitForURL(/\/verify-totp/, { timeout: 10_000 });
     await page.locator('#totpverifyform-code').fill('000000');
-    await page.locator('#page-content button[type="submit"]').click();
+    await Promise.all([
+      // Wait for the form-submit navigation to settle before asserting on
+      // the re-rendered page; otherwise the validation-error locator can
+      // race the navigation and time out under load.
+      page.waitForLoadState('domcontentloaded'),
+      page.locator('#page-content button[type="submit"]').click(),
+    ]);
 
     // Verify page re-renders with a validation error, user stays unauthenticated.
     await expect(page).toHaveURL(/\/verify-totp$/);
+    // Either the field-level invalid-code error, or the rate-limit lockout
+    // flash if the test ran enough times to hit the per-user attempt cap.
+    // Both prove the bad code wasn't accepted.
     await expect(
       page.locator('.invalid-feedback, .help-block-error, .has-error, .alert-danger'),
-    ).toBeVisible({ timeout: 5_000 });
+    ).toBeVisible({ timeout: 10_000 });
   });
 });

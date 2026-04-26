@@ -21,7 +21,7 @@ class WorkflowTemplateController extends BaseController
         return [
             ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['workflow-template.view']],
             ['actions' => ['create', 'add-step', 'remove-step'], 'allow' => true, 'roles' => ['workflow-template.create']],
-            ['actions' => ['update', 'add-step', 'remove-step'], 'allow' => true, 'roles' => ['workflow-template.update']],
+            ['actions' => ['update', 'add-step', 'remove-step', 'move-step'], 'allow' => true, 'roles' => ['workflow-template.update']],
             ['actions' => ['delete'], 'allow' => true, 'roles' => ['workflow-template.delete']],
             ['actions' => ['launch'], 'allow' => true, 'roles' => ['workflow.launch']],
         ];
@@ -37,6 +37,7 @@ class WorkflowTemplateController extends BaseController
             'launch' => ['POST'],
             'add-step' => ['POST'],
             'remove-step' => ['POST'],
+            'move-step' => ['POST'],
         ];
     }
 
@@ -138,6 +139,12 @@ class WorkflowTemplateController extends BaseController
             // A submitted "0" means "end workflow" and must stay as integer 0.
             $this->applyBranchFields($step);
             if ($step->save()) {
+                // Renumber the whole template to a sparse 10/20/30 layout so a
+                // user-typed step_order=15 keeps room for future inserts and
+                // future ▲/▼ moves stay deterministic.
+                /** @var \app\services\WorkflowStepReorderService $reorder */
+                $reorder = \Yii::$app->get('workflowStepReorderService');
+                $reorder->resequence($model);
                 $this->session()->setFlash('success', "Step \"{$step->name}\" added.");
             }
         }
@@ -168,6 +175,39 @@ class WorkflowTemplateController extends BaseController
         if ($step !== null) {
             $step->delete();
             $this->session()->setFlash('success', 'Step removed.');
+        }
+        return $this->redirect(['view', 'id' => $id]);
+    }
+
+    /**
+     * Move a step up or down by one slot inside its workflow template.
+     * direction=up swaps with the immediate predecessor, direction=down
+     * with the successor. Hitting the top/bottom is a soft no-op (no
+     * flash, no redirect change) so the caller doesn't need to special-case
+     * boundary rows.
+     */
+    public function actionMoveStep(int $id): Response
+    {
+        $model = $this->findModel($id);
+        $stepId = (int)\Yii::$app->request->post('step_id');
+        $direction = (string)\Yii::$app->request->post('direction', '');
+
+        if (!in_array($direction, ['up', 'down'], true)) {
+            $this->session()->setFlash('danger', 'Invalid move direction.');
+            return $this->redirect(['view', 'id' => $id]);
+        }
+
+        /** @var WorkflowStep|null $step */
+        $step = WorkflowStep::findOne(['id' => $stepId, 'workflow_template_id' => $model->id]);
+        if ($step === null) {
+            throw new NotFoundHttpException("Step #{$stepId} not found in workflow #{$id}.");
+        }
+
+        /** @var \app\services\WorkflowStepReorderService $reorder */
+        $reorder = \Yii::$app->get('workflowStepReorderService');
+        $moved = $direction === 'up' ? $reorder->moveUp($step) : $reorder->moveDown($step);
+        if ($moved) {
+            $this->session()->setFlash('success', "Step \"{$step->name}\" moved {$direction}.");
         }
         return $this->redirect(['view', 'id' => $id]);
     }

@@ -392,4 +392,153 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
             }
         };
     }
+
+    // ── actionMoveStep() ─────────────────────────────────────────────────────
+
+    public function testMoveStepUpSwapsWithPredecessorAndAuditsFlash(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 10);
+        $b = $this->createWorkflowStep($wf->id, 20);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost(['step_id' => (string)$b->id, 'direction' => 'up']);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionMoveStep((int)$wf->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $a->refresh();
+        $b->refresh();
+        $this->assertSame(10, (int)$b->step_order);
+        $this->assertSame(20, (int)$a->step_order);
+        $this->assertArrayHasKey('success', \Yii::$app->session->getAllFlashes());
+    }
+
+    public function testMoveStepDownSwapsWithSuccessor(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 10);
+        $b = $this->createWorkflowStep($wf->id, 20);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost(['step_id' => (string)$a->id, 'direction' => 'down']);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionMoveStep((int)$wf->id);
+
+        $a->refresh();
+        $b->refresh();
+        $this->assertSame(20, (int)$a->step_order);
+        $this->assertSame(10, (int)$b->step_order);
+    }
+
+    public function testMoveStepRejectsInvalidDirection(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 10);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost(['step_id' => (string)$a->id, 'direction' => 'sideways']);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionMoveStep((int)$wf->id);
+
+        $a->refresh();
+        $this->assertSame(10, (int)$a->step_order, 'Bad direction must not move anything.');
+        $this->assertArrayHasKey('danger', \Yii::$app->session->getAllFlashes());
+    }
+
+    public function testMoveStepThrowsForUnknownStep(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost(['step_id' => '999999', 'direction' => 'up']);
+
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionMoveStep((int)$wf->id);
+    }
+
+    public function testMoveStepRejectsCrossTemplateStep(): void
+    {
+        // A step belonging to a different workflow template must not be
+        // movable via the URL of an unrelated template — confidentiality
+        // and integrity guard combined.
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $other = $this->createWorkflowTemplate($user->id);
+        $foreign = $this->createWorkflowStep($other->id, 10);
+        $myWf = $this->createWorkflowTemplate($user->id);
+
+        $this->setQueryParams(['id' => (string)$myWf->id]);
+        $this->setPost(['step_id' => (string)$foreign->id, 'direction' => 'up']);
+
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionMoveStep((int)$myWf->id);
+    }
+
+    public function testMoveStepUpAtTopIsSoftNoOp(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 10);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost(['step_id' => (string)$a->id, 'direction' => 'up']);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionMoveStep((int)$wf->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $a->refresh();
+        $this->assertSame(10, (int)$a->step_order);
+        // No flash for soft no-op — controller must not lie about a move
+        // that didn't happen.
+        $this->assertEmpty(\Yii::$app->session->getAllFlashes());
+    }
+
+    public function testAddStepResequencesToSparseLayout(): void
+    {
+        // The user types step_order=15 to wedge between 10 and 20; the
+        // controller's post-save resequence normalises the layout to
+        // 10/20/30 so the new step lands neatly in the middle.
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 10);
+        $b = $this->createWorkflowStep($wf->id, 20);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost([
+            'WorkflowStep' => [
+                'name' => 'wedged',
+                'step_order' => '15',
+                'step_type' => WorkflowStep::TYPE_PAUSE,
+            ],
+        ]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionAddStep((int)$wf->id);
+
+        $a->refresh();
+        $b->refresh();
+        $wedged = WorkflowStep::find()->where(['workflow_template_id' => $wf->id, 'name' => 'wedged'])->one();
+        $this->assertNotNull($wedged);
+
+        $byOrder = [(int)$a->step_order, (int)$wedged->step_order, (int)$b->step_order];
+        sort($byOrder);
+        $this->assertSame([10, 20, 30], $byOrder, 'Sparse 10/20/30 layout after the resequence pass.');
+    }
 }

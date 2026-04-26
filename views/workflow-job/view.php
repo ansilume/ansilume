@@ -93,46 +93,59 @@ $steps = $model->stepExecutions;
                         <th>Status</th>
                         <th>Child Job</th>
                         <th>Started</th>
+                        <th>Duration</th>
                         <th>Finished</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($steps as $i => $wjs) : ?>
-                        <?php
-                        $isCurrent = $model->current_step_id === $wjs->workflow_step_id;
-                        $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
-                        $label = WorkflowJobStep::statusLabel($wjs->status);
-                        ?>
+                    <?php
+                    $renderDuration = static function (WorkflowJobStep $wjs): string {
+                        if ($wjs->started_at === null) {
+                            return '—';
+                        }
+                        $end = $wjs->finished_at !== null ? (int)$wjs->finished_at : time();
+                        $seconds = max(0, $end - (int)$wjs->started_at);
+                        $minutes = intdiv($seconds, 60);
+                        $remaining = $seconds % 60;
+                        $core = $minutes > 0 ? sprintf('%dm %02ds', $minutes, $remaining) : sprintf('%ds', $remaining);
+                        return $wjs->finished_at !== null ? $core : 'running ' . $core;
+                    };
+    foreach ($steps as $i => $wjs) :
+        $isCurrent = $model->current_step_id === $wjs->workflow_step_id;
+        $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
+        $label = WorkflowJobStep::statusLabel($wjs->status);
+        ?>
                         <tr data-wjs-step-id="<?= (int)$wjs->workflow_step_id // xss-ok: int?>" class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
                             <td><?= Html::encode((string)($i + 1)) ?></td>
                             <td><?= Html::encode($wjs->workflowStep?->name ?? '—') ?></td>
                             <td data-wjs-status-cell>
                                 <span class="badge text-bg-<?= Html::encode($cssClass) ?>">
-                                    <?= Html::encode($label) ?>
+                    <?= Html::encode($label) ?>
                                 </span>
                             </td>
                             <td data-wjs-job-cell>
-                                <?php if ($wjs->job_id) : ?>
+                <?php if ($wjs->job_id) : ?>
                                     <?= Html::a(
                                         '#' . Html::encode((string)$wjs->job_id),
                                         ['/job/view', 'id' => $wjs->job_id]
                                     ) ?>
-                                <?php else : ?>
+                <?php else : ?>
                                     —
-                                <?php endif; ?>
+                <?php endif; ?>
                             </td>
                             <td data-wjs-started-cell>
                                 <?= $wjs->started_at
-                                    ? Html::encode(date('H:i:s', (int)$wjs->started_at))
-                                    : '—' ?>
+                                ? Html::encode(date('H:i:s', (int)$wjs->started_at))
+                                : '—' ?>
                             </td>
+                            <td data-wjs-duration-cell><?= Html::encode($renderDuration($wjs)) ?></td>
                             <td data-wjs-finished-cell>
                                 <?= $wjs->finished_at
-                                    ? Html::encode(date('H:i:s', (int)$wjs->finished_at))
-                                    : '—' ?>
+                                ? Html::encode(date('H:i:s', (int)$wjs->finished_at))
+                                : '—' ?>
                             </td>
                         </tr>
-                    <?php endforeach; ?>
+    <?php endforeach; ?>
                 </tbody>
             </table>
         <?php endif; ?>
@@ -180,6 +193,10 @@ $steps = $model->stepExecutions;
         var startedCell = row.querySelector('[data-wjs-started-cell]');
         if (startedCell) {
             startedCell.textContent = step.started_label || '—';
+        }
+        var durationCell = row.querySelector('[data-wjs-duration-cell]');
+        if (durationCell) {
+            durationCell.textContent = step.duration_label || '—';
         }
         var finishedCell = row.querySelector('[data-wjs-finished-cell]');
         if (finishedCell) {

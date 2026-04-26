@@ -105,6 +105,111 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $this->assertArrayHasKey('verbs', $behaviors);
     }
 
+    // ── actionStatus() — duration field on each step ─────────────────────────
+
+    public function testStatusReturnsDurationLabelForFinishedStep(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+
+        $wf = $this->createWorkflowTemplate($user->id);
+        $step = $this->createWorkflowStep($wf->id, 10, \app\models\WorkflowStep::TYPE_PAUSE);
+
+        $wj = $this->createWfJobForTemplate($user, $wf);
+        $started = time() - 130;
+        $finished = $started + 75; // 1m 15s
+        $wjs = $this->seedJobStep($wj->id, $step->id, $started, $finished, \app\models\WorkflowJobStep::STATUS_SUCCEEDED);
+
+        $ctrl = $this->makeController();
+        $payload = $ctrl->actionStatus((int)$wj->id);
+
+        $row = $this->stepRow($payload, (int)$wjs->workflow_step_id);
+        $this->assertSame(75, $row['duration_seconds']);
+        $this->assertSame('1m 15s', $row['duration_label']);
+    }
+
+    public function testStatusReturnsRunningPrefixForInFlightStep(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+
+        $wf = $this->createWorkflowTemplate($user->id);
+        $step = $this->createWorkflowStep($wf->id, 10, \app\models\WorkflowStep::TYPE_PAUSE);
+
+        $wj = $this->createWfJobForTemplate($user, $wf);
+        $wjs = $this->seedJobStep($wj->id, $step->id, time() - 30, null, \app\models\WorkflowJobStep::STATUS_RUNNING);
+
+        $ctrl = $this->makeController();
+        $payload = $ctrl->actionStatus((int)$wj->id);
+
+        $row = $this->stepRow($payload, (int)$wjs->workflow_step_id);
+        $this->assertGreaterThanOrEqual(29, $row['duration_seconds']);
+        $this->assertStringStartsWith('running ', (string)$row['duration_label']);
+    }
+
+    public function testStatusReturnsNullDurationForStepThatNeverStarted(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+
+        $wf = $this->createWorkflowTemplate($user->id);
+        $step = $this->createWorkflowStep($wf->id, 10, \app\models\WorkflowStep::TYPE_PAUSE);
+
+        $wj = $this->createWfJobForTemplate($user, $wf);
+        $wjs = $this->seedJobStep($wj->id, $step->id, null, null, \app\models\WorkflowJobStep::STATUS_PENDING);
+
+        $ctrl = $this->makeController();
+        $payload = $ctrl->actionStatus((int)$wj->id);
+
+        $row = $this->stepRow($payload, (int)$wjs->workflow_step_id);
+        $this->assertNull($row['duration_seconds']);
+        $this->assertNull($row['duration_label']);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    private function stepRow(array $payload, int $workflowStepId): array
+    {
+        foreach ($payload['steps'] as $row) {
+            if ($row['workflow_step_id'] === $workflowStepId) {
+                return $row;
+            }
+        }
+        $this->fail('Step row for workflow_step_id ' . $workflowStepId . ' not present in status payload.');
+    }
+
+    private function createWfJobForTemplate(\app\models\User $user, \app\models\WorkflowTemplate $wf): WorkflowJob
+    {
+        $j = new WorkflowJob();
+        $j->workflow_template_id = $wf->id;
+        $j->launched_by = $user->id;
+        $j->status = WorkflowJob::STATUS_RUNNING;
+        $j->started_at = time();
+        $j->created_at = time();
+        $j->updated_at = time();
+        $j->save(false);
+        return $j;
+    }
+
+    private function seedJobStep(
+        int $workflowJobId,
+        int $workflowStepId,
+        ?int $startedAt,
+        ?int $finishedAt,
+        string $status,
+    ): \app\models\WorkflowJobStep {
+        $wjs = new \app\models\WorkflowJobStep();
+        $wjs->workflow_job_id = $workflowJobId;
+        $wjs->workflow_step_id = $workflowStepId;
+        $wjs->status = $status;
+        $wjs->started_at = $startedAt;
+        $wjs->finished_at = $finishedAt;
+        $wjs->save(false);
+        return $wjs;
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private function createWfJob(\app\models\User $user): WorkflowJob

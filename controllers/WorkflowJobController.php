@@ -85,7 +85,9 @@ class WorkflowJobController extends BaseController
     {
         $out = [];
         $currentStepId = $model->current_step_id !== null ? (int)$model->current_step_id : null;
+        $now = time();
         foreach ($model->stepExecutions as $wjs) {
+            $duration = $this->stepDurationSeconds($wjs, $now);
             $out[] = [
                 'workflow_step_id' => (int)$wjs->workflow_step_id,
                 'job_id' => $wjs->job_id !== null ? (int)$wjs->job_id : null,
@@ -97,6 +99,8 @@ class WorkflowJobController extends BaseController
                 'started_label' => $this->tsLabel($wjs->started_at, 'H:i:s'),
                 'finished_at' => $wjs->finished_at !== null ? (int)$wjs->finished_at : null,
                 'finished_label' => $this->tsLabel($wjs->finished_at, 'H:i:s'),
+                'duration_seconds' => $duration,
+                'duration_label' => $this->durationLabel($duration, $wjs->finished_at !== null),
             ];
         }
         return $out;
@@ -105,6 +109,36 @@ class WorkflowJobController extends BaseController
     private function tsLabel(?int $ts, string $fmt): ?string
     {
         return $ts !== null ? date($fmt, $ts) : null;
+    }
+
+    /**
+     * Step elapsed time. Finished steps return finished-started; in-flight
+     * steps return now-started so the UI shows a live-updating duration.
+     * Steps that never started return null.
+     */
+    private function stepDurationSeconds(\app\models\WorkflowJobStep $wjs, int $now): ?int
+    {
+        if ($wjs->started_at === null) {
+            return null;
+        }
+        $end = $wjs->finished_at !== null ? (int)$wjs->finished_at : $now;
+        return max(0, $end - (int)$wjs->started_at);
+    }
+
+    /**
+     * Human-readable duration ("2m 13s" / "running 0m 47s"). Kept on the
+     * server side so the polling JS can drop the value straight into the
+     * cell without re-implementing formatting.
+     */
+    private function durationLabel(?int $seconds, bool $finished): ?string
+    {
+        if ($seconds === null) {
+            return null;
+        }
+        $minutes = intdiv($seconds, 60);
+        $remaining = $seconds % 60;
+        $core = $minutes > 0 ? sprintf('%dm %02ds', $minutes, $remaining) : sprintf('%ds', $remaining);
+        return $finished ? $core : 'running ' . $core;
     }
 
     public function actionCancel(int $id): Response

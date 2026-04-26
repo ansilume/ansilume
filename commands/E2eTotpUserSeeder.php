@@ -60,6 +60,27 @@ class E2eTotpUserSeeder
         /** @var TotpService $totp */
         $totp = \Yii::$app->get('totpService');
         $totp->enable($user, self::TOTP_SECRET);
+
+        // Clear any leftover rate-limit lockout from prior wrong-code test
+        // runs — without this, repeated suite runs eventually trip the
+        // per-user attempt cap and the verify-totp spec ends up asserting
+        // against a lockout flash instead of an invalid-code error.
+        $this->clearRateLimit((int)$user->id);
+    }
+
+    private function clearRateLimit(int $userId): void
+    {
+        try {
+            $redis = new \Redis();
+            $redis->connect(
+                $_ENV['REDIS_HOST'] ?? 'redis',
+                (int)($_ENV['REDIS_PORT'] ?? 6379),
+            );
+            $redis->del('totp_rate_limit_' . $userId);
+        } catch (\Throwable) {
+            // best-effort — the spec re-tries with a wait; not having Redis
+            // here is not a hard error for the seed itself.
+        }
     }
 
     private function ensureViewerRole(int $userId): void

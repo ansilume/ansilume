@@ -79,7 +79,7 @@ foreach ($steps as $s) {
         <?php if (empty($steps)) : ?>
             <div class="text-muted mb-3">No steps defined yet.</div>
         <?php else : ?>
-            <table class="table table-bordered">
+            <table class="table table-bordered" id="workflow-steps-table">
                 <thead class="table-light">
                     <tr>
                         <th>#</th>
@@ -89,13 +89,18 @@ foreach ($steps as $s) {
                         <th>On Success</th>
                         <th>On Failure</th>
                         <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
-                        <th></th>
+                        <th class="text-nowrap">Actions</th>
                         <?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($steps as $step) : ?>
-                    <tr>
+                    <?php
+                    $stepCount = count($steps);
+                    foreach ($steps as $idx => $step) :
+                        $isFirst = $idx === 0;
+                        $isLast = $idx === $stepCount - 1;
+                        ?>
+                    <tr data-step-id="<?= (int)$step->id // xss-ok: int?>">
                         <td><?= Html::encode((string)$step->step_order) ?></td>
                         <td><?= Html::encode($step->name) ?></td>
                         <td><span class="badge text-bg-secondary"><?= Html::encode(WorkflowStep::typeLabels()[$step->step_type] ?? $step->step_type) ?></span></td>
@@ -127,10 +132,32 @@ foreach ($steps as $s) {
                         }
                         ?></td>
                         <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
-                        <td>
-                            <?= Html::beginForm(['remove-step', 'id' => $model->id], 'post') ?>
+                        <td class="text-nowrap">
+                            <?= Html::beginForm(['move-step', 'id' => $model->id], 'post', ['class' => 'd-inline']) ?>
                                 <?= Html::hiddenInput('step_id', (string)$step->id) ?>
-                                <?= Html::submitButton('Remove', ['class' => 'btn btn-outline-danger btn-sm', 'data-confirm' => 'Remove this step?']) ?>
+                                <?= Html::hiddenInput('direction', 'up') ?>
+                                <?= Html::submitButton('▲', [
+                                    'class' => 'btn btn-outline-secondary btn-sm',
+                                    'title' => 'Move up',
+                                    'aria-label' => 'Move step up',
+                                    'data-action' => 'move-up',
+                                    'disabled' => $isFirst,
+                                ]) ?>
+                            <?= Html::endForm() ?>
+                            <?= Html::beginForm(['move-step', 'id' => $model->id], 'post', ['class' => 'd-inline']) ?>
+                                <?= Html::hiddenInput('step_id', (string)$step->id) ?>
+                                <?= Html::hiddenInput('direction', 'down') ?>
+                                <?= Html::submitButton('▼', [
+                                    'class' => 'btn btn-outline-secondary btn-sm',
+                                    'title' => 'Move down',
+                                    'aria-label' => 'Move step down',
+                                    'data-action' => 'move-down',
+                                    'disabled' => $isLast,
+                                ]) ?>
+                            <?= Html::endForm() ?>
+                            <?= Html::beginForm(['remove-step', 'id' => $model->id], 'post', ['class' => 'd-inline']) ?>
+                                <?= Html::hiddenInput('step_id', (string)$step->id) ?>
+                                <?= Html::submitButton('Remove', ['class' => 'btn btn-outline-danger btn-sm ms-1', 'data-confirm' => 'Remove this step?']) ?>
                             <?= Html::endForm() ?>
                         </td>
                         <?php endif; ?>
@@ -138,6 +165,9 @@ foreach ($steps as $s) {
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            <p class="form-text small mb-3">
+                Use ▲ / ▼ to reorder. Step numbers are auto-spaced (10, 20, 30…) so you can manually wedge a new step between two existing ones by typing any value in between.
+            </p>
         <?php endif; ?>
 
         <?php if (Yii::$app->user->can('workflow-template.update')) : ?>

@@ -48,6 +48,9 @@ return [
         'workflowExecutionService' => [
             'class' => 'app\services\WorkflowExecutionService',
         ],
+        'workflowStepReorderService' => [
+            'class' => 'app\services\WorkflowStepReorderService',
+        ],
         'webhookService' => [
             'class' => 'app\services\WebhookService',
         ],
