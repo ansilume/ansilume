@@ -520,7 +520,10 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $this->assertArrayHasKey('last_seen_seconds_ago', $worker);
         $this->assertArrayHasKey('oldest_started_seconds_ago', $worker);
         $this->assertSame(120, $worker['stale_after_seconds']);
-        $this->assertSame(86400, $worker['stale_code_warn_seconds']);
+        $this->assertArrayHasKey('current_app_version', $worker);
+        $this->assertArrayHasKey('oldest_app_version', $worker);
+        $this->assertArrayHasKey('stale_code', $worker);
+        $this->assertIsBool($worker['stale_code']);
     }
 
     public function testSyncStatusWorkerAliveReflectsHeartbeatPresence(): void
@@ -565,32 +568,34 @@ class ProjectControllerActionTest extends WebControllerTestCase
         }
     }
 
-    public function testSyncStatusWorkerFlagsStaleStartedAtPastWarnThreshold(): void
+    public function testSyncStatusFlagsStaleCodeWhenWorkerVersionDoesNotMatch(): void
     {
+        // The previous time-based threshold gave false positives for any
+        // long-running healthy worker. The new contract: `stale_code` is
+        // true iff at least one worker's stamped app_version differs from
+        // the on-disk version.
         $user = $this->createSuperadmin();
         $this->loginAs($user);
         $project = $this->createProject($user->id);
         $ctrl = $this->makeController();
 
-        $key = 'ansilume:worker:phpunit-stale-' . uniqid('', true);
+        $key = 'ansilume:worker:phpunit-vermismatch-' . uniqid('', true);
         $redis = $this->connectRedisOrSkip();
         try {
-            $startedFiveDaysAgo = time() - (5 * 86400);
             $redis->setex($key, 120, json_encode([
-                'worker_id' => 'phpunit-stale',
+                'worker_id' => 'phpunit-vermismatch',
                 'pid' => 2,
                 'hostname' => 'phpunit',
-                'started_at' => $startedFiveDaysAgo,
+                'started_at' => time() - 60,
                 'seen_at' => time(),
+                'app_version' => '0.0.0-deliberately-stale',
             ]));
 
             $result = $ctrl->actionSyncStatus((int)$project->id);
             $this->assertTrue($result['worker']['alive']);
-            $this->assertNotNull($result['worker']['oldest_started_seconds_ago']);
-            $this->assertGreaterThan(
-                $result['worker']['stale_code_warn_seconds'],
-                $result['worker']['oldest_started_seconds_ago'],
-                'A 5-day-old worker must trip the stale-code warning so the JS panel can flag it.',
+            $this->assertTrue(
+                $result['worker']['stale_code'],
+                'A worker stamped with a different app_version must flip stale_code on.',
             );
         } finally {
             try {
@@ -599,6 +604,54 @@ class ProjectControllerActionTest extends WebControllerTestCase
                 // best-effort
             }
         }
+    }
+
+    public function testSyncStatusFlagsStaleCodeWhenWorkerHasNoVersionStamp(): void
+    {
+        // Pre-upgrade workers have no app_version field at all. Treat that
+        // as stale so the operator gets a one-time nudge to restart them.
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $key = 'ansilume:worker:phpunit-noversion-' . uniqid('', true);
+        $redis = $this->connectRedisOrSkip();
+        try {
+            $redis->setex($key, 120, json_encode([
+                'worker_id' => 'phpunit-noversion',
+                'pid' => 3,
+                'hostname' => 'phpunit',
+                'started_at' => time() - 60,
+                'seen_at' => time(),
+                // app_version intentionally absent
+            ]));
+
+            $result = $ctrl->actionSyncStatus((int)$project->id);
+            $this->assertTrue($result['worker']['stale_code']);
+            $this->assertNull($result['worker']['oldest_app_version']);
+        } finally {
+            try {
+                $redis->del($key);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
+    public function testSyncStatusReportsCurrentAppVersionFromVersionFile(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $result = $ctrl->actionSyncStatus((int)$project->id);
+        $current = $result['worker']['current_app_version'];
+        $this->assertIsString($current);
+        $this->assertNotSame('', $current);
+        // Whatever the operator deploys: the snapshot must surface a
+        // non-empty version string so the JS banner has something to name.
     }
 
     private function connectRedisOrSkip(): \Redis

@@ -138,21 +138,31 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
                 + '<code>docker compose up -d queue-worker</code>';
             return;
         }
-        var stale = w.oldest_started_seconds_ago !== null
-            && w.oldest_started_seconds_ago > w.stale_code_warn_seconds;
-        var className = stale
-            ? 'card-footer py-1 px-2 small text-warning'
-            : 'card-footer py-1 px-2 small text-muted';
+        // Stale-code banner only fires when a worker's stamped app_version
+        // differs from the version on disk — i.e. the worker process is
+        // running an older revision than the code. A long-running worker
+        // that's still on the right version is silent.
         var parts = [
             'Workers: ' + w.count + ' alive',
             'last heartbeat ' + humanSeconds(w.last_seen_seconds_ago) + ' ago',
         ];
         if (w.oldest_started_seconds_ago !== null) {
-            parts.push('oldest started ' + humanSeconds(w.oldest_started_seconds_ago) + ' ago'
-                + (stale ? ' \u26A0 stale code likely \u2014 restart the worker if you just deployed' : ''));
+            parts.push('oldest started ' + humanSeconds(w.oldest_started_seconds_ago) + ' ago');
+        }
+        var className = 'card-footer py-1 px-2 small text-muted';
+        var line = parts.join(' \u00B7 ');
+        if (w.stale_code) {
+            className = 'card-footer py-1 px-2 small text-warning';
+            var current = w.current_app_version || 'unknown';
+            var oldest = w.oldest_app_version || null;
+            var staleSuffix = oldest === null
+                ? ' \u26A0 worker started before this feature shipped \u2014 restart it to clear this banner'
+                : ' \u26A0 worker is on app v' + oldest + ', current is v' + current
+                    + ' \u2014 restart the worker to pick up new code';
+            line += staleSuffix;
         }
         workerEl.className = className;
-        workerEl.textContent = parts.join(' \u00B7 ');
+        workerEl.textContent = line;
     }
 
     function poll() {

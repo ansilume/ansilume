@@ -40,7 +40,9 @@ test.describe('Project sync log panel', () => {
     expect(typeof body.worker.alive).toBe('boolean');
     expect(typeof body.worker.count).toBe('number');
     expect(body.worker.stale_after_seconds).toBe(120);
-    expect(body.worker.stale_code_warn_seconds).toBe(86400);
+    expect(typeof body.worker.stale_code).toBe('boolean');
+    expect(typeof body.worker.current_app_version).toBe('string');
+    expect(body.worker.current_app_version.length).toBeGreaterThan(0);
 
     // The worker indicator footer is wired into the panel and should be
     // populated by the first poll. We don't pin alive/dead state because

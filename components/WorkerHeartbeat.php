@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\components;
 
+use app\helpers\AppVersion;
+
 /**
  * Manages worker heartbeat records in Redis.
  *
@@ -11,8 +13,14 @@ namespace app\components;
  * the timestamp every HEARTBEAT_INTERVAL seconds. The web health endpoint
  * reads these keys to report which workers are alive.
  *
- * Key schema:  ansilume:worker:{workerId}  →  JSON {pid, hostname, started_at, seen_at}
+ * Key schema:  ansilume:worker:{workerId}  →  JSON {pid, hostname, started_at, seen_at, app_version}
  * TTL:         STALE_AFTER seconds (auto-expiry if worker dies without deregistering)
+ *
+ * `app_version` is captured once at construct time so a worker that
+ * started against an older code revision keeps the OLD version stamp
+ * even after the on-disk VERSION file is bumped — which is exactly how
+ * the "stale code" banner detects a worker that didn't restart after a
+ * deploy.
  */
 class WorkerHeartbeat
 {
@@ -21,12 +29,14 @@ class WorkerHeartbeat
 
     private string $workerId;
     private int $startedAt;
+    private string $appVersion;
     private \Redis $redis;
 
     public function __construct()
     {
         $this->workerId = gethostname() . ':' . getmypid();
         $this->startedAt = time();
+        $this->appVersion = AppVersion::current();
         $this->redis = $this->connectRedis();
     }
 
@@ -61,7 +71,7 @@ class WorkerHeartbeat
     /**
      * Fetch all live worker records from Redis.
      *
-     * @return array<int, array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int}>
+     * @return array<int, array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int, app_version?: string}>
      */
     public static function all(): array
     {
@@ -75,7 +85,7 @@ class WorkerHeartbeat
                 $raw = $redis->get($key);
                 $data = ($raw !== false && is_string($raw)) ? json_decode($raw, true) : null;
                 if (is_array($data) && (int)($data['seen_at'] ?? 0) >= $cutoff) {
-                    /** @var array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int} $data */
+                    /** @var array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int, app_version?: string} $data */
                     $workers[] = $data;
                 }
             }
@@ -93,6 +103,7 @@ class WorkerHeartbeat
             'hostname' => gethostname(),
             'started_at' => $this->startedAt,
             'seen_at' => time(),
+            'app_version' => $this->appVersion,
         ]);
 
         try {

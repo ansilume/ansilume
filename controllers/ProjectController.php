@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\components\WorkerHeartbeat;
+use app\helpers\AppVersion;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Project;
@@ -258,10 +259,17 @@ class ProjectController extends BaseController
     }
 
     /**
-     * Snapshot of queue-worker liveness so the sync log panel can show
-     * "no worker running" or "worker is 4 days old (stale code likely)"
-     * — both are common causes of a syncing-but-empty-output card and the
-     * operator otherwise has no way to tell from the UI alone.
+     * Snapshot of queue-worker liveness for the sync log panel. Renders
+     * "no worker running" when nothing is registered, and "stale code"
+     * when at least one worker's stamped app_version doesn't match the
+     * version on disk — that's the precise condition that left a recent
+     * deploy's PHP changes invisible to the long-running worker process.
+     *
+     * The previous time-based threshold (warn after 24h uptime) gave
+     * false positives every time the worker happened to run a day in
+     * production WITHOUT a deploy. Comparing app_version makes the
+     * banner deploy-aware: it only fires when the worker is actually
+     * stale, and stays silent through arbitrarily long quiet periods.
      *
      * @return array{
      *     alive: bool,
@@ -269,33 +277,80 @@ class ProjectController extends BaseController
      *     last_seen_seconds_ago: int|null,
      *     oldest_started_seconds_ago: int|null,
      *     stale_after_seconds: int,
-     *     stale_code_warn_seconds: int,
+     *     current_app_version: string,
+     *     oldest_app_version: string|null,
+     *     stale_code: bool,
      * }
      */
     private function workerSnapshot(): array
     {
         $workers = WorkerHeartbeat::all();
         $now = time();
+        $current = AppVersion::current();
+        $folded = $this->foldWorkers($workers, $current);
+
+        return [
+            'alive' => count($workers) > 0,
+            'count' => count($workers),
+            'last_seen_seconds_ago' => $folded['latestSeen'] > 0 ? $now - $folded['latestSeen'] : null,
+            'oldest_started_seconds_ago' => $folded['oldestStart'] > 0 ? $now - $folded['oldestStart'] : null,
+            'stale_after_seconds' => WorkerHeartbeat::STALE_AFTER,
+            'current_app_version' => $current,
+            'oldest_app_version' => $folded['oldestVersion'],
+            'stale_code' => $folded['staleCode'],
+        ];
+    }
+
+    /**
+     * Aggregate the heartbeat list into the four scalar values workerSnapshot()
+     * needs. Pulled out of the snapshot method to keep PHPMD's complexity
+     * caps happy without losing the per-worker decision logic.
+     *
+     * @param array<int, array<string, mixed>> $workers
+     * @return array{latestSeen: int, oldestStart: int, oldestVersion: string|null, staleCode: bool}
+     */
+    private function foldWorkers(array $workers, string $current): array
+    {
         $latestSeen = 0;
         $oldestStart = 0;
+        $oldestStartWorker = null;
+        $staleCode = false;
         foreach ($workers as $w) {
             $latestSeen = max($latestSeen, (int)($w['seen_at'] ?? 0));
             $started = (int)($w['started_at'] ?? 0);
             if ($started > 0 && ($oldestStart === 0 || $started < $oldestStart)) {
                 $oldestStart = $started;
+                $oldestStartWorker = $w;
+            }
+            if ($this->isStaleVersion($w, $current)) {
+                $staleCode = true;
             }
         }
+        $oldestVersion = null;
+        if (is_array($oldestStartWorker) && isset($oldestStartWorker['app_version'])) {
+            $oldestVersion = (string)$oldestStartWorker['app_version'];
+        }
         return [
-            'alive' => count($workers) > 0,
-            'count' => count($workers),
-            'last_seen_seconds_ago' => $latestSeen > 0 ? $now - $latestSeen : null,
-            'oldest_started_seconds_ago' => $oldestStart > 0 ? $now - $oldestStart : null,
-            'stale_after_seconds' => WorkerHeartbeat::STALE_AFTER,
-            // 24h: arbitrary-but-safe threshold beyond which a long-running
-            // worker is statistically likely to have stale opcache/code in
-            // memory after one or more deploys.
-            'stale_code_warn_seconds' => 86400,
+            'latestSeen' => $latestSeen,
+            'oldestStart' => $oldestStart,
+            'oldestVersion' => $oldestVersion,
+            'staleCode' => $staleCode,
         ];
+    }
+
+    /**
+     * A worker counts as stale when it has no app_version stamp at all
+     * (pre-upgrade process) or its stamp differs from the on-disk
+     * VERSION file. Either way the operator should restart it.
+     *
+     * @param array<string, mixed> $worker
+     */
+    private function isStaleVersion(array $worker, string $current): bool
+    {
+        $version = isset($worker['app_version']) && is_string($worker['app_version'])
+            ? $worker['app_version']
+            : null;
+        return $version === null || $version !== $current;
     }
 
     /**
