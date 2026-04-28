@@ -51,7 +51,12 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
     </div>
     <div class="col-12">
         <?= $form->field($model, 'extra_vars')
-            ->textarea(['rows' => 5, 'class' => 'form-control font-monospace', 'placeholder' => "{\n  \"env\": \"production\"\n}"])
+            ->textarea([
+                'rows' => 5,
+                'class' => 'form-control font-monospace',
+                'placeholder' => "{\n  \"env\": \"production\"\n}",
+                'data-extra-vars-editor' => '1',
+            ])
             ->hint('Optional JSON extra vars that override the template defaults for scheduled runs.') ?>
     </div>
     <div class="col-12">
@@ -87,3 +92,14 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
     update();
 })();
 </script>
+
+<link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
+<link rel="stylesheet" href="/css/extra-vars-editor.css">
+<script src="/js/vendor/codemirror/codemirror.js"></script>
+<script src="/js/vendor/codemirror/mode/javascript/javascript.js"></script>
+<script src="/js/vendor/codemirror/mode/yaml/yaml.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/matchbrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/closebrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/selection/active-line.js"></script>
+<script src="/js/vendor/js-yaml/js-yaml.min.js"></script>
+<script src="/js/extra-vars-editor.js"></script>

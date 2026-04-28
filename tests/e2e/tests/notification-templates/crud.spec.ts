@@ -22,8 +22,12 @@ test.describe('Notification Templates CRUD', () => {
     await fillForm(page, 'notificationtemplate', {
       name: 'e2e-crud-notification',
       subject_template: 'E2E Test Subject',
-      body_template: 'E2E Test Body',
     });
+    // body_template is now driven by a CodeMirror template-editor — the
+    // backing textarea is hidden, so set the value directly via evaluate.
+    await page.locator('textarea[data-template-editor]').evaluate((el, value) => {
+      (el as HTMLTextAreaElement).value = value;
+    }, 'E2E Test Body');
     // Channel selector uses custom id #nt-channel in this view.
     await page.locator('#nt-channel').selectOption('email');
     await page.locator('#email-recipients').fill('["ops@example.com"]');

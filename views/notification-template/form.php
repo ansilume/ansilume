@@ -159,6 +159,7 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
     <?= $form->field($model, 'body_template')->textarea([
         'rows' => 6,
         'class' => 'form-control font-monospace',
+        'data-template-editor' => '1',
     ]) ?>
 
     <div class="mt-4">
@@ -247,3 +248,10 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
     });
 })();
 </script>
+
+<link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
+<link rel="stylesheet" href="/css/extra-vars-editor.css">
+<script src="/js/vendor/codemirror/codemirror.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/matchbrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/selection/active-line.js"></script>
+<script src="/js/template-editor.js"></script>
