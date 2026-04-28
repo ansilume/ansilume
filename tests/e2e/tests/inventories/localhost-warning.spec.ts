@@ -60,9 +60,14 @@ test.describe('Localhost warning', () => {
     if (await typeSelect.isVisible()) {
       await typeSelect.selectOption('static');
     }
-    await page.locator('#inventory-content').fill(
-      "all:\n  hosts:\n    web01.example.com:\n      ansible_user: deploy\n    db01.example.com:\n      ansible_user: deploy\n",
-    );
+    // The textarea is replaced by a CodeMirror editor (yaml-editor.js)
+    // and hidden. Typing via keyboard would interact with the editor's
+    // auto-indent and produce different indentation than the test wants.
+    // Set the value directly on the hidden textarea — that's what the
+    // form POSTs anyway.
+    await page.locator('textarea[data-yaml-editor]').evaluate((el, value) => {
+      (el as HTMLTextAreaElement).value = value;
+    }, 'all:\n  hosts:\n    web01.example.com:\n      ansible_user: deploy\n    db01.example.com:\n      ansible_user: deploy\n');
     await submitForm(page);
     await expectFlash(page, 'success');
 

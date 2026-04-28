@@ -26,10 +26,12 @@ test.describe('Inventories CRUD', () => {
     if (await typeSelect.isVisible()) {
       await typeSelect.selectOption('static');
     }
-    const contentArea = page.locator('#inventory-content');
-    if (await contentArea.isVisible()) {
-      await contentArea.fill("all:\n  hosts:\n    testhost:\n      ansible_connection: local\n");
-    }
+    // The textarea is replaced by a CodeMirror editor (yaml-editor.js)
+    // and hidden. Set the form value directly on the textarea — the
+    // editor's auto-indent makes keyboard.type unreliable for shaped YAML.
+    await page.locator('textarea[data-yaml-editor]').evaluate((el, value) => {
+      (el as HTMLTextAreaElement).value = value;
+    }, 'all:\n  hosts:\n    testhost:\n      ansible_connection: local\n');
     await submitForm(page);
     await expectFlash(page, 'success');
   });

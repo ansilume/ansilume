@@ -43,6 +43,7 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
             'rows' => 12,
             'class' => 'form-control font-monospace',
             'placeholder' => "all:\n  hosts:\n    192.168.1.10:\n    192.168.1.11:\n      ansible_user: ubuntu",
+            'data-yaml-editor' => '1',
         ])->label('Inventory Content (YAML)') ?>
     </div>
 
@@ -82,3 +83,13 @@ document.addEventListener('DOMContentLoaded', function () {
     update();
 });
 </script>
+
+<link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
+<link rel="stylesheet" href="/css/extra-vars-editor.css">
+<script src="/js/vendor/codemirror/codemirror.js"></script>
+<script src="/js/vendor/codemirror/mode/yaml/yaml.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/matchbrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/edit/closebrackets.js"></script>
+<script src="/js/vendor/codemirror/addon/selection/active-line.js"></script>
+<script src="/js/vendor/js-yaml/js-yaml.min.js"></script>
+<script src="/js/yaml-editor.js"></script>
