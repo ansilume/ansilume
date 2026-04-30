@@ -11,6 +11,7 @@ use yii\db\ActiveRecord;
  * @property int         $id
  * @property string      $name
  * @property string|null $description
+ * @property string|null $trigger_token  SHA-256 hex of the raw inbound-trigger token; null = trigger disabled
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at
@@ -65,8 +66,50 @@ class WorkflowTemplate extends ActiveRecord
             [['name'], 'required'],
             [['name'], 'string', 'max' => 128],
             [['description'], 'string', 'max' => 1000],
+            [['trigger_token'], 'string', 'max' => 64],
             [['created_by'], 'integer'],
         ];
+    }
+
+    /**
+     * Generate a new random inbound-trigger token. The raw value is
+     * returned once and must be shown to the operator immediately —
+     * only its SHA-256 hash is persisted, so the raw value cannot be
+     * recovered afterwards.
+     *
+     * Mirror of {@see JobTemplate::generateTriggerToken()}.
+     */
+    public function generateTriggerToken(): string
+    {
+        $raw = bin2hex(random_bytes(32));
+        $this->trigger_token = hash('sha256', $raw);
+        $this->save(false, ['trigger_token']);
+        return $raw;
+    }
+
+    /**
+     * Remove the trigger token, effectively disabling the inbound trigger.
+     */
+    public function revokeTriggerToken(): void
+    {
+        $this->trigger_token = null;
+        $this->save(false, ['trigger_token']);
+    }
+
+    /**
+     * Look up a workflow template by its raw trigger token. The raw value
+     * is hashed and compared against the stored SHA-256 hex. Returns null
+     * for empty input or unknown tokens — TriggerController turns either
+     * into a 404 + invalid-token notification.
+     */
+    public static function findByTriggerToken(string $token): ?self
+    {
+        if ($token === '') {
+            return null;
+        }
+        /** @var static|null $result */
+        $result = static::findOne(['trigger_token' => hash('sha256', $token)]);
+        return $result;
     }
 
     /**

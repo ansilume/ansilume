@@ -216,4 +216,51 @@ class WorkflowTemplateTest extends DbTestCase
         $this->assertSame('A test workflow', $wt->description);
         $this->assertSame($user->id, (int)$wt->created_by);
     }
+
+    // -- inbound trigger tokens ------------------------------------------------
+
+    public function testGenerateTriggerTokenReturnsRawAndStoresHash(): void
+    {
+        $user = $this->createUser();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $this->assertNull($wt->trigger_token);
+
+        $raw = $wt->generateTriggerToken();
+        $wt->refresh();
+
+        $this->assertNotSame('', $raw);
+        $this->assertSame(64, strlen($raw), 'Raw token is 32 random bytes hex-encoded.');
+        // Stored value is a SHA-256 hex of the raw token, never the raw value.
+        $this->assertNotSame($raw, $wt->trigger_token);
+        $this->assertSame(hash('sha256', $raw), $wt->trigger_token);
+    }
+
+    public function testRevokeTriggerTokenClearsStoredHash(): void
+    {
+        $user = $this->createUser();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $wt->generateTriggerToken();
+        $this->assertNotNull($wt->trigger_token);
+
+        $wt->revokeTriggerToken();
+        $wt->refresh();
+        $this->assertNull($wt->trigger_token);
+    }
+
+    public function testFindByTriggerTokenRoundTrip(): void
+    {
+        $user = $this->createUser();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $raw = $wt->generateTriggerToken();
+
+        $found = WorkflowTemplate::findByTriggerToken($raw);
+        $this->assertNotNull($found);
+        $this->assertSame($wt->id, $found->id);
+    }
+
+    public function testFindByTriggerTokenRejectsEmptyAndUnknown(): void
+    {
+        $this->assertNull(WorkflowTemplate::findByTriggerToken(''));
+        $this->assertNull(WorkflowTemplate::findByTriggerToken('does-not-exist'));
+    }
 }

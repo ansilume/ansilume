@@ -509,6 +509,72 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->assertEmpty(\Yii::$app->session->getAllFlashes());
     }
 
+    // ── actionGenerateTriggerToken / actionRevokeTriggerToken ────────────────
+
+    public function testGenerateTriggerTokenStoresHashAndFlashesRaw(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost([]);
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionGenerateTriggerToken((int)$wf->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $wf->refresh();
+        $this->assertNotNull($wf->trigger_token);
+        $this->assertSame(64, strlen((string)$wf->trigger_token), 'SHA-256 hex is 64 chars.');
+
+        $flashes = \Yii::$app->session->getAllFlashes();
+        $this->assertArrayHasKey('trigger_token_raw', $flashes);
+        $this->assertSame(64, strlen((string)$flashes['trigger_token_raw']), 'Raw token is 32 random bytes hex-encoded.');
+        // Defence in depth: never persist the raw value.
+        $this->assertNotSame($flashes['trigger_token_raw'], $wf->trigger_token);
+
+        $audit = AuditLog::findOne([
+            'action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_GENERATED,
+            'object_id' => $wf->id,
+        ]);
+        $this->assertNotNull($audit, 'Generation must produce an audit log entry.');
+    }
+
+    public function testRevokeTriggerTokenClearsAndAudits(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $wf->generateTriggerToken();
+        $this->assertNotNull($wf->trigger_token);
+
+        $this->setQueryParams(['id' => (string)$wf->id]);
+        $this->setPost([]);
+        $ctrl = $this->makeController();
+        $ctrl->actionRevokeTriggerToken((int)$wf->id);
+
+        $wf->refresh();
+        $this->assertNull($wf->trigger_token);
+
+        $audit = AuditLog::findOne([
+            'action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_REVOKED,
+            'object_id' => $wf->id,
+        ]);
+        $this->assertNotNull($audit);
+    }
+
+    public function testGenerateTriggerTokenThrowsForUnknownTemplate(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+
+        $this->setQueryParams(['id' => '9999999']);
+        $this->setPost([]);
+        $ctrl = $this->makeController();
+        $this->expectException(NotFoundHttpException::class);
+        $ctrl->actionGenerateTriggerToken(9999999);
+    }
+
     public function testAddStepResequencesToSparseLayout(): void
     {
         // The user types step_order=15 to wedge between 10 and 20; the

@@ -21,7 +21,12 @@ class WorkflowTemplateController extends BaseController
         return [
             ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['workflow-template.view']],
             ['actions' => ['create', 'add-step', 'remove-step'], 'allow' => true, 'roles' => ['workflow-template.create']],
-            ['actions' => ['update', 'add-step', 'remove-step', 'move-step'], 'allow' => true, 'roles' => ['workflow-template.update']],
+            [
+                'actions' => ['update', 'add-step', 'remove-step', 'move-step',
+                              'generate-trigger-token', 'revoke-trigger-token'],
+                'allow' => true,
+                'roles' => ['workflow-template.update'],
+            ],
             ['actions' => ['delete'], 'allow' => true, 'roles' => ['workflow-template.delete']],
             ['actions' => ['launch'], 'allow' => true, 'roles' => ['workflow.launch']],
         ];
@@ -38,6 +43,8 @@ class WorkflowTemplateController extends BaseController
             'add-step' => ['POST'],
             'remove-step' => ['POST'],
             'move-step' => ['POST'],
+            'generate-trigger-token' => ['POST'],
+            'revoke-trigger-token' => ['POST'],
         ];
     }
 
@@ -209,6 +216,38 @@ class WorkflowTemplateController extends BaseController
         if ($moved) {
             $this->session()->setFlash('success', "Step \"{$step->name}\" moved {$direction}.");
         }
+        return $this->redirect(['view', 'id' => $id]);
+    }
+
+    public function actionGenerateTriggerToken(int $id): Response
+    {
+        $model = $this->findModel($id);
+        $rawToken = $model->generateTriggerToken();
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_GENERATED,
+            'workflow_template',
+            $id,
+            \Yii::$app->user->id,
+            ['name' => $model->name],
+        );
+        $this->session()->setFlash('success', 'Trigger token generated. Copy it now — it will not be shown again.');
+        // Flash the raw token once so the view can display it. The DB stores only the hash.
+        $this->session()->setFlash('trigger_token_raw', $rawToken);
+        return $this->redirect(['view', 'id' => $id]);
+    }
+
+    public function actionRevokeTriggerToken(int $id): Response
+    {
+        $model = $this->findModel($id);
+        $model->revokeTriggerToken();
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_REVOKED,
+            'workflow_template',
+            $id,
+            \Yii::$app->user->id,
+            ['name' => $model->name],
+        );
+        $this->session()->setFlash('success', 'Trigger token revoked. The /trigger/fire-workflow endpoint is now disabled for this workflow.');
         return $this->redirect(['view', 'id' => $id]);
     }
 

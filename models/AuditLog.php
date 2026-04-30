@@ -119,6 +119,8 @@ class AuditLog extends ActiveRecord
     public const ACTION_WORKFLOW_STEP_STARTED = 'workflow.step.started';
     public const ACTION_WORKFLOW_STEP_COMPLETED = 'workflow.step.completed';
     public const ACTION_WORKFLOW_STEP_RESUMED = 'workflow.step.resumed';
+    public const ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_GENERATED = 'workflow-template.trigger-token.generated';
+    public const ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_REVOKED = 'workflow-template.trigger-token.revoked';
 
     // -- Notification template actions -----------------------------------------
     public const ACTION_NOTIFICATION_TEMPLATE_CREATED = 'notification-template.created';

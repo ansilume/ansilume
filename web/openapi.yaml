@@ -1438,25 +1438,88 @@ paths:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
 
   # ─────────────────────────── Triggers ───────────────────────────
-  /trigger/{token}:
+  /trigger/fire:
     post:
       tags: [Triggers]
       summary: Public webhook endpoint to launch a job by trigger token
       description: |
-        Authentication is the token itself (path parameter). This endpoint is
-        **not** under `/api/v1/` and does not use the Bearer scheme.
+        Authentication is the token itself (query parameter). This endpoint is
+        **not** under `/api/v1/` and does not use the Bearer scheme. Optional
+        JSON body forwards launch overrides to the underlying JobTemplate.
       security: []
       parameters:
-        - in: path
+        - in: query
           name: token
           required: true
           schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                extra_vars: { type: object, additionalProperties: true }
+                limit: { type: string }
+                verbosity: { type: integer, minimum: 0, maximum: 4 }
+            example:
+              extra_vars: { env: prod }
+              limit: webservers
       responses:
         '201':
           description: Job launched
-          content: { application/json: { schema: { type: object } } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: integer }
+              example:
+                job_id: 42
         '404':
           description: Unknown token
+
+  /trigger/fire-workflow:
+    post:
+      tags: [Triggers]
+      summary: Public webhook endpoint to launch a workflow by trigger token
+      description: |
+        Mirror of `/trigger/fire` but for workflow templates — launches a
+        WorkflowJob by the workflow template's inbound-trigger token. The
+        token is hashed (SHA-256) on the server, generated tokens are shown
+        to the operator exactly once. Optional JSON body forwards
+        `extra_vars` to every job step the workflow runs.
+      security: []
+      parameters:
+        - in: query
+          name: token
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                extra_vars: { type: object, additionalProperties: true }
+            example:
+              extra_vars: { release: '2026.04' }
+      responses:
+        '201':
+          description: Workflow launched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workflow_job_id: { type: integer }
+              example:
+                workflow_job_id: 17
+        '404':
+          description: Unknown token
+        '500':
+          description: Workflow execution refused (e.g., template has no steps)
 
   # ────────────────────────────── Roles ──────────────────────────────
   /api/v1/roles:
