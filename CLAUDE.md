@@ -401,9 +401,13 @@ When the user says "PUSH IT", follow this exact sequence:
 
 2. **All suites must pass.** Zero errors, zero warnings. If any suite fails, fix the issue and re-run the failing suite(s) (again as a subagent) until clean.
 3. **Commit** all changes.
-4. **Ask the user**: plain commit (no release) or a release? If release, ask: `PATCH`, `MINOR`, or `MAJOR`?
-   - **Plain commit**: just `git push`.
-   - **Release**: run `./bin/release patch`, `./bin/release minor`, or `./bin/release major`, then `git push --follow-tags`.
+4. **Ask the user via the `AskUserQuestion` tool** which release flavour they want. Single question, single-select, exactly four options (the picker auto-appends an `Other` fallback — that's fine, ignore it for typical use):
+   - **PLAIN** — plain commit, no release. Action: `git push`.
+   - **PATCH** — bug-fix release. Action: `./bin/release patch`, then `git push --follow-tags`.
+   - **MINOR** — feature release. Action: `./bin/release minor`, then `git push --follow-tags`.
+   - **MAJOR** — breaking-change release. Action: `./bin/release major`, then `git push --follow-tags`.
+
+   Use `header: "Release type"` and a clear question like "Wie soll ich pushen?" / "How should I push this?". Do NOT ask via plain text — the picker is the source of truth so the answer is unambiguous and consistent across every PUSH IT cycle.
 
 Never push without all green test suites. Never skip asking about the release type.
 

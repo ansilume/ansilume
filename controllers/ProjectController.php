@@ -259,17 +259,15 @@ class ProjectController extends BaseController
     }
 
     /**
-     * Snapshot of queue-worker liveness for the sync log panel. Renders
-     * "no worker running" when nothing is registered, and "stale code"
-     * when at least one worker's stamped app_version doesn't match the
-     * version on disk — that's the precise condition that left a recent
-     * deploy's PHP changes invisible to the long-running worker process.
+     * Snapshot of queue-worker liveness for the sync log panel. Surfaces
+     * three independent failure modes:
      *
-     * The previous time-based threshold (warn after 24h uptime) gave
-     * false positives every time the worker happened to run a day in
-     * production WITHOUT a deploy. Comparing app_version makes the
-     * banner deploy-aware: it only fires when the worker is actually
-     * stale, and stays silent through arbitrarily long quiet periods.
+     *   - alive=false      → no worker is running
+     *   - stale_code=true  → worker process pre-dates the current deploy
+     *   - is_stuck=true    → worker is alive but hasn't processed a job in
+     *                        STUCK_THRESHOLD_SECONDS while the queue has work
+     *                        (the "BRPOP on stale Redis connection" failure
+     *                        mode the worker self-heal probe also exits on)
      *
      * @return array{
      *     alive: bool,
@@ -280,6 +278,10 @@ class ProjectController extends BaseController
      *     current_app_version: string,
      *     oldest_app_version: string|null,
      *     stale_code: bool,
+     *     queue_depth: int,
+     *     last_job_processed_seconds_ago: int|null,
+     *     stuck_threshold_seconds: int,
+     *     is_stuck: bool,
      * }
      */
     private function workerSnapshot(): array
@@ -288,6 +290,12 @@ class ProjectController extends BaseController
         $now = time();
         $current = AppVersion::current();
         $folded = $this->foldWorkers($workers, $current);
+        $queueDepth = $this->queueDepth();
+        $lastJobAt = $folded['lastJobAt'];
+        $secondsSinceLastJob = $lastJobAt > 0 ? $now - $lastJobAt : null;
+        $isStuck = count($workers) > 0
+            && $queueDepth > 0
+            && ($lastJobAt === 0 || ($secondsSinceLastJob !== null && $secondsSinceLastJob > self::STUCK_THRESHOLD_SECONDS));
 
         return [
             'alive' => count($workers) > 0,
@@ -298,16 +306,58 @@ class ProjectController extends BaseController
             'current_app_version' => $current,
             'oldest_app_version' => $folded['oldestVersion'],
             'stale_code' => $folded['staleCode'],
+            'queue_depth' => $queueDepth,
+            'last_job_processed_seconds_ago' => $secondsSinceLastJob,
+            'stuck_threshold_seconds' => self::STUCK_THRESHOLD_SECONDS,
+            'is_stuck' => $isStuck,
         ];
     }
 
+    /** Time the worker may stay silent (no jobs processed) while the queue has work, before is_stuck flips. */
+    private const STUCK_THRESHOLD_SECONDS = 300; // 5 minutes
+
     /**
-     * Aggregate the heartbeat list into the four scalar values workerSnapshot()
+     * Sum the lengths of every yii2-queue redis structure that holds
+     * pending or in-flight work. Tolerant of a missing redis component
+     * (returns 0) so the snapshot endpoint stays usable even when the
+     * queue is misconfigured.
+     */
+    private function queueDepth(): int
+    {
+        try {
+            $queue = \Yii::$app->has('queue') ? \Yii::$app->get('queue') : null;
+            if (!$queue instanceof \yii\queue\redis\Queue) {
+                return 0;
+            }
+            $channel = $queue->channel;
+            $rawRedis = $queue->redis;
+            if ($rawRedis instanceof \yii\redis\Connection) {
+                $redis = $rawRedis;
+            } elseif (is_string($rawRedis)) {
+                /** @var \yii\redis\Connection $redis */
+                $redis = \Yii::$app->get($rawRedis);
+            } else {
+                // Yii::createObject from an array config — treat anything
+                // unexpected as "queue depth not introspectable" rather
+                // than letting it bubble up.
+                return 0;
+            }
+            $waiting = (int)$redis->executeCommand('LLEN', [$channel . '.waiting']);
+            $reserved = (int)$redis->executeCommand('ZCARD', [$channel . '.reserved']);
+            $delayed = (int)$redis->executeCommand('ZCARD', [$channel . '.delayed']);
+            return $waiting + $reserved + $delayed;
+        } catch (\Throwable) {
+            return 0;
+        }
+    }
+
+    /**
+     * Aggregate the heartbeat list into the scalar values workerSnapshot()
      * needs. Pulled out of the snapshot method to keep PHPMD's complexity
      * caps happy without losing the per-worker decision logic.
      *
      * @param array<int, array<string, mixed>> $workers
-     * @return array{latestSeen: int, oldestStart: int, oldestVersion: string|null, staleCode: bool}
+     * @return array{latestSeen: int, oldestStart: int, oldestVersion: string|null, staleCode: bool, lastJobAt: int}
      */
     private function foldWorkers(array $workers, string $current): array
     {
@@ -315,6 +365,7 @@ class ProjectController extends BaseController
         $oldestStart = 0;
         $oldestStartWorker = null;
         $staleCode = false;
+        $lastJobAt = 0;
         foreach ($workers as $w) {
             $latestSeen = max($latestSeen, (int)($w['seen_at'] ?? 0));
             $started = (int)($w['started_at'] ?? 0);
@@ -325,6 +376,8 @@ class ProjectController extends BaseController
             if ($this->isStaleVersion($w, $current)) {
                 $staleCode = true;
             }
+            $jobAt = (int)($w['last_job_processed_at'] ?? 0);
+            $lastJobAt = max($lastJobAt, $jobAt);
         }
         $oldestVersion = null;
         if (is_array($oldestStartWorker) && isset($oldestStartWorker['app_version'])) {
@@ -335,6 +388,7 @@ class ProjectController extends BaseController
             'oldestStart' => $oldestStart,
             'oldestVersion' => $oldestVersion,
             'staleCode' => $staleCode,
+            'lastJobAt' => $lastJobAt,
         ];
     }
 

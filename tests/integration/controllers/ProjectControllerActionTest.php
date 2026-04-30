@@ -654,6 +654,144 @@ class ProjectControllerActionTest extends WebControllerTestCase
         // non-empty version string so the JS banner has something to name.
     }
 
+    // ── stuck-worker detection ────────────────────────────────────────────────
+
+    public function testSyncStatusExposesStuckThresholdAndQueueDepth(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $result = $ctrl->actionSyncStatus((int)$project->id);
+        $w = $result['worker'];
+        $this->assertSame(300, $w['stuck_threshold_seconds']);
+        $this->assertIsInt($w['queue_depth']);
+        $this->assertGreaterThanOrEqual(0, $w['queue_depth']);
+        $this->assertArrayHasKey('last_job_processed_seconds_ago', $w);
+        $this->assertArrayHasKey('is_stuck', $w);
+        $this->assertIsBool($w['is_stuck']);
+    }
+
+    public function testSyncStatusFlagsStuckWhenWorkerNeverProcessedAndQueueHasDepth(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $redis = $this->connectRedisOrSkip();
+        $hbKey = 'ansilume:worker:phpunit-noprog-' . uniqid('', true);
+        $waitingKey = 'ansilume-test-queue.waiting';
+        $sentinel = 'phpunit-fixture-' . uniqid('', true);
+
+        try {
+            $redis->setex($hbKey, 120, json_encode([
+                'worker_id' => 'phpunit-noprog',
+                'pid' => 1,
+                'hostname' => 'phpunit',
+                'started_at' => time() - 600,
+                'seen_at' => time(),
+                'app_version' => \app\helpers\AppVersion::current(),
+                'last_job_processed_at' => null,
+            ]));
+            $redis->lPush($waitingKey, $sentinel);
+
+            $result = $ctrl->actionSyncStatus((int)$project->id);
+            $this->assertGreaterThanOrEqual(1, $result['worker']['queue_depth']);
+            $this->assertTrue($result['worker']['is_stuck']);
+        } finally {
+            try {
+                $redis->del($hbKey);
+                $redis->lRem($waitingKey, $sentinel, 0);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
+    public function testSyncStatusNotStuckWhenWorkerProcessedRecently(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $redis = $this->connectRedisOrSkip();
+        $hbKey = 'ansilume:worker:phpunit-fresh-' . uniqid('', true);
+        $waitingKey = 'ansilume-test-queue.waiting';
+        $sentinel = 'phpunit-fixture-' . uniqid('', true);
+
+        try {
+            $redis->setex($hbKey, 120, json_encode([
+                'worker_id' => 'phpunit-fresh',
+                'pid' => 2,
+                'hostname' => 'phpunit',
+                'started_at' => time() - 600,
+                'seen_at' => time(),
+                'app_version' => \app\helpers\AppVersion::current(),
+                'last_job_processed_at' => time() - 10,
+            ]));
+            $redis->lPush($waitingKey, $sentinel);
+
+            $result = $ctrl->actionSyncStatus((int)$project->id);
+            $this->assertFalse($result['worker']['is_stuck']);
+            $this->assertNotNull($result['worker']['last_job_processed_seconds_ago']);
+            $this->assertLessThanOrEqual(30, $result['worker']['last_job_processed_seconds_ago']);
+        } finally {
+            try {
+                $redis->del($hbKey);
+                $redis->lRem($waitingKey, $sentinel, 0);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
+    public function testSyncStatusNotStuckWhenQueueIsEmpty(): void
+    {
+        // Even a worker that hasn't processed anything for hours is fine
+        // when there's nothing to process. is_stuck must require BOTH
+        // signals so a quiet system never trips the warning.
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $redis = $this->connectRedisOrSkip();
+        $hbKey = 'ansilume:worker:phpunit-quiet-' . uniqid('', true);
+
+        try {
+            $redis->setex($hbKey, 120, json_encode([
+                'worker_id' => 'phpunit-quiet',
+                'pid' => 3,
+                'hostname' => 'phpunit',
+                'started_at' => time() - 86400,
+                'seen_at' => time(),
+                'app_version' => \app\helpers\AppVersion::current(),
+                'last_job_processed_at' => time() - 7200, // 2h ago
+            ]));
+
+            // No job pushed for THIS test — but a parallel test or the dev
+            // queue-worker might have items in flight. Assert relative to
+            // the depth we observe: stuck iff depth>0 AND last_job stale,
+            // and last_job here is 7200s which is >> threshold, so the
+            // verdict comes down to depth.
+            $result = $ctrl->actionSyncStatus((int)$project->id);
+            if ($result['worker']['queue_depth'] === 0) {
+                $this->assertFalse($result['worker']['is_stuck']);
+            } else {
+                $this->markTestSkipped('Concurrent queue activity made depth>0; is_stuck=true is correct then.');
+            }
+        } finally {
+            try {
+                $redis->del($hbKey);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
     private function connectRedisOrSkip(): \Redis
     {
         if (!class_exists(\Redis::class)) {

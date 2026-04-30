@@ -30,6 +30,9 @@ class WorkerHeartbeat
     private string $workerId;
     private int $startedAt;
     private string $appVersion;
+    /** Time the worker last finished processing a real job. Null until the
+     *  first job completes. Updated by WorkerController on EVENT_AFTER_EXEC. */
+    private ?int $lastJobProcessedAt = null;
     private \Redis $redis;
 
     public function __construct()
@@ -38,6 +41,20 @@ class WorkerHeartbeat
         $this->startedAt = time();
         $this->appVersion = AppVersion::current();
         $this->redis = $this->connectRedis();
+    }
+
+    /**
+     * Stamp that a real job just finished. Snapshots use the gap between
+     * this and `now` to detect "process is alive but BRPOP loop has gone
+     * stale and isn't returning new jobs" — heartbeat alone can't see that
+     * because it runs on a separate Redis connection (via SIGALRM).
+     */
+    public function markJobProcessed(): void
+    {
+        $this->lastJobProcessedAt = time();
+        // Mirror to the persisted blob so a subsequent snapshot reflects
+        // the freshly stamped value even before the next 30s heartbeat tick.
+        $this->write();
     }
 
     /**
@@ -71,7 +88,7 @@ class WorkerHeartbeat
     /**
      * Fetch all live worker records from Redis.
      *
-     * @return array<int, array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int, app_version?: string}>
+     * @return array<int, array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int, app_version?: string, last_job_processed_at?: int|null}>
      */
     public static function all(): array
     {
@@ -85,7 +102,7 @@ class WorkerHeartbeat
                 $raw = $redis->get($key);
                 $data = ($raw !== false && is_string($raw)) ? json_decode($raw, true) : null;
                 if (is_array($data) && (int)($data['seen_at'] ?? 0) >= $cutoff) {
-                    /** @var array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int, app_version?: string} $data */
+                    /** @var array{worker_id: string, pid: int, hostname: string, started_at: int, seen_at: int, app_version?: string, last_job_processed_at?: int|null} $data */
                     $workers[] = $data;
                 }
             }
@@ -104,6 +121,7 @@ class WorkerHeartbeat
             'started_at' => $this->startedAt,
             'seen_at' => time(),
             'app_version' => $this->appVersion,
+            'last_job_processed_at' => $this->lastJobProcessedAt,
         ]);
 
         try {

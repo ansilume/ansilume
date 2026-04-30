@@ -20,6 +20,28 @@ return [
         ],
         'db' => $db,
         'cache' => ['class' => 'yii\caching\ArrayCache'],
+        // Real Redis-backed queue so tests of the worker-snapshot
+        // queue_depth and is_stuck logic can plant fixtures via
+        // redis-cli and read them back through the same channel
+        // the controller queries.
+        'queue' => [
+            'class' => 'yii\queue\redis\Queue',
+            'redis' => [
+                'class' => 'yii\redis\Connection',
+                'hostname' => $_ENV['REDIS_HOST'] ?? 'redis',
+                'port' => (int)($_ENV['REDIS_PORT'] ?? 6379),
+                'database' => (int)($_ENV['REDIS_DB'] ?? 0),
+            ],
+            // Distinct channel so the live dev queue-worker doesn't drain
+            // fixture jobs the tests push to assert is_stuck / queue_depth.
+            'channel' => 'ansilume-test-queue',
+        ],
+        'redis' => [
+            'class' => 'yii\redis\Connection',
+            'hostname' => $_ENV['REDIS_HOST'] ?? 'redis',
+            'port' => (int)($_ENV['REDIS_PORT'] ?? 6379),
+            'database' => (int)($_ENV['REDIS_DB'] ?? 0),
+        ],
         'authManager' => [
             'class' => 'yii\rbac\DbManager',
         ],

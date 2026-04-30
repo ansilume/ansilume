@@ -138,6 +138,22 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
                 + '<code>docker compose up -d queue-worker</code>';
             return;
         }
+        // Stuck-worker banner takes precedence over stale-code: if the
+        // worker is alive but BRPOP isn't returning new jobs, the queue
+        // depth grows and last_job_processed_at goes stale. The worker's
+        // own self-heal probe will exit(1) within ~60s; meanwhile we
+        // surface the condition + the operator-runnable restart command.
+        if (w.is_stuck) {
+            workerEl.className = 'card-footer py-1 px-2 small text-danger';
+            var idle = humanSeconds(w.last_job_processed_seconds_ago);
+            var depth = w.queue_depth || 0;
+            workerEl.innerHTML = '\u26A0 Worker is alive but hasn\u2019t drained '
+                + depth + ' queued job' + (depth === 1 ? '' : 's')
+                + ' in ' + idle + ' \u2014 likely a stale Redis connection. '
+                + 'Restart with <code>docker compose restart queue-worker</code> '
+                + '(self-heal probe will also exit the process within ~60s).';
+            return;
+        }
         // Stale-code banner only fires when a worker's stamped app_version
         // differs from the version on disk — i.e. the worker process is
         // running an older revision than the code. A long-running worker
@@ -148,6 +164,9 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
         ];
         if (w.oldest_started_seconds_ago !== null) {
             parts.push('oldest started ' + humanSeconds(w.oldest_started_seconds_ago) + ' ago');
+        }
+        if (w.queue_depth > 0) {
+            parts.push('queue: ' + w.queue_depth);
         }
         var className = 'card-footer py-1 px-2 small text-muted';
         var line = parts.join(' \u00B7 ');

@@ -10,6 +10,7 @@ use yii\base\Event;
 use yii\console\Controller;
 use yii\console\ExitCode;
 use yii\queue\cli\Queue as CliQueue;
+use yii\queue\Queue as BaseQueue;
 
 /**
  * Worker management commands.
@@ -30,6 +31,23 @@ use yii\queue\cli\Queue as CliQueue;
 class WorkerController extends Controller
 {
     /**
+     * If the queue's BRPOP loop hasn't iterated in this many seconds the
+     * connection is presumed stale and the worker exits so docker's
+     * restart-policy can spawn a fresh process. Tuned higher than yii's
+     * 3s BRPOP timeout (the loop normally iterates ≥ once every 3s) but
+     * low enough that operators see recovery within a minute.
+     */
+    public const STALE_LOOP_THRESHOLD_SECONDS = 60;
+
+    /**
+     * In-process timestamp of the last EVENT_WORKER_LOOP firing. Updated
+     * from inside the worker loop, read by the SIGALRM-driven self-check.
+     * Static so the alarm callback (a closure) can reach it from outside
+     * the action method's scope.
+     */
+    private static int $lastLoopAt = 0;
+
+    /**
      * Start the queue listener with heartbeat registration.
      *
      * Replaces `php yii queue/listen` in docker-compose worker command.
@@ -42,6 +60,7 @@ class WorkerController extends Controller
 
         $this->stdout('[worker] started. PID=' . getmypid() . ' Host=' . gethostname() . PHP_EOL);
 
+        self::$lastLoopAt = time();
         $this->installHeartbeatRefresh($heartbeat);
         $this->attachWorkerEvents($heartbeat);
 
@@ -106,6 +125,12 @@ class WorkerController extends Controller
      * Refresh the worker heartbeat every {@see WorkerHeartbeat::HEARTBEAT_INTERVAL}
      * seconds via a recurring SIGALRM. Does nothing if pcntl is unavailable
      * (the heartbeat then expires after STALE_AFTER unless deregistered cleanly).
+     *
+     * Also runs the self-heal probe: if the queue's BRPOP loop hasn't
+     * iterated in {@see STALE_LOOP_THRESHOLD_SECONDS} the worker process
+     * has gone wedged on a stale Redis connection — heartbeat itself uses
+     * a separate Redis connection so it can't see this. Exit(1) so the
+     * docker restart-policy spawns a fresh process with a new connection.
      */
     private function installHeartbeatRefresh(WorkerHeartbeat $heartbeat): void
     {
@@ -114,9 +139,50 @@ class WorkerController extends Controller
         }
         pcntl_signal(SIGALRM, function () use ($heartbeat): void {
             $heartbeat->refresh();
+            $this->detectStaleLoopAndExit();
             pcntl_alarm(WorkerHeartbeat::HEARTBEAT_INTERVAL);
         });
         pcntl_alarm(WorkerHeartbeat::HEARTBEAT_INTERVAL);
+    }
+
+    /**
+     * Self-heal probe. Two signals point at a wedged worker:
+     *   1. EVENT_WORKER_LOOP hasn't fired in STALE_LOOP_THRESHOLD_SECONDS
+     *      (BRPOP not returning, even with a 3s timeout).
+     *   2. The queue's redis component fails PING.
+     * On either, log and exit(1). docker restart-policy: unless-stopped
+     * spawns a fresh worker with a new connection in <5s.
+     *
+     * Public so tests can drive it without rigging up a real queue loop.
+     */
+    public function detectStaleLoopAndExit(): void
+    {
+        $silentSeconds = time() - self::$lastLoopAt;
+        if (self::$lastLoopAt > 0 && $silentSeconds > self::STALE_LOOP_THRESHOLD_SECONDS) {
+            \Yii::error(
+                "Worker BRPOP loop has been silent for {$silentSeconds}s "
+                . '(threshold ' . self::STALE_LOOP_THRESHOLD_SECONDS . 's) — '
+                . 'exiting so docker restart-policy can recover with a fresh connection.',
+                __CLASS__,
+            );
+            $this->stderr("[worker] stale BRPOP loop detected — exiting for restart.\n");
+            exit(1);
+        }
+
+        try {
+            /** @var \yii\redis\Connection|null $redis */
+            $redis = \Yii::$app->has('redis') ? \Yii::$app->get('redis') : null;
+            if ($redis !== null && method_exists($redis, 'executeCommand')) {
+                $reply = $redis->executeCommand('PING');
+                if ($reply !== 'PONG' && $reply !== true) {
+                    throw new \RuntimeException('Unexpected PING reply: ' . var_export($reply, true));
+                }
+            }
+        } catch (\Throwable $e) {
+            \Yii::error('Worker queue-redis PING failed (' . $e->getMessage() . ') — exiting for restart.', __CLASS__);
+            $this->stderr("[worker] queue redis ping failed — exiting for restart.\n");
+            exit(1);
+        }
     }
 
     /**
@@ -131,6 +197,18 @@ class WorkerController extends Controller
     {
         Event::on(CliQueue::class, CliQueue::EVENT_WORKER_START, function (): void {
             \Yii::info('Worker entered listening loop.', __CLASS__);
+        });
+        // EVENT_WORKER_LOOP fires on every BRPOP iteration (~ every 3s
+        // when idle). The static stamp is what detectStaleLoopAndExit()
+        // reads on each SIGALRM tick to decide whether the loop is stuck.
+        Event::on(CliQueue::class, CliQueue::EVENT_WORKER_LOOP, function (): void {
+            self::$lastLoopAt = time();
+        });
+        // Real job finished — heartbeat carries `last_job_processed_at` so
+        // the panel can flag "queue has work but worker hasn't picked any
+        // up in N min" without relying on the loop stamp.
+        Event::on(BaseQueue::class, BaseQueue::EVENT_AFTER_EXEC, function () use ($heartbeat): void {
+            $heartbeat->markJobProcessed();
         });
         Event::on(CliQueue::class, CliQueue::EVENT_WORKER_STOP, function () use ($heartbeat): void {
             \Yii::info('Worker received stop signal — finishing current job, then exiting.', __CLASS__);
