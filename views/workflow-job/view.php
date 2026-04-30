@@ -82,9 +82,13 @@ $steps = $model->stepExecutions;
         </table>
 
         <h4>Steps</h4>
+        <?php // Always render the table — the polling JS appends rows for
+        // steps that start AFTER the page loads (workflow steps are created
+        // lazily). An empty table briefly shows headers only, which the
+        // first poll fills in.?>
         <?php if (empty($steps)) : ?>
-            <div class="text-muted">No steps executed.</div>
-        <?php else : ?>
+            <div class="text-muted small mb-2" id="wj-empty-hint">Waiting for the first step…</div>
+        <?php endif; ?>
             <table class="table table-bordered">
                 <thead class="table-light">
                     <tr>
@@ -110,45 +114,44 @@ $steps = $model->stepExecutions;
                         $core = $minutes > 0 ? sprintf('%dm %02ds', $minutes, $remaining) : sprintf('%ds', $remaining);
                         return $wjs->finished_at !== null ? $core : 'running ' . $core;
                     };
-    foreach ($steps as $i => $wjs) :
-        $isCurrent = $model->current_step_id === $wjs->workflow_step_id;
-        $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
-        $label = WorkflowJobStep::statusLabel($wjs->status);
-        ?>
+                    foreach ($steps as $i => $wjs) :
+                        $isCurrent = $model->current_step_id === $wjs->workflow_step_id;
+                        $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
+                        $label = WorkflowJobStep::statusLabel($wjs->status);
+                        ?>
                         <tr data-wjs-step-id="<?= (int)$wjs->workflow_step_id // xss-ok: int?>" class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
                             <td><?= Html::encode((string)($i + 1)) ?></td>
                             <td><?= Html::encode($wjs->workflowStep?->name ?? '—') ?></td>
                             <td data-wjs-status-cell>
                                 <span class="badge text-bg-<?= Html::encode($cssClass) ?>">
-                    <?= Html::encode($label) ?>
+                        <?= Html::encode($label) ?>
                                 </span>
                             </td>
                             <td data-wjs-job-cell>
-                <?php if ($wjs->job_id) : ?>
+                        <?php if ($wjs->job_id) : ?>
                                     <?= Html::a(
                                         '#' . Html::encode((string)$wjs->job_id),
                                         ['/job/view', 'id' => $wjs->job_id]
                                     ) ?>
-                <?php else : ?>
+                        <?php else : ?>
                                     —
-                <?php endif; ?>
+                        <?php endif; ?>
                             </td>
                             <td data-wjs-started-cell>
-                                <?= $wjs->started_at
-                                ? Html::encode(date('H:i:s', (int)$wjs->started_at))
-                                : '—' ?>
+                                                <?= $wjs->started_at
+                                                ? Html::encode(date('H:i:s', (int)$wjs->started_at))
+                                                : '—' ?>
                             </td>
                             <td data-wjs-duration-cell><?= Html::encode($renderDuration($wjs)) ?></td>
                             <td data-wjs-finished-cell>
-                                <?= $wjs->finished_at
-                                ? Html::encode(date('H:i:s', (int)$wjs->finished_at))
-                                : '—' ?>
+                                                <?= $wjs->finished_at
+                                                ? Html::encode(date('H:i:s', (int)$wjs->finished_at))
+                                                : '—' ?>
                             </td>
                         </tr>
-    <?php endforeach; ?>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
-        <?php endif; ?>
     </div>
 </div>
 
@@ -165,9 +168,52 @@ $steps = $model->stepExecutions;
     var liveEl = document.getElementById('wj-live');
     var finishedEl = document.getElementById('wj-finished');
 
+    function appendRow(step) {
+        // Workflow steps are created lazily — the WorkflowJobStep row only
+        // exists once the step actually starts running. When a workflow
+        // advances to a step that wasn't rendered server-side, we have to
+        // build the row from the polling JSON instead of just updating it.
+        var tbody = document.querySelector('table.table tbody');
+        if (!tbody) { return null; }
+        // First real row arrives → drop the "Waiting for the first step…"
+        // placeholder.
+        var hint = document.getElementById('wj-empty-hint');
+        if (hint) { hint.remove(); }
+        var tr = document.createElement('tr');
+        tr.setAttribute('data-wjs-step-id', String(step.workflow_step_id));
+        if (step.is_current) { tr.classList.add('table-active'); }
+
+        var cells = [
+            { text: String(step.step_index || (tbody.children.length + 1)) },
+            { text: step.step_name || '—' },
+            { html: '<span class="badge text-bg-' + (step.status_css || 'secondary') + '">'
+                + (step.status_label || step.status || '—') + '</span>',
+              attr: 'data-wjs-status-cell' },
+            { html: '—', attr: 'data-wjs-job-cell' },
+            { text: step.started_label || '—', attr: 'data-wjs-started-cell' },
+            { text: step.duration_label || '—', attr: 'data-wjs-duration-cell' },
+            { text: step.finished_label || '—', attr: 'data-wjs-finished-cell' },
+        ];
+        cells.forEach(function (c) {
+            var td = document.createElement('td');
+            if (c.attr) { td.setAttribute(c.attr, ''); }
+            if (c.html !== undefined) { td.innerHTML = c.html; } else { td.textContent = c.text; }
+            tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+        return tr;
+    }
+
     function updateRow(step) {
         var row = document.querySelector('tr[data-wjs-step-id="' + step.workflow_step_id + '"]');
-        if (!row) { return; }
+        if (!row) {
+            row = appendRow(step);
+            if (!row) { return; }
+            // Newly appended rows already carry the right cell values from
+            // appendRow(). Skip the redundant update — but DO continue so
+            // updates within the same tick still apply if appendRow
+            // missed something.
+        }
         row.classList.toggle('table-active', !!step.is_current);
 
         var badge = row.querySelector('[data-wjs-status-cell] .badge');

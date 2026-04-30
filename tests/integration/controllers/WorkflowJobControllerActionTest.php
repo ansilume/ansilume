@@ -166,6 +166,35 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $this->assertNull($row['duration_label']);
     }
 
+    public function testStatusIncludesStepNameAndIndexForLiveRowAppending(): void
+    {
+        // Workflow steps are created lazily — when a workflow advances to a
+        // step that wasn't rendered server-side, the polling JS has to
+        // build a brand-new <tr> from the JSON. step_name + step_index are
+        // the fields that make that possible without a page reload.
+        $user = $this->createUser();
+        $this->loginAs($user);
+
+        $wf = $this->createWorkflowTemplate($user->id);
+        $stepA = $this->createWorkflowStep($wf->id, 10, \app\models\WorkflowStep::TYPE_PAUSE);
+        $stepB = $this->createWorkflowStep($wf->id, 20, \app\models\WorkflowStep::TYPE_PAUSE);
+
+        $wj = $this->createWfJobForTemplate($user, $wf);
+        $this->seedJobStep($wj->id, $stepA->id, time() - 30, time() - 10, \app\models\WorkflowJobStep::STATUS_SUCCEEDED);
+        $this->seedJobStep($wj->id, $stepB->id, time() - 5, null, \app\models\WorkflowJobStep::STATUS_RUNNING);
+
+        $ctrl = $this->makeController();
+        $payload = $ctrl->actionStatus((int)$wj->id);
+
+        $rowA = $this->stepRow($payload, (int)$stepA->id);
+        $rowB = $this->stepRow($payload, (int)$stepB->id);
+
+        $this->assertSame($stepA->name, $rowA['step_name']);
+        $this->assertSame($stepB->name, $rowB['step_name']);
+        $this->assertSame(1, $rowA['step_index']);
+        $this->assertSame(2, $rowB['step_index']);
+    }
+
     /**
      * @param array<string, mixed> $payload
      * @return array<string, mixed>

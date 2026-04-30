@@ -86,10 +86,17 @@ class WorkflowJobController extends BaseController
         $out = [];
         $currentStepId = $model->current_step_id !== null ? (int)$model->current_step_id : null;
         $now = time();
+        $index = 1;
         foreach ($model->stepExecutions as $wjs) {
             $duration = $this->stepDurationSeconds($wjs, $now);
             $out[] = [
                 'workflow_step_id' => (int)$wjs->workflow_step_id,
+                // step_name + step_index let the polling JS build a brand-new
+                // row when a workflow advances and a previously-unrendered
+                // step starts running. Without these the client could only
+                // update existing rows and operators had to reload.
+                'step_name' => (string)($wjs->workflowStep?->name ?? '—'),
+                'step_index' => $index++,
                 'job_id' => $wjs->job_id !== null ? (int)$wjs->job_id : null,
                 'is_current' => $currentStepId === (int)$wjs->workflow_step_id,
                 'status' => (string)$wjs->status,
