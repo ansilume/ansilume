@@ -89,7 +89,7 @@ $steps = $model->stepExecutions;
         <?php if (empty($steps)) : ?>
             <div class="text-muted small mb-2" id="wj-empty-hint">Waiting for the first step…</div>
         <?php endif; ?>
-            <table class="table table-bordered">
+            <table class="table table-bordered" id="wj-steps-table">
                 <thead class="table-light">
                     <tr>
                         <th>#</th>
@@ -173,7 +173,10 @@ $steps = $model->stepExecutions;
         // exists once the step actually starts running. When a workflow
         // advances to a step that wasn't rendered server-side, we have to
         // build the row from the polling JSON instead of just updating it.
-        var tbody = document.querySelector('table.table tbody');
+        // Target the steps table by id — `table.table` would match the
+        // metadata box at the top of the page (the regression that put
+        // step 2 + 3 above the column headers).
+        var tbody = document.querySelector('#wj-steps-table tbody');
         if (!tbody) { return null; }
         // First real row arrives → drop the "Waiting for the first step…"
         // placeholder.
