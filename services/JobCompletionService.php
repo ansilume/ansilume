@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobLog;
@@ -141,6 +142,51 @@ class JobCompletionService extends Component
         $ws->dispatch(Webhook::EVENT_JOB_FAILURE, $job);
 
         $this->dispatchNotifications($job);
+        $this->advanceWorkflow($job);
+    }
+
+    /**
+     * Operator-initiated cancel. Single source of truth shared by the web
+     * controller and the API controller — both used to flip Job.status by
+     * hand and skip the workflow-advance hook, which left WorkflowJobSteps
+     * stuck on STATUS_RUNNING when their child job was canceled by hand.
+     *
+     * Treats canceled child jobs as "failed" for workflow routing — the
+     * step's on_failure target picks up next; if there's no on_failure
+     * route the workflow itself completes as failed/canceled. Mirrors what
+     * complete()/completeTimedOut() already do for the runner-side paths.
+     */
+    public function cancel(Job $job, ?int $cancelerUserId = null): void
+    {
+        if ($job->isFinished()) {
+            // Defensive: a double-cancel race or a cancel-after-success
+            // shouldn't tear down the previous terminal decision. The
+            // first writer wins.
+            return;
+        }
+
+        $job->status = Job::STATUS_CANCELED;
+        $job->finished_at = time();
+        $job->save(false);
+
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_JOB_CANCELED,
+            'job',
+            $job->id,
+            $cancelerUserId,
+        );
+
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+        $dispatcher->dispatch(
+            NotificationTemplate::EVENT_JOB_CANCELED,
+            JobPayloadBuilder::build($job),
+        );
+
+        // Critical: a canceled child job must move its WorkflowJobStep out
+        // of RUNNING. Without this the workflow-job view shows the parent
+        // workflow stuck on "running" while the actual child job is
+        // canceled — the regression that prompted this method to exist.
         $this->advanceWorkflow($job);
     }
 

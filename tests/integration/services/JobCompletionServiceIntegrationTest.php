@@ -322,6 +322,103 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
     }
 
     // -------------------------------------------------------------------------
+    // cancel() — operator-initiated cancellation
+    // -------------------------------------------------------------------------
+
+    public function testCancelFlipsStatusAndStampsFinishedAt(): void
+    {
+        $job = $this->makeRunningJob();
+        $before = time();
+
+        $this->service->cancel($job, $job->launched_by);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
+        $this->assertGreaterThanOrEqual($before, (int)$job->finished_at);
+    }
+
+    public function testCancelWritesJobCanceledAudit(): void
+    {
+        $job = $this->makeRunningJob();
+        $auditBefore = (int)\app\models\AuditLog::find()
+            ->where(['action' => 'job.canceled', 'object_type' => 'job', 'object_id' => $job->id])
+            ->count();
+
+        $this->service->cancel($job, $job->launched_by);
+
+        $auditAfter = (int)\app\models\AuditLog::find()
+            ->where(['action' => 'job.canceled', 'object_type' => 'job', 'object_id' => $job->id])
+            ->count();
+        $this->assertSame($auditBefore + 1, $auditAfter);
+    }
+
+    public function testCancelOnAlreadyFinishedJobIsNoop(): void
+    {
+        // Defensive: a double-cancel race or a cancel-after-success must
+        // not tear down the previous terminal decision. The first writer
+        // wins.
+        $job = $this->makeCanceledJob();
+        $originalFinishedAt = (int)$job->finished_at;
+
+        $this->service->cancel($job, $job->launched_by);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
+        $this->assertSame($originalFinishedAt, (int)$job->finished_at);
+    }
+
+    public function testCancelAdvancesParentWorkflow(): void
+    {
+        // Regression: the controller used to flip Job.status by hand and
+        // skipped the workflow-advance hook entirely, leaving the
+        // WorkflowJobStep on STATUS_RUNNING and the parent WorkflowJob on
+        // STATUS_RUNNING even after the child job was canceled. Cancel must
+        // call onChildJobCompleted so the step transitions to FAILED and
+        // the workflow follows on_failure (or completes).
+        $user = $this->createUser();
+        $group = $this->createRunnerGroup($user->id);
+        $project = $this->createProject($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate($project->id, $inv->id, $group->id, $user->id);
+
+        $wfTemplate = $this->createWorkflowTemplate($user->id);
+        $wfStep = $this->createWorkflowStep(
+            $wfTemplate->id,
+            10,
+            \app\models\WorkflowStep::TYPE_JOB,
+            $template->id,
+        );
+
+        $wfJob = new \app\models\WorkflowJob();
+        $wfJob->workflow_template_id = $wfTemplate->id;
+        $wfJob->launched_by = $user->id;
+        $wfJob->status = \app\models\WorkflowJob::STATUS_RUNNING;
+        $wfJob->started_at = time();
+        $wfJob->current_step_id = $wfStep->id;
+        $wfJob->created_at = time();
+        $wfJob->updated_at = time();
+        $wfJob->save(false);
+
+        $job = $this->createJob($template->id, $user->id, Job::STATUS_RUNNING);
+        $wjs = new \app\models\WorkflowJobStep();
+        $wjs->workflow_job_id = $wfJob->id;
+        $wjs->workflow_step_id = $wfStep->id;
+        $wjs->job_id = $job->id;
+        $wjs->status = \app\models\WorkflowJobStep::STATUS_RUNNING;
+        $wjs->started_at = time();
+        $wjs->save(false);
+
+        $this->service->cancel($job, $user->id);
+
+        $wjs->refresh();
+        $wfJob->refresh();
+        $this->assertSame(\app\models\WorkflowJobStep::STATUS_FAILED, $wjs->status);
+        $this->assertNotNull($wjs->finished_at);
+        // No on_failure target → workflow completes with a non-running status.
+        $this->assertNotSame(\app\models\WorkflowJob::STATUS_RUNNING, $wfJob->status);
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 

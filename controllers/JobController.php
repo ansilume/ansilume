@@ -11,13 +11,10 @@ use app\models\JobLog;
 use app\models\JobSearchForm;
 use app\models\JobTask;
 use app\models\JobTemplate;
-use app\models\NotificationTemplate;
 use app\models\RunnerGroup;
 use app\models\User;
 use app\services\ArtifactService;
 use app\services\JobLaunchService;
-use app\services\NotificationDispatcher;
-use app\services\notification\JobPayloadBuilder;
 use app\controllers\traits\TeamScopingTrait;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
@@ -119,18 +116,11 @@ class JobController extends BaseController
             $this->session()->setFlash('warning', "Job #{$job->id} cannot be canceled in status \"{$job->status}\".");
             return $this->redirect(['view', 'id' => $id]);
         }
-        $job->status = Job::STATUS_CANCELED;
-        $job->finished_at = time();
-        $job->save(false);
 
-        \Yii::$app->get('auditService')->log(AuditLog::ACTION_JOB_CANCELED, 'job', $job->id);
+        /** @var \app\services\JobCompletionService $completion */
+        $completion = \Yii::$app->get('jobCompletionService');
+        $completion->cancel($job, (int)\Yii::$app->user->id);
 
-        /** @var NotificationDispatcher $dispatcher */
-        $dispatcher = \Yii::$app->get('notificationDispatcher');
-        $dispatcher->dispatch(
-            NotificationTemplate::EVENT_JOB_CANCELED,
-            JobPayloadBuilder::build($job)
-        );
         $this->session()->setFlash('success', "Job #{$job->id} canceled.");
         return $this->redirect(['view', 'id' => $id]);
     }

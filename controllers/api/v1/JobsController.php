@@ -130,10 +130,15 @@ class JobsController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
 
-        $job->status = Job::STATUS_CANCELED;
-        $job->finished_at = time();
-        $job->save(false);
-        \Yii::$app->get('auditService')->log(AuditLog::ACTION_JOB_CANCELED, 'job', $job->id);
+        // Single source of truth in JobCompletionService::cancel — flips
+        // status, audits, dispatches the JOB_CANCELED notification, AND
+        // advances the parent workflow if the job was a child step. The
+        // earlier inline implementation skipped the workflow-advance hook,
+        // which left WorkflowJobSteps stuck on RUNNING when their child
+        // job was canceled via the API.
+        /** @var \app\services\JobCompletionService $completion */
+        $completion = \Yii::$app->get('jobCompletionService');
+        $completion->cancel($job, $userId);
 
         return $this->success($this->serializeJob($job));
     }
