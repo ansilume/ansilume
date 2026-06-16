@@ -17,21 +17,19 @@ parameters:
     # Disable strict PHPDoc-based narrowing to avoid false "always false" warnings.
     treatPhpDocTypesAsCertain: false
     ignoreErrors:
-        # Yii2 queue extension adds $queue dynamically — not in the base Application class
-        - '#Access to an undefined property yii\\(web|console)\\Application.*::\$queue#'
-
-        # ── Yii2 framework type-union limitations ────────────────────────────
-        # PHPStan sees \Yii::$app as yii\web\Application|yii\console\Application.
-        # Web controllers always get web Request/Response/Application — these
-        # are not real bugs, just framework type-system limitations.
-        #
-        # Strategy: suppress these globally; long-term fix is yii2-phpstan extension.
+        # ── Yii2 framework type-union limitations (Yii::$app) ─────────────────
+        # As of yii2 2.0.55 BaseYii::$app is typed
+        #   yii\console\Application|yii\web\Application<IdentityInterface>|null
+        # so PHPStan flags every Yii::$app->component access as a method call or
+        # property access on a possibly-null union. Inside a running web/console
+        # request Yii::$app is always set and always the matching Application
+        # subtype — these are framework type-system limitations, not real bugs.
+        # Strategy: suppress these globally; long-term fix is a yii2-phpstan extension.
+        - '#Cannot call method [a-zA-Z0-9_]+\(\) on yii\\console\\Application\|yii\\web\\Application<[^>]*>\|null#'
+        - '#Cannot access property \$[a-zA-Z0-9_]+ on yii\\console\\Application\|yii\\web\\Application<[^>]*>\|null#'
 
         # \Yii::$app->get('service') returns object — calling methods on it
         - '#Call to an undefined method object::#'
-
-        # \Yii::$app->user / ->session only exist on web Application
-        - '#Access to an undefined property yii\\(web|console)\\Application.*::\$(user|session)#'
 
         # \Yii::$app->request->post() / ->get() only exist on web Request
         - '#Call to an undefined method yii\\console\\Request\|yii\\web\\Request::(post|get)\(\)#'
@@ -41,13 +39,6 @@ parameters:
 
         # \Yii::$app->response->format / ->statusCode / ->data / ->headers / ->sendFile()
         - '#Access to an undefined property yii\\console\\Response\|yii\\web\\Response::\$(statusCode|format|data|headers)#'
-
-
-        # Controller classes extend generic yii\web\Controller<T> / yii\console\Controller<T>
-        - '#extends generic class yii\\(web|console)\\Controller but does not specify its types: T#'
-
-        # ActiveQuery return types are generic in Yii2 but rarely specified
-        - '#return type with generic class yii\\db\\ActiveQuery does not specify its types: T#'
 
         # ── Level 9: mixed → scalar cast safety ───────────────────────────────
         # PHPStan level 9 forbids (int)$mixed and (string)$mixed even though
