@@ -146,7 +146,12 @@ else
         skip "Integration tests (test database not available — run: php yii setup/test-db)"
     else
         fail "Integration tests failed"
-        echo "$COMBINED_OUT" | tail -30 | sed 's/^/     /'
+        # PHPUnit prints the failing-test details BEFORE the --coverage-text
+        # report, so a blind `tail` here only ever shows the per-class coverage
+        # table — which is exactly why an integration regression sat undiagnosed
+        # on red CI for weeks. Drop the coverage report first, then tail the
+        # real test output (FAILURES!/ERRORS! block + summary).
+        echo "$COMBINED_OUT" | awk '/Code Coverage Report/{exit} {print}' | tail -40 | sed 's/^/     /'
     fi
 
     # ── Coverage (from the same run) ─────────────────────────────────────────

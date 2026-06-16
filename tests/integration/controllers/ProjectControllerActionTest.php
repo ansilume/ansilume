@@ -617,6 +617,7 @@ class ProjectControllerActionTest extends WebControllerTestCase
 
         $key = 'ansilume:worker:phpunit-noversion-' . uniqid('', true);
         $redis = $this->connectRedisOrSkip();
+        $this->clearWorkerHeartbeats($redis);
         try {
             $redis->setex($key, 120, json_encode([
                 'worker_id' => 'phpunit-noversion',
@@ -633,6 +634,67 @@ class ProjectControllerActionTest extends WebControllerTestCase
         } finally {
             try {
                 $redis->del($key);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
+    public function testStaleCodeSnapshotIgnoresForeignVersionedWorkers(): void
+    {
+        // Regression (main red v2.3.16 → v2.4.2): the worker snapshot
+        // aggregates every `ansilume:worker:*` key, so the live queue-worker
+        // container that CI and the dev stack run leaks its own heartbeat —
+        // stamped with the current app_version — into this assertion. The
+        // no-version stale-code test then read oldest_app_version='2.4.2'
+        // instead of null and failed. A snapshot test must own the worker set
+        // it asserts over, even when a foreign versioned worker is present.
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $redis = $this->connectRedisOrSkip();
+        $foreignKey = 'ansilume:worker:phpunit-foreign-' . uniqid('', true);
+        $ourKey = 'ansilume:worker:phpunit-noversion-' . uniqid('', true);
+        try {
+            // A foreign, versioned worker — exactly what the live queue-worker
+            // looks like in CI.
+            $redis->setex($foreignKey, 120, json_encode([
+                'worker_id' => 'phpunit-foreign',
+                'pid' => 99,
+                'hostname' => 'phpunit',
+                'started_at' => time() - 90,
+                'seen_at' => time(),
+                'app_version' => '9.9.9-foreign',
+            ]));
+
+            // Take ownership of the population, then plant only our no-version
+            // fixture so the aggregate reflects a known, isolated set.
+            $this->clearWorkerHeartbeats($redis);
+            $redis->setex($ourKey, 120, json_encode([
+                'worker_id' => 'phpunit-noversion',
+                'pid' => 3,
+                'hostname' => 'phpunit',
+                'started_at' => time() - 60,
+                'seen_at' => time(),
+                // app_version intentionally absent
+            ]));
+
+            $result = $ctrl->actionSyncStatus((int)$project->id);
+            $this->assertTrue(
+                $result['worker']['stale_code'],
+                'A worker with no app_version stamp must flip stale_code on.',
+            );
+            $this->assertNull(
+                $result['worker']['oldest_app_version'],
+                'oldest_app_version must reflect only the test-owned worker '
+                . 'set, not a foreign/live worker heartbeat.',
+            );
+        } finally {
+            try {
+                $redis->del($foreignKey);
+                $redis->del($ourKey);
             } catch (\Throwable) {
                 // best-effort
             }
@@ -804,6 +866,27 @@ class ProjectControllerActionTest extends WebControllerTestCase
             $this->markTestSkipped('Redis not reachable: ' . $e->getMessage());
         }
         return $redis;
+    }
+
+    /**
+     * Drop every worker heartbeat so the test owns the population it asserts
+     * over.
+     *
+     * The snapshot aggregates ALL `ansilume:worker:*` keys (see
+     * {@see \app\components\WorkerHeartbeat::all()}), so the live queue-worker
+     * container that both CI and the dev stack run leaks its own heartbeat —
+     * stamped with the current on-disk app_version — into assertions like
+     * `oldest_app_version === null`. That foreign heartbeat is what kept the
+     * integration suite (and therefore main) red from v2.3.16 onward. Clearing
+     * the namespace immediately before planting our fixtures makes the
+     * aggregate deterministic regardless of any concurrently running worker.
+     */
+    private function clearWorkerHeartbeats(\Redis $redis): void
+    {
+        $keys = $redis->keys('ansilume:worker:*');
+        foreach ($keys as $key) {
+            $redis->del($key);
+        }
     }
 
     public function testSyncStatusFiltersBySinceSequence(): void
