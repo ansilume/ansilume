@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>Self-hosted Ansible automation platform</strong><br>
-  Run playbooks, manage infrastructure, track every execution — all from a clean UI.
+  Run playbooks, manage infrastructure, track every execution — all from a clean, intuitive UI.
 </p>
 
 <p align="center">
