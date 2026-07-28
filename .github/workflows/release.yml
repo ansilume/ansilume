@@ -1,5 +1,17 @@
 name: Release — Build & Push Container Images
 
+# Multi-arch release pipeline (linux/amd64 + linux/arm64):
+#
+#   1. build — one job per image × architecture on NATIVE runners (no QEMU).
+#      Each job pushes its single-arch image by digest only (untagged) and
+#      hands the digest to the merge job via an artifact.
+#   2. merge — per image: assembles the digests into one multi-arch manifest
+#      list, applies the semver + latest tags, and verifies both platforms
+#      are present in the pushed manifest.
+#   3. smoke-test-arm64 — boots the prebuilt compose stack on an arm64
+#      runner against the freshly pushed images and waits for the app,
+#      nginx, and runner containers to report healthy.
+
 on:
   push:
     tags:
@@ -13,29 +25,33 @@ permissions:
   packages: write
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.target.slug }} (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 45
 
     strategy:
+      fail-fast: false
       matrix:
-        include:
+        target:
           - image: ansilume/ansilume
+            slug: app
             dockerfile: docker/php/Dockerfile.prod
-            context: .
           - image: ansilume/ansilume-nginx
+            slug: nginx
             dockerfile: docker/nginx/Dockerfile.prod
-            context: .
           - image: ansilume/ansilume-runner
+            slug: runner
             dockerfile: docker/runner/Dockerfile
-            context: .
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -51,20 +67,197 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/${{ matrix.target.image }}
+
+      # Push by digest only — tags are applied in the merge job once both
+      # architectures exist. The GHA build cache is scoped per image and
+      # architecture so the matrix jobs never overwrite each other's cache.
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.target.dockerfile }}
+          platforms: linux/${{ matrix.platform.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ matrix.target.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.target.slug }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target.slug }}-${{ matrix.platform.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.target.slug }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge manifest (${{ matrix.target.slug }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - image: ansilume/ansilume
+            slug: app
+          - image: ansilume/ansilume-nginx
+            slug: nginx
+          - image: ansilume/ansilume-runner
+            slug: runner
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-${{ matrix.target.slug }}-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ matrix.target.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=raw,value=latest
 
-      - name: Build and push
-        uses: docker/build-push-action@v6
+      - name: Create and push manifest list
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          mapfile -t tag_args < <(jq -r '.tags[] | "-t", .' <<< "${DOCKER_METADATA_OUTPUT_JSON}")
+          refs=()
+          for digest in *; do
+            refs+=("${REGISTRY}/${{ matrix.target.image }}@sha256:${digest}")
+          done
+          docker buildx imagetools create "${tag_args[@]}" "${refs[@]}"
+
+      - name: Verify multi-arch manifest
+        run: |
+          ref="${{ env.REGISTRY }}/${{ matrix.target.image }}:${{ steps.meta.outputs.version }}"
+          manifest=$(docker buildx imagetools inspect "${ref}")
+          echo "${manifest}"
+          for platform in "linux/amd64" "linux/arm64"; do
+            if ! grep -q "${platform}" <<< "${manifest}"; then
+              echo "::error::${ref} is missing ${platform}"
+              exit 1
+            fi
+          done
+
+  smoke-test-arm64:
+    name: Smoke test (arm64, prebuilt compose)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    needs: merge
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create .env from production example
+        run: |
+          cp .env.prod.example .env
+          sed -i \
+            -e "s|COOKIE_VALIDATION_KEY=CHANGE-ME|COOKIE_VALIDATION_KEY=$(openssl rand -hex 32)|" \
+            -e "s|APP_SECRET_KEY=CHANGE-ME|APP_SECRET_KEY=$(openssl rand -hex 32)|" \
+            -e "s|RUNNER_BOOTSTRAP_SECRET=CHANGE-ME|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
+            -e "s|DB_ROOT_PASSWORD=CHANGE-ME|DB_ROOT_PASSWORD=$(openssl rand -hex 16)|" \
+            -e "s|DB_PASSWORD=CHANGE-ME|DB_PASSWORD=$(openssl rand -hex 16)|" \
+            .env
+
+      - name: Pull released images
+        run: docker compose -f docker-compose.prebuilt.yml pull app nginx runner-1
+
+      - name: Verify pulled images are arm64
+        run: |
+          for image in ansilume ansilume-nginx ansilume-runner; do
+            arch=$(docker image inspect "${REGISTRY}/ansilume/${image}:latest" --format '{{.Architecture}}')
+            echo "${image}: ${arch}"
+            if [ "${arch}" != "arm64" ]; then
+              echo "::error::${REGISTRY}/ansilume/${image}:latest resolved to ${arch} on an arm64 host"
+              exit 1
+            fi
+          done
+
+      - name: Start prebuilt stack
+        run: docker compose -f docker-compose.prebuilt.yml up -d
+
+      # A fresh database has no users, and runner self-registration is
+      # rejected with 503 until the first user exists. `up -d` has already
+      # waited for app to become healthy (runner-1 depends on nginx, nginx
+      # on app), so exec works immediately.
+      - name: Create admin user (required for runner registration)
+        run: |
+          docker compose -f docker-compose.prebuilt.yml exec -T app \
+            php yii setup/admin smoke-admin smoke-admin@example.com "$(openssl rand -hex 16)"
+
+      # runner-1 restart-loops until its first successful registration
+      # (each attempt before the admin user existed exits non-zero), so
+      # transient exited/restarting states are expected — poll until
+      # healthy instead of failing fast on container state.
+      - name: Wait for services to become healthy
+        run: |
+          for service in app nginx runner-1; do
+            container="ansilume_${service//-/_}"
+            echo "Waiting for ${container}..."
+            STATUS=none
+            for i in $(seq 1 60); do
+              STATUS=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container}" 2>/dev/null || echo "unknown")
+              if [ "${STATUS}" = "healthy" ]; then
+                echo "${container} healthy after $((i * 5))s"
+                break
+              fi
+              sleep 5
+            done
+            if [ "${STATUS}" != "healthy" ]; then
+              echo "::error::Timeout waiting for ${container} (status: ${STATUS})"
+              docker compose -f docker-compose.prebuilt.yml logs "${service}"
+              exit 1
+            fi
+          done
+
+      - name: Check /health through nginx
+        run: |
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' http://localhost:8080/health)
+          cat /tmp/health.json
+          echo
+          if [ "${code}" != "200" ]; then
+            echo "::error::/health returned HTTP ${code}"
+            exit 1
+          fi
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.prebuilt.yml logs

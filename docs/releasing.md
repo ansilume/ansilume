@@ -65,6 +65,13 @@ When a version tag (`v*`) is pushed, GitHub Actions automatically builds and pub
 | `ghcr.io/ansilume/ansilume-nginx` | Nginx with baked-in config and static assets |
 | `ghcr.io/ansilume/ansilume-runner` | Standalone runner (PHP CLI + Ansible, no DB/Redis) |
 
+### Supported architectures
+
+All images are published as multi-arch manifest lists for **`linux/amd64`** and
+**`linux/arm64`**. `docker pull` selects the matching architecture
+automatically — the same compose file works on x86 servers, AWS Graviton,
+Raspberry Pi 4/5, and other arm64 hosts.
+
 ### Tags
 
 Each image is tagged with:
@@ -76,7 +83,13 @@ Each image is tagged with:
 
 ### How it works
 
-The release workflow (`.github/workflows/release.yml`) triggers on `v*` tags and uses Docker Buildx with GitHub Actions cache for efficient multi-platform builds. Images are pushed to `ghcr.io` using the repository's `GITHUB_TOKEN`.
+The release workflow (`.github/workflows/release.yml`) triggers on `v*` tags and runs three stages:
+
+1. **Build** — each image is built once per architecture on a *native* runner (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm` — no QEMU emulation) and pushed to `ghcr.io` by digest only. The Buildx GHA cache is scoped per image and architecture.
+2. **Merge** — per image, the two digests are combined into a multi-arch manifest list via `docker buildx imagetools create`, the semver + `latest` tags are applied, and the pushed manifest is verified to contain both `linux/amd64` and `linux/arm64`.
+3. **Smoke test** — an arm64 runner pulls the freshly tagged images, boots the full `docker-compose.prebuilt.yml` stack, asserts the resolved images are arm64, and waits until app, nginx, and runner report healthy (including an HTTP `/health` check through nginx).
+
+All pushes use the repository's `GITHUB_TOKEN`.
 
 ### Using prebuilt images in production
 
@@ -85,7 +98,7 @@ The Ansible deploy role supports pulling prebuilt images instead of building fro
 ```yaml
 # In your inventory or group_vars:
 ansilume_use_prebuilt_images: true
-ansilume_version: v0.2.0   # tag to pull
+ansilume_version: "0.2.0"   # image tag to pull — published without the v prefix
 ```
 
 ### Standalone runner

@@ -21,7 +21,7 @@ All secrets (`COOKIE_VALIDATION_KEY`, `APP_SECRET_KEY`, `RUNNER_BOOTSTRAP_SECRET
 
 ## Manual setup — prebuilt images
 
-No git required. Pulls directly from the GitHub Container Registry.
+No git required. Pulls directly from the GitHub Container Registry. Images are published for `linux/amd64` and `linux/arm64` — Docker picks the matching architecture automatically (works on x86 servers, AWS Graviton, Raspberry Pi 4/5, …).
 
 ```bash
 # 1. Create a working directory

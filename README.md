@@ -30,7 +30,7 @@
 
 ## Get started
 
-**Requires:** Docker + Docker Compose
+**Requires:** Docker + Docker Compose (x86_64 or arm64)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quickstart | bash
@@ -88,7 +88,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Monitoring endpoints** — [Prometheus and JSON metrics](docs/monitoring.md) for jobs, tasks, hosts, runners, queues, and infrastructure health
 - **Health dashboard** — at-a-glance status of database, Redis, queue, runners, and migrations
 - **Production deployment** — [Ansible role](docs/deployment.md) for automated install, upgrades, and rollbacks
-- **Docker-native** — reproducible dev and prod stacks via `docker compose`, prebuilt images on ghcr.io
+- **Docker-native** — reproducible dev and prod stacks via `docker compose`, prebuilt multi-arch images (amd64 + arm64) on ghcr.io
 
 ---
 
