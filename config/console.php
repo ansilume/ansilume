@@ -8,7 +8,9 @@ $db = require __DIR__ . '/db.php';
 return [
     'id' => 'ansilume-console',
     'basePath' => dirname(__DIR__),
-    'bootstrap' => ['log', 'queue'],
+    // ProcessHardeningBootstrap marks console workers non-dumpable so child
+    // processes running repository code cannot read their environment.
+    'bootstrap' => ['log', 'queue', \app\components\ProcessHardeningBootstrap::class],
     'aliases' => [
         '@bower' => '@vendor/bower-asset',
         '@npm' => '@vendor/npm-asset',

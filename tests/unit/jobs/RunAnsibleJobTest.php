@@ -61,6 +61,30 @@ class RunAnsibleJobTest extends TestCase
         $this->assertSame('/var/www/runtime/ansible-home', $env['HOME']);
     }
 
+    /**
+     * Regression: this path runs ansible-playbook inside the queue-worker,
+     * whose environment holds APP_SECRET_KEY and the database password. The
+     * playbook used to inherit all of it via getenv().
+     */
+    public function testBuildProcessEnvDoesNotLeakWorkerSecrets(): void
+    {
+        $temp = new \app\tests\unit\TemporaryEnvironment([
+            'APP_SECRET_KEY' => 'leak-canary-app',
+            'DB_PASSWORD' => 'leak-canary-db',
+            'DB_ROOT_PASSWORD' => 'leak-canary-root',
+            'COOKIE_VALIDATION_KEY' => 'leak-canary-cookie',
+        ]);
+        try {
+            $env = (new TestableRunAnsibleJob())->buildProcessEnv('/tmp/cb', '/tmp/art');
+        } finally {
+            $temp->restore();
+        }
+
+        $this->assertStringNotContainsString('leak-canary', implode("\n", $env));
+        $this->assertSame('/tmp/art', $env['ANSILUME_ARTIFACT_DIR']);
+        $this->assertArrayHasKey('PATH', $env);
+    }
+
     // -------------------------------------------------------------------------
     // DockerCommandWrapper::wrap
     // -------------------------------------------------------------------------

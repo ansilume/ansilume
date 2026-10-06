@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubprocessEnvironment;
 use app\models\JobTemplate;
 use app\models\Project;
 use yii\base\Component;
@@ -130,11 +131,7 @@ class LintService extends Component
             2 => ['pipe', 'w'],
         ];
 
-        $env = array_merge(getenv() ?: [], [
-            'HOME' => sys_get_temp_dir(),
-            'ANSIBLE_HOME' => $this->ensureCacheDir($cwd),
-        ]);
-
+        $env = $this->buildProcessEnv($cwd);
         $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
 
         if (!is_resource($process)) {
@@ -150,6 +147,23 @@ class LintService extends Component
 
         $output = trim(($stdout ?: '') . ($stderr ? "\n" . $stderr : ''));
         return [$output, $exitCode];
+    }
+
+    /**
+     * Environment for ansible-lint. Lint runs ansible-playbook --syntax-check
+     * and loads repository-controlled code (an ansible.cfg vault password
+     * script, plugins, rule directories) inside the app or queue-worker
+     * container, so it must never inherit the server's environment with
+     * APP_SECRET_KEY, DB_PASSWORD and friends. See {@see SubprocessEnvironment}.
+     *
+     * @return array<string, string>
+     */
+    protected function buildProcessEnv(string $cwd): array
+    {
+        return SubprocessEnvironment::build(getenv() ?: [], [
+            'HOME' => sys_get_temp_dir(),
+            'ANSIBLE_HOME' => $this->ensureCacheDir($cwd),
+        ]);
     }
 
     /**

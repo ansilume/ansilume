@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     libxml2-dev \
     libzip-dev \
     libldap2-dev \
+    libffi-dev \
     zip \
     unzip \
     openssh-client \
@@ -39,6 +40,9 @@ RUN ansible-galaxy collection install --force --ignore-certs \
         ansible.posix \
         community.crypto
 
+# ffi: lets console workers mark themselves non-dumpable (prctl), so child
+# processes running repository code cannot read the worker's environment
+# through /proc. See components/ProcessHardening.php.
 RUN docker-php-ext-install \
     pdo_mysql \
     mbstring \
@@ -48,7 +52,8 @@ RUN docker-php-ext-install \
     gd \
     zip \
     sockets \
-    ldap
+    ldap \
+    ffi
 
 RUN pecl install redis && docker-php-ext-enable redis
 

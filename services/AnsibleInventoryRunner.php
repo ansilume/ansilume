@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubprocessEnvironment;
 use yii\base\Component;
 
 /**
@@ -96,18 +97,19 @@ class AnsibleInventoryRunner extends Component
     }
 
     /**
-     * Subprocess environment. Pinned HOME + propagated PATH so the child
-     * can find `ansible-inventory` and any plugin caches it wants to write.
+     * Subprocess environment: the shared allowlist (PATH, proxies, CA and
+     * ANSIBLE_* settings) plus a pinned writable HOME and a UTF-8 locale.
+     * Inventory scripts and plugins from the repository run in this process,
+     * so it never gets the server's secrets. See {@see SubprocessEnvironment}.
      *
      * @return array<string, string>
      */
     protected function buildProcessEnv(): array
     {
-        return [
+        return SubprocessEnvironment::build(getenv() ?: [], [
             'HOME' => self::ANSIBLE_HOME,
-            'PATH' => getenv('PATH') ?: '/usr/local/bin:/usr/bin:/bin',
             'LANG' => 'C.UTF-8',
-        ];
+        ]);
     }
 
     /**

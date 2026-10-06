@@ -164,13 +164,26 @@ added to a custom runner image.
 
 - **At rest:** `credential.secret_data` stores an AES-256-CBC
   encryption of `{"private_key": "...", "password": "...", ...}`.
-  The key lives in `APP_SECRET_KEY`; rotate it via
-  `php yii credential/rotate-key` (the command re-encrypts every row).
-- **In transit:** decryption happens inside the runner process only,
-  after the job has been claimed. The decrypted material is written to
-  `tempfile(mode=0600)` for private keys / vault passwords, or into
-  the process environment for passwords and tokens. Temp files are
+  The key is derived from `APP_SECRET_KEY`. Changing that key makes the
+  stored credentials unreadable; there is no re-encryption command yet,
+  so credentials have to be entered again after a key change.
+- **In transit:** when a runner claims a job, the server decrypts the
+  job's credentials and sends them to that runner in the claim response.
+  Use HTTPS for runners that are not on the server host. The runner
+  writes private keys and vault passwords to `0600` temp files and puts
+  passwords and tokens into the playbook environment. Temp files are
   unlinked in a `finally` block after `ansible-playbook` exits.
+- **Subprocesses:** `ansible-playbook`, `ansible-lint` and
+  `ansible-inventory` can run code from the project repository, so they
+  only get an allowlisted environment. Ansilume's own secrets
+  (`APP_SECRET_KEY`, database passwords, `RUNNER_BOOTSTRAP_SECRET`, …)
+  never reach them. Console workers (queue-worker, runner) mark
+  themselves non-dumpable, so these subprocesses cannot read the
+  worker's own environment through `/proc` either. On a runner, other
+  processes in the container (health check, `docker exec`) still carry
+  the container environment; see
+  [runners.md](runners.md#what-playbooks-can-see) for what that means
+  for `RUNNER_BOOTSTRAP_SECRET`.
 - **In the UI:** the secret inputs are `type="password"` and forms
   never echo stored secrets back to the browser. Audit logs record
   every credential create / update / delete with only the non-secret

@@ -129,6 +129,50 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.4.5 or older: playbook environment and exposed secrets
+
+**Playbooks no longer inherit the runner's environment.** They only see
+`PATH`, locale, proxy and CA settings, `ANSIBLE_*` variables and the env vars
+of attached Token credentials. If a playbook reads variables you set on the
+runner (`lookup('env', ...)`, cloud SDK credentials), list their names in
+`RUNNER_ENV_PASSTHROUGH` on the runner, or better, move secrets into Token
+credentials. The runner logs at start which variables it does not forward.
+See [runners.md](runners.md#what-playbooks-can-see).
+
+Lint and inventory parsing on the server now see the same restricted set:
+`PATH`, locale, proxy and CA settings and `ANSIBLE_*` variables. If a lint
+setup relied on other variables, for example a vault password script that reads
+an env var, point `ANSIBLE_VAULT_PASSWORD_FILE` at a mounted file instead.
+
+Update **every runner image** as well. Old runner images keep passing their
+full environment, including `RUNNER_BOOTSTRAP_SECRET`, to playbooks. Git
+checkouts need `docker compose up -d --build` once, because the PHP images
+gained the FFI extension.
+
+**Check whether secrets were exposed.** Up to 2.4.5, `ansible-lint` ran with
+the full server environment, and lint runs code from the project repository
+(for example a vault password script referenced from the repo's
+`ansible.cfg`). Lint runs automatically when a job template is saved and after
+every project sync. If anyone you do not fully trust could change a repository
+that Ansilume syncs, treat these as exposed and rotate them:
+
+- `DB_PASSWORD` and `DB_ROOT_PASSWORD`
+- `SMTP_PASSWORD` and `LDAP_BIND_PASSWORD`, if set
+- `COOKIE_VALIDATION_KEY` (logs out all users)
+- `RUNNER_BOOTSTRAP_SECRET` (update every runner afterwards)
+- any other secret you put into `.env` or the server containers' environment
+- `APP_SECRET_KEY`: changing it makes all stored credentials unreadable, and
+  there is no re-encryption command yet, so every credential has to be entered
+  again. Rotate it, and the secrets stored in your credentials, if the
+  repositories were not under your control.
+
+Playbook authors could also read `RUNNER_BOOTSTRAP_SECRET` on runners that have
+it set, and on the official runner image they still can (see
+[runners.md](runners.md#what-playbooks-can-see)). Rotating it does not help
+against that; give such runners a `RUNNER_TOKEN` instead.
+
+---
+
 ## After updating from 2.4.4 or older: clean up log files and rotate secrets
 
 Releases up to and including **2.4.4** had Yii's default `logVars` enabled on

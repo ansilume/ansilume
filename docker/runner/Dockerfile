@@ -37,13 +37,17 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     libzip-dev \
+    libffi-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv --system-site-packages /opt/ansible-lint \
     && /opt/ansible-lint/bin/pip install --no-cache-dir ansible-lint \
     && ln -s /opt/ansible-lint/bin/ansible-lint /usr/local/bin/ansible-lint
 
-# Only the extensions the runner actually needs
-RUN docker-php-ext-install pcntl zip
+# Only the extensions the runner actually needs. ffi lets the runner process
+# mark itself non-dumpable, so playbooks cannot read its environment through
+# /proc. Health check and docker exec processes still carry the container
+# environment; see docs/runners.md ("What playbooks can see").
+RUN docker-php-ext-install pcntl zip ffi
 
 # Pre-install Ansible collections that Ansilume playbooks commonly
 # rely on. community.general carries the `onepassword` / `hashi_vault`

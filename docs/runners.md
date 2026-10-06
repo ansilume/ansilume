@@ -70,9 +70,53 @@ CA trust store includes it, or set `API_URL` with `http://` for testing.
 | `RUNNER_NAME` | Yes (for bootstrap) | Unique name for this runner. Used during self-registration. |
 | `RUNNER_BOOTSTRAP_SECRET` | Yes (for bootstrap) | Shared secret that authorizes self-registration. Must match the server's `RUNNER_BOOTSTRAP_SECRET`. |
 | `RUNNER_TOKEN` | Alternative | Pre-configured runner token. If set, skips self-registration. Obtain from the Ansilume UI under Runner Groups. |
+| `RUNNER_ENV_PASSTHROUGH` | No | Comma- or space-separated names of runner environment variables that playbooks may see, e.g. `AWS_PROFILE, OP_SERVICE_ACCOUNT_TOKEN`. See [What playbooks can see](#what-playbooks-can-see). |
 
 You need either `RUNNER_BOOTSTRAP_SECRET` + `RUNNER_NAME` (self-registration)
 or `RUNNER_TOKEN` (pre-configured). Not both.
+
+### What playbooks can see
+
+Playbooks do **not** inherit the runner's environment. `ansible-playbook`
+only receives:
+
+- `PATH`, `TMPDIR`, `TZ`, `HOSTNAME`, `USER`, `LOGNAME`
+- locale: `LANG`, `LANGUAGE` and every `LC_*` variable
+- proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, also lowercase)
+- CA settings (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`)
+- every `ANSIBLE_*` variable, so Ansible settings on the runner keep working
+- the variables listed in `RUNNER_ENV_PASSTHROUGH`
+- the env vars of Token credentials attached to the job template
+
+Ansilume's own secrets (`RUNNER_BOOTSTRAP_SECRET`, `RUNNER_TOKEN`,
+`APP_SECRET_KEY`, `DB_PASSWORD`, `DB_ROOT_PASSWORD`, `REDIS_PASSWORD`,
+`SMTP_PASSWORD`, `LDAP_BIND_PASSWORD`, `COOKIE_VALIDATION_KEY`) are never
+forwarded, not even when listed in `RUNNER_ENV_PASSTHROUGH`; the runner says so
+at start if you list one. `HOME` is set by Ansilume to a writable directory.
+
+At start the runner logs the names of the variables it does not forward, so
+you can see what a playbook will miss. Runner settings (`RUNNER_*`,
+`API_URL`), Ansilume's server configuration (`DB_*`, `SMTP_*`, `YII_*`, …) and
+the PHP image's own variables are left out of that list.
+
+Prefer Token credentials for secrets: they are stored encrypted, attached per
+job template, and audited. Use `RUNNER_ENV_PASSTHROUGH` for runner-specific
+settings that are not secrets.
+
+The runner process also marks itself non-dumpable, so playbooks cannot read its
+environment through `/proc`, not even after `become`, because Docker drops
+`CAP_SYS_PTRACE` by default. This needs the PHP FFI extension, which the
+official runner image includes. Without it the runner prints a warning at start.
+
+**Limit:** other processes Docker starts in the runner container, such as the
+health check and every `docker exec`, carry the full container environment.
+In the official image they run as the same user as playbooks, and that user may
+use `sudo` without a password for `become`. A playbook can therefore still read
+`RUNNER_BOOTSTRAP_SECRET` from such a process. The bootstrap secret lets anyone
+register a runner in any runner group. On runners where not everyone who can
+run playbooks is trusted with that, configure `RUNNER_TOKEN` instead of
+`RUNNER_BOOTSTRAP_SECRET`. A runner token only grants access to that runner's
+own group.
 
 ---
 
@@ -159,7 +203,9 @@ If you prefer to run the runner directly on a host:
 
 ### Prerequisites
 
-- PHP 8.2+ with extensions: `pcntl`, `zip`, `curl`
+- PHP 8.2+ with extensions: `pcntl`, `zip`, `curl`, and `ffi` (recommended: without it,
+  playbooks running as the same user can read the runner's environment, see
+  [What playbooks can see](#what-playbooks-can-see))
 - Ansible 2.14+
 - `ansible-lint` (optional, for linting jobs)
 - OpenSSH client (for SSH-based connections)
@@ -309,13 +355,19 @@ After starting a runner, verify it registered and is online:
 ## Security Considerations
 
 - **Bootstrap secret**: Treat this like a password. Anyone with this secret can
-  register runners. Rotate it periodically and use a strong random value
-  (`openssl rand -hex 24`).
+  register runners in any runner group. Rotate it periodically and use a strong
+  random value (`openssl rand -hex 24`). Playbooks can read it on runners that
+  have it set, see [What playbooks can see](#what-playbooks-can-see); use
+  `RUNNER_TOKEN` there if playbook authors must not obtain it.
 - **Runner token**: The self-registration token is cached in `runtime/`. Protect
   this directory. If compromised, regenerate the runner's token from the UI.
-- **Network**: Use HTTPS in production. The runner transmits job payloads
-  (including credential references) over this connection.
+- **Network**: Use HTTPS in production. When a runner claims a job, the server
+  sends it the job's credentials in decrypted form over this connection.
 - **Runner isolation**: Runners execute Ansible playbooks with whatever system
   privileges they have. Run the container as a non-root user (the Docker image
   defaults to `www-data`). Consider network policies to limit what the runner
   can reach beyond the Ansilume server.
+- **Shared runners**: All jobs on a runner run as the same user. A playbook can
+  read files of other jobs running at the same time on that runner, including
+  their credential temp files, and the runner's cached token. Give teams that
+  must not trust each other their own runner groups.

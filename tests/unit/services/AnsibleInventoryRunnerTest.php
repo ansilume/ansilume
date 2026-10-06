@@ -96,6 +96,33 @@ class AnsibleInventoryRunnerTest extends TestCase
 
         $this->assertSame('C.UTF-8', $env['LANG']);
     }
+
+    /**
+     * Inventory scripts and plugins from the repository run inside this
+     * subprocess, so it must use the shared allowlist: operational settings
+     * pass, the server's secrets never do.
+     */
+    public function testBuildProcessEnvUsesTheSharedAllowlist(): void
+    {
+        $temp = new \app\tests\unit\TemporaryEnvironment([
+            'APP_SECRET_KEY' => 'leak-canary-app',
+            'DB_PASSWORD' => 'leak-canary-db',
+            'HTTPS_PROXY' => 'http://proxy:3128',
+            'ANSIBLE_INVENTORY_ENABLED' => 'yaml,ini',
+            'LANG' => 'POSIX',
+        ]);
+        try {
+            $env = (new ExposingAnsibleInventoryRunner())->envForTests();
+        } finally {
+            $temp->restore();
+        }
+
+        $this->assertArrayNotHasKey('APP_SECRET_KEY', $env);
+        $this->assertArrayNotHasKey('DB_PASSWORD', $env);
+        $this->assertSame('http://proxy:3128', $env['HTTPS_PROXY']);
+        $this->assertSame('yaml,ini', $env['ANSIBLE_INVENTORY_ENABLED']);
+        $this->assertSame('C.UTF-8', $env['LANG'], 'the pinned locale wins over the parent value');
+    }
 }
 
 /**

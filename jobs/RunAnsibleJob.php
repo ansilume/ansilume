@@ -8,6 +8,7 @@ use app\components\AnsibleJobProcess;
 use app\components\ArtifactCollector;
 use app\components\CredentialInjector;
 use app\components\DockerCommandWrapper;
+use app\components\PlaybookEnvironment;
 use app\jobs\JobTimeoutException;
 use app\models\Job;
 use app\models\JobLog;
@@ -199,20 +200,9 @@ class RunAnsibleJob extends BaseObject implements JobInterface
      */
     protected function buildProcessEnv(string $callbackFile, string $artifactDir): array
     {
-        return array_merge(getenv() ?: [], [
-            'ANSIBLE_CALLBACK_PLUGINS' => dirname(__DIR__) . '/ansible/callback_plugins',
-            'ANSIBLE_CALLBACKS_ENABLED' => 'ansilume_callback',
-            'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
-            'ANSILUME_CALLBACK_FILE' => $callbackFile,
-            'ANSILUME_ARTIFACT_DIR' => $artifactDir,
-            'ANSIBLE_FORCE_COLOR' => '1',
-            'PYTHONUNBUFFERED' => '1',
-            // Writable home for any lookup plugin that shells out to a CLI
-            // needing ~/.config (op, hcloud, aws, gh, …). The default
-            // /var/www is root-owned and breaks them. See the matching
-            // RunnerController::buildProcessEnv comment for full context.
-            'HOME' => '/var/www/runtime/ansible-home',
-        ]);
+        // Allowlisted environment only: this runs inside the queue-worker,
+        // whose environment holds APP_SECRET_KEY and the database password.
+        return PlaybookEnvironment::build(getenv() ?: [], $callbackFile, $artifactDir);
     }
 
     /**

@@ -6,6 +6,8 @@ namespace app\commands;
 
 use app\components\CredentialInjector;
 use app\components\GitEnvBuilder;
+use app\components\PlaybookEnvironment;
+use app\components\ProcessHardening;
 use app\components\RunnerHttpClient;
 use app\components\RunnerProcessExecutor;
 use app\components\RunnerTokenResolver;
@@ -72,6 +74,9 @@ class RunnerController extends Controller
         $runnerName = (string)($data['runner_name'] ?? 'unknown');
         $groupName = (string)($data['group_name'] ?? 'unknown');
         $this->stdout("Runner '{$runnerName}' started. Group: '{$groupName}'. Polling {$apiUrl}\n");
+        foreach (PlaybookEnvironment::startupNotices(getenv() ?: [], new ProcessHardening()) as $notice) {
+            $this->stdout($notice . "\n");
+        }
 
         $this->registerSignalHandlers();
         $this->pollLoop();
@@ -261,23 +266,9 @@ class RunnerController extends Controller
      */
     private function buildProcessEnv(string $callbackFile): array
     {
-        $pluginDir = dirname(__DIR__) . '/ansible/callback_plugins';
-
-        return array_merge(getenv() ?: [], [
-            'ANSIBLE_CALLBACK_PLUGINS' => $pluginDir,
-            'ANSIBLE_CALLBACKS_ENABLED' => 'ansilume_callback',
-            'ANSIBLE_CALLBACK_WHITELIST' => 'ansilume_callback',
-            'ANSILUME_CALLBACK_FILE' => $callbackFile,
-            'ANSIBLE_FORCE_COLOR' => '1',
-            'PYTHONUNBUFFERED' => '1',
-            // Many lookup plugins shell out to CLIs that expect a writable
-            // $HOME for their config/cache (1Password's `op` creates
-            // ~/.config/op; hcloud's CLI writes to ~/.config/hcloud; etc).
-            // The default home for www-data (/var/www) is root-owned, so
-            // any such CLI fails with "permission denied". Point HOME at
-            // the dedicated ansible-home dir the entrypoint chowns.
-            'HOME' => '/var/www/runtime/ansible-home',
-        ]);
+        // Allowlisted environment only: playbooks must not see the runner's
+        // own secrets (RUNNER_BOOTSTRAP_SECRET, RUNNER_TOKEN, the dev .env).
+        return PlaybookEnvironment::build(getenv() ?: [], $callbackFile);
     }
 
     private function collectAndSendTasks(int $jobId, string $callbackFile): void
