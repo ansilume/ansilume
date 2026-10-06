@@ -147,11 +147,13 @@ class CredentialInjectorTest extends DbTestCase
             'secrets' => ['password' => 'secret123'],
         ]);
 
+        CredentialInjector::cleanup($result->tempFiles);
+
         $this->assertContains('--user', $result->args);
         $this->assertContains('operator', $result->args);
         $this->assertArrayHasKey('ANSIBLE_SSH_PASS', $result->env);
         $this->assertSame('secret123', $result->env['ANSIBLE_SSH_PASS']);
-        $this->assertSame([], $result->tempFiles);
+        $this->assertSame([$result->env['ANSIBLE_CONNECTION_PASSWORD_FILE']], $result->tempFiles);
     }
 
     public function testInjectUsernamePasswordWithEmptyPasswordNoEnv(): void
@@ -174,6 +176,7 @@ class CredentialInjectorTest extends DbTestCase
             'username' => null,
             'secrets' => ['password' => 'pw'],
         ]);
+        CredentialInjector::cleanup($result->tempFiles);
 
         $this->assertNotContains('--user', $result->args);
         $this->assertArrayHasKey('ANSIBLE_SSH_PASS', $result->env);
@@ -186,6 +189,7 @@ class CredentialInjectorTest extends DbTestCase
             'username' => '',
             'secrets' => ['password' => 'pw'],
         ]);
+        CredentialInjector::cleanup($result->tempFiles);
 
         $this->assertNotContains('--user', $result->args);
     }

@@ -271,9 +271,11 @@ paths:
       tags: [Credentials]
       summary: Create a credential
       description: |
-        Requires `credential.create`. For `ssh_key` type, provide the raw PEM
-        private key in `secrets.private_key`; public key and algorithm are
-        derived server-side via `ssh-keygen -y`.
+        Requires `credential.create`. The secret of the credential's type is
+        required (see `CredentialInput.secrets`); without it the answer is 422,
+        for example `Token is required for Token credentials.` For `ssh_key`
+        type, provide the raw PEM private key in `secrets.private_key`; public
+        key and algorithm are derived server-side via `ssh-keygen -y`.
       requestBody:
         required: true
         content:
@@ -295,7 +297,15 @@ paths:
                   credential_type: username_password
                   username: root
                   secrets:
-                    password: hunter2
+                    password: "<password>"
+              token:
+                summary: Token credential exposed as an environment variable
+                value:
+                  name: deploy-token
+                  credential_type: token
+                  env_var_name: DEPLOY_TOKEN
+                  secrets:
+                    token: "<token>"
       responses:
         '201': { $ref: '#/components/responses/CredentialResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -306,17 +316,24 @@ paths:
     get:
       tags: [Credentials]
       summary: Get a single credential
+      description: |
+        Adds `secret_status` (whether the stored secret is usable) and
+        `used_by` (job templates, projects and waiting jobs that use the
+        credential). The lists only name what the caller may see; the hidden
+        counts cover the rest.
       responses:
-        '200': { $ref: '#/components/responses/CredentialResponse' }
+        '200': { $ref: '#/components/responses/CredentialDetailResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
     put:
       tags: [Credentials]
       summary: Update a credential
       description: |
-        Requires `credential.update`. If `secrets` is omitted or empty the
-        existing encrypted secret blob is kept unchanged; only metadata is
-        updated.
+        Requires `credential.update`. Omitted fields keep their value. If
+        `secrets` is omitted or its values are blank, the stored secret is
+        kept; a submitted secret replaces it. Changing `credential_type`
+        requires the new type's secret (422 otherwise), so no secret of the
+        old type stays behind.
       requestBody:
         required: true
         content:
@@ -330,11 +347,23 @@ paths:
     delete:
       tags: [Credentials]
       summary: Delete a credential
-      description: Requires `credential.delete`.
+      description: |
+        Requires `credential.delete`. A credential that a job template, a
+        project or a waiting job uses is not deleted: the answer is 409 with
+        `error.used_by`. Pass `force=1` to delete it anyway. It is then
+        detached from every job template and project, and waiting jobs that
+        need it fail before they start.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          description: "`1` or `true` deletes a credential that is in use."
+          schema: { type: boolean, default: false }
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/CredentialInUse' }
 
   # ─────────────────────────── Job Templates ───────────────────────────
   /api/v1/job-templates:
@@ -394,7 +423,10 @@ paths:
     delete:
       tags: [Job Templates]
       summary: Delete a job template
-      description: Requires `job-template.delete`.
+      description: |
+        Requires `job-template.delete`. A soft delete, like in the web UI: the
+        template disappears from lists and can no longer be launched, while
+        its jobs keep their link to it.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -414,30 +446,27 @@ paths:
     post:
       tags: [Jobs]
       summary: Launch a job from a template
-      description: Requires `job.launch`.
+      description: |
+        Requires `job.launch` and operator access to the template's project.
+        The response lists the credentials the job will use.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [job_template_id]
-              properties:
-                job_template_id: { type: integer }
-                extra_vars:      { type: object, additionalProperties: true }
-                limit:           { type: string }
-                tags:            { type: string }
+            schema: { $ref: '#/components/schemas/JobLaunchInput' }
       responses:
-        '201': { $ref: '#/components/responses/JobResponse' }
+        '201': { $ref: '#/components/responses/JobDetailResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '500': { $ref: '#/components/responses/ServerError' }
   /api/v1/jobs/{id}:
     get:
       tags: [Jobs]
       summary: Get a single job
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
-        '200': { $ref: '#/components/responses/JobResponse' }
+        '200': { $ref: '#/components/responses/JobDetailResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/jobs/{id}/cancel:
@@ -447,9 +476,12 @@ paths:
       description: Requires `job.cancel`.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
-        '200': { $ref: '#/components/responses/JobResponse' }
+        '200': { $ref: '#/components/responses/JobDetailResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The job is already finished and cannot be canceled
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
 
   /api/v1/jobs/{id}/artifacts:
     get:
@@ -1829,6 +1861,25 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/Credential' }
+    CredentialDetailResponse:
+      description: Credential with secret status and usage (secrets never included)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/CredentialDetail' }
+    CredentialInUse:
+      description: The credential is in use; nothing was deleted
+      content: { application/json: { schema: { $ref: '#/components/schemas/CredentialInUseError' } } }
+    JobDetailResponse:
+      description: Job with its credentials (secrets never included)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/JobDetail' }
     ProjectResponse:
       description: Project
       content:
@@ -1993,6 +2044,7 @@ components:
         description:     { type: string, nullable: true }
         credential_type: { type: string, enum: [ssh_key, username_password, vault, token] }
         username:        { type: string, nullable: true }
+        env_var_name:    { type: string, nullable: true, description: "Environment variable a token credential is exposed as. null means ANSILUME_CREDENTIAL_TOKEN." }
         created_at:      { type: integer }
         updated_at:      { type: integer }
     CredentialInput:
@@ -2003,11 +2055,14 @@ components:
         description:     { type: string, nullable: true }
         credential_type: { type: string, enum: [ssh_key, username_password, vault, token] }
         username:        { type: string, nullable: true }
+        env_var_name:    { type: string, nullable: true, maxLength: 128, pattern: '^[A-Z_][A-Z0-9_]*$', description: "Token credentials only. Blank or null uses ANSILUME_CREDENTIAL_TOKEN." }
         secrets:
           type: object
           description: |
-            Secret fields keyed by name. The accepted keys depend on
-            `credential_type`:
+            Secret fields keyed by name. Only the key of `credential_type`
+            counts; keys of other types are ignored. Blank values count as not
+            provided. On create the key is required; on update a blank or
+            missing key keeps the stored secret.
 
               * `ssh_key`           → `private_key` (PEM)
               * `username_password` → `password`
@@ -2019,6 +2074,57 @@ components:
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/Credential' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+    CredentialDetail:
+      allOf:
+        - $ref: '#/components/schemas/Credential'
+        - type: object
+          properties:
+            secret_status:
+              type: string
+              enum: [ok, incomplete, undecryptable]
+              description: |
+                `ok`: the secret of the type is stored. `incomplete`: it is
+                missing, as in credentials saved before validation existed;
+                jobs get no secret from it. `undecryptable`: it cannot be
+                decrypted, usually because APP_SECRET_KEY changed; jobs that
+                use it fail before they start.
+            used_by: { $ref: '#/components/schemas/CredentialUsage' }
+    CredentialUsage:
+      type: object
+      description: The lists only hold what the caller may see; the hidden counts cover the rest.
+      properties:
+        in_use: { type: boolean }
+        job_templates:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              project_id: { type: integer }
+              project_name: { type: string, nullable: true }
+              role: { type: string, enum: [primary, additional] }
+        projects:
+          type: array
+          description: Projects that use the credential to clone their repository.
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+        hidden_job_template_count: { type: integer }
+        hidden_project_count: { type: integer }
+        pending_job_count: { type: integer, description: "Jobs that have not started yet (pending, queued or waiting for approval) and need the credential." }
+    CredentialInUseError:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+              example: 'Credential "deploy-key" is in use by 2 job template(s). Pass force=1 to delete it anyway; it will be detached from all of them.'
+            used_by: { $ref: '#/components/schemas/CredentialUsage' }
 
     JobTemplate:
       type: object
@@ -2027,12 +2133,38 @@ components:
         name:            { type: string }
         description:     { type: string, nullable: true }
         project_id:      { type: integer }
+        project_name:    { type: string, nullable: true }
         inventory_id:    { type: integer }
-        credential_id:   { type: integer, nullable: true }
-        playbook:        { type: string }
+        inventory_name:  { type: string, nullable: true }
         runner_group_id: { type: integer, nullable: true }
+        credential_id:   { type: integer, nullable: true, description: "The primary credential." }
+        credential_ids:
+          type: array
+          items: { type: integer }
+          description: The additional credentials in precedence order, after the primary one.
+        credentials:
+          type: array
+          description: All credentials in precedence order, primary first. Never includes secrets.
+          items: { $ref: '#/components/schemas/JobTemplateCredential' }
+        playbook:        { type: string }
+        verbosity:       { type: integer }
+        forks:           { type: integer }
+        become:          { type: boolean }
+        become_method:   { type: string, nullable: true }
+        become_user:     { type: string, nullable: true }
+        limit:           { type: string, nullable: true }
+        tags:            { type: string, nullable: true }
+        skip_tags:       { type: string, nullable: true }
+        has_survey:      { type: boolean }
         created_at:      { type: integer }
         updated_at:      { type: integer }
+    JobTemplateCredential:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        credential_type: { type: string, enum: [ssh_key, username_password, vault, token] }
+        role: { type: string, enum: [primary, additional] }
     JobTemplateList:
       type: object
       properties:
@@ -2044,14 +2176,57 @@ components:
       properties:
         id:              { type: integer }
         job_template_id: { type: integer, nullable: true }
+        template_name:   { type: string, nullable: true }
         status:
           type: string
-          enum: [pending, waiting, running, successful, failed, error, canceled]
+          enum: [pending, queued, running, succeeded, failed, canceled, timed_out, pending_approval, rejected]
+        launched_by:     { type: string, nullable: true, description: "Username of whoever launched the job." }
+        extra_vars:      { type: object, nullable: true, additionalProperties: true }
+        limit:           { type: string, nullable: true }
+        verbosity:       { type: integer, nullable: true }
+        check_mode:      { type: boolean }
+        exit_code:       { type: integer, nullable: true, description: "-1 when the job ended without an exit code from ansible, for example after a timeout or a failure before execution." }
+        execution_command: { type: string, nullable: true }
         artifact_count:  { type: integer }
+        queued_at:       { type: integer, nullable: true }
         started_at:      { type: integer, nullable: true }
         finished_at:     { type: integer, nullable: true }
         created_at:      { type: integer }
-        updated_at:      { type: integer }
+    JobDetail:
+      allOf:
+        - $ref: '#/components/schemas/Job'
+        - type: object
+          properties:
+            credentials:
+              type: array
+              description: The job's credentials as launched, primary first. Never includes secrets.
+              items: { $ref: '#/components/schemas/JobCredential' }
+    JobCredential:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, nullable: true, description: "The name at launch time." }
+        credential_type: { type: string, nullable: true }
+        role: { type: string, enum: [primary, additional] }
+        deleted: { type: boolean, description: "The credential was deleted after the launch." }
+    JobLaunchInput:
+      type: object
+      required: [job_template_id]
+      properties:
+        job_template_id: { type: integer }
+        template_id: { type: integer, deprecated: true, description: "Older name of job_template_id, still accepted." }
+        extra_vars:
+          description: Extra vars for this run, merged over the template's. An object or a JSON string.
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: string }
+        limit: { type: string }
+        verbosity: { type: integer, minimum: 0, maximum: 5 }
+        check_mode: { type: boolean }
+      example:
+        job_template_id: 12
+        extra_vars: { app_version: "1.4.2" }
+        limit: web
     JobArtifact:
       type: object
       properties:
@@ -2181,7 +2356,15 @@ components:
         description: { type: string, nullable: true }
         project_id: { type: integer }
         inventory_id: { type: integer }
-        credential_id: { type: integer, nullable: true }
+        credential_id: { type: integer, nullable: true, description: "The primary credential. Its username and key win over the additional ones." }
+        credential_ids:
+          type: array
+          items: { type: integer }
+          description: |
+            The additional credentials in precedence order. Omit the key to
+            keep the current ones; `[]` removes them all. The primary
+            credential and duplicates are skipped. Unknown IDs are rejected
+            with 422.
         playbook: { type: string }
         extra_vars: { type: string, nullable: true }
         verbosity: { type: integer, minimum: 0, maximum: 5, default: 0 }

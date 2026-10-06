@@ -62,10 +62,8 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     </div>
 
     <?php
-    $selectedExtraIds = array_map(
-        static fn ($c) => (int)$c->id,
-        array_filter($model->credentials, static fn ($c) => (int)$c->id !== (int)$model->credential_id)
-    );
+    /** @var int[] $selectedCredentialIds */
+    $selectedExtraIds = $selectedCredentialIds;
     $extraCredentials = array_filter($credentials, static fn ($c) => (int)$c->id !== (int)$model->credential_id);
     ?>
     <div class="mb-3">
@@ -88,9 +86,13 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
                     </div>
                 <?php endforeach; ?>
             </div>
+            <?php if ($model->hasErrors('credential_ids')) : ?>
+                <div class="invalid-feedback d-block" id="credential-ids-error"><?= Html::encode($model->getFirstError('credential_ids')) ?></div>
+            <?php endif; ?>
             <div class="form-text">
                 Tokens are injected as environment variables (see the credential's <em>Env var name</em>).
-                Vault and SSH credentials can only claim one Ansible slot (<code>--user</code>, <code>--vault-password-file</code>); the primary credential above wins if multiple are selected.
+                Credentials apply in order: the primary credential first, then the checked ones as listed.
+                For <code>--user</code>, <code>--private-key</code> and <code>--vault-password-file</code> the first credential that provides one wins, so only one vault password is passed.
             </div>
         <?php endif; ?>
     </div>

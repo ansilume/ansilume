@@ -4,13 +4,21 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
-use app\models\AuditLog;
+use app\components\CredentialUsage;
 use app\models\Credential;
 use app\services\CredentialService;
+use app\services\CredentialUsageService;
+use app\services\CredentialWriteService;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
+/**
+ * Credentials in the web UI. Writes go through CredentialWriteService, the
+ * same rules as the REST API: the type's secret is required, a type change
+ * needs the new type's secret, and a credential in use is only deleted when
+ * the operator confirms the forced delete.
+ */
 class CredentialController extends BaseController
 {
     /**
@@ -46,34 +54,15 @@ class CredentialController extends BaseController
     public function actionView(int $id): string
     {
         $model = $this->findModel($id);
-        $sshInfo = null;
-        if ($model->credential_type === Credential::TYPE_SSH_KEY && !empty($model->secret_data)) {
-            /** @var CredentialService $cs */
-            $cs = \Yii::$app->get('credentialService');
-            $secrets = $cs->getSecrets($model);
+        $secretStatus = $this->credentialService()->secretStatus($model);
 
-            $publicKey = $secrets['public_key'] ?? '';
-            $algorithm = $secrets['algorithm'] ?? '';
-            $bits = (int)($secrets['bits'] ?? 0);
-            $keySecure = $secrets['key_secure'] ?? null;
-
-            // Derive public key on-the-fly if not yet stored (legacy credentials)
-            if ($publicKey === '' && !empty($secrets['private_key'])) {
-                $analysis = $cs->analyzePrivateKey($secrets['private_key']);
-                $publicKey = $analysis['public_key'];
-                $algorithm = $analysis['algorithm'];
-                $bits = $analysis['bits'];
-                $keySecure = $analysis['key_secure'];
-            }
-
-            $sshInfo = [
-                'public_key' => $publicKey,
-                'algorithm' => $algorithm,
-                'bits' => $bits,
-                'key_secure' => $keySecure,
-            ];
-        }
-        return $this->render('view', ['model' => $model, 'sshInfo' => $sshInfo]);
+        return $this->render('view', [
+            'model' => $model,
+            'secretStatus' => $secretStatus,
+            // Decrypting a broken or empty secret would fail; the status says why.
+            'sshInfo' => $secretStatus === CredentialService::SECRET_STATUS_OK ? $this->sshInfo($model) : null,
+            'usage' => $this->usage($model),
+        ]);
     }
 
     public function actionCreate(): Response|string
@@ -81,53 +70,24 @@ class CredentialController extends BaseController
         $model = new Credential();
         if ($model->load((array)\Yii::$app->request->post())) {
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
-            if ($model->validate()) {
-                /** @var CredentialService $cs */
-                $cs = \Yii::$app->get('credentialService');
-                /** @var array<string, string> $secrets */
-                $secrets = $this->extractSecrets($model->credential_type, $cs);
-                if ($cs->storeSecrets($model, $secrets)) {
-                    \Yii::$app->get('auditService')->log(
-                        AuditLog::ACTION_CREDENTIAL_CREATED,
-                        'credential',
-                        $model->id,
-                        null,
-                        ['name' => $model->name, 'type' => $model->credential_type]
-                    );
-                    $this->session()->setFlash('success', "Credential \"{$model->name}\" created.");
-                    return $this->redirect(['view', 'id' => $model->id]);
-                }
+            if ($this->writeService()->create($model, $this->postedSecrets())) {
+                $this->session()->setFlash('success', "Credential \"{$model->name}\" created.");
+                return $this->redirect(['view', 'id' => $model->id]);
             }
         }
-        return $this->render('form', ['model' => $model, 'secrets' => []]);
+        return $this->render('form', ['model' => $model]);
     }
 
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
         if ($model->load((array)\Yii::$app->request->post())) {
-            if ($model->validate()) {
-                /** @var CredentialService $cs */
-                $cs = \Yii::$app->get('credentialService');
-                /** @var array<string, string> $secrets */
-                $secrets = $this->extractSecrets($model->credential_type, $cs);
-                if (!empty(array_filter($secrets))) {
-                    $cs->storeSecrets($model, $secrets);
-                } else {
-                    $model->save();
-                }
-                \Yii::$app->get('auditService')->log(
-                    AuditLog::ACTION_CREDENTIAL_UPDATED,
-                    'credential',
-                    $model->id,
-                    null,
-                    ['name' => $model->name]
-                );
+            if ($this->writeService()->update($model, $this->postedSecrets())) {
                 $this->session()->setFlash('success', "Credential \"{$model->name}\" updated.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
-        return $this->render('form', ['model' => $model, 'secrets' => []]);
+        return $this->render('form', ['model' => $model]);
     }
 
     /**
@@ -138,9 +98,7 @@ class CredentialController extends BaseController
     {
         \Yii::$app->response->format = Response::FORMAT_JSON;
         try {
-            /** @var CredentialService $cs */
-            $cs = \Yii::$app->get('credentialService');
-            $pair = $cs->generateSshKeyPair();
+            $pair = $this->credentialService()->generateSshKeyPair();
             return $this->asJson(['ok' => true, 'private_key' => $pair['private_key'], 'public_key' => $pair['public_key']]);
         } catch (\RuntimeException $e) {
             \Yii::error('SSH key generation failed: ' . $e->getMessage(), __CLASS__);
@@ -149,52 +107,82 @@ class CredentialController extends BaseController
         }
     }
 
+    /**
+     * A credential in use is only deleted with force=1, which the delete
+     * button on the credential page sends after the operator confirmed it.
+     */
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
-        $name = $model->name;
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_CREDENTIAL_DELETED,
-            'credential',
-            $id,
-            null,
-            ['name' => $name]
-        );
-        $model->delete();
-        $this->session()->setFlash('success', "Credential \"{$name}\" deleted.");
+        $force = (string)\Yii::$app->request->post('force', '') === '1';
+        $result = $this->writeService()->delete($model, $force, $this->viewerId());
+        if (!$result['deleted']) {
+            $this->session()->setFlash('danger', $result['usage']->summary() . ' Review the usage below before deleting it.');
+            return $this->redirect(['view', 'id' => $id]);
+        }
+
+        $this->session()->setFlash('success', $this->deletedMessage($result['usage']));
         return $this->redirect(['index']);
     }
 
-    /**
-     * @return array<string, mixed>
-     */
-    private function extractSecrets(string $type, CredentialService $cs): array
+    private function deletedMessage(CredentialUsage $usage): string
     {
-        $post = (array)\Yii::$app->request->post('secrets', []);
-        if ($type !== Credential::TYPE_SSH_KEY) {
-            return match ($type) {
-                Credential::TYPE_USERNAME_PASSWORD => ['password' => $post['password'] ?? ''],
-                Credential::TYPE_VAULT => ['vault_password' => $post['vault_password'] ?? ''],
-                Credential::TYPE_TOKEN => ['token' => $post['token'] ?? ''],
-                default => [],
-            };
+        $message = "Credential \"{$usage->credentialName}\" deleted.";
+        if ($usage->isInUse()) {
+            $message .= ' It was detached from every job template and project that used it.';
         }
 
-        // Normalise line endings — browsers submit \r\n from textareas
-        /** @var string $rawKey */
-        $rawKey = $post['private_key'] ?? '';
-        $privateKey = str_replace("\r\n", "\n", str_replace("\r", "\n", $rawKey));
-        $secrets = ['private_key' => $privateKey];
+        return $message;
+    }
 
-        if ($privateKey !== '') {
-            $analysis = $cs->analyzePrivateKey($privateKey);
-            $secrets['public_key'] = $analysis['public_key'];
-            $secrets['algorithm'] = $analysis['algorithm'];
-            $secrets['bits'] = $analysis['bits'];
-            $secrets['key_secure'] = $analysis['key_secure'];
+    /**
+     * Public key and strength of an SSH key credential, derived on the fly
+     * for credentials saved before the metadata was stored.
+     *
+     * @return array{public_key: string, algorithm: string, bits: int, key_secure: bool|null}|null
+     */
+    private function sshInfo(Credential $model): ?array
+    {
+        if ($model->credential_type !== Credential::TYPE_SSH_KEY) {
+            return null;
+        }
+        $cs = $this->credentialService();
+        $secrets = $cs->getSecrets($model);
+        if (empty($secrets['public_key'])) {
+            $secrets = $cs->analyzePrivateKey((string)$secrets['private_key']) + $secrets;
         }
 
-        return $secrets;
+        return [
+            'public_key' => (string)($secrets['public_key'] ?? ''),
+            'algorithm' => (string)($secrets['algorithm'] ?? ''),
+            'bits' => (int)($secrets['bits'] ?? 0),
+            'key_secure' => isset($secrets['key_secure']) ? (bool)$secrets['key_secure'] : null,
+        ];
+    }
+
+    private function usage(Credential $model): CredentialUsage
+    {
+        /** @var CredentialUsageService $service */
+        $service = \Yii::$app->get('credentialUsageService');
+
+        return $service->forCredential($model, $this->viewerId());
+    }
+
+    /**
+     * @return array<array-key, mixed>
+     */
+    private function postedSecrets(): array
+    {
+        $secrets = \Yii::$app->request->post('secrets', []);
+
+        return is_array($secrets) ? $secrets : [];
+    }
+
+    private function viewerId(): ?int
+    {
+        $id = \Yii::$app->user->id;
+
+        return $id !== null ? (int)$id : null;
     }
 
     private function findModel(int $id): Credential
@@ -205,5 +193,21 @@ class CredentialController extends BaseController
             throw new NotFoundHttpException("Credential #{$id} not found.");
         }
         return $model;
+    }
+
+    private function credentialService(): CredentialService
+    {
+        /** @var CredentialService $service */
+        $service = \Yii::$app->get('credentialService');
+
+        return $service;
+    }
+
+    private function writeService(): CredentialWriteService
+    {
+        /** @var CredentialWriteService $service */
+        $service = \Yii::$app->get('credentialWriteService');
+
+        return $service;
     }
 }

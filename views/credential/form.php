@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\Credential $model */
-/** @var array $secrets  Always empty — never pre-populate secret fields */
+// Secret fields are never pre-populated: the form only ever sends new secrets.
 
 use app\models\Credential;
 use yii\helpers\Html;
@@ -36,7 +36,17 @@ $isEdit = !$model->isNewRecord;
         Credential::TYPE_USERNAME_PASSWORD => 'Username / Password',
         Credential::TYPE_VAULT => 'Vault Secret',
         Credential::TYPE_TOKEN => 'Token',
-    ], ['id' => 'credential-type']) ?>
+    ], ['id' => 'credential-type', 'data-original-type' => $isEdit ? (string)$model->getOldAttribute('credential_type') : '']) ?>
+
+    <?php if ($isEdit) : ?>
+        <div class="alert alert-info small" id="credential-type-change-notice" style="display:none">
+            The stored secret belongs to the current type. To change the type, enter the secret of the new type below; the stored secret is then replaced.
+        </div>
+    <?php endif; ?>
+
+    <?php if ($model->hasErrors('secrets')) : ?>
+        <div class="alert alert-danger" id="credential-secrets-error"><?= Html::encode($model->getFirstError('secrets')) ?></div>
+    <?php endif; ?>
 
     <?= $form->field($model, 'username', ['options' => ['id' => 'username-block', 'class' => 'mb-3']])
             ->textInput(['maxlength' => 128, 'autocomplete' => 'off'])
@@ -143,6 +153,8 @@ document.addEventListener('DOMContentLoaded', function () {
         '<?= Credential::TYPE_USERNAME_PASSWORD ?>': true,
     };
     var usernameBlock = document.getElementById('username-block');
+    var typeChangeNotice = document.getElementById('credential-type-change-notice');
+    var originalType = typeSelect.getAttribute('data-original-type') || '';
     function update() {
         var active = map[typeSelect.value];
         document.querySelectorAll('.secret-block').forEach(function (el) {
@@ -150,6 +162,9 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         if (usernameBlock) {
             usernameBlock.style.display = usernameVisibleFor[typeSelect.value] ? '' : 'none';
+        }
+        if (typeChangeNotice) {
+            typeChangeNotice.style.display = originalType !== '' && typeSelect.value !== originalType ? '' : 'none';
         }
     }
     typeSelect.addEventListener('change', update);

@@ -189,7 +189,7 @@ class JobLaunchService extends Component
 
     protected function buildRunnerPayload(\app\models\JobTemplate $template, \app\models\Job $job): string
     {
-        $credentialIds = array_map(static fn ($c) => (int)$c->id, $template->credentials);
+        $snapshot = $template->credentialSnapshot();
 
         return (string)json_encode([
             'template_id' => $template->id,
@@ -198,10 +198,12 @@ class JobLaunchService extends Component
             'inventory_id' => $template->inventory_id,
             // Primary credential FK — kept for API/UI back-compat.
             'credential_id' => $template->credential_id,
-            // All credentials attached to this template, in sort_order. The
-            // claim layer resolves this list into decrypted secrets before
-            // the runner sees it.
-            'credential_ids' => $credentialIds,
+            // All credentials in precedence order: primary first, then the
+            // additional ones by sort_order. The claim layer resolves them
+            // into decrypted secrets before the runner sees them.
+            'credential_ids' => array_column($snapshot, 'id'),
+            // The same credentials without secrets, as launched.
+            \app\models\Job::PAYLOAD_CREDENTIAL_SNAPSHOT => $snapshot,
             'playbook' => $template->playbook,
             'extra_vars' => $job->extra_vars ?? $template->extra_vars,
             'limit' => $job->limit ?? $template->limit,

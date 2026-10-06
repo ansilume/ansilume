@@ -85,6 +85,7 @@ class JobController extends BaseController
             'tasks' => $tasks,
             'hostSummaries' => $hostSummaries,
             'artifacts' => $artifacts,
+            'jobCredentials' => $this->credentialResolver()->describe($job->decodedRunnerPayload()),
         ]);
     }
 
@@ -287,6 +288,14 @@ class JobController extends BaseController
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
             throw new ForbiddenHttpException('You do not have permission to modify this resource.');
         }
+    }
+
+    private function credentialResolver(): \app\services\JobCredentialResolver
+    {
+        /** @var \app\services\JobCredentialResolver $resolver */
+        $resolver = \Yii::$app->get('jobCredentialResolver');
+
+        return $resolver;
     }
 
     private function findModel(int $id): Job

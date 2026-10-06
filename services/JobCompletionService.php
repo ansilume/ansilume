@@ -124,9 +124,36 @@ class JobCompletionService extends Component
             return;
         }
 
+        $this->finishUnsuccessfully($job, Job::STATUS_TIMED_OUT, []);
+    }
+
+    /**
+     * The job was claimed but cannot run, for example because one of its
+     * credentials was deleted or cannot be decrypted. Ends it as failed,
+     * with the reason in the job log, so it never stays "running" and
+     * workflows, webhooks and notifications see the failure.
+     */
+    public function failBeforeExecution(Job $job, string $reason): void
+    {
+        if ($job->isFinished()) {
+            return;
+        }
+
+        $this->appendSystemLog($job, $reason);
+        $this->finishUnsuccessfully($job, Job::STATUS_FAILED, ['reason' => 'pre_execution_failure']);
+    }
+
+    /**
+     * Terminal transition for jobs that end without the runner's exit code:
+     * exit code -1, audit, failure webhook, notifications, workflow advance.
+     *
+     * @param array<string, mixed> $auditExtra
+     */
+    private function finishUnsuccessfully(Job $job, string $status, array $auditExtra): void
+    {
         $job->exit_code = -1;
         $job->finished_at = time();
-        $job->status = Job::STATUS_TIMED_OUT;
+        $job->status = $status;
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(
@@ -134,7 +161,7 @@ class JobCompletionService extends Component
             'job',
             $job->id,
             null,
-            ['exit_code' => -1, 'status' => Job::STATUS_TIMED_OUT]
+            ['exit_code' => -1, 'status' => $status] + $auditExtra
         );
 
         /** @var WebhookService $ws */

@@ -49,9 +49,22 @@ class ScrutinizerConfigTest extends TestCase
         $this->assertSame(['php-scrutinizer-run'], self::commands($config['build']['nodes']['analysis']['tests']['override']));
     }
 
+    /**
+     * Scrutinizer's web UI config enables a "tests" node that runs
+     * auto-detected PHPUnit without the database setup. Only a node of the
+     * same name in this file replaces it.
+     */
+    public function testTheTestNodeReplacesTheWebConfigsTestsNode(): void
+    {
+        $nodes = $this->config()['build']['nodes'];
+
+        $this->assertSame(['analysis', 'tests'], array_keys($nodes));
+        $this->assertContains('php yii migrate --interactive=0', self::commands($nodes['tests']['tests']['before']));
+    }
+
     public function testPsr12RunsWithTheProjectsPhpcsAndTheStyleSuiteScope(): void
     {
-        $commands = self::commands($this->config()['build']['nodes']['phpunit']['tests']['override']);
+        $commands = self::commands($this->config()['build']['nodes']['tests']['tests']['override']);
         $phpcs = array_values(array_filter($commands, static fn (string $c): bool => str_starts_with($c, 'vendor/bin/phpcs ')));
 
         $this->assertCount(1, $phpcs);

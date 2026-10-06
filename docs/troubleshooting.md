@@ -79,6 +79,25 @@ script that the repository's `ansible.cfg` names. What you see instead:
 Jobs are not affected: the runner decrypts with the job template's vault
 credential.
 
+## Job aborted before execution: credentials could not be used
+
+**Symptom:** A job fails right after it was claimed, and its log starts with
+`Job aborted before execution: 1 credential(s) could not be used.`
+
+**Cause:** The server could not hand a credential of the job to the runner.
+The log names each one:
+
+- **"no longer exists"**: the credential was deleted after the job was
+  launched. Attach a replacement to the job template and relaunch.
+- **"cannot be decrypted"**: the secret was encrypted with a different
+  `APP_SECRET_KEY`, usually because the key changed. Restore the old key, or
+  enter the secret again on the credential page, then relaunch. The
+  credential page flags such a credential as "Cannot be decrypted".
+
+The job never started, so no credential was used and nothing ran on the
+target hosts. The project's SCM credential is checked the same way, shown
+as `(scm)` in the message.
+
 ## Runners show "unknown" name/group
 
 **Symptom:** Runner logs show `Runner 'unknown' started. Group: 'unknown'.`

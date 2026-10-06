@@ -4,12 +4,23 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\Credential $model */
-/** @var array|null $sshInfo  SSH key metadata or null for non-SSH credentials */
+/** @var string $secretStatus  one of CredentialService::SECRET_STATUS_* */
+/** @var array{public_key: string, algorithm: string, bits: int, key_secure: bool|null}|null $sshInfo  SSH key metadata, null for other types or unusable secrets */
+/** @var app\components\CredentialUsage $usage */
 
+use app\components\CredentialSecretPolicy;
+use app\helpers\ConfirmHelper;
 use app\models\Credential;
+use app\services\CredentialService;
 use yii\helpers\Html;
+use yii\helpers\Url;
 
 $this->title = $model->name;
+$requiredKeys = CredentialSecretPolicy::requiredKeys($model->credential_type);
+$secretLabel = $requiredKeys !== [] ? CredentialSecretPolicy::label($requiredKeys[0]) : 'Secret';
+$deleteConfirm = $usage->isInUse()
+    ? $usage->summary() . ' Deleting it detaches it from all of them, and jobs that need it will fail. Delete anyway?'
+    : 'Delete credential "' . $model->name . '"?';
 ?>
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
@@ -25,13 +36,27 @@ $this->title = $model->name;
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
         <?php endif; ?>
         <?php if (\Yii::$app->user?->can('credential.delete')) : ?>
-            <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this credential?')">
-                <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
-                <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
+            <form method="post" action="<?= Html::encode(Url::to(['delete', 'id' => $model->id])) ?>" style="display:inline" id="credential-delete-form"
+                  onsubmit="<?= ConfirmHelper::attribute($deleteConfirm) ?>">
+                <input type="hidden" name="<?= Html::encode(\Yii::$app->request->csrfParam) ?>" value="<?= Html::encode(\Yii::$app->request->getCsrfToken()) ?>">
+                <?php if ($usage->isInUse()) : ?>
+                    <input type="hidden" name="force" value="1">
+                <?php endif; ?>
+                <button type="submit" class="btn btn-outline-danger ms-1"><?= Html::encode($usage->isInUse() ? 'Delete anyway' : 'Delete') ?></button>
             </form>
         <?php endif; ?>
     </div>
 </div>
+
+<?php if ($secretStatus === CredentialService::SECRET_STATUS_INCOMPLETE) : ?>
+    <div class="alert alert-warning" id="credential-secret-status" data-status="<?= Html::encode($secretStatus) ?>">
+        <?= Html::encode("No {$secretLabel} is stored for this credential, so jobs get none. Edit the credential and enter the " . strtolower($secretLabel) . '.') ?>
+    </div>
+<?php elseif ($secretStatus === CredentialService::SECRET_STATUS_UNDECRYPTABLE) : ?>
+    <div class="alert alert-danger" id="credential-secret-status" data-status="<?= Html::encode($secretStatus) ?>">
+        <?= Html::encode('The stored secret cannot be decrypted, usually because APP_SECRET_KEY changed after it was saved. Jobs that use this credential fail before they start. Edit the credential and enter the ' . strtolower($secretLabel) . ' again.') ?>
+    </div>
+<?php endif; ?>
 
 <div class="row g-3">
     <div class="col-md-5">
@@ -45,7 +70,7 @@ $this->title = $model->name;
                         <dt class="col-5">Algorithm</dt>
                         <dd class="col-7">
                             <?php if ($sshInfo['algorithm'] && $sshInfo['algorithm'] !== 'unknown') : ?>
-                                <code><?= Html::encode(strtoupper($sshInfo['algorithm'])) ?><?= $sshInfo['bits'] ? '-' . $sshInfo['bits'] : '' ?></code>
+                                <code><?= Html::encode(strtoupper($sshInfo['algorithm'])) ?><?= Html::encode($sshInfo['bits'] ? '-' . $sshInfo['bits'] : '') ?></code>
                                 <?php if ($sshInfo['key_secure'] === false) : ?>
                                     <span class="badge text-bg-danger ms-1">Insecure</span>
                                 <?php elseif ($sshInfo['key_secure'] === null) : ?>
@@ -60,14 +85,31 @@ $this->title = $model->name;
                     <dt class="col-5">Username</dt>
                     <dd class="col-7"><?= Html::encode($model->username) ?></dd>
                     <?php endif; ?>
-                    <dt class="col-5">Private Key</dt>
-                    <dd class="col-7"><span class="text-muted small">***REDACTED***</span></dd>
+                    <?php if ($model->credential_type === Credential::TYPE_TOKEN) : ?>
+                    <dt class="col-5">Env var</dt>
+                    <dd class="col-7" id="credential-env-var">
+                        <code><?= Html::encode($model->resolveTokenEnvVarName()) ?></code>
+                        <?php if (trim((string)$model->env_var_name) === '') : ?>
+                            <span class="text-muted small">(default)</span>
+                        <?php endif; ?>
+                    </dd>
+                    <?php endif; ?>
+                    <dt class="col-5"><?= Html::encode($secretLabel) ?></dt>
+                    <dd class="col-7" id="credential-secret">
+                        <?php if ($secretStatus === CredentialService::SECRET_STATUS_OK) : ?>
+                            <span class="text-muted small">***REDACTED***</span>
+                        <?php elseif ($secretStatus === CredentialService::SECRET_STATUS_INCOMPLETE) : ?>
+                            <span class="badge text-bg-warning">Missing</span>
+                        <?php else : ?>
+                            <span class="badge text-bg-danger">Cannot be decrypted</span>
+                        <?php endif; ?>
+                    </dd>
                     <dt class="col-5">Created by</dt>
                     <dd class="col-7"><?= Html::encode($model->creator->username ?? '—') ?></dd>
                     <dt class="col-5">Created</dt>
-                    <dd class="col-7"><?= date('Y-m-d H:i', $model->created_at) ?></dd>
+                    <dd class="col-7"><?= Html::encode(date('Y-m-d H:i', $model->created_at)) ?></dd>
                     <dt class="col-5">Updated</dt>
-                    <dd class="col-7"><?= date('Y-m-d H:i', $model->updated_at) ?></dd>
+                    <dd class="col-7"><?= Html::encode(date('Y-m-d H:i', $model->updated_at)) ?></dd>
                 </dl>
             </div>
         </div>
@@ -77,6 +119,7 @@ $this->title = $model->name;
             <div class="card-body"><?= nl2br(Html::encode($model->description)) ?></div>
         </div>
         <?php endif; ?>
+        <?= $this->render('_usage', ['usage' => $usage]) ?>
     </div>
 
     <?php if ($model->credential_type === Credential::TYPE_SSH_KEY) : ?>
@@ -101,6 +144,10 @@ $this->title = $model->name;
                 </div>
                 <div class="card-footer text-muted small">
                     Add this public key as a Deploy Key on GitHub / GitLab, or to <code>~/.ssh/authorized_keys</code> on the target host.
+                </div>
+            <?php elseif ($secretStatus !== CredentialService::SECRET_STATUS_OK) : ?>
+                <div class="card-body text-muted small">
+                    Public key not available until a usable private key is stored.
                 </div>
             <?php else : ?>
                 <div class="card-body text-muted small">

@@ -129,6 +129,62 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.5.2 or older: credentials
+
+**Jobs no longer run without a credential they need.** A credential that
+was deleted after a job was launched, or whose secret cannot be decrypted,
+used to be skipped: the job ran without it, for example as the wrong user or
+without its vault password. Such a job now fails before it starts. The job
+log names the credential and what to do; see
+[troubleshooting.md](troubleshooting.md#job-aborted-before-execution-credentials-could-not-be-used).
+
+**The primary credential comes first.** Jobs applied a template's
+credentials in the order the credentials were created, not primary first.
+An additional SSH key, password or vault credential that was older than the
+primary one took `--user`, `--private-key` or `--vault-password-file`. Jobs
+now apply the primary credential first, then the additional ones as listed
+on the template. Check templates that combine several credentials of the
+same kind. Changing `credential_id` over the API also left the old primary
+attached; it is now detached.
+
+**SSH passwords reach Ansible.** Username/password credentials only set
+`ANSIBLE_SSH_PASS`, which ansible-core never reads, so password logins
+failed. The runner now hands the password over in a private file. The fix
+runs on the runner, so update the runner image as well: `docker compose
+pull` covers the bundled runners, and runners on other hosts need the new
+`ansilume-runner` image.
+
+**Credentials need their secret.** Creating a credential without the secret
+of its type, or changing its type without entering the new type's secret,
+is rejected in the form and the API with `422`. Existing credentials without
+a secret keep working as before, and their page flags the secret as
+"Missing". A credential whose secret cannot be decrypted, for example after
+`APP_SECRET_KEY` changed, is flagged as well.
+
+**Deleting a credential in use needs a second confirmation.** The
+credential page lists where a credential is used. **API contract change:**
+`DELETE /api/v1/credentials/{id}` answers `409` with `error.used_by` while a
+job template, a project or a waiting job uses the credential. Add
+`?force=1` to delete it anyway. Scripts that delete credentials must handle
+the `409` or pass `force=1`.
+
+Other API changes:
+
+- `POST /api/v1/jobs` accepts `job_template_id`, as documented. `template_id`
+  still works. Without either, the answer is now `422` instead of `404`.
+- `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs` and the cancel endpoint
+  return the job's `credentials`. Job templates return `credential_ids`,
+  `credentials` and `runner_group_id`, and accept `credential_ids`.
+- Credentials return and accept `env_var_name`. `GET /api/v1/credentials/{id}`
+  adds `secret_status` and `used_by`.
+- `DELETE /api/v1/job-templates/{id}` is a soft delete, like in the web UI.
+  Jobs keep their link to the template.
+
+The audit log now records which runner started a job and with which
+credentials, which fields of a credential changed and whether its secret
+was replaced, and which credentials were attached to or detached from a
+template. None of these entries contain secrets.
+
 ## After updating from 2.5.1 or older: vault content stays encrypted on the server
 
 **"Parse Inventory" and lint no longer use a repository's vault settings.**

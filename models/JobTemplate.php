@@ -40,7 +40,6 @@ use yii\db\ActiveRecord;
  * @property Project     $project
  * @property Inventory   $inventory
  * @property Credential|null $credential
- * @property Credential[] $credentials
  * @property JobTemplateCredential[] $jobTemplateCredentials
  * @property RunnerGroup|null $runnerGroup
  * @property ApprovalRule|null $approvalRule
@@ -111,6 +110,14 @@ class JobTemplate extends ActiveRecord
             [['survey_fields'], 'validateJson'],
             [['trigger_token'], 'string', 'max' => 64],
             [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'approval_rule_id', 'created_by'], 'integer'],
+            [
+                ['credential_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => Credential::class,
+                'targetAttribute' => ['credential_id' => 'id'],
+                'message' => 'The selected credential does not exist.',
+            ],
         ];
     }
 
@@ -147,21 +154,49 @@ class JobTemplate extends ActiveRecord
     }
 
     /**
-     * All credentials linked to this template via the pivot table,
-     * ordered by sort_order (so single-slot ansible args like --user or
-     * --private-key resolve to the lowest-order credential first).
+     * Every credential of this template in precedence order: the primary
+     * credential first, then the additional ones by pivot sort_order. For
+     * single-slot ansible arguments (--user, --private-key,
+     * --vault-password-file) the first credential that provides one wins.
+     *
+     * Regression: the former credentials relation sorted by credential id,
+     * so the documented order never applied.
+     *
+     * @return list<Credential>
      */
-    public function getCredentials(): \yii\db\ActiveQuery
+    public function orderedCredentials(): array
     {
-        return $this->hasMany(Credential::class, ['id' => 'credential_id'])
-            ->viaTable('{{%job_template_credential}}', ['job_template_id' => 'id'], function (\yii\db\ActiveQuery $q): void {
-                $q->orderBy(['sort_order' => SORT_ASC, 'credential_id' => SORT_ASC]);
-            })
-            ->orderBy(['{{%credential}}.id' => SORT_ASC]);
+        $ordered = [];
+        if ($this->credential !== null) {
+            $ordered[$this->credential->id] = $this->credential;
+        }
+        foreach ($this->jobTemplateCredentials as $row) {
+            $credential = $row->credential;
+            if ($credential !== null && !isset($ordered[$credential->id])) {
+                $ordered[$credential->id] = $credential;
+            }
+        }
+
+        return array_values($ordered);
     }
 
     /**
-     * Pivot rows (for sort_order access during form rendering).
+     * Non-secret description of the credentials, in precedence order.
+     *
+     * @return list<array{id: int, name: string, credential_type: string, role: string}>
+     */
+    public function credentialSnapshot(): array
+    {
+        return array_map(fn (Credential $credential): array => [
+            'id' => (int)$credential->id,
+            'name' => (string)$credential->name,
+            'credential_type' => (string)$credential->credential_type,
+            'role' => (int)$credential->id === (int)$this->credential_id ? Credential::ROLE_PRIMARY : Credential::ROLE_ADDITIONAL,
+        ], $this->orderedCredentials());
+    }
+
+    /**
+     * Pivot rows, the precedence source for additional credentials.
      */
     public function getJobTemplateCredentials(): \yii\db\ActiveQuery
     {

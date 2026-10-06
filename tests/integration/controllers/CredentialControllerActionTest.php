@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\components\CredentialUsage;
 use app\controllers\CredentialController;
 use app\models\AuditLog;
 use app\models\Credential;
+use app\services\CredentialService;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
@@ -19,6 +21,16 @@ use yii\web\Response;
  */
 class CredentialControllerActionTest extends WebControllerTestCase
 {
+    /**
+     * Some tests swap in a stub credentialService. Without this the stub
+     * stayed on Yii::$app for every later test in the process.
+     */
+    protected function tearDown(): void
+    {
+        \Yii::$app->set('credentialService', ['class' => CredentialService::class]);
+        parent::tearDown();
+    }
+
     // ── actionIndex() ────────────────────────────────────────────────────────
 
     public function testIndexRendersDataProvider(): void
@@ -233,9 +245,8 @@ class CredentialControllerActionTest extends WebControllerTestCase
         /** @var \app\services\CredentialService $cs */
         $cs = \Yii::$app->get('credentialService');
         $secrets = $cs->getSecrets($stored);
-        $this->assertStringNotContainsString("\r", $secrets['private_key']);
-        $this->assertStringContainsString('abc', $secrets['private_key']);
-        $this->assertStringContainsString('def', $secrets['private_key']);
+        // Regression: CR was replaced before CRLF, so every CRLF became a blank line.
+        $this->assertSame("-----BEGIN FAKE KEY-----\nabc\ndef\n-----END FAKE KEY-----", $secrets['private_key']);
     }
 
     public function testCreateInvalidInputRendersFormWithErrors(): void
@@ -446,7 +457,255 @@ class CredentialControllerActionTest extends WebControllerTestCase
         $ctrl->actionDelete(9999999);
     }
 
+    // ── Secret rules, usage and the guarded delete ───────────────────────────
+
+    /**
+     * Regression: the form stored a credential with an empty secret, so jobs
+     * ran without the token, password or key and failed far from the cause.
+     */
+    public function testCreateWithoutTheSecretRendersTheFormWithASecretsError(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $this->setPost([
+            'Credential' => ['name' => 'unit-test-blank-token', 'credential_type' => Credential::TYPE_TOKEN],
+            'secrets' => ['token' => '   '],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionCreate();
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertSame('Token is required for Token credentials.', $ctrl->capturedParams['model']->getFirstError('secrets'));
+        $this->assertNull(Credential::findOne(['name' => 'unit-test-blank-token']));
+    }
+
+    public function testCreateIgnoresASecretsFieldThatIsNotAnArray(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $this->setPost([
+            'Credential' => ['name' => 'unit-test-scalar-secrets', 'credential_type' => Credential::TYPE_TOKEN],
+            'secrets' => 'tok',
+        ]);
+
+        $ctrl = $this->makeController();
+
+        $this->assertSame('rendered:form', $ctrl->actionCreate());
+        $this->assertTrue($ctrl->capturedParams['model']->hasErrors('secrets'));
+    }
+
+    /**
+     * Regression: changing the type kept the old type's secret, for example a
+     * token credential turned into a vault credential without a vault password.
+     */
+    public function testATypeChangeWithoutTheNewSecretIsRejected(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->storedCredential($user, Credential::TYPE_TOKEN, ['token' => 'tok-kept']);
+        $this->setPost([
+            'Credential' => ['name' => $cred->name, 'credential_type' => Credential::TYPE_VAULT],
+            'secrets' => ['vault_password' => ''],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$cred->id);
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertSame('Changing the type to Vault Secret requires a new vault password.', $ctrl->capturedParams['model']->getFirstError('secrets'));
+        $cred->refresh();
+        $this->assertSame(Credential::TYPE_TOKEN, $cred->credential_type);
+        $this->assertSame(['token' => 'tok-kept'], $this->credentialService()->getSecrets($cred));
+    }
+
+    public function testUpdateAuditsWhatChangedButNeverTheSecret(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->storedCredential($user, Credential::TYPE_TOKEN, ['token' => 'tok-before']);
+        $this->setPost([
+            'Credential' => ['name' => $cred->name, 'credential_type' => Credential::TYPE_TOKEN, 'description' => 'rotated'],
+            'secrets' => ['token' => 'tok-after'],
+        ]);
+
+        $this->makeController()->actionUpdate((int)$cred->id);
+
+        $audit = AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_CREDENTIAL_UPDATED, 'object_id' => $cred->id])
+            ->orderBy(['id' => SORT_DESC])
+            ->one();
+        $this->assertNotNull($audit);
+        $meta = json_decode((string)$audit->metadata, true);
+        $this->assertIsArray($meta);
+        $this->assertTrue($meta['secret_changed']);
+        $this->assertSame(['description'], $meta['changed_fields']);
+        $this->assertStringNotContainsString('tok-', (string)$audit->metadata);
+    }
+
+    /**
+     * Regression: an SSH key credential whose secret could not be decrypted
+     * (APP_SECRET_KEY changed) made the credential page fail with a 500.
+     */
+    public function testViewOfAnUndecryptableSshKeyShowsTheStatusInsteadOfFailing(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->createCredential($user->id, Credential::TYPE_SSH_KEY);
+        $cred->secret_data = 'not-a-ciphertext';
+        $cred->save(false);
+
+        $ctrl = $this->makeController();
+
+        $this->assertSame('rendered:view', $ctrl->actionView((int)$cred->id));
+        $this->assertSame(CredentialService::SECRET_STATUS_UNDECRYPTABLE, $ctrl->capturedParams['secretStatus']);
+        $this->assertNull($ctrl->capturedParams['sshInfo']);
+    }
+
+    public function testViewDerivesThePublicKeyOfAKeyStoredWithoutIt(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $pair = $this->credentialService()->generateSshKeyPair();
+        $cred = $this->createCredential($user->id, Credential::TYPE_SSH_KEY);
+        $this->credentialService()->storeSecrets($cred, ['private_key' => $pair['private_key']]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$cred->id);
+
+        $this->assertSame(CredentialService::SECRET_STATUS_OK, $ctrl->capturedParams['secretStatus']);
+        $this->assertIsArray($ctrl->capturedParams['sshInfo']);
+        $this->assertSame(trim($pair['public_key']), trim($ctrl->capturedParams['sshInfo']['public_key']));
+        $this->assertSame('ed25519', $ctrl->capturedParams['sshInfo']['algorithm']);
+        $this->assertTrue($ctrl->capturedParams['sshInfo']['key_secure']);
+    }
+
+    public function testViewOfAUsableTokenCredentialHasNoSshInfo(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->storedCredential($user, Credential::TYPE_TOKEN, ['token' => 'tok-view']);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$cred->id);
+
+        $this->assertSame(CredentialService::SECRET_STATUS_OK, $ctrl->capturedParams['secretStatus']);
+        $this->assertNull($ctrl->capturedParams['sshInfo']);
+    }
+
+    public function testViewPassesWhereTheCredentialIsUsed(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->createCredential($user->id, Credential::TYPE_TOKEN);
+        $template = $this->templateUsing($cred, (int)$user->id);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$cred->id);
+
+        $usage = $ctrl->capturedParams['usage'];
+        $this->assertInstanceOf(CredentialUsage::class, $usage);
+        $this->assertSame([(int)$template->id], array_column($usage->jobTemplates, 'id'));
+        $this->assertSame(CredentialService::SECRET_STATUS_INCOMPLETE, $ctrl->capturedParams['secretStatus']);
+    }
+
+    /**
+     * Regression: deleting a credential in use silently detached it from its
+     * job templates, whose next jobs then ran without it.
+     */
+    public function testDeletingACredentialInUseNeedsTheForcedDelete(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->createCredential($user->id, Credential::TYPE_TOKEN);
+        $template = $this->templateUsing($cred, (int)$user->id);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionDelete((int)$cred->id);
+
+        $this->assertSame(['view', 'id' => (int)$cred->id], $ctrl->capturedRedirect);
+        $this->assertNotNull(Credential::findOne($cred->id));
+        $template->refresh();
+        $this->assertSame($cred->id, $template->credential_id);
+        $flash = (string)\Yii::$app->session->getFlash('danger');
+        $this->assertStringContainsString('is in use by 1 job template(s).', $flash);
+    }
+
+    public function testTheForcedDeleteDetachesTheCredentialAndAudits(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->createCredential($user->id, Credential::TYPE_TOKEN);
+        $template = $this->templateUsing($cred, (int)$user->id);
+        $this->setPost(['force' => '1']);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionDelete((int)$cred->id);
+
+        $this->assertSame('index', $ctrl->capturedRedirect[0]);
+        $this->assertNull(Credential::findOne($cred->id));
+        $template->refresh();
+        $this->assertNull($template->credential_id);
+        $this->assertStringContainsString('detached', (string)\Yii::$app->session->getFlash('success'));
+        $audit = AuditLog::find()->where(['action' => AuditLog::ACTION_CREDENTIAL_DELETED, 'object_id' => $cred->id])->one();
+        $this->assertNotNull($audit);
+        $meta = json_decode((string)$audit->metadata, true);
+        $this->assertIsArray($meta);
+        $this->assertTrue($meta['forced']);
+    }
+
+    public function testOnlyForceOneForcesTheDelete(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $cred = $this->createCredential($user->id, Credential::TYPE_TOKEN);
+        $this->templateUsing($cred, (int)$user->id);
+        $this->setPost(['force' => 'yes']);
+
+        $this->makeController()->actionDelete((int)$cred->id);
+
+        $this->assertNotNull(Credential::findOne($cred->id));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * @param array<string, string> $secrets
+     */
+    private function storedCredential(\app\models\User $owner, string $type, array $secrets): Credential
+    {
+        $credential = new Credential();
+        $credential->name = 'web-cred-' . uniqid('', true);
+        $credential->credential_type = $type;
+        $credential->created_by = (int)$owner->id;
+        /** @var \app\services\CredentialWriteService $writer */
+        $writer = \Yii::$app->get('credentialWriteService');
+        $this->assertTrue($writer->create($credential, $secrets));
+
+        return $credential;
+    }
+
+    private function templateUsing(Credential $credential, int $userId): \app\models\JobTemplate
+    {
+        $template = $this->createJobTemplate(
+            (int)$this->createProject($userId)->id,
+            (int)$this->createInventory($userId)->id,
+            (int)$this->createRunnerGroup($userId)->id,
+            $userId
+        );
+        $template->credential_id = $credential->id;
+        $template->save(false);
+
+        return $template;
+    }
+
+    private function credentialService(): CredentialService
+    {
+        /** @var CredentialService $service */
+        $service = \Yii::$app->get('credentialService');
+
+        return $service;
+    }
 
     /**
      * Anonymous CredentialController subclass that captures render/redirect

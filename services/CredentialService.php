@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\CredentialSecretPolicy;
 use app\models\Credential;
 use yii\base\Component;
 use yii\base\Exception;
@@ -17,6 +18,10 @@ use yii\base\Exception;
  */
 class CredentialService extends Component
 {
+    public const SECRET_STATUS_OK = 'ok';
+    public const SECRET_STATUS_INCOMPLETE = 'incomplete';
+    public const SECRET_STATUS_UNDECRYPTABLE = 'undecryptable';
+
     /**
      * Encrypt and store the secret fields for a credential.
      *
@@ -25,8 +30,37 @@ class CredentialService extends Component
      */
     public function storeSecrets(Credential $credential, array $secrets): bool
     {
-        $credential->secret_data = $this->encrypt(json_encode($secrets, JSON_THROW_ON_ERROR));
+        $credential->secret_data = $this->encryptSecrets($secrets);
         return $credential->save();
+    }
+
+    /**
+     * Encrypt a secret blob for credential.secret_data without saving.
+     *
+     * @param array<string, mixed> $secrets
+     */
+    public function encryptSecrets(array $secrets): string
+    {
+        return $this->encrypt(json_encode($secrets, JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * Whether the stored secret can be used: SECRET_STATUS_OK,
+     * SECRET_STATUS_INCOMPLETE (the secret its type needs is missing, as in
+     * credentials saved before validation existed) or
+     * SECRET_STATUS_UNDECRYPTABLE (for example after APP_SECRET_KEY changed).
+     */
+    public function secretStatus(Credential $credential): string
+    {
+        try {
+            $secrets = $this->getSecrets($credential);
+        } catch (\Exception) {
+            return self::SECRET_STATUS_UNDECRYPTABLE;
+        }
+        $type = (string)$credential->credential_type;
+        $missing = CredentialSecretPolicy::missing($type, CredentialSecretPolicy::provided($type, $secrets));
+
+        return $missing === [] ? self::SECRET_STATUS_OK : self::SECRET_STATUS_INCOMPLETE;
     }
 
     /**

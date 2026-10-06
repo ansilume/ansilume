@@ -16,13 +16,16 @@ build:
     # analysis commands, which include phpcs-run: finding no phpcs of its
     # own, phpcs-run installs phpcs 3.7.1, which Composer refuses because of a
     # security advisory (GHSA-hmqg-cxww-wqhq), so every build failed with
-    # exit code 127. PSR-12 runs in the phpunit node with the phpcs from
+    # exit code 127. PSR-12 runs in the tests node with the phpcs from
     # require-dev instead.
     analysis:
       tests:
         override:
           - php-scrutinizer-run
-    phpunit:
+    # Named "tests" on purpose: the repository config in Scrutinizer's web UI
+    # enables a "tests" node with auto-detected commands, which run PHPUnit
+    # without the database below. A node of the same name here replaces it.
+    tests:
       tests:
         before:
           - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\nDB_TEST_NAME=ansilume_test\nREDIS_HOST=127.0.0.1\nAPP_SECRET_KEY=scrutinizer-test-key-that-is-32-bytes!\n' > .env

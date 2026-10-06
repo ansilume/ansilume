@@ -76,6 +76,39 @@ class JobControllerActionTest extends WebControllerTestCase
         };
     }
 
+    // ─── view ───────────────────────────────────────────────────────
+
+    /**
+     * The job page lists the credentials as launched: names from the launch
+     * snapshot, and a credential deleted since then is flagged, not dropped.
+     */
+    public function testViewListsTheCredentialsAsLaunched(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($this->createProject($user->id)->id, $this->createInventory($user->id)->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id, \app\models\Job::STATUS_SUCCEEDED);
+        $live = $this->createCredential($user->id, \app\models\Credential::TYPE_TOKEN);
+        $job->runner_payload = (string)json_encode([
+            'credential_id' => $live->id,
+            'credential_ids' => [$live->id, 999999],
+            \app\models\Job::PAYLOAD_CREDENTIAL_SNAPSHOT => [
+                ['id' => $live->id, 'name' => 'deploy-token', 'credential_type' => 'token', 'role' => 'primary'],
+                ['id' => 999999, 'name' => 'removed-key', 'credential_type' => 'ssh_key', 'role' => 'additional'],
+            ],
+        ]);
+        $job->save(false);
+
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:view', $ctrl->actionView((int)$job->id));
+
+        $this->assertSame([
+            ['id' => (int)$live->id, 'name' => 'deploy-token', 'credential_type' => 'token', 'role' => 'primary', 'deleted' => false],
+            ['id' => 999999, 'name' => 'removed-key', 'credential_type' => 'ssh_key', 'role' => 'additional', 'deleted' => true],
+        ], $ctrl->capturedParams['jobCredentials']);
+    }
+
     // ─── artifact-content ───────────────────────────────────────────
 
     public function testArtifactContentReturnsJsonForTextFile(): void

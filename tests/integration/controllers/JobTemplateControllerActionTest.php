@@ -99,6 +99,35 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertSame($tpl->id, $ctrl->capturedParams['model']->id);
     }
 
+    public function testViewAndLaunchListTheCredentialsInPrecedenceOrder(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $tpl = $this->makeTemplate($user->id);
+        $older = $this->createCredential($user->id, \app\models\Credential::TYPE_TOKEN);
+        $primary = $this->createCredential($user->id, \app\models\Credential::TYPE_SSH_KEY);
+        $tpl->credential_id = $primary->id;
+        $tpl->save(false);
+        \Yii::$app->db->createCommand()->insert('{{%job_template_credential}}', [
+            'job_template_id' => $tpl->id,
+            'credential_id' => $older->id,
+            'sort_order' => 0,
+        ])->execute();
+        $expected = [
+            ['id' => (int)$primary->id, 'name' => $primary->name, 'credential_type' => \app\models\Credential::TYPE_SSH_KEY, 'role' => \app\models\Credential::ROLE_PRIMARY],
+            ['id' => (int)$older->id, 'name' => $older->name, 'credential_type' => \app\models\Credential::TYPE_TOKEN, 'role' => \app\models\Credential::ROLE_ADDITIONAL],
+        ];
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$tpl->id);
+        $this->assertSame($expected, $ctrl->capturedParams['attachedCredentials']);
+
+        $this->setQueryParams(['id' => (string)$tpl->id]);
+        $launch = $this->makeController();
+        $launch->actionLaunch();
+        $this->assertSame($expected, $launch->capturedParams['attachedCredentials']);
+    }
+
     public function testViewThrowsNotFound(): void
     {
         $user = $this->createUser();
@@ -200,6 +229,95 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
 
         $this->assertSame('rendered:form', $result);
         $this->assertTrue($ctrl->capturedParams['model']->hasErrors());
+    }
+
+    /**
+     * @param array<string, mixed> $extra
+     * @return array<string, mixed>
+     */
+    private function templatePost(\app\models\User $user, string $name, array $extra = []): array
+    {
+        return [
+            'JobTemplate' => [
+                'name' => $name,
+                'project_id' => $this->createProject($user->id)->id,
+                'inventory_id' => $this->createInventory($user->id)->id,
+                'runner_group_id' => $this->createRunnerGroup($user->id)->id,
+                'playbook' => 'site.yml',
+                'verbosity' => 0,
+                'forks' => 5,
+                'timeout_minutes' => 60,
+                'become' => 0,
+                'become_method' => 'sudo',
+                'become_user' => 'root',
+            ] + $extra,
+        ];
+    }
+
+    public function testCreateStoresTheCheckedCredentialsInFormOrder(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $primary = $this->createCredential($user->id, \app\models\Credential::TYPE_SSH_KEY);
+        $second = $this->createCredential($user->id);
+        $first = $this->createCredential($user->id, \app\models\Credential::TYPE_VAULT);
+        $this->setPost($this->templatePost($user, 'tpl-creds', ['credential_id' => $primary->id]) + [
+            'credential_ids' => [(string)$first->id, (string)$second->id],
+        ]);
+
+        $this->makeController()->actionCreate();
+
+        $stored = JobTemplate::findOne(['name' => 'tpl-creds']);
+        $this->assertNotNull($stored);
+        $this->assertSame(
+            [$primary->id, $first->id, $second->id],
+            array_map(static fn (\app\models\Credential $c): int => (int)$c->id, $stored->orderedCredentials())
+        );
+    }
+
+    public function testAnUnknownCredentialReRendersTheFormWithTheSelection(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $known = $this->createCredential($user->id);
+        $this->setPost($this->templatePost($user, 'tpl-bad-creds') + ['credential_ids' => [(string)$known->id, '999999999']]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionCreate();
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertSame('Credential #999999999 does not exist.', $ctrl->capturedParams['model']->getFirstError('credential_ids'));
+        $this->assertSame([$known->id, 999999999], $ctrl->capturedParams['selectedCredentialIds']);
+        $this->assertNull(JobTemplate::findOne(['name' => 'tpl-bad-creds']));
+    }
+
+    public function testUncheckingEveryCredentialDetachesTheAdditionalOnes(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $template = $this->makeTemplate($user->id);
+        $extra = $this->createCredential($user->id);
+        \Yii::$app->get('jobTemplateCredentialService')->saveWithCredentials($template, [$extra->id]);
+        $this->setPost(['JobTemplate' => ['description' => 'no extras any more']]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionUpdate($template->id);
+
+        $this->assertSame([], \Yii::$app->get('jobTemplateCredentialService')->additionalIds(JobTemplate::findOne($template->id)));
+    }
+
+    public function testTheFormShowsTheStoredAdditionalCredentials(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $template = $this->makeTemplate($user->id);
+        $extra = $this->createCredential($user->id);
+        \Yii::$app->get('jobTemplateCredentialService')->saveWithCredentials($template, [$extra->id]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionUpdate($template->id);
+
+        $this->assertSame([$extra->id], $ctrl->capturedParams['selectedCredentialIds']);
     }
 
     // ── actionUpdate() ───────────────────────────────────────────────────────

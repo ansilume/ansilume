@@ -27,6 +27,13 @@ class Credential extends ActiveRecord
     public const TYPE_VAULT = 'vault';
     public const TYPE_TOKEN = 'token';
 
+    /** How a credential takes part in a job: the template's primary credential, ... */
+    public const ROLE_PRIMARY = 'primary';
+    /** ... one of its additional credentials, ... */
+    public const ROLE_ADDITIONAL = 'additional';
+    /** ... or the project's SCM credential for the git checkout. */
+    public const ROLE_SCM = 'scm';
+
     /** Default env var name for a TYPE_TOKEN credential when none is configured. */
     public const DEFAULT_TOKEN_ENV_VAR = 'ANSILUME_CREDENTIAL_TOKEN';
 

@@ -104,4 +104,16 @@ return [
     'ldapUserProvisioner' => [
         'class' => 'app\services\ldap\LdapUserProvisioner',
     ],
+    'jobTemplateCredentialService' => [
+        'class' => 'app\services\JobTemplateCredentialService',
+    ],
+    'jobCredentialResolver' => [
+        'class' => 'app\services\JobCredentialResolver',
+    ],
+    'credentialUsageService' => [
+        'class' => 'app\services\CredentialUsageService',
+    ],
+    'credentialWriteService' => [
+        'class' => 'app\services\CredentialWriteService',
+    ],
 ];

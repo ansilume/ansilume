@@ -6,6 +6,7 @@ namespace app\tests\unit\services;
 
 use app\models\Inventory;
 use app\models\Project;
+use app\services\CredentialResolutionException;
 use app\services\JobClaimService;
 use PHPUnit\Framework\TestCase;
 use yii\db\BaseActiveRecord;
@@ -14,8 +15,8 @@ use yii\db\BaseActiveRecord;
  * Tests for JobClaimService::buildExecutionPayload() — pure payload assembly logic.
  * claim() is DB-dependent and covered by integration tests.
  *
- * All tests use an anonymous subclass that stubs out the two DB lookups
- * (resolveProjectPath, resolveInventory) so no database is required.
+ * All tests use an anonymous subclass that stubs out the DB lookups
+ * (project, SCM, inventory, credentials) so no database is required.
  */
 class JobClaimServiceTest extends TestCase
 {
@@ -57,9 +58,9 @@ class JobClaimServiceTest extends TestCase
                 return $this->inv;
             }
 
-            protected function resolveCredential(array $payload): ?array
+            protected function resolveTemplateCredentials(array $raw): array
             {
-                return $this->cred;
+                return ['credential' => $this->cred, 'credentials' => $this->cred !== null ? [$this->cred] : []];
             }
 
             protected function storeExecutionCommand(\app\models\Job $job, array $command): void
@@ -67,6 +68,82 @@ class JobClaimServiceTest extends TestCase
                 // no-op in unit tests (no DB)
             }
         };
+    }
+
+    /**
+     * A job whose credential cannot be resolved must not get a payload or a
+     * stored command; the exception reaches claimNextPayload(), which fails
+     * the job.
+     */
+    public function testACredentialResolutionFailureStopsThePayload(): void
+    {
+        $service = new class extends JobClaimService {
+            public bool $commandStored = false;
+
+            protected function resolveTemplateCredentials(array $raw): array
+            {
+                throw CredentialResolutionException::fromFailures([
+                    ['id' => 7, 'name' => 'gone', 'role' => 'primary', 'reason' => CredentialResolutionException::REASON_MISSING],
+                ]);
+            }
+
+            protected function storeExecutionCommand(\app\models\Job $job, array $command): void
+            {
+                $this->commandStored = true;
+            }
+        };
+
+        try {
+            $service->buildExecutionPayload($this->makeJob(1, ['credential_id' => 7]));
+            $this->fail('expected a CredentialResolutionException');
+        } catch (CredentialResolutionException $e) {
+            $this->assertStringContainsString('Credential #7 "gone" (primary) no longer exists.', $e->getMessage());
+        }
+        $this->assertFalse($service->commandStored);
+    }
+
+    public function testThePayloadCarriesEveryCredentialInOrder(): void
+    {
+        $primary = ['credential_type' => 'ssh_key', 'username' => 'deploy', 'env_var_name' => null, 'secrets' => ['private_key' => 'k']];
+        $token = ['credential_type' => 'token', 'username' => null, 'env_var_name' => 'API_TOKEN', 'secrets' => ['token' => 't']];
+        $service = new class ($primary, $token) extends JobClaimService {
+            /**
+             * @param array<string, mixed> $primary
+             * @param array<string, mixed> $token
+             */
+            public function __construct(private readonly array $primary, private readonly array $token)
+            {
+            }
+
+            protected function resolveTemplateCredentials(array $raw): array
+            {
+                return ['credential' => $this->primary, 'credentials' => [$this->primary, $this->token]];
+            }
+
+            protected function resolveProjectPath(array $payload): string
+            {
+                return '/var/projects/1';
+            }
+
+            protected function resolveProjectScm(array $payload): array
+            {
+                return ['scm_type' => 'manual', 'scm_url' => null, 'scm_branch' => null, 'scm_credential' => null];
+            }
+
+            protected function resolveInventory(array $payload): array
+            {
+                return ['type' => 'static', 'content' => "localhost\n", 'path' => null];
+            }
+
+            protected function storeExecutionCommand(\app\models\Job $job, array $command): void
+            {
+            }
+        };
+
+        $payload = $service->buildExecutionPayload($this->makeJob(1, ['credential_id' => 1, 'credential_ids' => [1, 2]]));
+
+        $this->assertSame($primary, $payload['credential']);
+        $this->assertSame([$primary, $token], $payload['credentials']);
     }
 
     public function testPayloadContainsJobId(): void

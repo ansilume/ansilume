@@ -30,7 +30,9 @@ test.describe('Lint of vault-encrypted playbooks', () => {
   });
 
   test('a job template with vault vars_files shows the neutral verdict', async ({ page }) => {
-    if (!(await openByName(page, '/job-template/index', 'e2e-vault-template'))) return;
+    // Newest first: by name, templates created earlier in the run (clones)
+    // push it off the first page.
+    if (!(await openByName(page, '/job-template/index?sort=-id', 'e2e-vault-template'))) return;
 
     await expect(page.getByTestId('lint-badge')).toHaveText(VERDICT);
     await expect(page.getByTestId('lint-vault-note')).toBeVisible();

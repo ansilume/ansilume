@@ -205,7 +205,7 @@ class CredentialServiceTest extends TestCase
         return false;
     }
 
-    private function makeCredential(): Credential
+    private function makeCredential(string $type = Credential::TYPE_SSH_KEY): Credential
     {
         // Partial stub — only secret_data field is used by the service.
         // Pre-populate _attributes so __get/__set work without a DB connection.
@@ -216,7 +216,46 @@ class CredentialServiceTest extends TestCase
         $stub->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
         $ref->setAccessible(true);
-        $ref->setValue($stub, ['secret_data' => '']);
+        $ref->setValue($stub, ['secret_data' => '', 'credential_type' => $type]);
         return $stub;
+    }
+
+    public function testEncryptSecretsProducesABlobGetSecretsCanRead(): void
+    {
+        $credential = $this->makeCredential(Credential::TYPE_TOKEN);
+
+        $credential->secret_data = $this->service->encryptSecrets(['token' => 'tok-123']);
+
+        $this->assertStringNotContainsString('tok-123', (string)$credential->secret_data);
+        $this->assertSame(['token' => 'tok-123'], $this->service->getSecrets($credential));
+    }
+
+    public function testSecretStatusOfACompleteCredentialIsOk(): void
+    {
+        $credential = $this->makeCredential(Credential::TYPE_VAULT);
+        $credential->secret_data = $this->service->encryptSecrets(['vault_password' => 'v']);
+
+        $this->assertSame(CredentialService::SECRET_STATUS_OK, $this->service->secretStatus($credential));
+    }
+
+    /**
+     * Credentials saved before validation existed may lack their secret.
+     */
+    public function testSecretStatusFlagsAMissingSecretAsIncomplete(): void
+    {
+        $blank = $this->makeCredential(Credential::TYPE_USERNAME_PASSWORD);
+        $blank->secret_data = $this->service->encryptSecrets(['password' => '']);
+        $empty = $this->makeCredential(Credential::TYPE_TOKEN);
+
+        $this->assertSame(CredentialService::SECRET_STATUS_INCOMPLETE, $this->service->secretStatus($blank));
+        $this->assertSame(CredentialService::SECRET_STATUS_INCOMPLETE, $this->service->secretStatus($empty));
+    }
+
+    public function testSecretStatusFlagsAnUndecryptableSecret(): void
+    {
+        $credential = $this->makeCredential(Credential::TYPE_TOKEN);
+        $credential->secret_data = base64_encode(random_bytes(64));
+
+        $this->assertSame(CredentialService::SECRET_STATUS_UNDECRYPTABLE, $this->service->secretStatus($credential));
     }
 }

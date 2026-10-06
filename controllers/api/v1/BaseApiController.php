@@ -143,6 +143,19 @@ abstract class BaseApiController extends Controller
     }
 
     /**
+     * An error response that carries more than a message, e.g. what blocks a
+     * delete.
+     *
+     * @param array<string, mixed> $details
+     * @return array{error: array<string, mixed>}
+     */
+    protected function errorWithDetails(string $message, int $status, array $details): array
+    {
+        \Yii::$app->response->statusCode = $status;
+        return ['error' => ['message' => $message] + $details];
+    }
+
+    /**
      * @param array<int, mixed> $items
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

@@ -176,9 +176,19 @@ class CredentialInjector
     {
         $env = [];
         $args = [];
+        $tempFiles = [];
 
         $password = $data['secrets']['password'] ?? '';
         if ($password !== '') {
+            // ansible-core never reads ANSIBLE_SSH_PASS, so the password did
+            // not reach SSH. The connection password file (ansible-core 2.12+)
+            // is its non-interactive input. ANSIBLE_SSH_PASS stays for
+            // inventories that look it up with lookup('env', ...).
+            $passwordFile = $this->writeTempFile($password, 'ansilume_conn_pass_');
+            if ($passwordFile !== null) {
+                $env['ANSIBLE_CONNECTION_PASSWORD_FILE'] = $passwordFile;
+                $tempFiles[] = $passwordFile;
+            }
             $env['ANSIBLE_SSH_PASS'] = $password;
         }
 
@@ -187,7 +197,7 @@ class CredentialInjector
             $args[] = $data['username'];
         }
 
-        return new CredentialInjectionResult($args, $env, []);
+        return new CredentialInjectionResult($args, $env, $tempFiles);
     }
 
     /**
@@ -256,7 +266,7 @@ class CredentialInjector
      * Write content to a secure temp file (mode 0600).
      * Returns the file path, or null on failure.
      */
-    private function writeTempFile(string $content, string $prefix): ?string
+    protected function writeTempFile(string $content, string $prefix): ?string
     {
         // Set umask before tempnam so file is created as 0600 from the start,
         // avoiding a TOCTOU window where the secret is world-readable.

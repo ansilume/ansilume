@@ -80,6 +80,18 @@ return [
         'projectDeletionService' => [
             'class' => 'app\services\ProjectDeletionService',
         ],
+        'jobTemplateCredentialService' => [
+            'class' => 'app\services\JobTemplateCredentialService',
+        ],
+        'jobCredentialResolver' => [
+            'class' => 'app\services\JobCredentialResolver',
+        ],
+        'credentialUsageService' => [
+            'class' => 'app\services\CredentialUsageService',
+        ],
+        'credentialWriteService' => [
+            'class' => 'app\services\CredentialWriteService',
+        ],
         'credentialService' => [
             'class' => 'app\services\CredentialService',
         ],

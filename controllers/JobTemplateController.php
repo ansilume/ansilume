@@ -105,7 +105,7 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildView($model->project_id);
-        return $this->render('view', ['model' => $model]);
+        return $this->render('view', ['model' => $model, 'attachedCredentials' => $this->credentialService()->describe($model)]);
     }
 
     public function actionCreate(?int $project_id = null, ?string $playbook = null): Response|string
@@ -126,15 +126,14 @@ class JobTemplateController extends BaseController
         if ($model->load((array)\Yii::$app->request->post())) {
             $this->requireChildOperate($model->project_id);
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
-            if ($model->save()) {
-                $this->syncCredentialPivot($model);
-                \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_CREATED, 'job_template', $model->id, null, ['name' => $model->name]);
+            if ($this->credentialService()->saveWithCredentials($model, $this->postedCredentialIds())) {
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
                 $lintService->runForTemplate($model);
                 $this->session()->setFlash('success', "Template \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
+            return $this->render('form', $this->formData($model, $this->postedCredentialIds()));
         }
         return $this->render('form', $this->formData($model));
     }
@@ -143,53 +142,36 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
-            $this->syncCredentialPivot($model);
-            \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_UPDATED, 'job_template', $model->id, null, ['name' => $model->name]);
-            /** @var \app\services\LintService $lintService */
-            $lintService = \Yii::$app->get('lintService');
-            $lintService->runForTemplate($model);
-            $this->session()->setFlash('success', "Template \"{$model->name}\" updated.");
-            return $this->redirect(['view', 'id' => $model->id]);
+        if ($model->load((array)\Yii::$app->request->post())) {
+            if ($this->credentialService()->saveWithCredentials($model, $this->postedCredentialIds())) {
+                /** @var \app\services\LintService $lintService */
+                $lintService = \Yii::$app->get('lintService');
+                $lintService->runForTemplate($model);
+                $this->session()->setFlash('success', "Template \"{$model->name}\" updated.");
+                return $this->redirect(['view', 'id' => $model->id]);
+            }
+            return $this->render('form', $this->formData($model, $this->postedCredentialIds()));
         }
         return $this->render('form', $this->formData($model));
     }
 
     /**
-     * Reconcile the job_template_credential pivot against the submitted
-     * form state. The primary credential_id is stored first (sort_order
-     * 0), then any checked extras in stable order.
+     * Checked additional credentials, in form order. No checkbox checked
+     * means no additional credentials.
+     *
+     * @return list<mixed>
      */
-    private function syncCredentialPivot(JobTemplate $model): void
+    private function postedCredentialIds(): array
     {
-        /** @var array<int, mixed> $rawExtras */
-        $rawExtras = (array)\Yii::$app->request->post('credential_ids', []);
-        $extras = [];
-        foreach ($rawExtras as $id) {
-            $id = (int)$id;
-            if ($id > 0 && $id !== (int)$model->credential_id) {
-                $extras[] = $id;
-            }
-        }
+        return array_values((array)\Yii::$app->request->post('credential_ids', []));
+    }
 
-        $db = \Yii::$app->db;
-        $db->createCommand()->delete('{{%job_template_credential}}', ['job_template_id' => $model->id])->execute();
+    private function credentialService(): \app\services\JobTemplateCredentialService
+    {
+        /** @var \app\services\JobTemplateCredentialService $service */
+        $service = \Yii::$app->get('jobTemplateCredentialService');
 
-        $sort = 0;
-        if ((int)$model->credential_id > 0) {
-            $db->createCommand()->insert('{{%job_template_credential}}', [
-                'job_template_id' => $model->id,
-                'credential_id' => (int)$model->credential_id,
-                'sort_order' => $sort++,
-            ])->execute();
-        }
-        foreach (array_unique($extras) as $extraId) {
-            $db->createCommand()->insert('{{%job_template_credential}}', [
-                'job_template_id' => $model->id,
-                'credential_id' => $extraId,
-                'sort_order' => $sort++,
-            ])->execute();
-        }
+        return $service;
     }
 
     public function actionDelete(int $id): Response
@@ -244,24 +226,14 @@ class JobTemplateController extends BaseController
         $clone->name = $this->resolveCloneName($source->name);
         $clone->created_by = (int)(\Yii::$app->user->id ?? 0);
 
-        if (!$clone->save()) {
+        $cloned = $this->credentialService()->copyWithCredentials($clone, $source, [
+            'cloned_from' => $source->id,
+            'cloned_from_name' => $source->name,
+        ]);
+        if (!$cloned) {
             $this->session()->setFlash('danger', 'Clone failed: ' . json_encode($clone->errors));
             return $this->redirect(['view', 'id' => $source->id]);
         }
-
-        $this->copyCredentialPivot($source->id, $clone->id);
-
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_CREATED,
-            'job_template',
-            $clone->id,
-            null,
-            [
-                'name' => $clone->name,
-                'cloned_from' => $source->id,
-                'cloned_from_name' => $source->name,
-            ],
-        );
 
         $this->session()->setFlash(
             'success',
@@ -296,22 +268,6 @@ class JobTemplateController extends BaseController
      * clone was already set via the attribute copy — these are the
      * additional attachments.
      */
-    private function copyCredentialPivot(int $sourceId, int $cloneId): void
-    {
-        $db = \Yii::$app->db;
-        $rows = $db->createCommand(
-            'SELECT credential_id, sort_order FROM {{%job_template_credential}} WHERE job_template_id = :id ORDER BY sort_order',
-            [':id' => $sourceId],
-        )->queryAll();
-        foreach ($rows as $row) {
-            $db->createCommand()->insert('{{%job_template_credential}}', [
-                'job_template_id' => $cloneId,
-                'credential_id' => (int)$row['credential_id'],
-                'sort_order' => (int)$row['sort_order'],
-            ])->execute();
-        }
-    }
-
     public function actionLaunch(): Response|string
     {
         $id = (int)(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0));
@@ -336,7 +292,7 @@ class JobTemplateController extends BaseController
                 $this->session()->setFlash('danger', 'Launch failed: ' . $e->getMessage());
             }
         }
-        return $this->render('launch', ['template' => $template]);
+        return $this->render('launch', ['template' => $template, 'attachedCredentials' => $this->credentialService()->describe($template)]);
     }
 
     public function actionGenerateTriggerToken(int $id): Response
@@ -376,7 +332,12 @@ class JobTemplateController extends BaseController
     /**
      * @return array<string, mixed>
      */
-    private function formData(JobTemplate $model): array
+    /**
+     * @param list<mixed>|null $selectedCredentialIds submitted additional
+     *        credentials to re-render; null shows the stored ones
+     * @return array<string, mixed>
+     */
+    private function formData(JobTemplate $model, ?array $selectedCredentialIds = null): array
     {
         $userId = $this->currentUserId();
         $checker = $this->checker();
@@ -398,6 +359,9 @@ class JobTemplateController extends BaseController
             'projects' => $projectQuery->all(),
             'inventories' => $inventoryQuery->all(),
             'credentials' => Credential::find()->orderBy('name')->all(),
+            'selectedCredentialIds' => $selectedCredentialIds !== null
+                ? array_map(static fn (mixed $id): int => is_numeric($id) ? (int)$id : 0, $selectedCredentialIds)
+                : ($model->isNewRecord ? [] : $this->credentialService()->additionalIds($model)),
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
         ];
     }

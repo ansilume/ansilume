@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
+use app\models\Credential;
 use app\models\JobTemplate;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use yii\data\ActiveDataProvider;
@@ -40,7 +41,9 @@ class JobTemplatesController extends BaseApiController
      */
     public function actionIndex(): array
     {
-        $query = JobTemplate::find()->with(['project', 'inventory'])->orderBy(['id' => SORT_DESC]);
+        $query = JobTemplate::find()
+            ->with(['project', 'inventory', 'credential', 'jobTemplateCredentials.credential'])
+            ->orderBy(['id' => SORT_DESC]);
         $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
         if ($filter !== null) {
             $query->andWhere($filter);
@@ -98,20 +101,13 @@ class JobTemplatesController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
 
-        if (!$model->validate()) {
+        $credentialIds = $this->readCredentialIds($body);
+        if ($credentialIds === false) {
+            return $this->error('credential_ids must be an array of credential IDs.', 422);
+        }
+        if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, ['source' => 'api'])) {
             return $this->error($this->firstError($model), 422);
         }
-        if (!$model->save(false)) {
-            return $this->error('Failed to save template.', 422);
-        }
-
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_CREATED,
-            'job_template',
-            $model->id,
-            null,
-            ['name' => $model->name, 'source' => 'api']
-        );
 
         return $this->success($this->serialize($model), 201);
     }
@@ -135,20 +131,13 @@ class JobTemplatesController extends BaseApiController
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
 
-        if (!$model->validate()) {
+        $credentialIds = $this->readCredentialIds($body);
+        if ($credentialIds === false) {
+            return $this->error('credential_ids must be an array of credential IDs.', 422);
+        }
+        if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, ['source' => 'api'])) {
             return $this->error($this->firstError($model), 422);
         }
-        if (!$model->save(false)) {
-            return $this->error('Failed to save template.', 422);
-        }
-
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_UPDATED,
-            'job_template',
-            $model->id,
-            null,
-            ['name' => $model->name, 'source' => 'api']
-        );
 
         return $this->success($this->serialize($model));
     }
@@ -170,7 +159,8 @@ class JobTemplatesController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
         $name = $model->name;
-        $model->delete();
+        // Soft delete, like the web UI: jobs keep their template link.
+        $model->softDelete();
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_TEMPLATE_DELETED,
@@ -243,6 +233,9 @@ class JobTemplatesController extends BaseApiController
      */
     private function serialize(JobTemplate $t): array
     {
+        $credentials = $this->credentialService()->describe($t);
+        $additional = array_filter($credentials, static fn (array $c): bool => $c['role'] === Credential::ROLE_ADDITIONAL);
+
         return [
             'id' => $t->id,
             'name' => $t->name,
@@ -251,7 +244,10 @@ class JobTemplatesController extends BaseApiController
             'project_name' => $t->project->name ?? null,
             'inventory_id' => $t->inventory_id,
             'inventory_name' => $t->inventory->name ?? null,
+            'runner_group_id' => $t->runner_group_id,
             'credential_id' => $t->credential_id,
+            'credential_ids' => array_values(array_column($additional, 'id')),
+            'credentials' => $credentials,
             'playbook' => $t->playbook,
             'verbosity' => $t->verbosity,
             'forks' => $t->forks,
@@ -265,6 +261,31 @@ class JobTemplatesController extends BaseApiController
             'created_at' => $t->created_at,
             'updated_at' => $t->updated_at,
         ];
+    }
+
+    /**
+     * The additional credentials from the request body: null when the key is
+     * absent (keep the current ones), false when it is not a list.
+     *
+     * @param array<string, mixed> $body
+     * @return list<mixed>|null|false
+     */
+    private function readCredentialIds(array $body): array|null|false
+    {
+        if (!array_key_exists('credential_ids', $body)) {
+            return null;
+        }
+        $ids = $body['credential_ids'] ?? [];
+
+        return is_array($ids) && array_is_list($ids) ? $ids : false;
+    }
+
+    private function credentialService(): \app\services\JobTemplateCredentialService
+    {
+        /** @var \app\services\JobTemplateCredentialService $service */
+        $service = \Yii::$app->get('jobTemplateCredentialService');
+
+        return $service;
     }
 
     private function findModel(int $id): JobTemplate

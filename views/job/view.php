@@ -8,6 +8,7 @@ declare(strict_types=1);
 /** @var app\models\JobTask[] $tasks */
 /** @var app\models\JobHostSummary[] $hostSummaries */
 /** @var app\models\JobArtifact[] $artifacts */
+/** @var list<array{id: int, name: string|null, credential_type: string|null, role: string, deleted: bool}> $jobCredentials  as launched, primary first */
 
 use app\models\Job;
 use app\models\JobHostSummary;
@@ -77,6 +78,8 @@ $isLive = !$job->isFinished();
                             —
                         <?php endif; ?>
                     </dd>
+                    <dt class="col-5">Credentials</dt>
+                    <dd class="col-7"><?= $this->render('/credential/_credential-list', ['credentials' => $jobCredentials, 'listId' => 'job-credentials']) ?></dd>
                     <dt class="col-5">Status</dt>
                     <dd class="col-7" id="detail-status"><?= Html::encode(Job::statusLabel($job->status)) ?></dd>
                     <dt class="col-5">Queued</dt>

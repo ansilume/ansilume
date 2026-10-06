@@ -154,7 +154,12 @@ class CredentialInjectorTest extends TestCase
 
     // ── Username/Password ───────────────────────────────────────────────
 
-    public function testUsernamePasswordSetsEnvVar(): void
+    /**
+     * Regression: the password only went into ANSIBLE_SSH_PASS, which
+     * ansible-core never reads, so SSH logins with a password failed. It now
+     * goes into a private file named by ANSIBLE_CONNECTION_PASSWORD_FILE.
+     */
+    public function testUsernamePasswordHandsThePasswordToAnsibleThroughAFile(): void
     {
         $result = $this->injector->inject([
             'credential_type' => Credential::TYPE_USERNAME_PASSWORD,
@@ -162,8 +167,18 @@ class CredentialInjectorTest extends TestCase
             'secrets' => ['password' => 's3cret'],
         ]);
 
-        $this->assertSame('s3cret', $result->env['ANSIBLE_SSH_PASS']);
-        $this->assertSame([], $result->tempFiles);
+        $file = $result->env['ANSIBLE_CONNECTION_PASSWORD_FILE'] ?? null;
+        try {
+            $this->assertIsString($file);
+            $this->assertSame('s3cret', file_get_contents($file));
+            $this->assertSame(0600, fileperms($file) & 0777);
+            $this->assertSame([$file], $result->tempFiles);
+            // Kept for inventories that read it with lookup('env', ...).
+            $this->assertSame('s3cret', $result->env['ANSIBLE_SSH_PASS']);
+        } finally {
+            CredentialInjector::cleanup($result->tempFiles);
+        }
+        $this->assertFileDoesNotExist($file);
     }
 
     public function testUsernamePasswordWithUsernameSetsUserFlag(): void
@@ -173,10 +188,9 @@ class CredentialInjectorTest extends TestCase
             'username' => 'admin',
             'secrets' => ['password' => 'pass'],
         ]);
+        CredentialInjector::cleanup($result->tempFiles);
 
-        $this->assertContains('--user', $result->args);
-        $this->assertContains('admin', $result->args);
-        $this->assertSame('pass', $result->env['ANSIBLE_SSH_PASS']);
+        $this->assertSame(['--user', 'admin'], $result->args);
     }
 
     public function testUsernamePasswordWithoutPasswordSetsNoEnv(): void
@@ -187,7 +201,8 @@ class CredentialInjectorTest extends TestCase
             'secrets' => [],
         ]);
 
-        $this->assertArrayNotHasKey('ANSIBLE_SSH_PASS', $result->env);
+        $this->assertSame([], $result->env);
+        $this->assertSame([], $result->tempFiles);
         $this->assertContains('--user', $result->args);
     }
 
@@ -198,8 +213,50 @@ class CredentialInjectorTest extends TestCase
             'username' => null,
             'secrets' => ['password' => 'pass'],
         ]);
+        CredentialInjector::cleanup($result->tempFiles);
 
         $this->assertNotContains('--user', $result->args);
+    }
+
+    public function testTheFirstPasswordCredentialWinsAndEveryFileIsTracked(): void
+    {
+        $result = $this->injector->injectAll([
+            ['credential_type' => Credential::TYPE_USERNAME_PASSWORD, 'username' => 'first', 'secrets' => ['password' => 'pw-first']],
+            ['credential_type' => Credential::TYPE_USERNAME_PASSWORD, 'username' => 'second', 'secrets' => ['password' => 'pw-second']],
+        ]);
+
+        try {
+            $this->assertSame('pw-first', file_get_contents($result->env['ANSIBLE_CONNECTION_PASSWORD_FILE']));
+            $this->assertCount(2, $result->tempFiles);
+            $this->assertSame(['--user', 'first'], $result->args);
+        } finally {
+            CredentialInjector::cleanup($result->tempFiles);
+        }
+    }
+
+    /**
+     * Without a writable temp dir nothing that needs a file is injected: no
+     * key or vault flag pointing at a missing file, and the password stays
+     * in ANSIBLE_SSH_PASS only.
+     */
+    public function testNothingThatNeedsAFileIsInjectedWhenTheFileCannotBeWritten(): void
+    {
+        $injector = new class extends CredentialInjector {
+            protected function writeTempFile(string $content, string $prefix): ?string
+            {
+                return null;
+            }
+        };
+
+        $ssh = $injector->inject(['credential_type' => Credential::TYPE_SSH_KEY, 'username' => 'deploy', 'secrets' => ['private_key' => 'key']]);
+        $vault = $injector->inject(['credential_type' => Credential::TYPE_VAULT, 'username' => null, 'secrets' => ['vault_password' => 'pw']]);
+        $password = $injector->inject(['credential_type' => Credential::TYPE_USERNAME_PASSWORD, 'username' => 'deploy', 'secrets' => ['password' => 'pw']]);
+
+        $this->assertSame([[], [], []], [$ssh->args, $ssh->env, $ssh->tempFiles]);
+        $this->assertSame([[], [], []], [$vault->args, $vault->env, $vault->tempFiles]);
+        $this->assertSame(['ANSIBLE_SSH_PASS' => 'pw'], $password->env);
+        $this->assertSame([], $password->tempFiles);
+        $this->assertSame(['--user', 'deploy'], $password->args);
     }
 
     // ── Vault ───────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\JobTemplate $model */
+/** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
 
 use app\components\LintVerdict;
 use app\helpers\TimeHelper;
@@ -58,8 +59,8 @@ $this->title = $model->name;
                     <dd class="col-7"><code><?= Html::encode($model->playbook) ?></code></dd>
                     <dt class="col-5">Inventory</dt>
                     <dd class="col-7"><?= $model->inventory ? Html::a(Html::encode($model->inventory->name), ['/inventory/view', 'id' => $model->inventory_id]) : '—' ?></dd>
-                    <dt class="col-5">Credential</dt>
-                    <dd class="col-7"><?= $model->credential ? Html::a(Html::encode($model->credential->name), ['/credential/view', 'id' => $model->credential_id]) : '<span class="text-muted">None</span>' ?></dd>
+                    <dt class="col-5">Credentials</dt>
+                    <dd class="col-7"><?= $this->render('/credential/_credential-list', ['credentials' => $attachedCredentials, 'listId' => 'template-credentials']) ?></dd>
                     <dt class="col-5">Forks</dt>
                     <dd class="col-7"><?= $model->forks // xss-ok: integer?></dd>
                     <dt class="col-5">Verbosity</dt>

@@ -191,6 +191,24 @@ class Job extends ActiveRecord
         };
     }
 
+    /**
+     * runner_payload key holding the job's credentials as launched (id, name,
+     * type and role, no secrets), so deleted credentials can still be named.
+     */
+    public const PAYLOAD_CREDENTIAL_SNAPSHOT = 'credential_snapshot';
+
+    /**
+     * The launch-time payload snapshot, or [] when missing or not valid JSON.
+     *
+     * @return array<string, mixed>
+     */
+    public function decodedRunnerPayload(): array
+    {
+        $decoded = json_decode((string)$this->runner_payload, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
     public function getJobTemplate(): \yii\db\ActiveQuery
     {
         // Include soft-deleted templates so job history remains intact.

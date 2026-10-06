@@ -171,6 +171,147 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         $this->ctrl->actionView($template->id);
     }
 
+    /**
+     * Regression: the API hard-deleted templates while the web UI soft-deletes
+     * them, so jobs lost their template link.
+     */
+    public function testDeleteIsASoftDeleteLikeTheWebUi(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $template = $this->createJobTemplate(
+            $this->createProject($userId)->id,
+            $this->createInventory($userId)->id,
+            $this->createRunnerGroup($userId)->id,
+            $userId
+        );
+
+        $this->ctrl->actionDelete($template->id);
+
+        $row = \app\models\JobTemplate::findWithDeleted()->where(['id' => $template->id])->one();
+        $this->assertNotNull($row, 'the row stays');
+        $this->assertNotNull($row->deleted_at);
+    }
+
+    // -- Credentials -----------------------------------------------------------
+
+    /**
+     * @return array{project: int, inventory: int, group: int}
+     */
+    private function templateParents(int $userId): array
+    {
+        return [
+            'project' => $this->createProject($userId)->id,
+            'inventory' => $this->createInventory($userId)->id,
+            'group' => $this->createRunnerGroup($userId)->id,
+        ];
+    }
+
+    public function testCreateAcceptsAdditionalCredentialsInOrder(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $parents = $this->templateParents($userId);
+        $primary = $this->createCredential($userId, \app\models\Credential::TYPE_SSH_KEY);
+        $vault = $this->createCredential($userId, \app\models\Credential::TYPE_VAULT);
+        $token = $this->createCredential($userId);
+        $this->setBody([
+            'name' => 'api-creds-' . uniqid('', true),
+            'project_id' => $parents['project'],
+            'inventory_id' => $parents['inventory'],
+            'runner_group_id' => $parents['group'],
+            'playbook' => 'site.yml',
+            'credential_id' => $primary->id,
+            'credential_ids' => [$token->id, $vault->id],
+        ]);
+
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionCreate());
+
+        $this->assertSame(201, \Yii::$app->response->statusCode);
+        $this->assertSame($parents['group'], $item['runner_group_id']);
+        $this->assertSame([$token->id, $vault->id], $item['credential_ids']);
+        $this->assertSame([$primary->id, $token->id, $vault->id], array_column($item['credentials'], 'id'));
+        $this->assertSame(['primary', 'additional', 'additional'], array_column($item['credentials'], 'role'));
+    }
+
+    /**
+     * Regression: changing credential_id over the API left the old primary
+     * attached as an additional credential.
+     */
+    public function testChangingThePrimaryDetachesTheOldOne(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $parents = $this->templateParents($userId);
+        $old = $this->createCredential($userId, \app\models\Credential::TYPE_SSH_KEY);
+        $new = $this->createCredential($userId, \app\models\Credential::TYPE_SSH_KEY);
+        $template = $this->createJobTemplate($parents['project'], $parents['inventory'], $parents['group'], $userId);
+        $this->setBody(['credential_id' => $old->id, 'credential_ids' => []]);
+        $this->ctrl->actionUpdate($template->id);
+
+        $this->setBody(['credential_id' => $new->id]);
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionUpdate($template->id));
+
+        $this->assertSame([$new->id], array_column($item['credentials'], 'id'));
+        $this->assertSame([], $item['credential_ids']);
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>, 1: string}>
+     */
+    public static function invalidCredentialBodyProvider(): array
+    {
+        return [
+            'credential_ids not a list' => [['credential_ids' => 'abc'], 'credential_ids must be an array of credential IDs.'],
+            'credential_ids an object' => [['credential_ids' => ['a' => 1]], 'credential_ids must be an array of credential IDs.'],
+            'unknown additional credential' => [['credential_ids' => [999999999]], 'Credential #999999999 does not exist.'],
+            // Regression: answered 500 (foreign key violation) instead of 422.
+            'unknown primary credential' => [['credential_id' => 999999999], 'The selected credential does not exist.'],
+        ];
+    }
+
+    /**
+     * @dataProvider invalidCredentialBodyProvider
+     * @param array<string, mixed> $body
+     */
+    public function testInvalidCredentialsAre422(array $body, string $message): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $parents = $this->templateParents($userId);
+        $template = $this->createJobTemplate($parents['project'], $parents['inventory'], $parents['group'], $userId);
+        $this->setBody($body);
+
+        $result = $this->ctrl->actionUpdate($template->id);
+
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => $message]], $result);
+    }
+
+    public function testCreateRejectsCredentialIdsThatAreNotAList(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $parents = $this->templateParents($userId);
+        $before = \app\models\JobTemplate::find()->count();
+        $this->setBody([
+            'name' => 'api-bad-credential-ids',
+            'project_id' => $parents['project'],
+            'inventory_id' => $parents['inventory'],
+            'runner_group_id' => $parents['group'],
+            'playbook' => 'deploy.yml',
+            'credential_ids' => 'abc',
+        ]);
+
+        $result = $this->ctrl->actionCreate();
+
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'credential_ids must be an array of credential IDs.']], $result);
+        $this->assertSame($before, \app\models\JobTemplate::find()->count());
+    }
+
     public function testDeleteReturns404(): void
     {
         $this->authenticateWithAdmin();

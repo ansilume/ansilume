@@ -25,6 +25,13 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $this->service = \Yii::$app->get('jobCompletionService');
     }
 
+    /** Some tests swap in a webhook recorder; restore the real service. */
+    protected function tearDown(): void
+    {
+        \Yii::$app->set('webhookService', ['class' => \app\services\WebhookService::class]);
+        parent::tearDown();
+    }
+
     // -------------------------------------------------------------------------
     // complete()
     // -------------------------------------------------------------------------
@@ -486,6 +493,83 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $this->assertNotNull($wjs->finished_at);
         // No on_failure target → workflow completes with a non-running status.
         $this->assertNotSame(\app\models\WorkflowJob::STATUS_RUNNING, $wfJob->status);
+    }
+
+    // -------------------------------------------------------------------------
+    // failBeforeExecution()
+    // -------------------------------------------------------------------------
+
+    public function testFailBeforeExecutionEndsTheJobAsFailedWithTheReason(): void
+    {
+        $job = $this->makeRunningJob();
+        $webhooks = $this->captureWebhooks();
+
+        $this->service->failBeforeExecution($job, "Job aborted before execution: 1 credential(s) could not be used.");
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_FAILED, $job->status);
+        $this->assertSame(-1, (int)$job->exit_code);
+        $this->assertNotNull($job->finished_at);
+        $log = JobLog::find()->where(['job_id' => $job->id, 'stream' => JobLog::STREAM_STDERR])->one();
+        $this->assertNotNull($log);
+        $this->assertStringContainsString('could not be used', (string)$log->content);
+        $audit = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_JOB_FINISHED, 'object_id' => $job->id])
+            ->one();
+        $this->assertNotNull($audit);
+        $this->assertSame(
+            ['exit_code' => -1, 'status' => Job::STATUS_FAILED, 'reason' => 'pre_execution_failure'],
+            json_decode((string)$audit->metadata, true)
+        );
+        $this->assertSame([\app\models\Webhook::EVENT_JOB_FAILURE], $webhooks->events);
+    }
+
+    public function testFailBeforeExecutionLeavesAFinishedJobUntouched(): void
+    {
+        $job = $this->makeCanceledJob();
+        $webhooks = $this->captureWebhooks();
+
+        $this->service->failBeforeExecution($job, 'too late');
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
+        $this->assertNull($job->exit_code);
+        $this->assertSame(0, (int)JobLog::find()->where(['job_id' => $job->id])->count());
+        $this->assertSame([], $webhooks->events);
+    }
+
+    public function testCompleteTimedOutStillSendsTheFailureWebhook(): void
+    {
+        $job = $this->makeRunningJob();
+        $webhooks = $this->captureWebhooks();
+
+        $this->service->completeTimedOut($job);
+
+        $job->refresh();
+        $this->assertSame(Job::STATUS_TIMED_OUT, $job->status);
+        $this->assertSame(-1, (int)$job->exit_code);
+        $this->assertSame([\app\models\Webhook::EVENT_JOB_FAILURE], $webhooks->events);
+    }
+
+    /**
+     * Replaces webhookService with a recorder for the rest of the test.
+     *
+     * @return object{events: list<string>}
+     */
+    private function captureWebhooks(): object
+    {
+        $recorder = new class extends \app\services\WebhookService {
+            /** @var list<string> */
+            public array $events = [];
+
+            public function dispatch(string $event, Job $job): void
+            {
+                $this->events[] = $event;
+            }
+        };
+        \Yii::$app->set('webhookService', $recorder);
+
+        return $recorder;
     }
 
     // -------------------------------------------------------------------------

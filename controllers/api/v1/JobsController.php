@@ -19,7 +19,8 @@ use yii\web\NotFoundHttpException;
  *
  * GET  /api/v1/jobs            — list (filterable)
  * GET  /api/v1/jobs/{id}       — detail
- * POST /api/v1/jobs            — launch (body: {"template_id": N, "extra_vars": {...}, "limit": "..."})
+ * POST /api/v1/jobs            — launch (body: {"job_template_id": N, "extra_vars": {...}, "limit": "..."});
+ *                                "template_id" is still accepted as an alias
  * POST /api/v1/jobs/{id}/cancel
  */
 class JobsController extends BaseApiController
@@ -79,7 +80,7 @@ class JobsController extends BaseApiController
         if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
             return $this->error('Forbidden.', 403);
         }
-        return $this->success($this->serializeJob($job));
+        return $this->success($this->serializeJob($job, true));
     }
 
     /**
@@ -91,7 +92,10 @@ class JobsController extends BaseApiController
         $user = \Yii::$app->user;
         $body = (array)\Yii::$app->request->bodyParams;
 
-        $templateId = (int)($body['template_id'] ?? 0);
+        $templateId = $this->templateIdFrom($body);
+        if ($templateId === null) {
+            return $this->error('job_template_id is required.', 422);
+        }
         /** @var JobTemplate|null $template */
         $template = JobTemplate::findOne($templateId);
 
@@ -114,7 +118,7 @@ class JobsController extends BaseApiController
             /** @var JobLaunchService $svc */
             $svc = \Yii::$app->get('jobLaunchService');
             $job = $svc->launch($template, (int)($user->id ?? 0), $overrides);
-            return $this->success($this->serializeJob($job), 201);
+            return $this->success($this->serializeJob($job, true), 201);
         } catch (\RuntimeException $e) {
             \Yii::error('Job launch failed: ' . $e->getMessage(), __CLASS__);
             return $this->error('Launch failed.', 500);
@@ -154,7 +158,7 @@ class JobsController extends BaseApiController
         $completion = \Yii::$app->get('jobCompletionService');
         $completion->cancel($job, $userId);
 
-        return $this->success($this->serializeJob($job));
+        return $this->success($this->serializeJob($job, true));
     }
 
     /**
@@ -329,6 +333,21 @@ class JobsController extends BaseApiController
         return $overrides;
     }
 
+    /**
+     * job_template_id, as in the Job response; template_id is the older name.
+     *
+     * @param array<string, mixed> $body
+     */
+    private function templateIdFrom(array $body): ?int
+    {
+        $raw = $body['job_template_id'] ?? $body['template_id'] ?? null;
+        if (!is_numeric($raw) || (int)$raw <= 0) {
+            return null;
+        }
+
+        return (int)$raw;
+    }
+
     private function findJob(int $id): Job
     {
         /** @var Job|null $job */
@@ -340,11 +359,14 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, status: string, job_template_id: int|null, template_name: string|null, launched_by: string|null, extra_vars: mixed, limit: string|null, verbosity: int|null, check_mode: bool, exit_code: int|null, execution_command: string|null, artifact_count: int, queued_at: int|null, started_at: int|null, finished_at: int|null, created_at: int}
+     * $withCredentials adds the job's credentials (names and roles, never
+     * secrets). Single-job responses only, so the list needs no extra queries.
+     *
+     * @return array<string, mixed>
      */
-    private function serializeJob(Job $job): array
+    private function serializeJob(Job $job, bool $withCredentials = false): array
     {
-        return [
+        $data = [
             'id' => $job->id,
             'status' => $job->status,
             'job_template_id' => $job->job_template_id,
@@ -362,6 +384,13 @@ class JobsController extends BaseApiController
             'finished_at' => $job->finished_at,
             'created_at' => $job->created_at,
         ];
+        if ($withCredentials) {
+            /** @var \app\services\JobCredentialResolver $resolver */
+            $resolver = \Yii::$app->get('jobCredentialResolver');
+            $data['credentials'] = $resolver->describe($job->decodedRunnerPayload());
+        }
+
+        return $data;
     }
 
     /**

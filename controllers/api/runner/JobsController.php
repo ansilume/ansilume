@@ -48,7 +48,8 @@ class JobsController extends BaseRunnerApiController
     /**
      * POST /api/runner/v1/jobs/claim
      * Atomically claim the next queued job for this runner's group.
-     * Returns 204 (no body) when there is nothing to run.
+     * Returns 204 (no body) when there is nothing to run. Jobs whose
+     * credentials cannot be resolved are failed on the server and skipped.
      *
      * @return array<string, mixed>
      */
@@ -59,14 +60,12 @@ class JobsController extends BaseRunnerApiController
 
         /** @var JobClaimService $svc */
         $svc = \Yii::$app->get('jobClaimService');
-        $job = $svc->claim($group, $runner);
+        $payload = $svc->claimNextPayload($group, $runner);
 
-        if ($job === null) {
+        if ($payload === null) {
             \Yii::$app->response->statusCode = 204;
             return [];
         }
-
-        $payload = $svc->buildExecutionPayload($job);
 
         return $this->ok($payload);
     }

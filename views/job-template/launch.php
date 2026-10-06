@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\JobTemplate $template */
+/** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
 
 use app\components\SurveyField;
 use yii\helpers\Html;
@@ -34,7 +35,7 @@ $hasSurvey = !empty($surveyFields);
             <dt class="col-4">Project</dt>    <dd class="col-8"><?= Html::encode($template->project->name ?? '—') ?></dd>
             <dt class="col-4">Playbook</dt>   <dd class="col-8"><code><?= Html::encode($template->playbook) ?></code></dd>
             <dt class="col-4">Inventory</dt>  <dd class="col-8"><?= Html::encode($template->inventory->name ?? '—') ?></dd>
-            <dt class="col-4">Credential</dt> <dd class="col-8"><?= Html::encode($template->credential->name ?? 'None') ?></dd>
+            <dt class="col-4">Credentials</dt> <dd class="col-8"><?= $this->render('/credential/_credential-list', ['credentials' => $attachedCredentials, 'listId' => 'launch-credentials']) ?></dd>
         </dl>
     </div>
 </div>

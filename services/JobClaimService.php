@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\RunnerCommandBuilder;
-use app\models\Credential;
 use app\models\Inventory;
 use app\models\Job;
 use app\models\Project;
@@ -21,6 +20,35 @@ use yii\base\Component;
  */
 class JobClaimService extends Component
 {
+    /** How many claimed jobs one claim request may fail before it gives up. */
+    public const MAX_CLAIM_ATTEMPTS = 3;
+
+    /**
+     * Claims the next job and builds its payload. A job whose credentials
+     * cannot be resolved is failed with an operator message and the next
+     * one is tried, so a broken job never blocks the queue.
+     *
+     * @return array<string, mixed>|null null when there is nothing to run
+     */
+    public function claimNextPayload(RunnerGroup $group, Runner $runner): ?array
+    {
+        for ($attempt = 0; $attempt < self::MAX_CLAIM_ATTEMPTS; $attempt++) {
+            $job = $this->claim($group, $runner);
+            if ($job === null) {
+                return null;
+            }
+            try {
+                return $this->buildExecutionPayload($job);
+            } catch (CredentialResolutionException $e) {
+                /** @var JobCompletionService $completion */
+                $completion = \Yii::$app->get('jobCompletionService');
+                $completion->failBeforeExecution($job, $e->getMessage());
+            }
+        }
+
+        return null;
+    }
+
     public function claim(RunnerGroup $group, Runner $runner): ?Job
     {
         $db = \Yii::$app->db;
@@ -71,6 +99,12 @@ class JobClaimService extends Component
                 AuditService::ACTION_JOB_STARTED,
                 'job',
                 $job->id,
+                null,
+                [
+                    'runner_id' => $runner->id,
+                    'runner_name' => $runner->name,
+                    'credentials' => $this->credentialResolver()->describeForAudit($job->decodedRunnerPayload()),
+                ]
             );
 
             return $job;
@@ -85,12 +119,15 @@ class JobClaimService extends Component
      * Resolves IDs to actual paths/content so the runner needs no DB access.
      * Also builds and stores the canonical execution command on the job record.
      *
-     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, secrets: array<string, string>}|null, command: array<int, string>}
+     * @throws CredentialResolutionException when a credential of the job was
+     *     deleted or cannot be decrypted; nothing is stored in that case
+     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, credentials: list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>, command: array<int, string>}
      */
     public function buildExecutionPayload(Job $job): array
     {
-        /** @var array<string, mixed> $raw */
-        $raw = json_decode($job->runner_payload ?? '{}', true) ?: [];
+        $raw = $job->decodedRunnerPayload();
+        // First, so a job with an unusable credential fails before anything else.
+        $credentials = $this->resolveTemplateCredentials($raw);
 
         $projectPath = $this->resolveProjectPath($raw);
         $playbookPath = rtrim($projectPath, '/') . '/' . ltrim((string)($raw['playbook'] ?? 'site.yml'), '/');
@@ -120,8 +157,8 @@ class JobClaimService extends Component
             'skip_tags' => isset($raw['skip_tags']) ? (string)$raw['skip_tags'] : null,
             'check_mode' => !empty($raw['check_mode']),
             'timeout_minutes' => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
-            'credential' => $this->resolveCredential($raw),
-            'credentials' => $this->resolveCredentials($raw),
+            'credential' => $credentials['credential'],
+            'credentials' => $credentials['credentials'],
         ];
 
         $builder = new RunnerCommandBuilder();
@@ -144,83 +181,25 @@ class JobClaimService extends Component
     }
 
     /**
-     * Resolve the primary credential only — kept as a convenience for code
-     * paths that still expect a single-credential shape.
+     * The primary credential and every credential in precedence order
+     * (primary first, then the additional ones by position). Elements match
+     * the {@see \app\components\CredentialInjector::injectAll()} contract.
      *
-     * @param array<string, mixed> $payload
-     * @return array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null
+     * @param array<string, mixed> $raw
+     * @return array{credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, credentials: list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>}
+     * @throws CredentialResolutionException
      */
-    protected function resolveCredential(array $payload): ?array
+    protected function resolveTemplateCredentials(array $raw): array
     {
-        return $this->resolveCredentialById((int)($payload['credential_id'] ?? 0));
+        return $this->credentialResolver()->resolveTemplateCredentials($raw);
     }
 
-    /**
-     * Resolve every credential attached to the template (primary FK plus
-     * pivot rows). Returns an ordered list whose elements match the
-     * {@see \app\components\CredentialInjector::injectAll()} contract.
-     *
-     * @param array<string, mixed> $payload
-     * @return list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>
-     */
-    protected function resolveCredentials(array $payload): array
+    protected function credentialResolver(): JobCredentialResolver
     {
-        /** @var list<int> $ids */
-        $ids = array_values(array_map(
-            static fn ($v): int => (int)$v,
-            (array)($payload['credential_ids'] ?? [])
-        ));
-        if ($ids === []) {
-            $primary = (int)($payload['credential_id'] ?? 0);
-            if ($primary !== 0) {
-                $ids[] = $primary;
-            }
-        }
+        /** @var JobCredentialResolver $resolver */
+        $resolver = \Yii::$app->get('jobCredentialResolver');
 
-        $out = [];
-        foreach ($ids as $id) {
-            $resolved = $this->resolveCredentialById($id);
-            if ($resolved !== null) {
-                $out[] = $resolved;
-            }
-        }
-        return $out;
-    }
-
-    /**
-     * @return array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null
-     */
-    private function resolveCredentialById(int $credentialId): ?array
-    {
-        if ($credentialId === 0) {
-            return null;
-        }
-
-        /** @var Credential|null $credential */
-        $credential = Credential::findOne($credentialId);
-        if ($credential === null) {
-            return null;
-        }
-
-        /** @var CredentialService $credentialService */
-        $credentialService = \Yii::$app->get('credentialService');
-
-        try {
-            $secrets = $credentialService->getSecrets($credential);
-        } catch (\Exception $e) {
-            \Yii::error(
-                "Failed to decrypt credential #{$credentialId}: " . $e->getMessage(),
-                __CLASS__
-            );
-            return null;
-        }
-
-        return [
-            'credential_type' => $credential->credential_type,
-            'username' => $credential->username,
-            'env_var_name' => $credential->env_var_name,
-            'secrets' => $secrets,
-        ];
+        return $resolver;
     }
 
     /**
@@ -241,6 +220,7 @@ class JobClaimService extends Component
      *     scm_branch: string|null,
      *     scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null,
      * }
+     * @throws CredentialResolutionException when the SCM credential cannot be decrypted
      */
     protected function resolveProjectScm(array $payload): array
     {
@@ -253,7 +233,7 @@ class JobClaimService extends Component
             // Resolve the project-level SCM credential so the runner can
             // authenticate to git. Distinct from the ansible-execution
             // credential(s) carried under `credential` / `credentials`.
-            'scm_credential' => $this->resolveCredentialById((int)($project?->scm_credential_id ?? 0)),
+            'scm_credential' => $this->credentialResolver()->resolveScmCredential($project),
         ];
     }
 
