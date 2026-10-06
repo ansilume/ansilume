@@ -11,43 +11,53 @@ build:
     override:
       - composer self-update --2
       - composer install --no-interaction --prefer-dist
-  tests:
-    before:
-      - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\nDB_TEST_NAME=ansilume_test\nREDIS_HOST=127.0.0.1\nAPP_SECRET_KEY=scrutinizer-test-key-that-is-32-bytes!\n' > .env
-      # Create the databases via PHP/PDO, not the mysql CLI: the client binary
-      # is not guaranteed to exist in Scrutinizer's build image (exit 127 on
-      # the v2.4.5 build), while pdo_mysql is required by the app anyway. The
-      # retry loop covers the MySQL service still starting up.
-      - >-
-        php -r '
-        $pdo = null;
-        for ($i = 1; $i <= 30 && $pdo === null; $i++) {
-        try { $pdo = new PDO("mysql:host=127.0.0.1", "root", "", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]); }
-        catch (PDOException $e) { fwrite(STDERR, "Waiting for MySQL ($i/30): " . $e->getMessage() . PHP_EOL); sleep(2); }
-        }
-        if ($pdo === null) { fwrite(STDERR, "MySQL is not reachable on 127.0.0.1" . PHP_EOL); exit(1); }
-        foreach ([
-        "CREATE DATABASE IF NOT EXISTS ansilume",
-        "CREATE DATABASE IF NOT EXISTS ansilume_test",
-        "CREATE USER IF NOT EXISTS `ansilume`@`%` IDENTIFIED BY " . $pdo->quote("secret"),
-        "GRANT ALL ON ansilume.* TO `ansilume`@`%`",
-        "GRANT ALL ON ansilume_test.* TO `ansilume`@`%`",
-        "FLUSH PRIVILEGES",
-        ] as $sql) { $pdo->exec($sql); }
-        echo "MySQL databases and user ready" . PHP_EOL;
-        '
-      - php yii migrate --interactive=0
-      - sed -i 's/DB_NAME=ansilume/DB_NAME=ansilume_test/' .env && php yii migrate --interactive=0 && sed -i 's/DB_NAME=ansilume_test/DB_NAME=ansilume/' .env
-    override:
-      - php-scrutinizer-run
-      # PSR-12 with the project's own phpcs (require-dev) and the same scope as
-      # bin/tests-style.sh. See the note under tools.
-      - vendor/bin/phpcs --standard=PSR12 --extensions=php --warning-severity=0 --ignore=vendor,.composer,runtime,@runtime,web/assets,docker,migrations,tests -q .
-      -
-        command: vendor/bin/phpunit --testsuite=Unit --colors=never --coverage-clover clover.xml
-        coverage:
-          file: clover.xml
-          format: php-clover
+  nodes:
+    # Static analysis only. Defining this node replaces Scrutinizer's default
+    # analysis commands, which include phpcs-run: finding no phpcs of its
+    # own, phpcs-run installs phpcs 3.7.1, which Composer refuses because of a
+    # security advisory (GHSA-hmqg-cxww-wqhq), so every build failed with
+    # exit code 127. PSR-12 runs in the phpunit node with the phpcs from
+    # require-dev instead.
+    analysis:
+      tests:
+        override:
+          - php-scrutinizer-run
+    phpunit:
+      tests:
+        before:
+          - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\nDB_TEST_NAME=ansilume_test\nREDIS_HOST=127.0.0.1\nAPP_SECRET_KEY=scrutinizer-test-key-that-is-32-bytes!\n' > .env
+          # Create the databases via PHP/PDO, not the mysql CLI: the client binary
+          # is not guaranteed to exist in Scrutinizer's build image (exit 127 on
+          # the v2.4.5 build), while pdo_mysql is required by the app anyway. The
+          # retry loop covers the MySQL service still starting up.
+          - >-
+            php -r '
+            $pdo = null;
+            for ($i = 1; $i <= 30 && $pdo === null; $i++) {
+            try { $pdo = new PDO("mysql:host=127.0.0.1", "root", "", [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]); }
+            catch (PDOException $e) { fwrite(STDERR, "Waiting for MySQL ($i/30): " . $e->getMessage() . PHP_EOL); sleep(2); }
+            }
+            if ($pdo === null) { fwrite(STDERR, "MySQL is not reachable on 127.0.0.1" . PHP_EOL); exit(1); }
+            foreach ([
+            "CREATE DATABASE IF NOT EXISTS ansilume",
+            "CREATE DATABASE IF NOT EXISTS ansilume_test",
+            "CREATE USER IF NOT EXISTS `ansilume`@`%` IDENTIFIED BY " . $pdo->quote("secret"),
+            "GRANT ALL ON ansilume.* TO `ansilume`@`%`",
+            "GRANT ALL ON ansilume_test.* TO `ansilume`@`%`",
+            "FLUSH PRIVILEGES",
+            ] as $sql) { $pdo->exec($sql); }
+            echo "MySQL databases and user ready" . PHP_EOL;
+            '
+          - php yii migrate --interactive=0
+          - sed -i 's/DB_NAME=ansilume/DB_NAME=ansilume_test/' .env && php yii migrate --interactive=0 && sed -i 's/DB_NAME=ansilume_test/DB_NAME=ansilume/' .env
+        override:
+          # PSR-12 with the project's own phpcs, same scope as bin/tests-style.sh.
+          - vendor/bin/phpcs --standard=PSR12 --extensions=php --warning-severity=0 --ignore=vendor,.composer,runtime,@runtime,web/assets,docker,migrations,tests -q .
+          -
+            command: vendor/bin/phpunit --testsuite=Unit --colors=never --coverage-clover clover.xml
+            coverage:
+              file: clover.xml
+              format: php-clover
 
 checks:
   php:
@@ -60,10 +70,7 @@ checks:
     spacing_around_non_conditional_operators: false
 
 tools:
-  # No php_code_sniffer here: Scrutinizer installs its own phpcs 3.7.1 for it,
-  # and Composer refuses that version because of a security advisory
-  # (GHSA-hmqg-cxww-wqhq), so every build failed with "phpcs-run", exit 127.
-  # PSR-12 runs as a build command instead (build.tests.override).
+  # No php_code_sniffer here, see build.nodes.analysis.
   php_mess_detector: true
   php_cpd: true
 
