@@ -40,6 +40,9 @@ build:
       - sed -i 's/DB_NAME=ansilume/DB_NAME=ansilume_test/' .env && php yii migrate --interactive=0 && sed -i 's/DB_NAME=ansilume_test/DB_NAME=ansilume/' .env
     override:
       - php-scrutinizer-run
+      # PSR-12 with the project's own phpcs (require-dev) and the same scope as
+      # bin/tests-style.sh. See the note under tools.
+      - vendor/bin/phpcs --standard=PSR12 --extensions=php --warning-severity=0 --ignore=vendor,.composer,runtime,@runtime,web/assets,docker,migrations,tests -q .
       -
         command: vendor/bin/phpunit --testsuite=Unit --colors=never --coverage-clover clover.xml
         coverage:
@@ -57,9 +60,10 @@ checks:
     spacing_around_non_conditional_operators: false
 
 tools:
-  php_code_sniffer:
-    config:
-      standard: PSR12
+  # No php_code_sniffer here: Scrutinizer installs its own phpcs 3.7.1 for it,
+  # and Composer refuses that version because of a security advisory
+  # (GHSA-hmqg-cxww-wqhq), so every build failed with "phpcs-run", exit 127.
+  # PSR-12 runs as a build command instead (build.tests.override).
   php_mess_detector: true
   php_cpd: true
 
