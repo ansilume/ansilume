@@ -20,6 +20,14 @@ RUN composer install --no-dev --no-interaction --no-scripts --optimize-autoloade
 # -- Stage 2: Runtime ---------------------------------------------------------
 FROM php:8.2-cli
 
+# ansible-lint lives in its own virtualenv. Installing it into the system
+# interpreter (pip --break-system-packages) collides with the Debian-managed
+# python3-cryptography that the apt `ansible` package depends on: pip tries
+# to uninstall the Debian package and the image build fails. Inside a venv
+# pip installs newer dependencies next to (shadowing) the system ones instead.
+# --system-site-packages lets ansible-lint reuse the apt ansible-core, so it
+# lints with the exact Ansible version that executes the playbooks and does
+# not warn about a second `ansible` binary on PATH.
 RUN apt-get update && apt-get install -y \
     curl \
     git \
@@ -27,9 +35,12 @@ RUN apt-get update && apt-get install -y \
     sudo \
     ansible \
     python3-pip \
+    python3-venv \
     libzip-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --break-system-packages ansible-lint
+    && python3 -m venv --system-site-packages /opt/ansible-lint \
+    && /opt/ansible-lint/bin/pip install --no-cache-dir ansible-lint \
+    && ln -s /opt/ansible-lint/bin/ansible-lint /usr/local/bin/ansible-lint
 
 # Only the extensions the runner actually needs
 RUN docker-php-ext-install pcntl zip
@@ -62,8 +73,11 @@ RUN echo 'www-data ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/www-data \
 #     write their ~/.config / ~/.cache without hitting the root-owned
 #     /var/www. Matching buildProcessEnv() sets HOME to this dir.
 #   - /var/www/.ansible        — ansible-compat's isolated cache dir
-RUN mkdir -p /var/www/runtime/ansible-home /var/www/.ansible/tmp \
-    && chown -R www-data:www-data /var/www/runtime /var/www/.ansible
+#   - /var/www/.cache          — ansible-lint's version-check cache (it is
+#     created on `ansible-lint --version`; with the root-owned $HOME=/var/www
+#     the command died with PermissionError when run as www-data)
+RUN mkdir -p /var/www/runtime/ansible-home /var/www/.ansible/tmp /var/www/.cache \
+    && chown -R www-data:www-data /var/www/runtime /var/www/.ansible /var/www/.cache
 
 COPY docker/runner/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

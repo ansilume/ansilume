@@ -17,6 +17,14 @@ You will be asked:
 
 All secrets (`COOKIE_VALIDATION_KEY`, `APP_SECRET_KEY`, `RUNNER_BOOTSTRAP_SECRET`, database passwords) are generated automatically.
 
+When the containers are up, the quickstart verifies the install from the host
+(health endpoint, login redirect, login page, one published asset) and exits
+non-zero if anything fails. Open the printed URL with an explicit **`http://`**
+prefix — there is no TLS listener out of the box, and browsers that force
+`https://` will show the site as down. A bare `curl` on the URL prints nothing
+(empty 302 body); use `curl -IL <url>` to verify by hand. See
+[troubleshooting.md](troubleshooting.md) for details.
+
 ---
 
 ## Manual setup — prebuilt images

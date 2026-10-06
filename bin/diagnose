@@ -38,6 +38,44 @@ redact() {
     sed -E 's/(PASSWORD|SECRET|KEY|TOKEN)([=:][[:space:]]*)([^[:space:]]+)/\1\2***REDACTED***/gi'
 }
 
+# Map curl's "000" write-out (transport failure) to a readable label.
+http_code_label() {
+    if [ -z "${1:-}" ] || [ "${1:-}" = "000" ]; then
+        printf 'unreachable'
+    else
+        printf '%s' "$1"
+    fi
+}
+
+# Port nginx is actually published on. The live compose binding is
+# authoritative — .env (NGINX_PORT) can be stale or overridden by the
+# environment, which produced false "reachability issues" alarms on healthy
+# installs. Falls back to .env (last occurrence wins, CR/whitespace stripped
+# so a Windows-edited .env cannot break the probe URL), then to 8080. Either
+# source may carry a bind-address prefix (127.0.0.1:8080, [::]:8080) which is
+# stripped so only the bare host port is returned.
+published_nginx_port() {
+    local port
+    port=$(docker compose port nginx 80 2>/dev/null | head -1 || true)
+    if [ -z "$port" ]; then
+        port=$(grep '^NGINX_PORT=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    fi
+    port=${port##*:}
+    printf '%s' "${port:-8080}"
+}
+
+# PHP prelude for in-container deep probes. Boots a console application the
+# same way ./yii does: load .env first (the dev checkout injects only APP_ENV
+# into the app container, so DB_* must come from the bind-mounted .env; in
+# prebuilt images .env is absent and compose provides the environment —
+# safeLoad() makes that a no-op), then Yii and the console config.
+PHP_BOOT="
+    require '/var/www/vendor/autoload.php';
+    Dotenv\Dotenv::createUnsafeImmutable('/var/www')->safeLoad();
+    require '/var/www/vendor/yiisoft/yii2/Yii.php';
+    \$app = new yii\console\Application(require '/var/www/config/console.php');
+"
+
 # ── Preamble ─────────────────────────────────────────────────────────────────
 
 printf "${BOLD}Ansilume Stack Diagnostics${NC}\n"
@@ -302,8 +340,13 @@ done
 section "Migration Status"
 
 if [ -n "$app_container" ]; then
-    migration_output=$(docker exec "$app_container" php /var/www/yii migrate/history 10 2>&1 || true)
-    if echo "$migration_output" | grep -qi "error\|exception\|fail"; then
+    # Judge by the exit code and by error lines at the start of a line. A
+    # case-insensitive match anywhere in the output misfires on migration
+    # NAMES (m000069_..._widen_inventory_parsed_error) and reported a healthy
+    # schema as "Migration check failed".
+    migration_rc=0
+    migration_output=$(docker exec "$app_container" php /var/www/yii migrate/history 10 2>&1) || migration_rc=$?
+    if [ "$migration_rc" -ne 0 ] || echo "$migration_output" | grep -qE '^(Exception|Error|PHP Fatal error|PHP Warning)'; then
         fail "Migration check failed"
         echo "$migration_output" | redact | head -10 | while read -r line; do
             info "  ${line}"
@@ -359,9 +402,7 @@ if [ -n "$app_container" ]; then
     section "Project Sync Status"
 
     sync_output=$(docker exec "$app_container" php -r "
-        require '/var/www/vendor/autoload.php';
-        require '/var/www/config/bootstrap.php';
-        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        ${PHP_BOOT}
         \$projects = app\models\Project::find()->all();
         foreach (\$projects as \$p) {
             printf(\"%d|%s|%s|%s|%s\n\",
@@ -439,9 +480,7 @@ if [ -n "$app_container" ]; then
 
     # RBAC core roles
     rbac_output=$(docker exec "$app_container" php -r "
-        require '/var/www/vendor/autoload.php';
-        require '/var/www/config/bootstrap.php';
-        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        ${PHP_BOOT}
         \$auth = \$app->authManager;
         foreach (['admin', 'operator', 'viewer'] as \$r) {
             echo (\$auth->getRole(\$r) !== null ? 'ok' : 'missing') . '|' . \$r . PHP_EOL;
@@ -467,9 +506,7 @@ if [ -n "$app_container" ]; then
 
     # Admin user exists
     admin_output=$(docker exec "$app_container" php -r "
-        require '/var/www/vendor/autoload.php';
-        require '/var/www/config/bootstrap.php';
-        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        ${PHP_BOOT}
         \$total = (int)app\models\User::find()->count();
         \$admins = (int)app\models\User::find()->where(['is_superadmin' => true])->count();
         echo \$total . '|' . \$admins;
@@ -507,14 +544,100 @@ if [ -n "$nginx_container" ]; then
     fi
 fi
 
+# ── 10e. HTTP reachability from the host ────────────────────────────────────
+# Everything above checks the stack from the inside; this section checks what
+# an operator actually experiences via the published port.
+
+section "HTTP Reachability (host)"
+
+http_reach_failed=""
+diag_port=$(published_nginx_port)
+base_url="http://127.0.0.1:${diag_port}"
+
+if ! command -v curl >/dev/null 2>&1; then
+    warn "curl not found on the host — skipping HTTP reachability checks"
+else
+    http_reach_failed=false
+
+    # Root URL: a healthy install answers 302 → /login. The redirect body is
+    # empty, so a bare curl printing nothing here is normal.
+    root_code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base_url}/" || true)
+    if [ "$root_code" = "302" ] || [ "$root_code" = "200" ]; then
+        ok "GET / → HTTP ${root_code} (an empty body is expected on the 302 — use 'curl -IL' to inspect)"
+    else
+        fail "GET / → HTTP $(http_code_label "$root_code") on ${base_url} (expected 302 → /login)"
+        http_reach_failed=true
+    fi
+
+    # Login page.
+    login_html=$(curl -s -m 10 "${base_url}/login" || true)
+    login_code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base_url}/login" || true)
+    if [ "$login_code" = "200" ]; then
+        ok "GET /login → HTTP 200"
+    else
+        fail "GET /login → HTTP $(http_code_label "$login_code")"
+        http_reach_failed=true
+    fi
+
+    # One published asset — catches a missing web assets volume (nginx 404s
+    # on /assets/<hash>/... when the volume is absent or empty).
+    asset_url=$(printf '%s' "$login_html" | grep -oE '/assets/[a-zA-Z0-9]+/[a-zA-Z0-9._-]+' | head -1 || true)
+    if [ -n "$asset_url" ]; then
+        asset_code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base_url}${asset_url}" || true)
+        if [ "$asset_code" = "200" ]; then
+            ok "GET ${asset_url} → HTTP 200"
+        else
+            fail "GET ${asset_url} → HTTP $(http_code_label "$asset_code") — check the web_assets volume"
+            http_reach_failed=true
+        fi
+    else
+        warn "No asset URL found on the login page — skipping asset check"
+    fi
+
+    # Health endpoint over the published port — one request for both the
+    # status code and the body so the two cannot disagree.
+    health_raw=$(curl -s -m 10 -w '\n%{http_code}' "${base_url}/health" || true)
+    health_code=${health_raw##*$'\n'}
+    if [ "$health_code" = "200" ] && printf '%s' "${health_raw%$'\n'*}" | grep -q '"status":"ok"'; then
+        ok "GET /health → HTTP 200, status ok"
+    else
+        fail "GET /health → HTTP $(http_code_label "$health_code")"
+        http_reach_failed=true
+    fi
+
+    # HTTPS probe: when nothing serves TLS for THIS install, browsers in
+    # HTTPS-First mode hang on https:// and the site looks down. A TLS
+    # responder only counts if it actually serves the health endpoint —
+    # an unrelated service on 443 must not suppress the guidance.
+    if curl -sk -m 4 "https://127.0.0.1/health" 2>/dev/null | grep -q '"status"'; then
+        ok "HTTPS (port 443): answers and serves this install — TLS termination is present"
+    else
+        if curl -sk -o /dev/null -m 4 "https://127.0.0.1/" 2>/dev/null; then
+            info "HTTPS (port 443): a TLS service answers, but it does not look like this install."
+        else
+            info "HTTPS (port 443): nothing answers — this install serves plain HTTP only."
+        fi
+        info "Open the UI with an explicit http:// URL. Browsers in HTTPS-First"
+        info "mode silently try https:// first, time out, and the site looks down."
+    fi
+fi
+
 # ── 11. Port conflicts ──────────────────────────────────────────────────────
 
 section "Port Conflicts"
 
-nginx_port=$(grep '^NGINX_PORT=' .env 2>/dev/null | cut -d= -f2- || echo "8080")
-nginx_port=${nginx_port:-8080}
+nginx_port=$(published_nginx_port)
 
-if command -v ss >/dev/null 2>&1; then
+# When the nginx container is up and compose reports the binding, the
+# listener on that port IS the stack (docker-proxy) — another process could
+# not have bound it or the container would have failed to start. Only probe
+# the host when compose cannot tell. Without that short-circuit a non-root
+# `ss -p` (no process names, so `grep -v docker` filters nothing) reported
+# the stack's own listener as a conflicting process.
+compose_binding=$(docker compose port nginx 80 2>/dev/null | head -1 || true)
+if [ -n "$compose_binding" ]; then
+    ok "Port ${nginx_port} is published by the nginx container (${compose_binding})"
+elif command -v ss >/dev/null 2>&1; then
     listeners=$(ss -tlnp 2>/dev/null | grep ":${nginx_port} " | grep -v docker || true)
     if [ -n "$listeners" ]; then
         fail "Port ${nginx_port} is also used by another process:"
@@ -586,9 +709,7 @@ done
 if [ -n "$app_container" ]; then
     # Re-check admin user for summary
     summary_admin=$(docker exec "$app_container" php -r "
-        require '/var/www/vendor/autoload.php';
-        require '/var/www/config/bootstrap.php';
-        \$app = new yii\console\Application(require '/var/www/config/console.php');
+        ${PHP_BOOT}
         echo (int)app\models\User::find()->where(['is_superadmin' => true])->count();
     " 2>/dev/null || echo "0")
     if [ "${summary_admin:-0}" -eq 0 ]; then
@@ -605,6 +726,14 @@ if [ -n "$app_container" ]; then
     else
         ok "vendor: intact"
     fi
+fi
+
+# Host-side HTTP reachability in summary
+if [ "$http_reach_failed" = "true" ]; then
+    fail "http: host-side reachability issues (see HTTP Reachability section)"
+    all_ok=false
+elif [ "$http_reach_failed" = "false" ]; then
+    ok "http: reachable via ${base_url}"
 fi
 
 echo ""

@@ -11,6 +11,15 @@ use yii\console\Controller;
  */
 class RunnerTokenResolver
 {
+    /**
+     * Registration attempts while the server reports 503 (not initialized
+     * yet, e.g. quickstart has not created the admin user). 12 × 5s covers
+     * a normal first-boot window before giving up and letting the container
+     * restart policy take over.
+     */
+    private const REGISTER_MAX_ATTEMPTS = 12;
+    private const REGISTER_RETRY_SECONDS = 5;
+
     private RunnerHttpClient $http;
     private Controller $controller;
 
@@ -89,6 +98,102 @@ class RunnerTokenResolver
         $groupInfo = $group !== '' ? " in group '{$group}'" : '';
         $this->controller->stdout("No token found — registering as '{$name}'{$groupInfo} with the server...\n");
 
+        $payload = $this->buildRegisterPayload($name, $bootstrapSecret, $group);
+        $lastError = '';
+
+        for ($attempt = 1; $attempt <= self::REGISTER_MAX_ATTEMPTS; $attempt++) {
+            $response = $this->http->postUnauthenticated('/api/runner/v1/register', $payload);
+
+            $token = $this->extractToken($response);
+            if ($token !== '') {
+                $this->cacheToken($name, $token);
+
+                $this->controller->stdout("Registered successfully. Token cached.\n");
+                return $token;
+            }
+
+            $lastError = $this->registrationErrorText($response);
+            if (!$this->isNotReadyStatus()) {
+                return $this->failPermanently($response, $lastError);
+            }
+
+            // 502/503 (also as an unparsable nginx HTML page, i.e. a null
+            // response) means the server is still booting or awaits its
+            // initial setup — wait and try again.
+            if ($attempt < self::REGISTER_MAX_ATTEMPTS) {
+                $this->controller->stdout(
+                    "Server is not ready for runner registration yet ({$lastError}) — retrying in "
+                    . self::REGISTER_RETRY_SECONDS . "s...\n"
+                );
+                $this->waitBeforeRetry();
+            }
+        }
+
+        $this->controller->stderr("ERROR: Registration failed: {$lastError}\n");
+        $this->controller->stderr($this->neverReadyHint() . " The runner will retry after the container restarts.\n");
+        return '';
+    }
+
+    /**
+     * A null response without a not-ready status means the server was never
+     * reached at all; any other non-retryable answer is a permanent rejection.
+     *
+     * @param array<string, mixed>|null $response
+     */
+    private function failPermanently(?array $response, string $error): string
+    {
+        if ($response === null) {
+            $apiUrl = (string)($_ENV['API_URL'] ?? '(server)');
+            $this->controller->stderr("ERROR: Could not reach the server at {$apiUrl} for registration.\n");
+            return '';
+        }
+
+        $this->controller->stderr("ERROR: Registration failed: {$error}\n");
+        return '';
+    }
+
+    /**
+     * Operator guidance after the retry budget is exhausted, depending on
+     * which not-ready status the server kept answering with.
+     */
+    private function neverReadyHint(): string
+    {
+        if ($this->http->getLastHttpStatus() === 502) {
+            return 'The app container never answered (502 from nginx) — '
+                . 'check that it is running and healthy: docker compose logs app.';
+        }
+
+        return 'The server never became ready (503) — complete the initial setup (create the admin user).';
+    }
+
+    /**
+     * @param array<string, mixed>|null $response
+     */
+    private function extractToken(?array $response): string
+    {
+        if ($response === null || empty($response['ok'])) {
+            return '';
+        }
+        $data = is_array($response['data'] ?? null) ? $response['data'] : [];
+        return (string)($data['token'] ?? '');
+    }
+
+    /**
+     * @param array<string, mixed>|null $response
+     */
+    private function registrationErrorText(?array $response): string
+    {
+        if ($response === null) {
+            return 'HTTP ' . $this->http->getLastHttpStatus() . ' without a readable response body';
+        }
+        return (string)($response['error'] ?? 'unknown error');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function buildRegisterPayload(string $name, string $bootstrapSecret, string $group): array
+    {
         $payload = [
             'name' => $name,
             'bootstrap_secret' => $bootstrapSecret,
@@ -97,27 +202,23 @@ class RunnerTokenResolver
         if ($group !== '') {
             $payload['group'] = $group;
         }
+        return $payload;
+    }
 
-        $response = $this->http->postUnauthenticated('/api/runner/v1/register', $payload);
+    /**
+     * A 503 means the server itself is not ready to register runners yet
+     * (typically: no admin user exists seconds after a fresh install); a 502
+     * is nginx answering for an app container that is still booting.
+     * Anything else is a permanent error and must fail loudly.
+     */
+    private function isNotReadyStatus(): bool
+    {
+        return in_array($this->http->getLastHttpStatus(), [502, 503], true);
+    }
 
-        if ($response === null) {
-            $apiUrl = '(server)';
-            $this->controller->stderr("ERROR: Could not reach the server at {$apiUrl} for registration.\n");
-            return '';
-        }
-
-        $responseData = is_array($response['data'] ?? null) ? $response['data'] : [];
-        if (empty($response['ok']) || empty($responseData['token'])) {
-            $error = (string)($response['error'] ?? 'unknown error');
-            $this->controller->stderr("ERROR: Registration failed: {$error}\n");
-            return '';
-        }
-
-        $token = (string)$responseData['token'];
-        $this->cacheToken($name, $token);
-
-        $this->controller->stdout("Registered successfully. Token cached.\n");
-        return $token;
+    protected function waitBeforeRetry(): void
+    {
+        sleep(self::REGISTER_RETRY_SECONDS);
     }
 
     private function cacheToken(string $name, string $token): void

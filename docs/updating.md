@@ -97,7 +97,8 @@ If `git pull` fails with merge conflicts, you have local modifications. Either s
 2. **Container images** — all services pull the latest images from `ghcr.io/ansilume/`.
 3. **Database migrations** — the app container's entrypoint runs `php yii migrate --interactive=0` on every start. This is idempotent and safe to run repeatedly.
 4. **Configuration** — the quickstart merges new `.env` variables that were introduced in newer versions. Your existing values are never modified.
-5. **Health check** — the quickstart waits for the app container to report healthy before declaring the update complete.
+5. **Health check** — the quickstart waits for the app container to report healthy.
+6. **HTTP verification** — the quickstart then probes the stack from the host through the published port: the `/health` endpoint, the `/` → `/login` redirect, the login page, and one published asset (catches a missing `web_assets` volume). If any check fails, the script prints what failed, points you at the diagnostics script, and **exits with status 1**. Unattended runs (cron, CI) can rely on that exit code.
 
 ---
 
@@ -112,8 +113,12 @@ docker compose ps
 # Check app health
 docker compose exec app php yii health/check
 
-# Check the version in the web UI footer or via API
-curl -s http://localhost:8080/api/v1/health | head
+# Check the health endpoint (adjust the port to your NGINX_PORT)
+curl -s http://localhost:8080/health
+
+# Follow the login redirect — a bare `curl` on the base URL prints nothing,
+# because the 302 to /login has an empty body. Use -IL to see the headers.
+curl -IL http://localhost:8080/
 ```
 
 Run the diagnostics script if anything looks wrong:
@@ -121,6 +126,38 @@ Run the diagnostics script if anything looks wrong:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 ```
+
+---
+
+## After updating from 2.4.4 or older: clean up log files and rotate secrets
+
+Releases up to and including **2.4.4** had Yii's default `logVars` enabled on
+every log target. Whenever an error or warning was logged, Yii appended the
+complete `$_SERVER` context to `runtime/logs/app.log` — including
+`APP_SECRET_KEY`, `DB_PASSWORD`, `DB_ROOT_PASSWORD`, `COOKIE_VALIDATION_KEY`
+and `RUNNER_BOOTSTRAP_SECRET` from the container environment. This affected
+both the prebuilt images and git checkouts.
+
+The current release disables context dumping, but existing log files still
+contain the old entries. After the update:
+
+1. **Truncate the old logs** (inside the app container, or on the host for a
+   git checkout where `runtime/` is bind-mounted):
+
+   ```bash
+   docker compose exec app sh -c 'for f in /var/www/runtime/logs/app.log*; do : > "$f"; done'
+   ```
+
+2. **Rotate the secrets** if those log files were ever copied, attached to a
+   bug report, or shipped to a central log store: generate new values for
+   `APP_SECRET_KEY`, `COOKIE_VALIDATION_KEY` and `RUNNER_BOOTSTRAP_SECRET` in
+   `.env` (`openssl rand -hex 32`), change the database password, then
+   `docker compose up -d`. Note that rotating `APP_SECRET_KEY` requires
+   re-entering stored credentials, and rotating `RUNNER_BOOTSTRAP_SECRET`
+   requires updating every external runner's configuration.
+
+Diagnostics output produced by `bin/diagnose` was never affected — it
+redacts secrets before printing.
 
 ---
 

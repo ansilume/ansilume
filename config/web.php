@@ -119,6 +119,9 @@ $config = [
                 [
                     'class' => 'yii\log\FileTarget',
                     'levels' => ['error', 'warning'],
+                    // Never dump request/environment context ($_SERVER contains
+                    // APP_SECRET_KEY, DB_PASSWORD, ...) into the log file.
+                    'logVars' => [],
                 ],
             ],
         ],

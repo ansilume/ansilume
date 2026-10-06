@@ -296,6 +296,9 @@ After starting a runner, verify it registered and is online:
 |---------|-------|-----|
 | `ERROR: API_URL environment variable is required` | `API_URL` not set | Set the environment variable |
 | `403 Invalid bootstrap secret` | Secret mismatch | Ensure `RUNNER_BOOTSTRAP_SECRET` matches the server |
+| `Server is not ready for runner registration yet (...) — retrying in 5s` | Server answers 503 (no admin user yet) or 502 (app container still booting) | Normal during first boot. The runner retries 12 times at 5 s intervals (about one minute), then exits and lets the container restart policy try again. Finish the initial setup or check `docker compose logs app`. |
+| `Registration failed: ... The server never became ready (503)` | Initial setup was never completed | Create the admin user (`php yii setup/admin ...`) — the runner keeps retrying on every restart |
+| `Registration failed: ... The app container never answered (502 from nginx)` | App container unhealthy or not started | Check `docker compose ps` and `docker compose logs app` on the server |
 | `Connection refused` | Server unreachable | Check network path, firewall, DNS |
 | `SSL certificate problem` | Self-signed cert | Add CA to trust store or use HTTP for testing |
 | Runner shows "Offline" in UI | Heartbeat not reaching server | Check outbound connectivity, proxy settings |

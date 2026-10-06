@@ -421,6 +421,31 @@ for entrypoint in docker/php/entrypoint.sh docker/php/entrypoint-prod.sh; do
 done
 
 # =============================================================================
+# ansible-lint must not be pip-installed into the system interpreter
+#
+# Regression: `pip3 install --break-system-packages ansible-lint` worked until
+# the php:8.2 base image moved to Debian trixie, whose apt `ansible` package
+# depends on a Debian-managed python3-cryptography. pip then tried to
+# uninstall that package and every image build (dev, prod, runner) failed with
+# "Cannot uninstall cryptography ... no RECORD file". Only cached images kept
+# working, so the breakage surfaced late — in the release pipeline. The fix
+# is a dedicated virtualenv; keep it that way in all three Dockerfiles.
+# =============================================================================
+section "ansible-lint installed in an isolated virtualenv (not system pip)"
+
+for dockerfile in docker/php/Dockerfile docker/php/Dockerfile.prod docker/runner/Dockerfile; do
+    if grep -v '^\s*#' "$dockerfile" | grep -q -- '--break-system-packages'; then
+        fail "$dockerfile installs into the system interpreter (--break-system-packages) — use the /opt/ansible-lint venv"
+    elif ! grep -q 'python3 -m venv --system-site-packages /opt/ansible-lint' "$dockerfile"; then
+        fail "$dockerfile does not create the /opt/ansible-lint virtualenv"
+    elif ! grep -q 'ln -s /opt/ansible-lint/bin/ansible-lint /usr/local/bin/ansible-lint' "$dockerfile"; then
+        fail "$dockerfile does not expose ansible-lint on PATH via /usr/local/bin"
+    else
+        ok "$dockerfile installs ansible-lint via isolated venv"
+    fi
+done
+
+# =============================================================================
 # Writable subprocess HOME (regression: SSH/git/ansible permission denied)
 #
 # The php:8.2-fpm image's default www-data home is /var/www, which on our

@@ -17,7 +17,7 @@ class RunnerTokenResolverTest extends TestCase
         $this->tmpDir = sys_get_temp_dir() . '/runner_token_test_' . uniqid('', true);
         mkdir($this->tmpDir, 0700, true);
 
-        unset($_ENV['RUNNER_TOKEN'], $_ENV['RUNNER_NAME'], $_ENV['RUNNER_BOOTSTRAP_SECRET']);
+        unset($_ENV['RUNNER_TOKEN'], $_ENV['RUNNER_NAME'], $_ENV['RUNNER_BOOTSTRAP_SECRET'], $_ENV['RUNNER_GROUP']);
     }
 
     protected function tearDown(): void
@@ -27,7 +27,7 @@ class RunnerTokenResolverTest extends TestCase
         }
         \app\helpers\FileHelper::safeRmdir($this->tmpDir);
 
-        unset($_ENV['RUNNER_TOKEN'], $_ENV['RUNNER_NAME'], $_ENV['RUNNER_BOOTSTRAP_SECRET']);
+        unset($_ENV['RUNNER_TOKEN'], $_ENV['RUNNER_NAME'], $_ENV['RUNNER_BOOTSTRAP_SECRET'], $_ENV['RUNNER_GROUP']);
     }
 
     private function makeResolver(?RunnerHttpClient $http = null): RunnerTokenResolver
@@ -133,6 +133,235 @@ class RunnerTokenResolverTest extends TestCase
 
         $resolver = $this->makeResolver($http);
         $this->assertSame('', $resolver->resolve());
+    }
+
+    // -------------------------------------------------------------------------
+    // selfRegister() retry while the server awaits initial setup
+    //
+    // Regression: during first boot the runner registered before quickstart
+    // had created the admin user; the server answered 503 ("No users exist
+    // yet") and the runner logged scary ERROR lines and exited, restarting
+    // in a loop. The resolver must instead wait and retry quietly.
+    // -------------------------------------------------------------------------
+
+    public function testSelfRegisterRetriesWhileServerAwaitsInitialSetup(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        $notReady = ['ok' => false, 'error' => 'No users exist yet. Run setup/admin first.'];
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')->willReturnOnConsecutiveCalls(
+            $notReady,
+            $notReady,
+            ['ok' => true, 'data' => ['token' => 'fresh-token']]
+        );
+        $http->method('getLastHttpStatus')->willReturn(503);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('fresh-token', $resolver->resolve());
+        $this->assertSame(2, $resolver->retryWaits);
+        $this->assertStringNotContainsString('ERROR', $controller->capturedStderr);
+        $this->assertStringContainsString('retrying', $controller->capturedStdout);
+    }
+
+    public function testSelfRegisterDoesNotRetryOnPermanentError(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')
+            ->willReturn(['ok' => false, 'error' => 'Invalid bootstrap secret.']);
+        $http->method('getLastHttpStatus')->willReturn(403);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('', $resolver->resolve());
+        $this->assertSame(0, $resolver->retryWaits);
+        $this->assertStringContainsString('ERROR: Registration failed', $controller->capturedStderr);
+    }
+
+    public function testSelfRegisterGivesUpAfterMaxAttemptsWhenServerStaysUnready(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')
+            ->willReturn(['ok' => false, 'error' => 'No users exist yet. Run setup/admin first.']);
+        $http->method('getLastHttpStatus')->willReturn(503);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('', $resolver->resolve());
+        // 12 attempts total (kept in sync with RunnerTokenResolver) → 11 waits.
+        $this->assertSame(11, $resolver->retryWaits);
+        $this->assertStringContainsString('ERROR: Registration failed', $controller->capturedStderr);
+        // Operators must get actionable guidance, not just the raw server error.
+        $this->assertStringContainsString('complete the initial setup', $controller->capturedStderr);
+    }
+
+    public function testSelfRegisterStopsRetryingWhenServerBecomesReadyButRejectsRequest(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')->willReturnOnConsecutiveCalls(
+            ['ok' => false, 'error' => 'No users exist yet. Run setup/admin first.'],
+            ['ok' => false, 'error' => 'Runner group "missing" not found.']
+        );
+        // The status must be re-evaluated on EVERY attempt: once the server
+        // stops answering 503, a rejection is permanent and must fail loudly.
+        $http->method('getLastHttpStatus')->willReturnOnConsecutiveCalls(503, 400);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('', $resolver->resolve());
+        $this->assertSame(1, $resolver->retryWaits);
+        $this->assertStringContainsString('ERROR: Registration failed', $controller->capturedStderr);
+        $this->assertStringContainsString('not found', $controller->capturedStderr);
+    }
+
+    public function testSelfRegisterRetriesWhenNotReadyResponseHasNoJsonBody(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        // nginx answers 502/503 with an HTML error page while the app
+        // container is still booting — the client returns null for the
+        // unparsable body but the HTTP status is still available.
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')->willReturnOnConsecutiveCalls(
+            null,
+            null,
+            ['ok' => true, 'data' => ['token' => 'fresh-token']]
+        );
+        $http->method('getLastHttpStatus')->willReturn(503);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('fresh-token', $resolver->resolve());
+        $this->assertSame(2, $resolver->retryWaits);
+        $this->assertStringNotContainsString('ERROR', $controller->capturedStderr);
+    }
+
+    public function testSelfRegisterFailsImmediatelyWhenServerUnreachable(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')->willReturn(null);
+        $http->method('getLastHttpStatus')->willReturn(0);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('', $resolver->resolve());
+        $this->assertSame(0, $resolver->retryWaits);
+        $this->assertStringContainsString('ERROR: Could not reach the server', $controller->capturedStderr);
+    }
+
+    public function testSelfRegisterGiveUpHintAfter502PointsAtTheAppContainerNotTheAdminUser(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        // nginx keeps answering 502 (HTML page, no JSON) because the app
+        // container never came up. Telling the operator to "create the admin
+        // user" would send them down the wrong path.
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')->willReturn(null);
+        $http->method('getLastHttpStatus')->willReturn(502);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('', $resolver->resolve());
+        $this->assertSame(11, $resolver->retryWaits);
+        $this->assertStringContainsString('ERROR: Registration failed: HTTP 502', $controller->capturedStderr);
+        $this->assertStringContainsString('app container', $controller->capturedStderr);
+        $this->assertStringContainsString('docker compose logs app', $controller->capturedStderr);
+        $this->assertStringNotContainsString('admin user', $controller->capturedStderr);
+    }
+
+    public function testSelfRegisterSendsRunnerGroupWhenConfigured(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+        $_ENV['RUNNER_GROUP'] = 'dc2-prod';
+
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->expects($this->once())
+            ->method('postUnauthenticated')
+            ->with(
+                '/api/runner/v1/register',
+                $this->callback(static function (array $payload): bool {
+                    return ($payload['group'] ?? null) === 'dc2-prod'
+                        && $payload['name'] === 'test-runner'
+                        && $payload['bootstrap_secret'] === 'secret'
+                        && isset($payload['software_version']);
+                })
+            )
+            ->willReturn(['ok' => true, 'data' => ['token' => 'grouped-token']]);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('grouped-token', $resolver->resolve());
+        $this->assertStringContainsString("in group 'dc2-prod'", $controller->capturedStdout);
+    }
+
+    public function testSelfRegisterOmitsGroupKeyWhenNoGroupConfigured(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->expects($this->once())
+            ->method('postUnauthenticated')
+            ->with(
+                '/api/runner/v1/register',
+                $this->callback(static function (array $payload): bool {
+                    return !array_key_exists('group', $payload);
+                })
+            )
+            ->willReturn(['ok' => true, 'data' => ['token' => 'ungrouped-token']]);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        $this->assertSame('ungrouped-token', $resolver->resolve());
+        $this->assertStringNotContainsString('in group', $controller->capturedStdout);
+    }
+
+    public function testUnreachableServerErrorNamesTheConfiguredApiUrl(): void
+    {
+        $_ENV['RUNNER_NAME'] = 'test-runner';
+        $_ENV['RUNNER_BOOTSTRAP_SECRET'] = 'secret';
+        $_ENV['API_URL'] = 'http://ansilume.internal:8080';
+
+        $http = $this->createMock(RunnerHttpClient::class);
+        $http->method('postUnauthenticated')->willReturn(null);
+        $http->method('getLastHttpStatus')->willReturn(0);
+
+        $controller = new CapturingController('test', \Yii::$app);
+        $resolver = new RetryCountingTokenResolver($http, $controller, $this->tmpDir);
+
+        try {
+            $this->assertSame('', $resolver->resolve());
+        } finally {
+            unset($_ENV['API_URL']);
+        }
+        $this->assertStringContainsString('http://ansilume.internal:8080', $controller->capturedStderr);
     }
 
     // -------------------------------------------------------------------------

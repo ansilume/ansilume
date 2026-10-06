@@ -79,6 +79,38 @@ docker compose logs runner-1 --tail 50
 docker compose restart runner-1 runner-2
 ```
 
+## Site looks down in the browser, but the containers are healthy
+
+**Symptom:** `docker compose ps` shows everything healthy, `bin/diagnose` reports
+no issues, but the browser spins forever or shows "This site can't be reached".
+
+**Cause:** Ansilume serves plain **http://** out of the box — there is no TLS
+listener unless you put a reverse proxy in front of it. Modern browsers with
+*HTTPS-First* / *HTTPS-Only* mode silently upgrade a typed `host:8080` to
+`https://host:8080`, which nothing answers.
+
+**Solution:** Open the URL with an explicit `http://` prefix, or terminate TLS
+in a reverse proxy and set `APP_URL` to the `https://` address. For
+production, the proxy route is the recommended one.
+
+## A bare `curl` on the URL prints nothing
+
+**Symptom:** `curl http://host:8080/` prints an empty line and exits 0, which
+looks like a broken install.
+
+**Cause:** `/` answers with a `302` redirect to `/login`. The redirect body is
+empty, so curl has nothing to print. The install is fine.
+
+**Solution:** Look at the headers or follow the redirect:
+
+```bash
+curl -IL http://host:8080/          # shows the 302 and the final 200
+curl -s http://host:8080/health     # {"status":"ok", ...}
+```
+
+The quickstart runs exactly these checks at the end of an install or update
+and exits non-zero if any of them fail.
+
 ## App returns 502 Bad Gateway
 
 **Symptom:** Nginx returns 502 when accessing the UI.
@@ -94,6 +126,11 @@ docker compose exec app ps aux | grep php-fpm
 # Check entrypoint progress
 docker compose logs app --tail 20
 ```
+
+Runners that start during this window see the same 502 from nginx. They log
+`Server is not ready for runner registration yet ... retrying in 5s` and keep
+trying for about a minute before giving up and letting the container restart
+policy retry — no action is needed as long as the app container comes up.
 
 ## Health endpoint reports unhealthy
 

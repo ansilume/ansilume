@@ -381,6 +381,98 @@ wait_healthy() {
     info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
 }
 
+# ── Helper: post-install HTTP verification ──────────────────────────────────
+# Proves the stack answers HTTP from the host's perspective: health endpoint,
+# login redirect, login page, and one published asset. Returns non-zero when
+# any check fails so callers can surface it.
+
+# Map curl's "000" write-out (transport failure) to a readable label.
+http_code_label() {
+    if [ -z "${1:-}" ] || [ "${1:-}" = "000" ]; then
+        printf 'unreachable'
+    else
+        printf '%s' "$1"
+    fi
+}
+
+verify_install() {
+    # Probe the port nginx is actually published on. The live compose binding
+    # is authoritative — .env (NGINX_PORT) can be stale or overridden by the
+    # environment, which produced false alarms on healthy installs. Fall back
+    # to NGINX_PORT when compose cannot answer (stack down, older compose).
+    # Either value may carry a bind-address prefix (127.0.0.1:8080, [::]:8080) —
+    # strip everything up to the last colon to get the bare host port.
+    local port
+    port=$($COMPOSE_CMD port nginx 80 2>/dev/null | head -1 || true)
+    port=${port##*:}
+    port=${port:-${NGINX_PORT##*:}}
+    local base="http://127.0.0.1:${port}"
+    local failed=0
+    local code
+
+    if ! command -v curl >/dev/null 2>&1; then
+        warn "curl not found — skipping HTTP verification"
+        return 0
+    fi
+
+    # Health endpoint must answer 200 and report ok — one request for both
+    # the status code and the body so the two cannot disagree.
+    local health_raw
+    health_raw=$(curl -s -m 10 -w '\n%{http_code}' "${base}/health" || true)
+    code=${health_raw##*$'\n'}
+    if [ "$code" = "200" ] && printf '%s' "${health_raw%$'\n'*}" | grep -q '"status":"ok"'; then
+        ok "Health endpoint: OK"
+    else
+        fail "Health endpoint: HTTP $(http_code_label "$code") (${base}/health)"
+        failed=1
+    fi
+
+    # / answers with a 302 redirect to /login. The redirect body is empty —
+    # a bare curl printing nothing here is healthy, not broken.
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base}/" || true)
+    if [ "$code" = "302" ] || [ "$code" = "200" ]; then
+        ok "Root URL: HTTP ${code} → login"
+    else
+        fail "Root URL: HTTP $(http_code_label "$code") (expected a 302 redirect to /login)"
+        failed=1
+    fi
+
+    # Login page renders.
+    local login_html
+    login_html=$(curl -s -m 10 "${base}/login" || true)
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base}/login" || true)
+    if [ "$code" = "200" ]; then
+        ok "Login page: HTTP 200"
+    else
+        fail "Login page: HTTP $(http_code_label "$code") (${base}/login)"
+        failed=1
+    fi
+
+    # One published asset must be served — catches a missing or empty web
+    # assets volume (nginx would 404 on /assets/<hash>/...).
+    local asset
+    asset=$(printf '%s' "$login_html" | grep -oE '/assets/[a-zA-Z0-9]+/[a-zA-Z0-9._-]+' | head -1 || true)
+    if [ -n "$asset" ]; then
+        code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base}${asset}" || true)
+        if [ "$code" = "200" ]; then
+            ok "Web assets: HTTP 200 (${asset})"
+        else
+            fail "Web assets: HTTP $(http_code_label "$code") for ${asset} — check the web_assets volume"
+            failed=1
+        fi
+    else
+        warn "Web assets: no asset URL found on the login page — skipping check"
+    fi
+
+    if [ "$failed" = "1" ]; then
+        printf "\n"
+        warn "One or more HTTP checks failed. Run diagnostics:"
+        info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
+        return 1
+    fi
+    return 0
+}
+
 # ── Resolve compose download ref ────────────────────────────────────────────
 # Use version tag for GitHub raw URLs, fall back to main if version is "latest".
 
@@ -549,10 +641,28 @@ if [ "$INSTALL_MODE" = "update" ]; then
     wait_healthy
 
     info "Migrations will be applied automatically by the app container."
+
+    # ── Verify the updated stack actually answers HTTP ──
+    # Last occurrence wins (docker compose semantics) and CR/whitespace is
+    # stripped so a Windows-edited (CRLF) .env cannot break the probe URL.
+    NGINX_PORT=$(grep '^NGINX_PORT=' .env | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    NGINX_PORT=${NGINX_PORT:-8080}
+    APP_URL=$(grep '^APP_URL=' .env | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    APP_URL=${APP_URL:-http://localhost:${NGINX_PORT}}
+
+    section "Verifying update"
+    UPDATE_OK=1
+    verify_install || UPDATE_OK=0
+
     printf "\n"
-    ok "Update complete. Ansilume is running the latest version."
+    if [ "$UPDATE_OK" = "1" ]; then
+        ok "Update complete. Ansilume is running the latest version at ${APP_URL}"
+        printf "\n"
+        exit 0
+    fi
+    warn "Update finished but verification checks failed (see above)."
     printf "\n"
-    exit 0
+    exit 1
 fi
 
 # ── 4. Database ──────────────────────────────────────────────────────────────
@@ -822,16 +932,49 @@ case "$ADMIN_OUT" in
         ;;
 esac
 
-# ── 12. Done ──────────────────────────────────────────────────────────────────
+# ── 12. Verify installation ──────────────────────────────────────────────────
 
-printf "\n${GREEN}${BOLD}"
-printf "  ╔═══════════════════════════════════════╗\n"
-printf "  ║         Ansilume is ready!            ║\n"
-printf "  ╚═══════════════════════════════════════╝\n"
-printf "${NC}\n"
-ok "URL:      http://localhost:${NGINX_PORT}"
+section "Verifying installation"
+
+VERIFY_OK=1
+verify_install || VERIFY_OK=0
+
+# ── 13. Done ──────────────────────────────────────────────────────────────────
+
+if [ "$VERIFY_OK" = "1" ]; then
+    printf "\n${GREEN}${BOLD}"
+    printf "  ╔═══════════════════════════════════════╗\n"
+    printf "  ║         Ansilume is ready!            ║\n"
+    printf "  ╚═══════════════════════════════════════╝\n"
+    printf "${NC}\n"
+else
+    printf "\n${YELLOW}${BOLD}"
+    printf "  ╔═══════════════════════════════════════╗\n"
+    printf "  ║   Installed — verification FAILED     ║\n"
+    printf "  ╚═══════════════════════════════════════╝\n"
+    printf "${NC}\n"
+    warn "The containers are up, but the HTTP checks above did not pass."
+    warn "Ansilume may not be reachable yet — see the failed checks and run the diagnostics."
+    printf "\n"
+fi
+ok "URL:      ${APP_URL}"
 ok "Username: ${ADMIN_USER}"
 ok "Email:    ${ADMIN_EMAIL}"
+printf "\n"
+case "$APP_URL" in
+    https://*)
+        info "Note: your APP_URL uses https:// — make sure a reverse proxy"
+        info "terminates TLS and forwards to port ${NGINX_PORT}, otherwise the"
+        info "URL will not be reachable."
+        ;;
+    *)
+        info "Note: HTTPS is not configured out of the box — open the URL with an"
+        info "explicit http:// prefix. Browsers that silently force https:// will"
+        info "time out and the site looks down even though it is running."
+        ;;
+esac
+info "A bare 'curl' on the URL prints nothing (302 redirect with an empty"
+info "body) — verify manually with: curl -IL ${APP_URL}"
 printf "\n"
 info "Useful commands:"
 info "  $COMPOSE_CMD logs -f          — follow container logs"
@@ -842,3 +985,8 @@ info "                                — run diagnostics"
 printf "\n"
 info "Docs: https://github.com/ansilume/ansilume/tree/main/docs"
 printf "\n"
+
+if [ "$VERIFY_OK" != "1" ]; then
+    warn "Installation completed but verification checks failed (see above)."
+    exit 1
+fi
