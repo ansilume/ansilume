@@ -90,6 +90,9 @@ return [
         'lintService' => [
             'class' => 'app\services\LintService',
         ],
+        'projectDeletionService' => [
+            'class' => 'app\services\ProjectDeletionService',
+        ],
         'jobLaunchService' => [
             'class' => 'app\services\JobLaunchService',
         ],

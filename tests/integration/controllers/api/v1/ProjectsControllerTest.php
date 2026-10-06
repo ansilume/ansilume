@@ -164,6 +164,29 @@ class ProjectsControllerTest extends WebControllerTestCase
         $this->assertSame(422, \Yii::$app->response->statusCode);
     }
 
+    /**
+     * Regression: a project whose templates were soft-deleted could not be
+     * removed via the API either — the guard saw zero templates, the RESTRICT
+     * foreign key saw them all, and the request ended in a 500.
+     */
+    public function testDeleteSucceedsWhenOnlySoftDeletedTemplatesRemain(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $project = $this->createProject($userId);
+        $inventory = $this->createInventory($userId);
+        $group = $this->createRunnerGroup($userId);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $userId);
+        $this->assertTrue($template->softDelete());
+
+        $data = $this->callSuccess($this->ctrl->actionDelete($project->id));
+        /** @var array<string, mixed> $payload */
+        $payload = $data;
+        $this->assertTrue($payload['deleted']);
+        $this->assertNull(\app\models\Project::findOne($project->id));
+        $this->assertNull(\app\models\JobTemplate::findWithDeleted()->where(['id' => $template->id])->one());
+    }
+
     // -- Sync -----------------------------------------------------------------
 
     public function testSyncRejects422ForManualProject(): void

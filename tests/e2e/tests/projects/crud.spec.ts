@@ -85,4 +85,14 @@ test.describe('Projects CRUD', () => {
     await deleteByRowText(page, '/project/index', 'e2e-crud-project');
     await expectFlash(page, 'success');
   });
+
+  test('delete project whose templates were soft-deleted (integrity violation regression)', async ({ page }) => {
+    // Seeded e2e-softdel-project has one template that was deleted in the UI
+    // (soft-deleted row still references the project). Deleting the project
+    // used to hit the RESTRICT foreign key and render a 500 error page.
+    await deleteByRowText(page, '/project/index', 'e2e-softdel-project');
+    await expectFlash(page, 'success');
+    await page.goto('/project/index');
+    await expect(page.locator('table.table tbody tr', { hasText: 'e2e-softdel-project' })).toHaveCount(0);
+  });
 });

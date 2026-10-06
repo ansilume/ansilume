@@ -143,7 +143,9 @@ paths:
       tags: [Projects]
       summary: Delete a project
       description: |
-        Requires `project.delete`. Refuses if job templates reference this project.
+        Requires `project.delete`. Refuses with 422 while active job templates
+        reference this project. Templates that were already deleted (soft-deleted,
+        no longer listed) are purged together with the project.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }

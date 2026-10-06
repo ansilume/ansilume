@@ -12,6 +12,7 @@ use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\services\LintService;
 use app\services\ProjectAccessChecker;
+use app\services\ProjectDeletionService;
 use app\services\ProjectService;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
@@ -170,14 +171,16 @@ class ProjectController extends BaseController
         $model = $this->findModel($id);
         $this->requireAccess($model, true);
 
-        $templateCount = $model->getJobTemplates()->count();
+        /** @var ProjectDeletionService $deletion */
+        $deletion = \Yii::$app->get('projectDeletionService');
+        $templateCount = $deletion->blockingTemplateCount($model);
         if ($templateCount > 0) {
-            $this->session()->setFlash('danger', "Cannot delete \"{$model->name}\": {$templateCount} job template(s) still reference this project. Remove or reassign them first.");
+            $this->session()->setFlash('danger', $deletion->refusalMessage($model, $templateCount));
             return $this->redirect(['view', 'id' => $id]);
         }
 
         $name = $model->name;
-        $model->delete();
+        $deletion->delete($model);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_DELETED, 'project', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', "Project \"{$name}\" deleted.");
         return $this->redirect(['index']);

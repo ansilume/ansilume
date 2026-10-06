@@ -82,6 +82,9 @@ return [
         'lintService' => [
             'class' => 'app\services\LintService',
         ],
+        'projectDeletionService' => [
+            'class' => 'app\services\ProjectDeletionService',
+        ],
         'credentialService' => [
             'class' => 'app\services\CredentialService',
         ],

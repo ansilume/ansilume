@@ -168,16 +168,15 @@ class ProjectsController extends BaseApiController
         if ($userId === null || !$this->checker()->canOperate($userId, $model->id)) {
             return $this->error('Forbidden.', 403);
         }
-        $templateCount = $model->getJobTemplates()->count();
+        /** @var \app\services\ProjectDeletionService $deletion */
+        $deletion = \Yii::$app->get('projectDeletionService');
+        $templateCount = $deletion->blockingTemplateCount($model);
         if ($templateCount > 0) {
-            return $this->error(
-                "Cannot delete \"{$model->name}\": {$templateCount} job template(s) still reference this project.",
-                422
-            );
+            return $this->error($deletion->refusalMessage($model, $templateCount), 422);
         }
 
         $name = $model->name;
-        $model->delete();
+        $deletion->delete($model);
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_PROJECT_DELETED,

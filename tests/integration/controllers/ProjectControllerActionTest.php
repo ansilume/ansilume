@@ -308,6 +308,40 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $this->assertArrayHasKey('danger', $flashes);
     }
 
+    /**
+     * Regression: templates are soft-deleted (hidden by JobTemplate::find()),
+     * but their rows still reference the project. The old guard counted only
+     * visible templates, so the delete reached the database and died with an
+     * integrity constraint violation (HTTP 500) — e.g. when removing the Demo
+     * project after deleting its templates in the UI.
+     */
+    public function testDeleteSucceedsWhenOnlySoftDeletedTemplatesRemain(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $inv = $this->createInventory($user->id);
+        $template = $this->createJobTemplate((int)$project->id, (int)$inv->id, (int)$group->id, $user->id);
+        $this->assertTrue($template->softDelete());
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionDelete((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertNull(Project::findOne($project->id), 'project must be deleted');
+        $this->assertNull(
+            \app\models\JobTemplate::findWithDeleted()->where(['id' => $template->id])->one(),
+            'the soft-deleted template row must be purged with the project'
+        );
+        $flashes = \Yii::$app->session->getAllFlashes();
+        $this->assertArrayHasKey('success', $flashes);
+        $this->assertNotNull(AuditLog::findOne([
+            'action' => AuditLog::ACTION_PROJECT_DELETED,
+            'object_id' => $project->id,
+        ]));
+    }
+
     // ── actionSync() ─────────────────────────────────────────────────────────
 
     public function testSyncQueuesGitProject(): void

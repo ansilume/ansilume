@@ -181,6 +181,9 @@ $config = [
         'lintService' => [
             'class' => 'app\services\LintService',
         ],
+        'projectDeletionService' => [
+            'class' => 'app\services\ProjectDeletionService',
+        ],
         'scheduleService' => [
             'class' => 'app\services\ScheduleService',
         ],
