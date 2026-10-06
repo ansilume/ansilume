@@ -87,7 +87,7 @@ The release workflow (`.github/workflows/release.yml`) triggers on `v*` tags and
 
 1. **Build** — each image is built once per architecture on a *native* runner (amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm` — no QEMU emulation) and pushed to `ghcr.io` by digest only. The Buildx GHA cache is scoped per image and architecture.
 2. **Merge** — per image, the two digests are combined into a multi-arch manifest list via `docker buildx imagetools create`, the semver + `latest` tags are applied, and the pushed manifest is verified to contain both `linux/amd64` and `linux/arm64`.
-3. **Smoke test** — an arm64 runner pulls the freshly tagged images, boots the full `docker-compose.prebuilt.yml` stack, asserts the resolved images are arm64, and waits until app, nginx, and runner report healthy (including an HTTP `/health` check through nginx).
+3. **Smoke test** — an arm64 runner pulls the freshly tagged images, boots the full `docker-compose.prebuilt.yml` stack, asserts the resolved images are arm64, and waits until app, nginx, and runner report healthy (including an HTTP `/health` check through nginx). It then checks that runner-1 can resolve nginx but none of the backend services, and that Redis refuses an unauthenticated `PING`.
 
 All pushes use the repository's `GITHUB_TOKEN`.
 

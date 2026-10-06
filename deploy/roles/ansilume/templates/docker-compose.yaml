@@ -15,8 +15,12 @@ services:
     container_name: {{ ansilume_compose_project }}_app
     restart: {{ ansilume_restart_policy }}
     working_dir: /var/www
-{% if not ansilume_use_prebuilt_images %}
     volumes:
+{% if ansilume_use_prebuilt_images %}
+      # Shared with the queue-worker (project syncs) and nginx (published assets).
+      - runtime_projects:/var/www/runtime/projects
+      - web_assets:/var/www/web/assets
+{% else %}
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
 {% endif %}
@@ -52,8 +56,10 @@ services:
     restart: {{ ansilume_restart_policy }}
     ports:
       - "${NGINX_PORT:-{{ ansilume_nginx_port }}}:80"
-{% if not ansilume_use_prebuilt_images %}
     volumes:
+{% if ansilume_use_prebuilt_images %}
+      - web_assets:/var/www/web/assets:ro
+{% else %}
       - .:/var/www
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
 {% endif %}
@@ -68,6 +74,7 @@ services:
       start_period: 60s
     networks:
       - {{ ansilume_network_name }}
+      - {{ ansilume_runner_network_name }}
 
 {% if ansilume_db_local %}
   db:
@@ -98,8 +105,17 @@ services:
     image: {{ ansilume_redis_image }}
     container_name: {{ ansilume_compose_project }}_redis
     restart: {{ ansilume_restart_policy }}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    # requirepass only when REDIS_PASSWORD is set; the password comes from the
+    # container environment and is not part of the compose command.
+    command:
+      - sh
+      - -c
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server; fi'
     healthcheck:
-      test: ["CMD", "redis-cli", "-h", "localhost", "ping"]
+      # REDISCLI_AUTH keeps the password off the redis-cli command line.
+      test: ["CMD-SHELL", 'if [ -n "$$REDIS_PASSWORD" ]; then export REDISCLI_AUTH="$$REDIS_PASSWORD"; fi; redis-cli -h localhost ping | grep -q PONG']
       interval: 10s
       timeout: 3s
       retries: 3
@@ -123,7 +139,7 @@ services:
     restart: {{ ansilume_restart_policy }}
     working_dir: /var/www
     command: ["/bin/sh", "-c",
-      "while true; do php yii schedule/run && touch /tmp/schedule-alive; sleep 60; done"]
+      "while true; do php yii schedule/run && php yii maintenance/run && touch /tmp/schedule-alive; sleep 60; done"]
 {% if not ansilume_use_prebuilt_images %}
     volumes:
       - .:/var/www
@@ -165,8 +181,10 @@ services:
     restart: {{ ansilume_restart_policy }}
     working_dir: /var/www
     command: ["php", "yii", "worker/start"]
-{% if not ansilume_use_prebuilt_images %}
     volumes:
+{% if ansilume_use_prebuilt_images %}
+      - runtime_projects:/var/www/runtime/projects
+{% else %}
       - .:/var/www
       - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
 {% endif %}
@@ -192,25 +210,18 @@ services:
 
 {% for i in range(1, ansilume_runner_count + 1) %}
   runner-{{ i }}:
+  # The standalone runner image in both modes, never a mount of the install
+  # directory: playbooks must neither read .env nor change the code that
+  # php-fpm executes. The runner clones projects itself.
 {% if ansilume_use_prebuilt_images %}
     image: {{ ansilume_runner_image }}:{{ ansilume_version }}
 {% else %}
     build:
       context: .
-      dockerfile: docker/php/Dockerfile
-      args:
-        USER_ID: ${UID:-{{ ansilume_uid }}}
-        GROUP_ID: ${GID:-{{ ansilume_gid }}}
+      dockerfile: docker/runner/Dockerfile
 {% endif %}
     container_name: {{ ansilume_compose_project }}_runner_{{ i }}
     restart: {{ ansilume_restart_policy }}
-    working_dir: /var/www
-    command: ["php", "yii", "runner/start"]
-{% if not ansilume_use_prebuilt_images %}
-    volumes:
-      - .:/var/www
-      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
-{% endif %}
     environment:
       - RUNNER_NAME=runner-{{ i }}
       - RUNNER_BOOTSTRAP_SECRET=${RUNNER_BOOTSTRAP_SECRET}
@@ -225,14 +236,24 @@ services:
       retries: 3
       start_period: 120s
     networks:
-      - {{ ansilume_network_name }}
+      - {{ ansilume_runner_network_name }}
 
 {% endfor %}
 networks:
   {{ ansilume_network_name }}:
     driver: bridge
+  # Runners reach the server only through nginx; playbooks must not reach
+  # app (php-fpm), db, redis or the queue-worker.
+  {{ ansilume_runner_network_name }}:
+    driver: bridge
 
-{% if ansilume_db_local %}
+{% if ansilume_db_local or ansilume_use_prebuilt_images %}
 volumes:
+{% if ansilume_db_local %}
   db_data:
+{% endif %}
+{% if ansilume_use_prebuilt_images %}
+  runtime_projects:
+  web_assets:
+{% endif %}
 {% endif %}

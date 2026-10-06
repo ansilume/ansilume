@@ -5,10 +5,19 @@ Ansilume captures, stores, and exposes for download or inline preview.
 Typical use cases: generated reports, rendered configs, host facts,
 diagnostic dumps, screenshots, JSON/YAML produced by a custom module, etc.
 
-The runner exports a per-job temporary directory via the
-`ANSILUME_ARTIFACT_DIR` environment variable. Anything the playbook writes
-into that directory is collected after the playbook finishes and persisted to
-permanent storage. The temp directory itself is removed.
+Capture is built around a per-job temporary directory that is exported to
+the playbook as `ANSILUME_ARTIFACT_DIR`. Anything the playbook writes into
+that directory is collected after the playbook finishes and persisted to
+permanent storage, and the temporary directory is removed. Runners do not
+export it yet, see the limitation below.
+
+> **Known limitation:** artifact capture was only implemented in an old
+> execution path inside the queue-worker, which has not run jobs since the
+> pull runners took over (and was removed in this release). Jobs executed by
+> runners currently do not set `ANSILUME_ARTIFACT_DIR`, so no artifacts are
+> captured. Storage, retention, the UI and the REST API below work as
+> described for artifacts that already exist. Runner-side capture is being
+> added.
 
 ---
 
@@ -17,10 +26,10 @@ permanent storage. The temp directory itself is removed.
 ```
 ┌─────────────┐  1. exports ANSILUME_ARTIFACT_DIR  ┌─────────────────┐
 │   Runner    │ ──────────────────────────────────►│  ansible-       │
-│ (yii worker)│                                    │  playbook       │
+│             │                                    │  playbook       │
 └─────┬───────┘                                    └────────┬────────┘
       │                                                     │
-      │  4. ArtifactCollector → ArtifactService             │ 2. writes files
+      │  4. ArtifactService (server)                        │ 2. writes files
       │                                                     │    into the dir
       ▼                                                     ▼
 ┌─────────────────┐                              ┌─────────────────────┐
@@ -36,10 +45,10 @@ permanent storage. The temp directory itself is removed.
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-1. When a job starts, `RunAnsibleJob` creates `/tmp/ansilume_artifacts_<job_id>_<rand>/`
+1. When a job starts, the executor creates `/tmp/ansilume_artifacts_<job_id>_<rand>/`
    and exports its path in the env block passed to `ansible-playbook`.
 2. The playbook can read `$ANSILUME_ARTIFACT_DIR` and write any files into it.
-3. After the playbook exits, `ArtifactCollector` is invoked.
+3. After the playbook exits, the executor hands the directory to the server.
 4. `ArtifactService::collectFromDirectory()` scans the directory, validates
    each file (size, symlink check, path-traversal guard) and copies eligible
    files into `@runtime/artifacts/job_<ID>/`. A `job_artifact` row is

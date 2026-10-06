@@ -29,15 +29,6 @@ class PlaybookEnvironmentTest extends TestCase
         $this->assertSame('/usr/bin', $env['PATH']);
     }
 
-    public function testArtifactDirIsOnlySetWhenGiven(): void
-    {
-        $without = PlaybookEnvironment::build([], '/tmp/cb');
-        $with = PlaybookEnvironment::build([], '/tmp/cb', '/tmp/artifacts');
-
-        $this->assertArrayNotHasKey('ANSILUME_ARTIFACT_DIR', $without);
-        $this->assertSame('/tmp/artifacts', $with['ANSILUME_ARTIFACT_DIR']);
-    }
-
     public function testPlaybooksNeverSeeRunnerOrServerSecrets(): void
     {
         $env = PlaybookEnvironment::build([

@@ -893,13 +893,11 @@ class ProjectControllerActionTest extends WebControllerTestCase
         if (!class_exists(\Redis::class)) {
             $this->markTestSkipped('phpredis extension not loaded.');
         }
-        $redis = new \Redis();
         try {
-            $redis->connect($_ENV['REDIS_HOST'] ?? 'redis', (int)($_ENV['REDIS_PORT'] ?? 6379));
+            return \app\components\RedisSettings::fromEnvironment($_ENV)->connectPhpRedis(new \Redis());
         } catch (\Throwable $e) {
             $this->markTestSkipped('Redis not reachable: ' . $e->getMessage());
         }
-        return $redis;
     }
 
     /**

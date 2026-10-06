@@ -143,15 +143,6 @@ class WorkerHeartbeat
 
     protected static function connectRedisStatic(): \Redis
     {
-        $r = new \Redis();
-        $r->connect(
-            $_ENV['REDIS_HOST'] ?? 'redis',
-            (int)($_ENV['REDIS_PORT'] ?? 6379)
-        );
-        $db = (int)($_ENV['REDIS_DB'] ?? 0);
-        if ($db !== 0) {
-            $r->select($db);
-        }
-        return $r;
+        return RedisSettings::fromEnvironment($_ENV)->connectPhpRedis(new \Redis());
     }
 }

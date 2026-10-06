@@ -321,6 +321,76 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $this->assertSame(0, (int)JobTask::find()->where(['job_id' => $job->id])->count());
     }
 
+    public function testSaveTasksKeepsHasChangesFalseWhenNothingChanged(): void
+    {
+        $job = $this->makeRunningJob();
+
+        $this->service->saveTasks($job, [
+            ['seq' => 1, 'name' => 'Gather facts', 'action' => 'setup', 'host' => 'web1', 'status' => 'ok',
+                'changed' => false, 'duration_ms' => 500],
+        ]);
+
+        $job->refresh();
+        $this->assertSame(0, (int)$job->has_changes);
+    }
+
+    public function testSaveTasksMapsAllFields(): void
+    {
+        $job = $this->makeRunningJob();
+
+        $this->service->saveTasks($job, [
+            ['seq' => 5, 'name' => 'Deploy app', 'action' => 'copy', 'host' => 'srv1', 'status' => 'ok',
+                'changed' => true, 'duration_ms' => 1500],
+        ]);
+
+        $task = JobTask::find()->where(['job_id' => $job->id])->one();
+        $this->assertNotNull($task);
+        $this->assertSame(5, $task->sequence);
+        $this->assertSame('Deploy app', $task->task_name);
+        $this->assertSame('copy', $task->task_action);
+        $this->assertSame('srv1', $task->host);
+        $this->assertSame('ok', $task->status);
+        $this->assertSame(1, (int)$task->changed);
+        $this->assertSame(1500, (int)$task->duration_ms);
+    }
+
+    public function testSaveTasksHandlesMultipleHosts(): void
+    {
+        $job = $this->makeRunningJob();
+
+        $this->service->saveTasks($job, [
+            ['seq' => 1, 'name' => 'ping', 'action' => 'ping', 'host' => 'web1', 'status' => 'ok',
+                'changed' => false, 'duration_ms' => 10],
+            ['seq' => 2, 'name' => 'ping', 'action' => 'ping', 'host' => 'web2', 'status' => 'ok',
+                'changed' => false, 'duration_ms' => 12],
+            ['seq' => 3, 'name' => 'ping', 'action' => 'ping', 'host' => 'db1', 'status' => 'unreachable',
+                'changed' => false, 'duration_ms' => 5000],
+        ]);
+
+        $records = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
+        $this->assertCount(3, $records);
+        $this->assertSame('web1', $records[0]->host);
+        $this->assertSame('web2', $records[1]->host);
+        $this->assertSame('db1', $records[2]->host);
+        $this->assertSame('unreachable', $records[2]->status);
+    }
+
+    public function testSaveTasksAppliesDefaultsForMissingFields(): void
+    {
+        $job = $this->makeRunningJob();
+
+        $this->service->saveTasks($job, [['seq' => 0]]);
+
+        $task = JobTask::find()->where(['job_id' => $job->id])->one();
+        $this->assertNotNull($task);
+        $this->assertSame('', $task->task_name);
+        $this->assertSame('', $task->task_action);
+        $this->assertSame('', $task->host);
+        $this->assertSame('ok', $task->status);
+        $this->assertSame(0, (int)$task->changed);
+        $this->assertSame(0, (int)$task->duration_ms);
+    }
+
     // -------------------------------------------------------------------------
     // cancel() — operator-initiated cancellation
     // -------------------------------------------------------------------------

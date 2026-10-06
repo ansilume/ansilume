@@ -6,6 +6,8 @@
 .env
 .env.example
 docker-compose.yml
+# Rendered by the Ansible deploy role, with secrets as fallback defaults.
+docker-compose.yaml
 docker/adminer
 docker/mysql
 

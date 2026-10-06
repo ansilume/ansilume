@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace app\components;
 
 /**
- * Environment for ansible-playbook runs, used by the pull runner and the
- * queue-worker execution path alike.
+ * Environment for ansible-playbook runs on the pull runner.
  *
  * Playbooks only see the allowlist from {@see SubprocessEnvironment}, the
  * settings Ansilume needs for its callback plugin, and the variables an
@@ -71,7 +70,7 @@ final class PlaybookEnvironment
      * @param array<string, string> $parentEnv Usually getenv().
      * @return array<string, string>
      */
-    public static function build(array $parentEnv, string $callbackFile, ?string $artifactDir = null): array
+    public static function build(array $parentEnv, string $callbackFile): array
     {
         $overrides = [
             'ANSIBLE_CALLBACK_PLUGINS' => dirname(__DIR__) . '/ansible/callback_plugins',
@@ -82,9 +81,6 @@ final class PlaybookEnvironment
             'PYTHONUNBUFFERED' => '1',
             'HOME' => self::ANSIBLE_HOME,
         ];
-        if ($artifactDir !== null) {
-            $overrides['ANSILUME_ARTIFACT_DIR'] = $artifactDir;
-        }
 
         return SubprocessEnvironment::build($parentEnv, $overrides, self::extraNames($parentEnv));
     }

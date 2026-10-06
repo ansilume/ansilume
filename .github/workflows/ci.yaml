@@ -46,7 +46,10 @@ jobs:
             -e "s|^COOKIE_VALIDATION_KEY=.*|COOKIE_VALIDATION_KEY=$(openssl rand -hex 32)|" \
             -e "s|^APP_SECRET_KEY=.*|APP_SECRET_KEY=$(openssl rand -hex 32)|" \
             -e "s|^RUNNER_BOOTSTRAP_SECRET=.*|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
+            -e "s|^REDIS_PASSWORD=.*|REDIS_PASSWORD=$(openssl rand -hex 16)|" \
             .env
+          # Every suite runs against a Redis that requires a password.
+          grep -q "^REDIS_PASSWORD=..*" .env
 
       - name: Build and start services
         run: |

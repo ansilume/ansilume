@@ -20,7 +20,7 @@ class AnsibleInventoryRunner extends Component
      * Writable HOME for the subprocess. ansible plugins (and tools like
      * ansible-vault helpers) probe `~/.ansible*` and similar paths; the
      * default www-data home `/var/www` is root-owned, so anything that
-     * writes there fails with EACCES. Same fix as RunAnsibleJob and
+     * writes there fails with EACCES. Same fix as PlaybookEnvironment and
      * ProjectService — point at a runtime dir prepared by the entrypoints.
      */
     public const ANSIBLE_HOME = '/var/www/runtime/ansible-home';

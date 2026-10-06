@@ -8,6 +8,7 @@
 #   ansilume_db_password: "{{ vault_db_password }}"
 #   ansilume_db_root_password: "{{ vault_db_root_password }}"
 #   ansilume_runner_bootstrap_secret: "{{ vault_runner_bootstrap_secret }}"
+#   ansilume_redis_password: "{{ vault_redis_password }}"
 #
 #   ansilume_nginx_port: 443
 #   ansilume_runner_count: 4

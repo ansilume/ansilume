@@ -253,25 +253,29 @@
           This is expected if running outside the Docker network.
       when: health_response.status is not defined
 
-    - name: Check DNS resolution of database host
-      ansible.builtin.command: getent hosts db
-      register: dns_db
+    # The trailing dot makes the name absolute, so a resolver search domain
+    # (e.g. app.example.com) cannot produce a false warning.
+    - name: Check that backend services are not reachable from the runner
+      ansible.builtin.command: "getent hosts {{ item }}."
+      loop:
+        - app
+        - db
+        - redis
+      register: backend_dns
       changed_when: false
       failed_when: false
 
-    - name: Show database DNS result
+    - name: Report runner network isolation
       ansible.builtin.debug:
-        msg: "{{ 'DB host resolved: ' ~ dns_db.stdout if dns_db.rc == 0 else 'WARNING: Cannot resolve db host (expected outside Docker network)' }}"
-
-    - name: Check DNS resolution of Redis host
-      ansible.builtin.command: getent hosts redis
-      register: dns_redis
-      changed_when: false
-      failed_when: false
-
-    - name: Show Redis DNS result
-      ansible.builtin.debug:
-        msg: "{{ 'Redis host resolved: ' ~ dns_redis.stdout if dns_redis.rc == 0 else 'WARNING: Cannot resolve redis host (expected outside Docker network)' }}"
+        msg: >-
+          {{ item.item ~ ': not reachable from this runner (expected)'
+             if item.rc != 0
+             else 'WARNING: ' ~ item.item ~ ' is resolvable from this runner. Bundled runners must only'
+                  ~ ' join the runners network, otherwise playbooks can reach backend services'
+                  ~ ' (see docs/updating.md).' }}
+      loop: "{{ backend_dns.results }}"
+      loop_control:
+        label: "{{ item.item }}"
 
     # ==================================================================
     # Summary

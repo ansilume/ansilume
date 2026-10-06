@@ -365,8 +365,15 @@ After starting a runner, verify it registered and is online:
   sends it the job's credentials in decrypted form over this connection.
 - **Runner isolation**: Runners execute Ansible playbooks with whatever system
   privileges they have. Run the container as a non-root user (the Docker image
-  defaults to `www-data`). Consider network policies to limit what the runner
-  can reach beyond the Ansilume server.
+  defaults to `www-data`). The bundled runners of the prebuilt compose file
+  and the Ansible deploy role use the standalone runner image, mount nothing
+  from the host and sit on a separate `runners` network that only nginx joins.
+  Playbooks therefore cannot reach php-fpm, the database or Redis, and cannot
+  read the server's `.env`. The development compose file of a git checkout
+  mounts the source tree into its runners, so playbooks there can read `.env`
+  and change the code; use it for development only. Give standalone runners
+  the same treatment: they need nothing but the Ansilume API (HTTP/HTTPS) and
+  the hosts they manage.
 - **Shared runners**: All jobs on a runner run as the same user. A playbook can
   read files of other jobs running at the same time on that runner, including
   their credential temp files, and the runner's cached token. Give teams that

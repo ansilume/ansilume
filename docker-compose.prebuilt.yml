@@ -55,6 +55,7 @@ services:
       start_period: 60s
     networks:
       - ansilume
+      - runners
 
   queue-worker:
     image: ghcr.io/ansilume/ansilume:latest
@@ -84,7 +85,7 @@ services:
     container_name: ansilume_schedule_runner
     restart: unless-stopped
     command: ["/bin/sh", "-c",
-      "while true; do php yii schedule/run && touch /tmp/schedule-alive; sleep 60; done"]
+      "while true; do php yii schedule/run && php yii maintenance/run && touch /tmp/schedule-alive; sleep 60; done"]
     env_file: .env
     depends_on:
       db:
@@ -121,7 +122,7 @@ services:
       retries: 3
       start_period: 120s
     networks:
-      - ansilume
+      - runners
 
   db:
     # Gated behind the "internal-db" profile so operators running against
@@ -153,8 +154,18 @@ services:
     image: redis:7.2-alpine
     container_name: ansilume_redis
     restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    # requirepass only when REDIS_PASSWORD is set. The password comes from the
+    # container environment, so it is not part of the compose command (docker
+    # ps / docker inspect Cmd); redis rewrites its process title after start.
+    command:
+      - sh
+      - -c
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server; fi'
     healthcheck:
-      test: ["CMD", "redis-cli", "-h", "localhost", "ping"]
+      # REDISCLI_AUTH keeps the password off the redis-cli command line.
+      test: ["CMD-SHELL", 'if [ -n "$$REDIS_PASSWORD" ]; then export REDISCLI_AUTH="$$REDIS_PASSWORD"; fi; redis-cli -h localhost ping | grep -q PONG']
       interval: 10s
       timeout: 3s
       retries: 3
@@ -164,6 +175,12 @@ services:
 
 networks:
   ansilume:
+    driver: bridge
+  # Bundled runners live on their own network and reach the server only
+  # through nginx (API_URL=http://nginx). Playbooks run on runners, so they must
+  # not reach app (php-fpm), db, redis or the queue-worker. Not 'internal':
+  # playbooks, git and composer need outbound access.
+  runners:
     driver: bridge
 
 volumes:

@@ -33,9 +33,11 @@ fail()    { printf "  ${RED}✗${NC} %s\n" "$1"; }
 info()    { printf "  %s\n" "$1"; }
 
 # Redact values that look like secrets from a key=value stream.
-# Matches: PASSWORD, SECRET, KEY, TOKEN (case-insensitive).
+# Matches: PASSWORD, SECRET, KEY, TOKEN (case-insensitive), and the
+# arguments of a Redis AUTH command ("Redis command was: AUTH <password>").
 redact() {
-    sed -E 's/(PASSWORD|SECRET|KEY|TOKEN)([=:][[:space:]]*)([^[:space:]]+)/\1\2***REDACTED***/gi'
+    sed -E -e 's/(PASSWORD|SECRET|KEY|TOKEN)([=:][[:space:]]*)([^[:space:]]+)/\1\2***REDACTED***/gi' \
+        -e 's/(AUTH)([[:space:]]+[^[:space:]]+){1,2}/\1 ***REDACTED***/g'
 }
 
 # Map curl's "000" write-out (transport failure) to a readable label.
@@ -62,6 +64,25 @@ published_nginx_port() {
     fi
     port=${port##*:}
     printf '%s' "${port:-8080}"
+}
+
+# IDs of the Docker networks a container is attached to, space-separated.
+container_networks() {
+    docker inspect -f '{{range .NetworkSettings.Networks}}{{.NetworkID}} {{end}}' "$1" 2>/dev/null || true
+}
+
+# Succeeds when two containers share at least one Docker network. Compares
+# network IDs instead of resolving names, so a DNS search domain cannot make
+# an isolated runner look connected.
+share_network() {
+    local net other
+    other=" $(container_networks "$2") "
+    for net in $(container_networks "$1"); do
+        case "$other" in
+            *" ${net} "*) return 0 ;;
+        esac
+    done
+    return 1
 }
 
 # PHP prelude for in-container deep probes. Boots a console application the
@@ -141,6 +162,7 @@ fi
 
 section "Configuration (.env)"
 
+redis_password_set=0
 if [ -f .env ]; then
     ok ".env file exists"
 
@@ -169,10 +191,20 @@ if [ -f .env ]; then
         fi
     done
 
+    # REDIS_PASSWORD is optional, so only report whether it is set.
+    if ! grep -q "^REDIS_PASSWORD=" .env 2>/dev/null; then
+        warn "REDIS_PASSWORD is missing from .env — Redis runs without authentication (run quickstart --update)"
+    elif [ -z "$(grep "^REDIS_PASSWORD=" .env | tail -1 | cut -d= -f2- | tr -d '[:space:]')" ]; then
+        warn "REDIS_PASSWORD is empty — Redis runs without authentication"
+    else
+        ok "REDIS_PASSWORD is set"
+        redis_password_set=1
+    fi
+
     # Show non-secret config values
     info ""
     info "Non-secret configuration:"
-    grep -E '^(APP_ENV|YII_ENV|YII_DEBUG|NGINX_PORT|DB_NAME|DB_USER|DB_HOST|REDIS_HOST|REDIS_PORT|REDIS_DB|RUNNER_MODE|SMTP_HOST|SMTP_PORT)=' .env 2>/dev/null | while read -r line; do
+    grep -E '^(APP_ENV|YII_ENV|YII_DEBUG|NGINX_PORT|DB_NAME|DB_USER|DB_HOST|REDIS_HOST|REDIS_PORT|REDIS_DB|SMTP_HOST|SMTP_PORT)=' .env 2>/dev/null | while read -r line; do
         info "  ${line}"
     done
 else
@@ -196,6 +228,14 @@ if [ -n "$compose_file" ]; then
     ok "Found: ${compose_file}"
     services=$(docker compose config --services 2>/dev/null | sort)
     info "Services defined: $(echo "$services" | tr '\n' ' ')"
+
+    # A password in .env only protects the bundled Redis when the compose file
+    # passes it on; otherwise Redis has none and every AUTH is rejected.
+    env_redis_host=$(grep '^REDIS_HOST=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    if [ "$redis_password_set" = "1" ] && [ "${env_redis_host:-redis}" = "redis" ] \
+        && ! grep -q 'REDIS_PASSWORD' "$compose_file"; then
+        fail "REDIS_PASSWORD is set, but ${compose_file} does not pass it to the redis service — download the current compose file"
+    fi
 else
     fail "No docker-compose file found"
 fi
@@ -283,6 +323,12 @@ if [ -n "$app_container" ]; then
         ok "app → redis (${redis_host}:${redis_port}): reachable"
     else
         warn "app → redis (${redis_host}:${redis_port}): may not be reachable"
+    fi
+
+    # Images that predate REDIS_PASSWORD never authenticate (NOAUTH).
+    if [ "$redis_password_set" = "1" ] \
+        && ! docker exec "$app_container" test -f /var/www/components/RedisSettings.php 2>/dev/null; then
+        fail "app image predates REDIS_PASSWORD — pull the current images: docker compose pull && docker compose up -d"
     fi
 
     # Health check from inside app
@@ -384,6 +430,15 @@ else
         else
             fail "${runner_svc}: git not found — runner cannot sync git projects (upgrade to latest runner image)"
         fi
+
+        # Bundled runners must only share a network with nginx. Otherwise
+        # playbooks can reach php-fpm, the database or Redis.
+        for backend in app db redis queue-worker; do
+            backend_cid=$(docker compose ps -q "$backend" 2>/dev/null | head -1 || true)
+            if [ -n "$backend_cid" ] && share_network "$runner_cid" "$backend_cid"; then
+                fail "${runner_svc}: shares a Docker network with '${backend}' — runners must only join the 'runners' network (docs/updating.md)"
+            fi
+        done
 
         # Check how many projects have been synced locally.
         proj_count=$(docker exec "$runner_cid" sh -c \

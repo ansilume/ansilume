@@ -80,6 +80,11 @@ ansilume_redis_host: redis
 ansilume_redis_port: 6379
 ansilume_redis_db: 0
 
+# Redis password (REDIS_PASSWORD). Empty means no AUTH. With a local Redis
+# the container enforces it; for an external Redis use that server's
+# password. Keep it in Ansible Vault (see group_vars/ansilume.yaml).
+ansilume_redis_password: ""
+
 # Redis image and version for the local container.
 ansilume_redis_image: "redis:7.2-alpine"
 
@@ -120,12 +125,6 @@ ansilume_gid: 1000
 
 # Number of runner containers to deploy.
 ansilume_runner_count: 2
-
-# Runner execution mode: "local" (direct) or "docker" (isolated container).
-ansilume_runner_mode: local
-
-# Docker image for isolated ansible execution (only when runner_mode=docker).
-ansilume_runner_docker_image: "cytopia/ansible:latest"
 
 # -- Job execution -----------------------------------------------------------
 
@@ -184,6 +183,11 @@ ansilume_restart_policy: unless-stopped
 
 # Docker network name.
 ansilume_network_name: ansilume
+
+# Network for the bundled runners. Only nginx joins both networks, so
+# playbooks cannot reach app, db, redis or the queue-worker. Must differ
+# from ansilume_network_name.
+ansilume_runner_network_name: runners
 
 # -- System requirements -----------------------------------------------------
 

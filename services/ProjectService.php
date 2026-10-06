@@ -254,8 +254,8 @@ class ProjectService extends Component
      * "Permission denied". The matching directory is created and chowned in
      * docker/php/entrypoint*.sh and docker/runner/entrypoint.sh.
      *
-     * Mirrors the equivalent constant for ansible (see RunAnsibleJob and
-     * RunnerController).
+     * Mirrors the equivalent constant for ansible (see
+     * PlaybookEnvironment::ANSIBLE_HOME).
      */
     public const GIT_HOME = '/var/www/runtime/git-home';
 

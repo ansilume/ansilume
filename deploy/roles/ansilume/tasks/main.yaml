@@ -13,6 +13,25 @@
     quiet: true
   tags: [validate]
 
+- name: Validate the runner network is separate
+  ansible.builtin.assert:
+    that:
+      - ansilume_runner_network_name != ansilume_network_name
+    fail_msg: >-
+      ansilume_runner_network_name must differ from ansilume_network_name,
+      otherwise playbooks on bundled runners can reach app, db and redis.
+    quiet: true
+  tags: [validate]
+
+- name: Warn when the local Redis runs without a password
+  ansible.builtin.debug:
+    msg: >-
+      ansilume_redis_password is empty, so the local Redis accepts
+      unauthenticated connections from every container on its network.
+      Set it (for example from Ansible Vault) to enable AUTH.
+  when: ansilume_redis_local and ansilume_redis_password | length == 0
+  tags: [validate]
+
 - name: Verify Docker is installed
   ansible.builtin.include_tasks: preflight.yaml
   tags: [preflight]

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\RedisSettings;
 use app\models\User;
 use app\services\TotpService;
 
@@ -71,12 +72,9 @@ class E2eTotpUserSeeder
     private function clearRateLimit(int $userId): void
     {
         try {
-            $redis = new \Redis();
-            $redis->connect(
-                $_ENV['REDIS_HOST'] ?? 'redis',
-                (int)($_ENV['REDIS_PORT'] ?? 6379),
-            );
-            $redis->del('totp_rate_limit_' . $userId);
+            RedisSettings::fromEnvironment($_ENV)
+                ->connectPhpRedis(new \Redis())
+                ->del('totp_rate_limit_' . $userId);
         } catch (\Throwable) {
             // best-effort — the spec re-tries with a wait; not having Redis
             // here is not a hard error for the seed itself.

@@ -3,6 +3,9 @@
 declare(strict_types=1);
 
 $params = require __DIR__ . '/params.php';
+// Every Redis connection (cache, session, queue) shares host, port, db and the
+// optional REDIS_PASSWORD; see app\components\RedisSettings.
+$redis = \app\components\RedisSettings::fromEnvironment($_ENV)->connectionConfig();
 $db = require __DIR__ . '/db-test.php';
 
 return [
@@ -29,22 +32,14 @@ return [
         // the controller queries.
         'queue' => [
             'class' => 'yii\queue\redis\Queue',
-            'redis' => [
-                'class' => 'yii\redis\Connection',
-                'hostname' => $_ENV['REDIS_HOST'] ?? 'redis',
-                'port' => (int)($_ENV['REDIS_PORT'] ?? 6379),
-                'database' => (int)($_ENV['REDIS_DB'] ?? 0),
-            ],
+            // Only Ansilume's own job classes may be unserialized from Redis.
+            'serializer' => \app\components\AllowlistQueueSerializer::class,
+            'redis' => $redis,
             // Distinct channel so the live dev queue-worker doesn't drain
             // fixture jobs the tests push to assert is_stuck / queue_depth.
             'channel' => 'ansilume-test-queue',
         ],
-        'redis' => [
-            'class' => 'yii\redis\Connection',
-            'hostname' => $_ENV['REDIS_HOST'] ?? 'redis',
-            'port' => (int)($_ENV['REDIS_PORT'] ?? 6379),
-            'database' => (int)($_ENV['REDIS_DB'] ?? 0),
-        ],
+        'redis' => $redis,
         'authManager' => [
             'class' => 'yii\rbac\DbManager',
         ],

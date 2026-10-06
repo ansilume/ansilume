@@ -27,6 +27,7 @@ ansible-vault create group_vars/vault.yaml
 #   vault_db_password: <openssl rand -hex 16>
 #   vault_db_root_password: <openssl rand -hex 16>
 #   vault_runner_bootstrap_secret: <openssl rand -hex 24>
+#   vault_redis_password: <openssl rand -hex 32>
 
 # 3. Reference vault in group_vars
 cat >> group_vars/ansilume.yaml <<EOF
@@ -35,6 +36,7 @@ ansilume_app_secret_key: "{{ vault_app_secret_key }}"
 ansilume_db_password: "{{ vault_db_password }}"
 ansilume_db_root_password: "{{ vault_db_root_password }}"
 ansilume_runner_bootstrap_secret: "{{ vault_runner_bootstrap_secret }}"
+ansilume_redis_password: "{{ vault_redis_password }}"
 EOF
 
 # 4. Deploy
@@ -63,9 +65,18 @@ The production stack consists of:
 | `nginx` | Web server / reverse proxy |
 | `db` | MariaDB database (optional — see external DB) |
 | `redis` | Cache, sessions, job queue |
-| `queue-worker` | Processes async jobs from Redis |
-| `schedule-runner` | Executes scheduled jobs every minute |
+| `queue-worker` | Runs project syncs and lint from the Redis queue |
+| `schedule-runner` | Every minute: due schedules and maintenance (stale project syncs, artifact retention) |
 | `runner-1..N` | Pull-based Ansible execution agents |
+
+The runners sit on their own network (`ansilume_runner_network_name`, default
+`runners`) that only nginx joins. Playbooks therefore reach the server only
+through nginx, never php-fpm, the database or Redis. In both image modes the
+runners use the standalone runner image (build mode builds it from
+`docker/runner/Dockerfile`) and mount nothing from the install directory, so
+playbooks cannot read `.env` either. The runners clone git projects
+themselves. A manual project only runs on them when its path exists inside the
+runner image, like the bundled selftest.
 
 ## Using an external database
 
@@ -95,7 +106,13 @@ ansilume_redis_local: false
 ansilume_redis_host: redis.internal.example.com
 ansilume_redis_port: 6379
 ansilume_redis_db: 0
+ansilume_redis_password: "{{ vault_redis_password }}"
 ```
+
+With the local Redis, set `ansilume_redis_password` as well: the container
+then requires it. The role warns when it is empty. Only set it when
+`ansilume_version` is a release newer than 2.4.6; older releases ignore it and
+lose their Redis connection.
 
 ## Configuration reference
 
@@ -119,6 +136,7 @@ All variables are documented in `deploy/roles/ansilume/defaults/main.yaml`. Key 
 | `ansilume_db_password` | Database user password |
 | `ansilume_db_root_password` | MariaDB root password (local DB only) |
 | `ansilume_runner_bootstrap_secret` | Runner self-registration shared secret |
+| `ansilume_redis_password` | Redis password (recommended; empty means no AUTH) |
 
 ### Infrastructure
 
@@ -128,6 +146,7 @@ All variables are documented in `deploy/roles/ansilume/defaults/main.yaml`. Key 
 | `ansilume_redis_local` | `true` | Deploy local Redis container |
 | `ansilume_nginx_port` | `8080` | Port nginx listens on |
 | `ansilume_runner_count` | `2` | Number of runner containers |
+| `ansilume_runner_network_name` | `runners` | Network for the runners; must differ from `ansilume_network_name` |
 
 ### Mail
 

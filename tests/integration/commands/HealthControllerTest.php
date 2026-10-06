@@ -52,6 +52,68 @@ class HealthControllerTest extends DbTestCase
         $this->assertStringContainsString('[health] status: ok', $ctrl->captured);
     }
 
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function redisAuthRejectionProvider(): array
+    {
+        return [
+            'wrong password' => ["-WRONGPASS invalid username-password pair or user is disabled.\r\n", 'WRONGPASS'],
+            'server without a password' => [
+                "-ERR AUTH <password> called without any password configured for the default user."
+                    . " Are you sure your configuration is correct?\r\n",
+                'called without any password configured',
+            ],
+        ];
+    }
+
+    /**
+     * A rejected REDIS_PASSWORD must show up as a failing Redis check that
+     * names the real cause, and nothing the check prints or logs may contain
+     * the password.
+     *
+     * Regression: the cache's cluster auto-detection swallowed the failed
+     * AUTH, so the check reported a misleading "NOAUTH Authentication
+     * required" from the next command instead.
+     *
+     * @dataProvider redisAuthRejectionProvider
+     */
+    public function testRedisAuthFailureIsReportedWithoutThePassword(string $authReply, string $expectedCause): void
+    {
+        // Like a real server: AUTH is rejected, every later command gets NOAUTH.
+        $server = \app\tests\FakeRedisServer::start("-NOAUTH Authentication required.\r\n", true, $authReply);
+        $previousCache = \Yii::$app->get('cache');
+        $previousLogger = \Yii::getLogger();
+        $logger = new \yii\log\Logger();
+        \Yii::setLogger($logger);
+        // The production cache definition, pointed at the fake server.
+        $cache = (require dirname(__DIR__, 3) . '/config/console.php')['components']['cache'];
+        $cache['redis'] = \app\components\RedisSettings::fromEnvironment([
+            'REDIS_HOST' => '127.0.0.1',
+            'REDIS_PORT' => (string)$server->port,
+            'REDIS_PASSWORD' => 'canary-redis-4711',
+        ])->connectionConfig();
+        \Yii::$app->set('cache', $cache);
+        $ctrl = $this->makeController();
+        try {
+            $result = $ctrl->actionCheck();
+        } finally {
+            \Yii::$app->set('cache', $previousCache);
+            \Yii::setLogger($previousLogger);
+            $server->stop();
+        }
+        $logged = array_map(
+            static fn (array $m): string => is_string($m[0]) ? $m[0] : \yii\helpers\VarDumper::dumpAsString($m[0]),
+            $logger->messages
+        );
+
+        $this->assertSame(ExitCode::UNSPECIFIED_ERROR, $result);
+        $this->assertMatchesRegularExpression('/\[health\] redis: error .*' . preg_quote($expectedCause, '/') . '/', $ctrl->captured);
+        $this->assertStringContainsString(\app\components\RedactingRedisConnection::REDACTED_NOTE, $ctrl->captured);
+        $this->assertStringNotContainsString('NOAUTH', $ctrl->captured);
+        $this->assertStringNotContainsString('canary-redis-4711', $ctrl->captured . implode("\n", $logged));
+    }
+
     public function testCheckReportsRbacRoles(): void
     {
         $ctrl = $this->makeController();

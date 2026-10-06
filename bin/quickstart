@@ -338,6 +338,47 @@ JOB_QUEUE_TIMEOUT=1800"
     fi
 }
 
+# ── Helper: enable Redis authentication ─────────────────────────────────────
+# REDIS_PASSWORD is only enabled when both sides support it: the compose file
+# must pass it to the redis service, and the pulled app image must know it.
+# Otherwise an outdated image (images move on a different schedule than the
+# compose file) would lose its Redis connection with NOAUTH. Must run after
+# the images are pulled and before `up -d`.
+
+compose_supports_redis_password() {
+    grep -q 'REDIS_PASSWORD' "${INSTALL_DIR}/${COMPOSE_FILE}" 2>/dev/null
+}
+
+image_supports_redis_password() {
+    # Images that support REDIS_PASSWORD ship components/RedisSettings.php.
+    $COMPOSE_CMD $COMPOSE_ARGS run --rm --no-deps -T --entrypoint test app \
+        -f /var/www/components/RedisSettings.php < /dev/null >/dev/null 2>&1
+}
+
+ensure_redis_password() {
+    local env_file="${INSTALL_DIR}/.env"
+    if grep -q "^REDIS_PASSWORD=" "$env_file" 2>/dev/null; then
+        return 0
+    fi
+
+    # Last occurrence wins, like docker compose reads .env.
+    local redis_host
+    redis_host=$(grep "^REDIS_HOST=" "$env_file" | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
+    if [ -n "$redis_host" ] && [ "$redis_host" != "redis" ]; then
+        echo "REDIS_PASSWORD=" >> "$env_file"
+        warn "Added REDIS_PASSWORD= (external Redis) — set it to your Redis server's password"
+        return 0
+    fi
+
+    if ! compose_supports_redis_password || ! image_supports_redis_password; then
+        debug "Redis authentication not enabled yet: compose file or app image predates REDIS_PASSWORD"
+        return 0
+    fi
+
+    echo "REDIS_PASSWORD=$(gen_secret | head -c 32)" >> "$env_file"
+    ok "Enabled Redis authentication (REDIS_PASSWORD generated)"
+}
+
 # ── Helper: wait for app container health ───────────────────────────────────
 
 wait_healthy() {
@@ -626,11 +667,15 @@ if [ "$INSTALL_MODE" = "update" ]; then
         $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
             info "  $line"
         done || true
+    else
+        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null >/dev/null 2>&1 || true
+    fi
+    ensure_redis_password
+    if [ "$VERBOSE" -ge 2 ]; then
         $COMPOSE_CMD $COMPOSE_ARGS up -d < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
             info "  $line"
         done || true
     else
-        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null >/dev/null 2>&1 || true
         $COMPOSE_CMD $COMPOSE_ARGS up -d < /dev/null >/dev/null 2>&1 || true
     fi
     ok "Containers updated"
@@ -863,8 +908,12 @@ elif command -v netstat >/dev/null 2>&1; then
     fi
 fi
 
+info "Pulling images (this may take a moment)..."
+$COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null >/dev/null 2>&1 || true
+ensure_redis_password
+
 debug "Running: $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always"
-info "Pulling images and starting services (this may take a moment)..."
+info "Starting services..."
 COMPOSE_EXIT=0
 if [ "$VERBOSE" -ge 2 ]; then
     $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do

@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 $params = require __DIR__ . '/params.php';
+$services = require __DIR__ . '/services.php';
+// Every Redis connection (cache, session, queue) shares host, port, db and the
+// optional REDIS_PASSWORD; see app\components\RedisSettings.
+$redis = \app\components\RedisSettings::fromEnvironment($_ENV)->connectionConfig();
 $db = require __DIR__ . '/db.php';
 
 return [
@@ -19,11 +23,11 @@ return [
     'components' => [
         'cache' => [
             'class' => 'yii\redis\Cache',
-            'redis' => [
-                'hostname' => $_ENV['REDIS_HOST'] ?? 'redis',
-                'port' => (int)($_ENV['REDIS_PORT'] ?? 6379),
-                'database' => (int)($_ENV['REDIS_DB'] ?? 0),
-            ],
+            'redis' => $redis,
+            // Single Redis node. Auto-detection sends CLUSTER INFO and swallows
+            // any error, including a failed AUTH, which then surfaces later as
+            // a misleading NOAUTH instead of the real authentication error.
+            'forceClusterMode' => false,
         ],
         'log' => [
             'targets' => [
@@ -54,110 +58,12 @@ return [
                 'password' => $_ENV['SMTP_PASSWORD'] ?: null,
             ]),
         ],
-        'auditService' => [
-            'class' => 'app\services\AuditService',
-            'targets' => call_user_func(static function (): array {
-                $targets = [new \app\services\audit\DatabaseAuditTarget()];
-                if (filter_var(getenv('AUDIT_SYSLOG_ENABLED'), FILTER_VALIDATE_BOOLEAN)) {
-                    $targets[] = new \app\services\audit\SyslogAuditTarget(
-                        getenv('AUDIT_SYSLOG_IDENT') ?: 'ansilume',
-                        getenv('AUDIT_SYSLOG_FACILITY') ?: 'LOG_LOCAL0',
-                    );
-                }
-                return $targets;
-            }),
-        ],
-        'projectService' => [
-            'class' => 'app\services\ProjectService',
-            'workspacePath' => '@runtime/projects',
-        ],
-        'credentialService' => [
-            'class' => 'app\services\CredentialService',
-        ],
-        'notificationDispatcher' => [
-            'class' => 'app\services\NotificationDispatcher',
-        ],
-        'analyticsService' => [
-            'class' => 'app\services\AnalyticsService',
-        ],
-        'approvalService' => [
-            'class' => 'app\services\ApprovalService',
-        ],
-        'workflowExecutionService' => [
-            'class' => 'app\services\WorkflowExecutionService',
-        ],
-        'workflowStepReorderService' => [
-            'class' => 'app\services\WorkflowStepReorderService',
-        ],
-        'lintService' => [
-            'class' => 'app\services\LintService',
-        ],
-        'projectDeletionService' => [
-            'class' => 'app\services\ProjectDeletionService',
-        ],
-        'jobLaunchService' => [
-            'class' => 'app\services\JobLaunchService',
-        ],
-        'scheduleService' => [
-            'class' => 'app\services\ScheduleService',
-        ],
-        'roleService' => [
-            'class' => 'app\services\RoleService',
-        ],
-        'projectAccessChecker' => [
-            'class' => 'app\services\ProjectAccessChecker',
-        ],
-        'webhookService' => [
-            'class' => 'app\services\WebhookService',
-        ],
-        'jobCompletionService' => [
-            'class' => 'app\services\JobCompletionService',
-        ],
-        'jobClaimService' => [
-            'class' => 'app\services\JobClaimService',
-        ],
-        'jobReclaimService' => [
-            'class' => 'app\services\JobReclaimService',
-            'progressTimeoutSeconds' => (int)(getenv('JOB_PROGRESS_TIMEOUT') ?: 600),
-            'mode' => getenv('JOB_RECLAIM_MODE') ?: 'fail',
-            'queueTimeoutSeconds' => (int)(getenv('JOB_QUEUE_TIMEOUT') ?: 1800),
-        ],
-        'totpService' => [
-            'class' => 'app\services\TotpService',
-            'rateLimiter' => [
-                'class' => 'app\services\TotpRateLimiter',
-            ],
-        ],
-        'inventoryService' => [
-            'class' => 'app\services\InventoryService',
-            'timeout' => 30,
-        ],
-        'artifactService' => [
-            'class' => 'app\services\ArtifactService',
-            'storagePath' => '@runtime/artifacts',
-            'maxFileSize' => (int)(getenv('ARTIFACT_MAX_FILE_SIZE') ?: 10485760),
-            'maxBytesPerJob' => (int)(getenv('ARTIFACT_MAX_BYTES_PER_JOB') ?: 52428800),
-            'maxTotalBytes' => (int)(getenv('ARTIFACT_MAX_TOTAL_BYTES') ?: 0),
-            'retentionDays' => (int)(getenv('ARTIFACT_RETENTION_DAYS') ?: 0),
-            'maxJobsWithArtifacts' => (int)(getenv('ARTIFACT_MAX_JOBS_WITH_ARTIFACTS') ?: 0),
-        ],
-        'maintenanceService' => [
-            'class' => 'app\services\MaintenanceService',
-            'artifactCleanupIntervalSeconds' => (int)(getenv('MAINTENANCE_ARTIFACT_CLEANUP_INTERVAL') ?: 86400),
-        ],
-        'ldapService' => [
-            'class' => 'app\services\ldap\LdapService',
-        ],
-        'ldapUserProvisioner' => [
-            'class' => 'app\services\ldap\LdapUserProvisioner',
-        ],
+        ...$services,
         'queue' => [
             'class' => 'yii\queue\redis\Queue',
-            'redis' => [
-                'hostname' => $_ENV['REDIS_HOST'] ?? 'redis',
-                'port' => (int)($_ENV['REDIS_PORT'] ?? 6379),
-                'database' => (int)($_ENV['REDIS_DB'] ?? 0),
-            ],
+            // Only Ansilume's own job classes may be unserialized from Redis.
+            'serializer' => \app\components\AllowlistQueueSerializer::class,
+            'redis' => $redis,
             'channel' => 'ansilume-queue',
             'ttr' => 3600,
             'as log' => 'yii\queue\LogBehavior',

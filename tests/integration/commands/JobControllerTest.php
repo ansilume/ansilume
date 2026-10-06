@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\integration\commands;
 
 use app\commands\JobController;
+use app\components\RedisSettings;
 use app\models\Job;
 use app\models\Runner;
 use app\models\RunnerGroup;
@@ -104,8 +105,9 @@ class JobControllerTest extends DbTestCase
     {
         // Drain Redis worker keys so the starvation sweep sees no live worker.
         try {
-            $r = new \Redis();
-            $r->connect($_ENV['REDIS_HOST'] ?? 'redis', (int)($_ENV['REDIS_PORT'] ?? 6379));
+            // Authenticates when REDIS_PASSWORD is set; a NOAUTH error would be
+            // swallowed below and leave the worker keys in place.
+            $r = RedisSettings::fromEnvironment($_ENV)->connectPhpRedis(new \Redis());
             foreach ($r->keys('ansilume:worker:*') as $k) {
                 $r->del($k);
             }

@@ -2,14 +2,14 @@
 - name: Check that Docker is installed
   ansible.builtin.command: docker --version
   changed_when: false
-  register: _docker_version
-  failed_when: _docker_version.rc != 0
+  register: ansilume_docker_version
+  failed_when: ansilume_docker_version.rc != 0
 
 - name: Check that Docker Compose plugin is installed
   ansible.builtin.command: docker compose version
   changed_when: false
-  register: _compose_version
-  failed_when: _compose_version.rc != 0
+  register: ansilume_compose_version
+  failed_when: ansilume_compose_version.rc != 0
 
 - name: Check that Docker daemon is running
   ansible.builtin.service_facts:
@@ -26,4 +26,4 @@
 
 - name: Show Docker versions
   ansible.builtin.debug:
-    msg: "{{ _docker_version.stdout }} / {{ _compose_version.stdout }}"
+    msg: "{{ ansilume_docker_version.stdout }} / {{ ansilume_compose_version.stdout }}"

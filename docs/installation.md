@@ -15,7 +15,7 @@ You will be asked:
 - **HTTP port** — default `8080`
 - **Admin account** — username, email, password
 
-All secrets (`COOKIE_VALIDATION_KEY`, `APP_SECRET_KEY`, `RUNNER_BOOTSTRAP_SECRET`, database passwords) are generated automatically.
+All secrets (`COOKIE_VALIDATION_KEY`, `APP_SECRET_KEY`, `RUNNER_BOOTSTRAP_SECRET`, database passwords and `REDIS_PASSWORD` for the bundled Redis) are generated automatically.
 
 When the containers are up, the quickstart verifies the install from the host
 (health endpoint, login redirect, login page, one published asset) and exits
@@ -46,6 +46,7 @@ sed -i \
   -e "s|RUNNER_BOOTSTRAP_SECRET=CHANGE-ME|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
   -e "s|DB_ROOT_PASSWORD=CHANGE-ME|DB_ROOT_PASSWORD=$(openssl rand -hex 16)|" \
   -e "s|DB_PASSWORD=CHANGE-ME|DB_PASSWORD=$(openssl rand -hex 16)|" \
+  -e "s|REDIS_PASSWORD=CHANGE-ME|REDIS_PASSWORD=$(openssl rand -hex 32)|" \
   .env
 
 # 4. Start
@@ -82,6 +83,10 @@ docker compose up -d --build
 
 docker compose exec app php yii setup/admin admin admin@example.com yourpassword
 ```
+
+> This uses the development compose file. Its runners mount the source tree,
+> so playbooks can read `.env` and change the code. In production, use the
+> prebuilt images or the [Ansible deploy role](deployment.md).
 
 ---
 
@@ -130,14 +135,14 @@ All configuration is via `.env`. Variables with no default are required; everyth
 
 | Variable | Description |
 |---|---|
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | Redis connection (used for queue + cache) |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_DB` | Redis connection (used for queue, cache and sessions) |
+| `REDIS_PASSWORD` | Redis password. When set, the bundled Redis container requires it. Empty means no authentication. Quickstart generates one. Avoid `$` in the value |
 
 ### Runners
 
 | Variable | Description |
 |---|---|
 | `RUNNER_BOOTSTRAP_SECRET` | Shared secret for runner self-registration |
-| `RUNNER_MODE` | `local` (default, uses the bundled runner containers) or `remote` (register external runners) |
 
 ### Jobs
 

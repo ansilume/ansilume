@@ -195,6 +195,7 @@ jobs:
             -e "s|RUNNER_BOOTSTRAP_SECRET=CHANGE-ME|RUNNER_BOOTSTRAP_SECRET=$(openssl rand -hex 24)|" \
             -e "s|DB_ROOT_PASSWORD=CHANGE-ME|DB_ROOT_PASSWORD=$(openssl rand -hex 16)|" \
             -e "s|DB_PASSWORD=CHANGE-ME|DB_PASSWORD=$(openssl rand -hex 16)|" \
+            -e "s|REDIS_PASSWORD=CHANGE-ME|REDIS_PASSWORD=$(openssl rand -hex 32)|" \
             .env
 
       - name: Pull released images
@@ -257,6 +258,34 @@ jobs:
             echo "::error::/health returned HTTP ${code}"
             exit 1
           fi
+
+      # Playbooks run on runners, so a bundled runner must reach nothing but
+      # nginx, and Redis must refuse unauthenticated clients. /health above
+      # being 200 proves the app itself authenticates to Redis.
+      - name: Verify runner isolation and Redis authentication
+        run: |
+          compose="docker compose -f docker-compose.prebuilt.yml"
+          backends="app redis queue-worker schedule-runner"
+          if ${compose} ps --services --status running | grep -qx db; then
+            backends="${backends} db"
+          fi
+          # Trailing dot: absolute names, so a DNS search domain cannot interfere.
+          for svc in ${backends}; do
+            if ${compose} exec -T runner-1 getent hosts "${svc}." >/dev/null 2>&1; then
+              echo "::error::runner-1 can resolve ${svc}; runners must only join the runners network"
+              exit 1
+            fi
+          done
+          if ! ${compose} exec -T runner-1 getent hosts nginx. >/dev/null 2>&1; then
+            echo "::error::runner-1 cannot resolve nginx"
+            exit 1
+          fi
+          reply=$(${compose} exec -T redis redis-cli ping 2>&1 || true)
+          echo "unauthenticated PING: ${reply}"
+          case "${reply}" in
+            *NOAUTH*) ;;
+            *) echo "::error::Redis answered an unauthenticated PING"; exit 1 ;;
+          esac
 
       - name: Dump logs on failure
         if: failure()

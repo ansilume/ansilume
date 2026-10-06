@@ -129,6 +129,72 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.4.6 or older: runner network, Redis password, maintenance
+
+**Bundled runners get their own network.** Playbooks run on runners, and until
+now the bundled runners shared one Docker network with every other service.
+A playbook could reach php-fpm on `app:9000` (FastCGI has no authentication,
+so that meant running PHP code inside the app container), the database, and
+Redis. Runners now sit on a separate `runners` network that only nginx joins;
+they still reach the server through `API_URL=http://nginx` and keep normal
+outbound access for playbooks and git.
+
+- Quickstart `--update` downloads the new compose file automatically.
+- Manual prebuilt updates must download the new `docker-compose.prebuilt.yml`
+  before `docker compose up -d`, otherwise the runners stay on the shared
+  network.
+- If a playbook or a git remote addressed another container on the old
+  network (for example a Gitea container), attach that container to the
+  `runners` network or reach it through a host name instead.
+- The Ansible deploy role now runs its runners from the standalone runner
+  image in build mode too, without mounting the install directory. Until now
+  they mounted it read-write, so playbooks could read `.env` and change the
+  application code. The runners clone git projects themselves; a manual
+  project whose path only exists on the server no longer runs on them. In
+  prebuilt mode the role now shares the project and asset volumes like
+  `docker-compose.prebuilt.yml`; before, nginx could not serve the published
+  assets.
+- In a git checkout, the dev-only ports (database, Redis, adminer, mailhog,
+  swagger) now bind to `127.0.0.1`. Set `DEV_BIND_ADDRESS=0.0.0.0` in `.env`
+  to reach them from another machine on a trusted network. The runners of a
+  git checkout still mount the source tree, so playbooks there can read
+  `.env` and change the code. Use that setup for development only.
+
+**Redis can require a password.** Set `REDIS_PASSWORD` in `.env`; the bundled
+Redis container then enforces it and every Ansilume connection authenticates.
+Quickstart (`--update` and fresh installs) generates one for installations that
+use the bundled Redis, after pulling the images and only once the pulled app
+image supports it, so an older image never locks itself out. For an external
+Redis it adds an empty value; set it to that server's password. For manual
+updates, pull the new images first, then add a line like this to `.env` before
+`docker compose up -d`:
+
+```bash
+echo "REDIS_PASSWORD=$(openssl rand -hex 32)" >> .env
+```
+
+Use a value without `$`, because docker compose interpolates it. In a git
+checkout the containers read `.env` themselves, so after changing
+`REDIS_PASSWORD` run `docker compose up -d --force-recreate` once; otherwise
+the long-running queue-worker keeps connecting with the old setting. To roll back
+to an older release, roll back the compose file together with the images, or
+empty `REDIS_PASSWORD` first: older releases ignore it while the new Redis
+service enforces it.
+
+**Queue messages are allowlisted.** The queue-worker only accepts Ansilume's
+own job messages. Anything else in the queue is logged and dropped instead of
+being unserialized.
+
+**Prebuilt installations run the maintenance tasks.** The schedule-runner of
+the prebuilt compose file and of the Ansible deploy role now also runs
+`php yii maintenance/run` every minute, as git checkouts always did. It
+recovers project syncs stuck in `syncing` and applies the artifact retention
+settings.
+
+**`RUNNER_MODE` and `RUNNER_DOCKER_IMAGE` are gone.** They only applied to an
+execution path inside the queue-worker that no longer ran any jobs. Leftover
+values in `.env` are ignored.
+
 ## After updating from 2.4.5 or older: playbook environment and exposed secrets
 
 **Playbooks no longer inherit the runner's environment.** They only see

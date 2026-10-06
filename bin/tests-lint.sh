@@ -12,15 +12,23 @@ source "$(dirname "$0")/tests-common.sh"
 # =============================================================================
 section "PHP syntax check"
 
-SYNTAX_ERRORS=0
-while IFS= read -r -d '' file; do
-    output=$(dc php -l "$file" 2>&1)
-    if [[ $? -ne 0 ]]; then
-        echo -e "  ${RED}✘${NC}  $file"
-        echo "     $output"
-        SYNTAX_ERRORS=$((SYNTAX_ERRORS+1))
-    fi
-done < <(find . \
+# Lints every file of the NUL-separated list on stdin and sets SYNTAX_ERRORS.
+# dc runs `docker compose exec`, which reads stdin: without </dev/null it
+# swallowed the rest of the list, so only the first file was ever checked.
+# The `if !` form keeps set -e from aborting at the first broken file.
+php_syntax_check() {
+    local file output
+    SYNTAX_ERRORS=0
+    while IFS= read -r -d '' file; do
+        if ! output=$(dc php -l "$file" </dev/null 2>&1); then
+            echo -e "  ${RED}✘${NC}  $file"
+            echo "     $output"
+            SYNTAX_ERRORS=$((SYNTAX_ERRORS+1))
+        fi
+    done
+}
+
+php_syntax_check < <(find . \
     -not -path "./vendor/*" \
     -not -path "./.composer/*" \
     -not -path "./runtime/*" \
@@ -365,28 +373,24 @@ fi
 # =============================================================================
 section "Ansible Lint (deploy/)"
 
+# Judge by the exit code. ansible-lint prints "Failed: N failure(s) ... but
+# 'min' profile passed" when the required production profile fails, so a
+# grep for "passed" used to report a failing run as green.
+ALINT_RC=""
 if command -v ansible-lint &>/dev/null; then
-    ALINT_OUT=$(cd deploy && ansible-lint 2>&1 || true)
-    if echo "$ALINT_OUT" | grep -qP "Passed|passed"; then
-        ok "ansible-lint (production profile) passed"
-    elif echo "$ALINT_OUT" | grep -qP "violation|warning|error"; then
-        fail "ansible-lint found issues in deploy/"
-        echo "$ALINT_OUT" | tail -30 | sed 's/^/     /'
-    else
-        ok "ansible-lint (production profile) passed"
-    fi
+    ALINT_RC=0
+    ALINT_OUT=$(cd deploy && ansible-lint 2>&1) || ALINT_RC=$?
 elif dc ansible-lint --version >/dev/null 2>&1; then
-    ALINT_OUT=$(dc bash -c "cd deploy && ansible-lint 2>&1" || true)
-    if echo "$ALINT_OUT" | grep -qP "Passed|passed"; then
-        ok "ansible-lint (production profile) passed"
-    elif echo "$ALINT_OUT" | grep -qP "violation|warning|error"; then
-        fail "ansible-lint found issues in deploy/"
-        echo "$ALINT_OUT" | tail -30 | sed 's/^/     /'
-    else
-        ok "ansible-lint (production profile) passed"
-    fi
-else
+    ALINT_RC=0
+    ALINT_OUT=$(dc bash -c "cd deploy && ansible-lint 2>&1") || ALINT_RC=$?
+fi
+if [ -z "$ALINT_RC" ]; then
     skip "ansible-lint not available"
+elif [ "$ALINT_RC" -eq 0 ]; then
+    ok "ansible-lint (production profile) passed"
+else
+    fail "ansible-lint found issues in deploy/ (exit $ALINT_RC)"
+    echo "$ALINT_OUT" | tail -30 | sed 's/^/     /'
 fi
 
 # =============================================================================
@@ -453,7 +457,7 @@ done
 # ~/.ssh/known_hosts (git-via-SSH), ~/.gitconfig, or ~/.ansible (lookup
 # plugins, op CLI, etc.) blows up with EACCES. The fix is two-sided:
 # the application sets HOME to a runtime dir (constants in ProjectService /
-# GitEnvBuilder / AnsibleInventoryRunner / RunAnsibleJob), and the
+# GitEnvBuilder / AnsibleInventoryRunner / PlaybookEnvironment), and the
 # entrypoints create + chown that dir. Both halves must agree, otherwise
 # operators see "Permission denied" at runtime even though every PHPUnit
 # test passes.

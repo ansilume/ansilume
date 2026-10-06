@@ -212,8 +212,7 @@ class RunnerControllerTest extends TestCase
      * got interactive-signin errors from 1Password lookups because
      * lookup('env', 'OP_SERVICE_ACCOUNT_TOKEN') returned empty.
      *
-     * Fix: call injectAll() on the full $payload['credentials'] list,
-     * mirroring what the queue-worker path (RunAnsibleJob) already does.
+     * Fix: call injectAll() on the full $payload['credentials'] list.
      * Source-level check — executeJob() drives too many side effects to
      * drive from a unit test; pin the shape of the injection call.
      */

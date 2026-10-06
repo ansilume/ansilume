@@ -198,13 +198,11 @@ class RunnerController extends Controller
         }
 
         // Inject every template credential (primary + additional) into
-        // command args and env. The queue-worker path
-        // (jobs/RunAnsibleJob) has always called injectAll(); the pull-
-        // runner was stuck on inject() with only the primary credential,
-        // so operators who attached a secondary token credential (e.g. a
-        // 1Password service account) got their SSH key injected but not
-        // the token — and lookup('env', 'OP_SERVICE_ACCOUNT_TOKEN') came
-        // back empty in playbooks running on the pull runner.
+        // command args and env. The runner used to call inject() with only
+        // the primary credential, so operators who attached a secondary
+        // token credential (e.g. a 1Password service account) got their SSH
+        // key injected but not the token — and
+        // lookup('env', 'OP_SERVICE_ACCOUNT_TOKEN') came back empty.
         $credentialInjector = new CredentialInjector();
         $injection = $credentialInjector->injectAll($this->resolveCredentialList($payload));
         $cmd = array_merge($cmd, $injection->args);

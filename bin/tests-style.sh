@@ -85,19 +85,21 @@ fi
 section "PHPCPD (copy-paste detection)"
 
 if dc php vendor/bin/phpcpd --version >/dev/null 2>&1; then
+    # Judge by the exit code (phpcpd exits 1 when it finds clones). The old
+    # text match never matched phpcpd 7's "Found N code clones" wording, so
+    # duplicated code passed silently.
+    PHPCPD_RC=0
     PHPCPD_OUT=$(dc php vendor/bin/phpcpd \
         --min-lines=15 \
         --min-tokens=70 \
         --exclude=vendor --exclude=tests --exclude=migrations --exclude=views \
-        . 2>&1 || true)
-    if echo "$PHPCPD_OUT" | grep -q "0.00% duplicated"; then
+        . 2>&1) || PHPCPD_RC=$?
+    if [ "$PHPCPD_RC" -eq 0 ]; then
         ok "PHPCPD passed (no duplications)"
-    elif echo "$PHPCPD_OUT" | grep -qP "Found \d+ clones"; then
-        CLONE_COUNT=$(echo "$PHPCPD_OUT" | grep -oP 'Found \K\d+(?= clones)')
-        fail "PHPCPD: ${CLONE_COUNT} clone(s) found"
-        echo "$PHPCPD_OUT" | head -20 | sed 's/^/     /'
     else
-        ok "PHPCPD passed"
+        CLONE_COUNT=$(echo "$PHPCPD_OUT" | grep -oP 'Found \K\d+(?= (code )?clones)' || echo "?")
+        fail "PHPCPD: ${CLONE_COUNT} clone(s) found (exit $PHPCPD_RC)"
+        echo "$PHPCPD_OUT" | head -20 | sed 's/^/     /'
     fi
 else
     skip "phpcpd not available"

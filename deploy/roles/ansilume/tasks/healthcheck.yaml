@@ -4,14 +4,14 @@
     url: "http://127.0.0.1:{{ ansilume_nginx_port }}/health"
     return_content: true
     status_code: [200, 503]
-  register: _health
-  until: _health.status == 200
+  register: ansilume_health
+  until: ansilume_health.status == 200
   retries: 30
   delay: 10
 
 - name: Report health status
   ansible.builtin.debug:
     msg: >-
-      Ansilume is {{ _health.json.status }} —
-      runners: {{ _health.json.runners.online }}/{{ _health.json.runners.total }} online,
-      queue: {{ _health.json.queue.pending }} pending / {{ _health.json.queue.running }} running
+      Ansilume is {{ ansilume_health.json.status }} —
+      runners: {{ ansilume_health.json.runners.online }}/{{ ansilume_health.json.runners.total }} online,
+      queue: {{ ansilume_health.json.queue.pending }} pending / {{ ansilume_health.json.queue.running }} running

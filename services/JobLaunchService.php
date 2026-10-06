@@ -17,7 +17,8 @@ use yii\base\Component;
  * Responsibilities:
  *   1. Validate launch parameters.
  *   2. Build and persist a Job record with status=pending.
- *   3. Push a RunAnsibleJob message to the queue (status → queued).
+ *   3. Set the job to status=queued; a runner of the template's runner
+ *      group claims it through the runner API.
  *
  * Ansible execution is intentionally NOT performed here.
  */

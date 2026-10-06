@@ -133,7 +133,7 @@ controllers/          HTTP controllers (web UI + api/v1/ + api/runner/)
 deploy/               Deployment artifacts
 docker/               Dockerfiles, entrypoints, nginx config
 helpers/              Utility classes (FileHelper)
-jobs/                 Async job handlers (RunAnsibleJob, SyncProjectJob)
+jobs/                 Async job handlers (SyncProjectJob)
 mail/                 Email templates (job notifications, password reset)
 migrations/           Forward-only database migrations
 models/               ActiveRecord models and form models

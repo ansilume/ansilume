@@ -32,10 +32,7 @@ DB_ROOT_PASSWORD={{ ansilume_db_root_password }}
 REDIS_HOST={{ ansilume_redis_host }}
 REDIS_PORT={{ ansilume_redis_port }}
 REDIS_DB={{ ansilume_redis_db }}
-
-# Runner
-RUNNER_MODE={{ ansilume_runner_mode }}
-RUNNER_DOCKER_IMAGE={{ ansilume_runner_docker_image }}
+REDIS_PASSWORD={{ ansilume_redis_password }}
 
 # Mail / SMTP
 {% if ansilume_smtp_host | length > 0 %}

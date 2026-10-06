@@ -49,6 +49,7 @@ services:
       start_period: 60s
     networks:
       - ansilume
+      - runners
 
   db:
     # Gated behind the "internal-db" profile so operators running against
@@ -69,7 +70,7 @@ services:
       - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf
       - ./docker/mysql/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
     ports:
-      - "${DB_PORT:-3306}:3306"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${DB_PORT:-3306}:3306"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
              "-u", "${DB_USER:-ansilume}", "-p${DB_PASSWORD:-secret}", "--silent"]
@@ -85,9 +86,19 @@ services:
     container_name: ansilume_redis
     restart: unless-stopped
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    # requirepass only when REDIS_PASSWORD is set. The password comes from the
+    # container environment, so it is not part of the compose command (docker
+    # ps / docker inspect Cmd); redis rewrites its process title after start.
+    command:
+      - sh
+      - -c
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec docker-entrypoint.sh redis-server --requirepass "$$REDIS_PASSWORD"; else exec docker-entrypoint.sh redis-server; fi'
     healthcheck:
-      test: ["CMD", "redis-cli", "-h", "localhost", "ping"]
+      # REDISCLI_AUTH keeps the password off the redis-cli command line.
+      test: ["CMD-SHELL", 'if [ -n "$$REDIS_PASSWORD" ]; then export REDISCLI_AUTH="$$REDIS_PASSWORD"; fi; redis-cli -h localhost ping | grep -q PONG']
       interval: 10s
       timeout: 3s
       retries: 3
@@ -103,7 +114,7 @@ services:
     container_name: ansilume_adminer
     restart: unless-stopped
     ports:
-      - "${ADMINER_PORT:-8081}:8080"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${ADMINER_PORT:-8081}:8080"
     volumes:
       - ./docker/adminer/index.php:/var/www/html/index.php:ro
     environment:
@@ -122,7 +133,7 @@ services:
     container_name: ansilume_mailhog
     restart: unless-stopped
     ports:
-      - "${MAILHOG_PORT:-8025}:8025"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${MAILHOG_PORT:-8025}:8025"
     networks:
       - ansilume
 
@@ -131,7 +142,7 @@ services:
     container_name: ansilume_swagger
     restart: unless-stopped
     ports:
-      - "${SWAGGER_PORT:-8088}:8080"
+      - "${DEV_BIND_ADDRESS:-127.0.0.1}:${SWAGGER_PORT:-8088}:8080"
     environment:
       # swagger-ui runs in the user's browser, so the URL must be reachable
       # from the host. Nginx serves /openapi.yaml with permissive CORS.
@@ -237,7 +248,7 @@ services:
       retries: 3
       start_period: 120s
     networks:
-      - ansilume
+      - runners
 
   runner-2:
     build:
@@ -270,7 +281,7 @@ services:
       retries: 3
       start_period: 120s
     networks:
-      - ansilume
+      - runners
 
   playwright:
     build:
@@ -292,6 +303,12 @@ services:
 
 networks:
   ansilume:
+    driver: bridge
+  # Bundled runners live on their own network and reach the server only
+  # through nginx (API_URL=http://nginx). Playbooks run on runners, so they must
+  # not reach app (php-fpm), db, redis or the queue-worker. Not 'internal':
+  # playbooks, git and composer need outbound access.
+  runners:
     driver: bridge
 
 volumes:

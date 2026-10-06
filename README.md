@@ -51,9 +51,9 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 ## Features
 
 ### Execution
-- **Async, isolated execution** — jobs run in queue workers and runner agents, never in the web request thread
+- **Async, isolated execution** — jobs run on pull-based runner agents on their own network, never in the web request thread
 - **Live job output** — streaming stdout/stderr with ANSI colors, per-task progress, and full play recap per host
-- **Job artifacts & host summaries** — structured results captured via a custom Ansible callback plugin
+- **Host summaries & task results** — structured results captured via a custom Ansible callback plugin
 - **Job templates** — reusable launch configs with extra vars, verbosity, become, forks, limits, tags, and survey fields for launch-time input
 - **Workflows** — chain multiple templates with on-success / on-failure / always branches and manual approval gates
 - **Pull-based runners** — lightweight agents self-register via bootstrap token; isolate execution from the control plane
@@ -118,12 +118,13 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 ## Architecture
 
 ```
-Browser → Nginx → PHP-FPM (Yii2) → MariaDB
-                                  → Redis (queue / cache / sessions)
-                       ↓
-                  Queue Worker
-                       ↓
-                  Runner Agent(s) → ansible-playbook
+Browser ──→ Nginx ──→ PHP-FPM (Yii2) ──→ MariaDB
+              ▲                     └──→ Redis (queue / cache / sessions)
+              │                                ▲
+              │ runner API (HTTP)              │
+              │                          Queue Worker (project sync, lint)
+     Runner Agent(s) ──→ ansible-playbook
+     (own network, pull jobs)
 ```
 
 | Layer | Role |
