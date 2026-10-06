@@ -24,6 +24,17 @@ class JobTemplatesController extends BaseApiController
 {
     use ApiTeamScopingTrait;
 
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'job-template.view',
+            'view' => 'job-template.view',
+            'create' => 'job-template.create',
+            'update' => 'job-template.update',
+            'delete' => 'job-template.delete',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

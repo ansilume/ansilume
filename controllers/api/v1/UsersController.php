@@ -23,6 +23,17 @@ use yii\web\NotFoundHttpException;
  */
 class UsersController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'user.view',
+            'view' => 'user.view',
+            'create' => 'user.create',
+            'update' => 'user.update',
+            'delete' => 'user.delete',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}|array{error: array{message: string}}
      */

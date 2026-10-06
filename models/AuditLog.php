@@ -94,6 +94,8 @@ class AuditLog extends ActiveRecord
     public const ACTION_RUNNER_UPDATED = 'runner.updated';
     public const ACTION_RUNNER_DELETED = 'runner.deleted';
     public const ACTION_RUNNER_TOKEN_REGENERATED = 'runner.token.regenerated';
+    /** Self-registration issued a new token to an existing runner, revoking the old one. */
+    public const ACTION_RUNNER_REREGISTERED = 'runner.reregistered';
 
     // -- Webhook actions -------------------------------------------------------
     public const ACTION_WEBHOOK_CREATED = 'webhook.created';
@@ -190,5 +192,39 @@ class AuditLog extends ActiveRecord
     public function getUser(): \yii\db\ActiveQuery
     {
         return $this->hasOne(User::class, ['id' => 'user_id']);
+    }
+
+    /**
+     * Latest occurrence and recent count of one action per object, in one
+     * grouped query (idx_audit_log_object).
+     *
+     * @param list<int> $objectIds
+     * @return array<int, array{last_at: int, recent: int}> keyed by object id;
+     *         objects without any entry are missing
+     */
+    public static function summarizeByObject(string $action, string $objectType, array $objectIds, int $since): array
+    {
+        if ($objectIds === []) {
+            return [];
+        }
+
+        $rows = (new \yii\db\Query())
+            ->select([
+                'object_id',
+                'last_at' => 'MAX(created_at)',
+                'recent' => 'SUM(CASE WHEN created_at >= :since THEN 1 ELSE 0 END)',
+            ])
+            ->from(self::tableName())
+            ->where(['action' => $action, 'object_type' => $objectType, 'object_id' => $objectIds])
+            ->groupBy('object_id')
+            ->addParams([':since' => $since])
+            ->all();
+
+        $summary = [];
+        foreach ($rows as $row) {
+            $summary[(int)$row['object_id']] = ['last_at' => (int)$row['last_at'], 'recent' => (int)$row['recent']];
+        }
+
+        return $summary;
     }
 }

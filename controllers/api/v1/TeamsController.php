@@ -29,6 +29,21 @@ use yii\web\NotFoundHttpException;
  */
 class TeamsController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'admin',
+            'view' => 'admin',
+            'create' => 'admin',
+            'update' => 'admin',
+            'delete' => 'admin',
+            'add-member' => 'admin',
+            'remove-member' => 'admin',
+            'add-project' => 'admin',
+            'remove-project' => 'admin',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}|array{error: array{message: string}}
      */

@@ -17,6 +17,18 @@ use yii\web\NotFoundHttpException;
  */
 class RolesController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'role.view',
+            'view' => 'role.view',
+            'permissions' => 'role.view',
+            'create' => 'role.create',
+            'update' => 'role.update',
+            'delete' => 'role.delete',
+        ];
+    }
+
     /**
      * @return array{data: mixed}|array{error: array{message: string}}
      */

@@ -22,6 +22,18 @@ use yii\web\NotFoundHttpException;
  */
 class NotificationTemplatesController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'notification-template.view',
+            'view' => 'notification-template.view',
+            'create' => 'notification-template.create',
+            'update' => 'notification-template.update',
+            'test' => 'notification-template.update',
+            'delete' => 'notification-template.delete',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

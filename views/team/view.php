@@ -7,6 +7,7 @@ declare(strict_types=1);
 /** @var app\models\User[] $allUsers      Users not yet in the team */
 /** @var app\models\Project[] $allProjects Projects not yet in the team */
 
+use app\helpers\ConfirmHelper;
 use app\models\TeamProject;
 use yii\helpers\Html;
 use yii\helpers\Url;
@@ -19,7 +20,7 @@ $this->title = Html::encode($team->name);
     <div>
         <?= Html::a('Edit', ['update', 'id' => $team->id], ['class' => 'btn btn-outline-secondary']) ?>
         <form method="post" action="<?= Url::to(['delete', 'id' => $team->id]) ?>" style="display:inline"
-              onsubmit="return confirm('Delete team &quot;<?= Html::encode($team->name) ?>&quot;? All member and project assignments will be removed.')">
+              onsubmit="<?= ConfirmHelper::attribute('Delete team "' . $team->name . '"? All member and project assignments will be removed.') ?>">
             <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
             <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
         </form>

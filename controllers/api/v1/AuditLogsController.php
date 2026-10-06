@@ -16,6 +16,14 @@ use yii\web\NotFoundHttpException;
  */
 class AuditLogsController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'user.view',
+            'view' => 'user.view',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}|array{error: array{message: string}}
      */

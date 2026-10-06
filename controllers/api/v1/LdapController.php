@@ -24,6 +24,13 @@ use app\services\ldap\LdapService;
  */
 class LdapController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'test' => 'admin',
+        ];
+    }
+
     /**
      * Run a connection diagnostic.
      *

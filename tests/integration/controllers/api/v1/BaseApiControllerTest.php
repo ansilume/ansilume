@@ -108,6 +108,94 @@ class BaseApiControllerTest extends WebControllerTestCase
         $this->expectException(UnauthorizedHttpException::class);
         $ctrl->beforeAction($action);
     }
+
+    /**
+     * Regression: a valid token of a disabled user was accepted. The request
+     * then ran as a guest, and endpoints without their own permission check
+     * (workflow launches, notification templates) still worked.
+     */
+    public function testTokenOfDisabledUserIsRejected(): void
+    {
+        $user = $this->createUser('disabled');
+        ['token' => $token, 'raw' => $raw] = ApiToken::generate((int)$user->id, 'test-token');
+        $user->status = \app\models\User::STATUS_INACTIVE;
+        $user->save(false);
+        \Yii::$app->request->headers->set('Authorization', 'Bearer ' . $raw);
+
+        try {
+            (new StubApiController('stub', \Yii::$app))->callAuthenticate();
+            $this->fail('the token of a disabled user must be rejected');
+        } catch (UnauthorizedHttpException $e) {
+            $this->assertSame('Invalid or expired token.', $e->getMessage());
+        }
+        $this->assertNull(ApiToken::findOne($token->id)?->last_used_at, 'a rejected token is not marked as used');
+    }
+
+    private function authenticate(?string $permission = null, bool $superadmin = false): void
+    {
+        $user = $this->createUser('gate');
+        if ($superadmin) {
+            $user->is_superadmin = true;
+            $user->save(false);
+        }
+        if ($permission !== null) {
+            $auth = \Yii::$app->authManager;
+            $this->assertNotNull($auth);
+            $role = $auth->createRole('gate-test-' . uniqid());
+            $auth->add($role);
+            $item = $auth->getPermission($permission);
+            $this->assertNotNull($item);
+            $auth->addChild($role, $item);
+            $auth->assign($role, (string)$user->id);
+        }
+        ['raw' => $raw] = ApiToken::generate((int)$user->id, 'gate-token');
+        \Yii::$app->request->headers->set('Authorization', 'Bearer ' . $raw);
+    }
+
+    private function gate(string $actionId): bool
+    {
+        $ctrl = new StubApiController('stub', \Yii::$app);
+
+        return $ctrl->beforeAction(new Action($actionId, $ctrl));
+    }
+
+    public function testGateDeniesAUserWithoutThePermission(): void
+    {
+        $this->authenticate();
+
+        $this->assertFalse($this->gate('guarded'));
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'Forbidden.']], \Yii::$app->response->data);
+    }
+
+    public function testGateAllowsAUserWithThePermission(): void
+    {
+        $this->authenticate('job.view');
+
+        $this->assertTrue($this->gate('guarded'));
+    }
+
+    public function testGateDeniesActionsWithoutARuleEvenForSuperadmins(): void
+    {
+        $this->authenticate('job.view', true);
+
+        $this->assertFalse($this->gate('unlisted'));
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+    }
+
+    public function testGateLetsSuperadminsPassEveryRule(): void
+    {
+        $this->authenticate(null, true);
+
+        $this->assertTrue($this->gate('guarded'));
+    }
+
+    public function testAuthenticatedRuleAllowsEverySignedInUser(): void
+    {
+        $this->authenticate();
+
+        $this->assertTrue($this->gate('open'));
+    }
 }
 
 /**
@@ -115,6 +203,15 @@ class BaseApiControllerTest extends WebControllerTestCase
  */
 class StubApiController extends BaseApiController // phpcs:ignore PSR1.Classes.ClassDeclaration.MultipleClasses
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'test' => self::AUTHENTICATED,
+            'guarded' => 'job.view',
+            'open' => self::AUTHENTICATED,
+        ];
+    }
+
     public function callAuthenticate(): void
     {
         $this->authenticateRequest();

@@ -22,6 +22,17 @@ use yii\web\NotFoundHttpException;
  */
 class RunnersController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'runner-group.view',
+            'view' => 'runner-group.view',
+            'move' => 'runner-group.update',
+            'delete' => 'runner-group.update',
+            'regenerate-token' => 'runner-group.update',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
@@ -43,8 +54,12 @@ class RunnersController extends BaseApiController
         /** @var int $page */
         $page = \Yii::$app->request->get('page', 1);
 
+        /** @var Runner[] $runners */
+        $runners = $dp->getModels();
+        $reregistrations = $this->reregistrations(array_map(static fn (Runner $r): int => (int)$r->id, $runners));
+
         return $this->paginated(
-            array_map(fn ($r) => $this->serialize($r), $dp->getModels()),
+            array_map(fn (Runner $r) => $this->serialize($r, $reregistrations[$r->id] ?? null), $runners),
             (int)$dp->totalCount,
             $page,
             25
@@ -56,7 +71,7 @@ class RunnersController extends BaseApiController
      */
     public function actionView(int $id): array
     {
-        return $this->success($this->serialize($this->findModel($id)));
+        return $this->success($this->serializeOne($this->findModel($id)));
     }
 
     /**
@@ -114,7 +129,7 @@ class RunnersController extends BaseApiController
             ]
         );
 
-        return $this->success($this->serialize($runner));
+        return $this->success($this->serializeOne($runner));
     }
 
     /**
@@ -169,15 +184,16 @@ class RunnersController extends BaseApiController
         );
 
         return $this->success([
-            'runner' => $this->serialize($runner),
+            'runner' => $this->serializeOne($runner),
             'token' => $token['raw'],
         ]);
     }
 
     /**
-     * @return array{id: int, name: string, description: string|null, runner_group_id: int, runner_group_name: string|null, is_online: bool, last_seen_at: int|null, created_at: int}
+     * @param array{last_at: int, recent: int}|null $reregistration
+     * @return array{id: int, name: string, description: string|null, runner_group_id: int, runner_group_name: string|null, is_online: bool, last_seen_at: int|null, software_version: string|null, last_reregistered_at: int|null, reregistrations_24h: int, created_at: int}
      */
-    private function serialize(Runner $r): array
+    private function serialize(Runner $r, ?array $reregistration): array
     {
         /** @var RunnerGroup|null $group */
         $group = $r->group;
@@ -190,8 +206,35 @@ class RunnersController extends BaseApiController
             'is_online' => $r->isOnline(),
             'last_seen_at' => $r->last_seen_at,
             'software_version' => $r->software_version,
+            'last_reregistered_at' => $reregistration['last_at'] ?? null,
+            'reregistrations_24h' => $reregistration['recent'] ?? 0,
             'created_at' => $r->created_at,
         ];
+    }
+
+    /**
+     * @return array{id: int, name: string, description: string|null, runner_group_id: int, runner_group_name: string|null, is_online: bool, last_seen_at: int|null, software_version: string|null, last_reregistered_at: int|null, reregistrations_24h: int, created_at: int}
+     */
+    private function serializeOne(Runner $r): array
+    {
+        return $this->serialize($r, $this->reregistrations([(int)$r->id])[(int)$r->id] ?? null);
+    }
+
+    /**
+     * Self-registrations that re-issued a runner's token: latest and count
+     * within Runner::REREGISTRATION_WINDOW, one query for all given runners.
+     *
+     * @param list<int> $runnerIds
+     * @return array<int, array{last_at: int, recent: int}>
+     */
+    private function reregistrations(array $runnerIds): array
+    {
+        return AuditLog::summarizeByObject(
+            AuditLog::ACTION_RUNNER_REREGISTERED,
+            'runner',
+            $runnerIds,
+            time() - Runner::REREGISTRATION_WINDOW
+        );
     }
 
     private function findModel(int $id): Runner

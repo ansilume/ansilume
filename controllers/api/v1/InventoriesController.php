@@ -23,6 +23,17 @@ class InventoriesController extends BaseApiController
 {
     use ApiTeamScopingTrait;
 
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'inventory.view',
+            'view' => 'inventory.view',
+            'create' => 'inventory.create',
+            'update' => 'inventory.update',
+            'delete' => 'inventory.delete',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var app\models\ApiToken[] $tokens */
 /** @var string|null $newToken */
 
+use app\helpers\ConfirmHelper;
 use yii\helpers\Html;
 
 $this->title = 'API Tokens';
@@ -93,7 +94,7 @@ $this->title = 'API Tokens';
                     <?php endif; ?>
                 </td>
                 <td class="text-end">
-                    <form method="post" action="<?= \yii\helpers\Url::to(['/profile/delete-token', 'id' => $token->id]) ?>" style="display:inline" onsubmit="return confirm('Revoke token &quot;<?= addslashes(Html::encode($token->name)) ?>&quot;?')">
+                    <form method="post" action="<?= \yii\helpers\Url::to(['/profile/delete-token', 'id' => $token->id]) ?>" style="display:inline" onsubmit="<?= ConfirmHelper::attribute('Revoke token "' . $token->name . '"?') ?>">
                         <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                         <button type="submit" class="btn btn-sm btn-outline-danger">Revoke</button>
                     </form>

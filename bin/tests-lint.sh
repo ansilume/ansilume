@@ -200,6 +200,16 @@ else
     echo "$UNESCAPED" | head -20 | sed 's/^/     /'
 fi
 
+# The browser decodes an attribute before JavaScript runs, so neither
+# addslashes() nor Html::encode() keeps a name inside a confirm('...') string.
+UNSAFE_CONFIRM=$(grep -rn --include="*.php" -P "addslashes\(|confirm\('[^']*<\?=" views/ 2>/dev/null || true)
+if [[ -z "$UNSAFE_CONFIRM" ]]; then
+    ok "No values interpolated into confirm('...') dialogs"
+else
+    fail "Values interpolated into confirm('...') — use ConfirmHelper::attribute()"
+    echo "$UNSAFE_CONFIRM" | head -20 | sed 's/^/     /'
+fi
+
 # =============================================================================
 # CSRF safety
 # =============================================================================

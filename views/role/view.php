@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var array{name: string, description: string, isSystem: bool, directPermissions: string[], effectivePermissions: string[], userIds: int[]} $role */
 /** @var \app\models\User[] $users */
 
+use app\helpers\ConfirmHelper;
 use app\helpers\PermissionCatalog;
 use yii\helpers\Html;
 
@@ -29,7 +30,7 @@ $inherited = array_diff($role['effectivePermissions'], $role['directPermissions'
         <?php endif; ?>
         <?php if (!$role['isSystem'] && Yii::$app->user->can('role.delete')) : ?>
             <form action="<?= \yii\helpers\Url::to(['delete', 'name' => $role['name']]) ?>" method="post" style="display:inline"
-                  onsubmit="return confirm('Delete role &quot;<?= Html::encode($role['name']) ?>&quot;? Users holding this role will be left without a role.')">
+                  onsubmit="<?= ConfirmHelper::attribute('Delete role "' . $role['name'] . '"? Users holding this role will be left without a role.') ?>">
                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
                 <button type="submit" class="btn btn-outline-danger btn-sm ms-1">Delete</button>
             </form>

@@ -117,6 +117,13 @@ class ComposeIsolationTest extends TestCase
         foreach ($runners as $name => $service) {
             $this->assertSame(['runners'], $this->networksOf($service), "{$name} must only join 'runners'");
             $this->assertArrayNotHasKey('env_file', $service, "{$name} must not get the server's .env");
+            if ($file === 'docker-compose.prebuilt.yml') {
+                // Prebuilt runners keep their token in a named volume; the dev
+                // compose file bind-mounts the checkout instead.
+                $volume = str_replace('-', '_', (string)$name) . '_runtime';
+                $this->assertSame([$volume . ':/var/www/runtime'], $service['volumes'] ?? [], "{$name} keeps its token in a named volume");
+                $this->assertArrayHasKey($volume, $compose['volumes']);
+            }
         }
         $this->assertArrayHasKey('runners', $compose['networks']);
         $this->assertNotTrue($compose['networks']['runners']['internal'] ?? false, 'playbooks need outbound access');
@@ -195,13 +202,16 @@ class ComposeIsolationTest extends TestCase
      */
     public function testDeployRunnersAreIsolated(bool $prebuilt): void
     {
-        $services = $this->renderDeployTemplate($prebuilt)['services'];
+        $compose = $this->renderDeployTemplate($prebuilt);
+        $services = $compose['services'];
         $runners = array_filter($services, static fn (string $n): bool => str_starts_with($n, 'runner'), ARRAY_FILTER_USE_KEY);
 
         $this->assertCount(2, $runners, 'ansilume_runner_count defaults to 2');
         foreach ($runners as $name => $runner) {
             $this->assertSame(['runners'], $this->networksOf($runner), "{$name} must only join the runner network");
-            $this->assertArrayNotHasKey('volumes', $runner, "{$name} must not mount anything from the host");
+            $volume = str_replace('-', '_', $name) . '_runtime';
+            $this->assertSame([$volume . ':/var/www/runtime'], $runner['volumes'] ?? [], "{$name} mounts only its own named volume, nothing from the host");
+            $this->assertArrayHasKey($volume, $compose['volumes'] ?? []);
             $this->assertArrayNotHasKey('env_file', $runner, "{$name} must not get the server's .env");
             if (!$prebuilt) {
                 $this->assertSame('docker/runner/Dockerfile', $runner['build']['dockerfile'] ?? null, $name);

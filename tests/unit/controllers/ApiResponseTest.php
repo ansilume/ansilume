@@ -26,6 +26,11 @@ class ApiResponseTest extends TestCase
                 return true;
             }
 
+            protected function apiAccessRules(): array
+            {
+                return [];
+            }
+
             public function testSuccess(mixed $data, int $status = 200): array
             {
                 $this->capturedStatus = $status;

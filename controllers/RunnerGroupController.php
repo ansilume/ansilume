@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\models\AuditLog;
+use app\models\Runner;
 use app\models\RunnerGroup;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
@@ -77,10 +78,17 @@ class RunnerGroupController extends BaseController
     public function actionView(int $id): string
     {
         $group = $this->findModel($id);
+        /** @var Runner[] $runners */
         $runners = $group->getRunners()->orderBy('name')->all();
         /** @var RunnerGroup[] $allGroups */
         $allGroups = RunnerGroup::find()->where(['!=', 'id', $group->id])->orderBy('name')->all();
-        return $this->render('view', compact('group', 'runners', 'allGroups'));
+        $reregistrations = AuditLog::summarizeByObject(
+            AuditLog::ACTION_RUNNER_REREGISTERED,
+            'runner',
+            array_map(static fn (Runner $runner): int => (int)$runner->id, $runners),
+            time() - Runner::REREGISTRATION_WINDOW
+        );
+        return $this->render('view', compact('group', 'runners', 'allGroups', 'reregistrations'));
     }
 
     public function actionCreate(): string|Response

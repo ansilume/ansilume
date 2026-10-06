@@ -26,6 +26,22 @@ use app\services\AnalyticsService;
  */
 class AnalyticsController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'summary' => 'analytics.view',
+            'template-reliability' => 'analytics.view',
+            'project-activity' => 'analytics.view',
+            'user-activity' => 'analytics.view',
+            'host-health' => 'analytics.view',
+            'job-trend' => 'analytics.view',
+            'workflow-summary' => 'analytics.view',
+            'workflow-activity' => 'analytics.view',
+            'approval-summary' => 'analytics.view',
+            'runner-activity' => 'analytics.view',
+        ];
+    }
+
     /**
      * @return array{data: mixed}|array{error: array{message: string}}
      */
@@ -125,6 +141,11 @@ class AnalyticsController extends BaseApiController
 
         $format = (string)\Yii::$app->request->get('format', 'json');
         if ($format === 'csv') {
+            // Same split as the web UI: viewing needs analytics.view,
+            // exporting needs analytics.export.
+            if (!$this->userCan('analytics.export')) {
+                return $this->error('Forbidden.', 403);
+            }
             return $this->respondCsv($data, $method);
         }
 

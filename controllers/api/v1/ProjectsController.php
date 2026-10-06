@@ -26,6 +26,18 @@ class ProjectsController extends BaseApiController
 {
     use ApiTeamScopingTrait;
 
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'project.view',
+            'view' => 'project.view',
+            'create' => 'project.create',
+            'update' => 'project.update',
+            'sync' => 'project.update',
+            'delete' => 'project.delete',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

@@ -15,6 +15,13 @@ use app\models\User;
  */
 class ProfileController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'change-password' => self::AUTHENTICATED,
+        ];
+    }
+
     /**
      * POST /api/v1/profile/change-password
      *

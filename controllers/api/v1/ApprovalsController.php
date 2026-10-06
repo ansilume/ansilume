@@ -16,6 +16,16 @@ use yii\web\NotFoundHttpException;
  */
 class ApprovalsController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'approval.view',
+            'view' => 'approval.view',
+            'approve' => 'approval.decide',
+            'reject' => 'approval.decide',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

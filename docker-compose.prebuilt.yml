@@ -115,6 +115,11 @@ services:
     depends_on:
       nginx:
         condition: service_healthy
+    # Keeps the runner's token (and project checkouts) across container
+    # recreation, so an update does not re-register the runner and revoke
+    # its token.
+    volumes:
+      - runner_1_runtime:/var/www/runtime
     healthcheck:
       test: ["CMD", "sh", "-c", "test -f /var/www/runtime/runner-runner-1.token"]
       interval: 30s
@@ -186,6 +191,7 @@ networks:
 volumes:
   db_data:
   runtime_projects:
+  runner_1_runtime:
   # Yii2 publishes framework assets (jQuery, yii.js) to /var/www/web/assets/
   # on first request. The app container writes them; nginx serves them.
   # Without this shared volume, browsers get 404/HTML for /assets/... URLs.

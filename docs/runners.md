@@ -126,10 +126,23 @@ own group.
 
 1. Runner starts and finds no `RUNNER_TOKEN` in the environment
 2. Runner sends `POST /api/runner/v1/register` with `{ name, bootstrap_secret }`
-3. Server validates the secret, creates (or updates) the runner record in the
-   "default" runner group, and returns a token
+3. Server validates the secret and returns a token. It creates the runner in
+   the requested group ("default" if none), or, when a runner with this name
+   already exists in that group, issues it a new token and revokes the old
+   one. Both are recorded in the audit log (`runner.created`,
+   `runner.reregistered`).
 4. Runner caches the token in `runtime/` and uses it for all subsequent requests
 5. On restart, the cached token is reused; if invalid, re-registration is attempted
+
+Because re-registration revokes the previous token, the runner group page
+shows "Token re-issued by self-registration" under the runner, plus a badge
+when that happened more than once within 24 hours. The Runners API reports
+the same as `last_reregistered_at` and `reregistrations_24h`. Repeated resets
+usually mean that two runners use the same `RUNNER_NAME` in one group, or that
+someone else registered with it, so give every runner a unique name. The
+bundled runners of the prebuilt compose file and the deploy role keep their
+token in a named volume (`runner_N_runtime`), so recreating them during an
+update does not re-register them.
 
 ### Option B: Pre-configured token
 

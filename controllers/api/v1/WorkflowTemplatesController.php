@@ -16,6 +16,18 @@ use yii\web\NotFoundHttpException;
  */
 class WorkflowTemplatesController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'workflow-template.view',
+            'view' => 'workflow-template.view',
+            'create' => 'workflow-template.create',
+            'update' => 'workflow-template.update',
+            'delete' => 'workflow-template.delete',
+            'launch' => 'workflow.launch',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

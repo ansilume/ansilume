@@ -6,8 +6,11 @@ declare(strict_types=1);
 /** @var app\models\RunnerGroup $group */
 /** @var app\models\Runner[] $runners */
 /** @var app\models\RunnerGroup[] $allGroups */
+/** @var array<int, array{last_at: int, recent: int}> $reregistrations */
 
+use app\helpers\ConfirmHelper;
 use app\helpers\TimeHelper;
+use app\models\AuditLog;
 use yii\helpers\Html;
 use yii\helpers\Url;
 
@@ -127,7 +130,18 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
             <tbody>
             <?php foreach ($runners as $runner) : ?>
                 <tr>
-                    <td class="fw-semibold"><?= Html::encode($runner->name) ?></td>
+                    <td>
+                        <span class="fw-semibold"><?= Html::encode($runner->name) ?></span>
+                        <?php if (isset($reregistrations[$runner->id])) : ?>
+                            <?php $rereg = $reregistrations[$runner->id]; ?>
+                            <div class="small text-muted" data-testid="runner-reregistered">
+                                Token re-issued by self-registration <?= TimeHelper::relative($rereg['last_at']) ?>
+                                <?php if ($rereg['recent'] > 1) : ?>
+                                    <span class="badge text-bg-warning" data-testid="runner-reregistered-count" title="<?= Html::encode('Each registration revokes the previous token. Repeated resets usually mean that two runners share this RUNNER_NAME or that someone else registered with it. See audit action ' . AuditLog::ACTION_RUNNER_REREGISTERED . '.') ?>"><?= Html::encode($rereg['recent'] . '× in 24 h') ?></span>
+                                <?php endif; ?>
+                            </div>
+                        <?php endif; ?>
+                    </td>
                     <td>
                         <?php if ($runner->isOnline()) : ?>
                             <span class="badge text-bg-success">Online</span>
@@ -157,7 +171,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                     <td class="text-muted small"><?= Html::encode($runner->description ?? '') ?></td>
                     <td class="text-end">
                         <?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
-                            <form method="post" action="<?= Url::to(['/runner/regenerate-token', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="return confirm('Regenerate token for &quot;<?= addslashes($runner->name) ?>&quot;? The old token will stop working immediately.')">
+                            <form method="post" action="<?= Url::to(['/runner/regenerate-token', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="<?= ConfirmHelper::attribute('Regenerate token for "' . $runner->name . '"? The old token will stop working immediately.') ?>">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-warning me-1">Regen Token</button>
                             </form>
@@ -177,7 +191,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                                 </ul>
                             </div>
                             <?php endif; ?>
-                            <form method="post" action="<?= Url::to(['/runner/delete', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="return confirm('Delete runner &quot;<?= addslashes($runner->name) ?>&quot;?')">
+                            <form method="post" action="<?= Url::to(['/runner/delete', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="<?= ConfirmHelper::attribute('Delete runner "' . $runner->name . '"?') ?>">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
                             </form>

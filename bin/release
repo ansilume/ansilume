@@ -10,6 +10,14 @@
 
 set -euo pipefail
 
+# The OpenAPI spec's info.version tracks the application version (CLAUDE.md).
+# Only the first two-space-indented "version:" line is info.version.
+bump_openapi_version() {
+    local spec="$1" version="$2"
+    sed -i -E "0,/^  version: \"[^\"]*\"\$/s//  version: \"${version}\"/" "$spec"
+    grep -q "^  version: \"${version}\"\$" "$spec"
+}
+
 BUMP="${1:-}"
 if [[ "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
     echo "Usage: $0 <patch|minor|major>" >&2
@@ -35,8 +43,9 @@ NEW="${MAJOR}.${MINOR}.${PATCH}"
 TAG="v${NEW}"
 
 echo "${NEW}" > VERSION
+bump_openapi_version web/openapi.yaml "${NEW}"
 
-git add VERSION
+git add VERSION web/openapi.yaml
 git commit -m "chore: release ${TAG}"
 git tag -a "${TAG}" -m "Release ${TAG}"
 git push origin main

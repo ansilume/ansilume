@@ -16,6 +16,13 @@ use app\services\ArtifactService;
  */
 class SystemController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'artifact-stats' => 'user.view',
+        ];
+    }
+
     public $enableCsrfValidation = false;
 
     /**

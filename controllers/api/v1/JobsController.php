@@ -26,6 +26,20 @@ class JobsController extends BaseApiController
 {
     use ApiTeamScopingTrait;
 
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'job.view',
+            'view' => 'job.view',
+            'create' => 'job.launch',
+            'cancel' => 'job.cancel',
+            'artifacts' => 'job.view',
+            'download-artifact' => 'job.view',
+            'artifact-content' => 'job.view',
+            'download-all-artifacts' => 'job.view',
+        ];
+    }
+
     public $enableCsrfValidation = false;
 
     /**

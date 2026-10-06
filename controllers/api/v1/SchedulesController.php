@@ -26,6 +26,18 @@ class SchedulesController extends BaseApiController
 {
     use ApiTeamScopingTrait;
 
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'job.launch',
+            'view' => 'job.launch',
+            'create' => 'job.launch',
+            'update' => 'job.launch',
+            'delete' => 'job.launch',
+            'toggle' => 'job.launch',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

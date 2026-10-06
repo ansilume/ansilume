@@ -23,6 +23,17 @@ use yii\web\NotFoundHttpException;
  */
 class CredentialsController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'credential.view',
+            'view' => 'credential.view',
+            'create' => 'credential.create',
+            'update' => 'credential.update',
+            'delete' => 'credential.delete',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

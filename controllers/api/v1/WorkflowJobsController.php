@@ -15,6 +15,16 @@ use yii\web\NotFoundHttpException;
  */
 class WorkflowJobsController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'workflow.view',
+            'view' => 'workflow.view',
+            'cancel' => 'workflow.cancel',
+            'resume' => 'workflow.launch',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

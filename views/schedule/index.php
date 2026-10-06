@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
+use app\helpers\ConfirmHelper;
 use app\helpers\TimeHelper;
 use yii\helpers\Html;
 use yii\helpers\Url;
@@ -74,7 +75,7 @@ $this->title = 'Schedules';
                         <?php if (\Yii::$app->user?->can('job.launch')) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                             <form method="post" action="<?= Url::to(['toggle', 'id' => $model->id]) ?>" style="display:inline"
-                                  onsubmit="return confirm('<?= $model->enabled ? 'Disable this schedule?' : 'Enable this schedule?' ?>')">
+                                  onsubmit="<?= ConfirmHelper::attribute($model->enabled ? 'Disable this schedule?' : 'Enable this schedule?') ?>">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-<?= $model->enabled ? 'warning' : 'success' ?> ms-1">
                                     <?= $model->enabled ? 'Disable' : 'Enable' ?>

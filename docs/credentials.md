@@ -205,3 +205,12 @@ Viewer can see that a credential exists and what type it is, but the
 secret fields are never rendered. Operator can create and update but
 cannot delete — once a credential is attached to a template it would
 disappear from there on delete, so deletion is admin-gated.
+
+The REST API enforces the same permissions: `GET /api/v1/credentials` and
+`GET /api/v1/credentials/{id}` need `credential.view`. Every signed-in user
+holds the viewer role implicitly, and operator and admin inherit viewer.
+Removing `credential.view` from viewer therefore also removes it from
+operator, admin and their API tokens. To hide credentials from read-only
+users, first grant `credential.view` directly to operator, admin and every
+custom role that needs it, then remove it from viewer. Superadmins keep every
+permission.

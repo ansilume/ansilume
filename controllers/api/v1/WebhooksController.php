@@ -21,6 +21,17 @@ use yii\web\NotFoundHttpException;
  */
 class WebhooksController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'admin',
+            'view' => 'admin',
+            'create' => 'admin',
+            'update' => 'admin',
+            'delete' => 'admin',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}|array{error: array{message: string}}
      */

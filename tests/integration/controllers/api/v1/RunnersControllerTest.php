@@ -74,6 +74,36 @@ class RunnersControllerTest extends WebControllerTestCase
         $this->assertArrayHasKey('last_seen_at', $item);
     }
 
+    public function testRunnerPayloadReportsSelfRegistrationResets(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $group = $this->createRunnerGroup($userId);
+        $runner = $this->createRunner($group->id, $userId);
+        $untouched = $this->createRunner($group->id, $userId);
+        $now = time();
+        foreach ([$now - 90_000, $now - 600, $now - 30] as $at) {
+            \Yii::$app->db->createCommand()->insert(\app\models\AuditLog::tableName(), [
+                'action' => \app\models\AuditLog::ACTION_RUNNER_REREGISTERED,
+                'object_type' => 'runner',
+                'object_id' => $runner->id,
+                'created_at' => $at,
+            ])->execute();
+        }
+
+        /** @var array<string, mixed> $view */
+        $view = $this->callSuccess($this->ctrl->actionView($runner->id));
+        $this->assertSame($now - 30, $view['last_reregistered_at']);
+        $this->assertSame(2, $view['reregistrations_24h']);
+
+        $this->setQueryParams(['group_id' => $group->id]);
+        $index = $this->ctrl->actionIndex();
+        $byId = array_column($index['data'], null, 'id');
+        $this->assertSame(2, $byId[$runner->id]['reregistrations_24h']);
+        $this->assertNull($byId[$untouched->id]['last_reregistered_at']);
+        $this->assertSame(0, $byId[$untouched->id]['reregistrations_24h']);
+    }
+
     public function testViewReturns404(): void
     {
         $this->authenticateWithAdmin();

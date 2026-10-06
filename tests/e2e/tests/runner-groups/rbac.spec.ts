@@ -14,6 +14,15 @@ test.describe('Runner Groups RBAC', () => {
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
+  test('viewer sees re-registration notices but no runner actions', async ({ page }) => {
+    await page.goto('/runner-group/index');
+    await page.locator('table.table tbody tr a', { hasText: 'e2e-runner-group-2' }).first().click();
+
+    const row = page.locator('table.table tbody tr', { hasText: 'e2e-reregistered-runner' });
+    await expect(row.getByTestId('runner-reregistered-count')).toHaveText('2× in 24 h');
+    await expect(row.locator('button:has-text("Regen Token"), button:has-text("Delete")')).toHaveCount(0);
+  });
+
   test('viewer gets 403 on create', async ({ page }) => {
     await page.goto('/runner-group/create');
     await expectForbidden(page);

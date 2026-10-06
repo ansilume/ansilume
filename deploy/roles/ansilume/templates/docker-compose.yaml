@@ -222,6 +222,10 @@ services:
 {% endif %}
     container_name: {{ ansilume_compose_project }}_runner_{{ i }}
     restart: {{ ansilume_restart_policy }}
+    # A named volume, not the install directory: keeps the runner's token
+    # across recreation, so an update does not re-register it.
+    volumes:
+      - runner_{{ i }}_runtime:/var/www/runtime
     environment:
       - RUNNER_NAME=runner-{{ i }}
       - RUNNER_BOOTSTRAP_SECRET=${RUNNER_BOOTSTRAP_SECRET}
@@ -247,7 +251,7 @@ networks:
   {{ ansilume_runner_network_name }}:
     driver: bridge
 
-{% if ansilume_db_local or ansilume_use_prebuilt_images %}
+{% if ansilume_db_local or ansilume_use_prebuilt_images or ansilume_runner_count > 0 %}
 volumes:
 {% if ansilume_db_local %}
   db_data:
@@ -256,4 +260,7 @@ volumes:
   runtime_projects:
   web_assets:
 {% endif %}
+{% for i in range(1, ansilume_runner_count + 1) %}
+  runner_{{ i }}_runtime:
+{% endfor %}
 {% endif %}

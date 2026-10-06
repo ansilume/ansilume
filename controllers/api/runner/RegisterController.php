@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\runner;
 
+use app\models\AuditLog;
 use app\models\Runner;
 use app\models\RunnerGroup;
 use app\models\User;
@@ -19,6 +20,9 @@ use yii\web\Response;
  * A runner that has no pre-configured token can call this endpoint with a
  * shared bootstrap secret to obtain a token automatically.  The endpoint
  * creates (or resets the token of) a runner record named after the caller.
+ * Both are audited (runner.created / runner.reregistered); a reset revokes
+ * the runner's previous token. Rejected attempts are not audited, because
+ * the endpoint is unauthenticated and they would let anyone flood the log.
  *
  * The optional "group" field specifies the target runner group by name.
  * If omitted or empty, the runner is placed in the "default" group (created
@@ -85,12 +89,19 @@ class RegisterController extends Controller
             return ['ok' => false, 'error' => "Runner group \"{$groupName}\" not found."];
         }
 
+        /** @var Runner|null $existing */
+        $existing = Runner::findOne(['runner_group_id' => $group->id, 'name' => $name]);
+        $wasOnline = $existing !== null && $existing->isOnline();
+        $previousLastSeen = $existing?->last_seen_at;
+
         [$runner, $rawToken] = $this->upsertRunner(
+            $existing,
             $group->id,
             $name,
             $systemUserId,
             $this->extractReportedVersion($body),
         );
+        $this->auditRegistration($runner, $group, $existing !== null, $wasOnline, $previousLastSeen);
 
         return [
             'ok' => true,
@@ -199,17 +210,21 @@ class RegisterController extends Controller
     }
 
     /**
-     * Find or create a runner by name within the given group.
-     * Always generates a fresh token so the caller gets one valid credential.
+     * Create a runner, or reset the token of the existing runner with this
+     * name in this group. Never moves a runner between groups. Always
+     * generates a fresh token so the caller gets one valid credential.
      *
      * @return array{0: Runner, 1: string}  [runner, rawToken]
      */
-    private function upsertRunner(int $groupId, string $name, int $createdBy, ?string $softwareVersion = null): array
-    {
+    private function upsertRunner(
+        ?Runner $runner,
+        int $groupId,
+        string $name,
+        int $createdBy,
+        ?string $softwareVersion = null
+    ): array {
         $token = Runner::generateToken();
 
-        /** @var Runner|null $runner */
-        $runner = Runner::findOne(['runner_group_id' => $groupId, 'name' => $name]);
         if ($runner === null) {
             $runner = new Runner();
             $runner->runner_group_id = $groupId;
@@ -226,5 +241,41 @@ class RegisterController extends Controller
         }
 
         return [$runner, $token['raw']];
+    }
+
+    private function auditRegistration(
+        Runner $runner,
+        RunnerGroup $group,
+        bool $existed,
+        bool $wasOnline,
+        ?int $previousLastSeen
+    ): void {
+        $context = [
+            'name' => $runner->name,
+            'group_id' => $group->id,
+            'group_name' => $group->name,
+            'source' => 'self-registration',
+        ];
+        $audit = \Yii::$app->get('auditService');
+
+        if (!$existed) {
+            $otherGroupIds = array_map('intval', Runner::find()
+                ->select('runner_group_id')
+                ->where(['name' => $runner->name])
+                ->andWhere(['<>', 'id', $runner->id])
+                ->column());
+            if ($otherGroupIds !== []) {
+                $context['other_group_ids'] = $otherGroupIds;
+            }
+            $audit->log(AuditLog::ACTION_RUNNER_CREATED, 'runner', $runner->id, null, $context);
+            return;
+        }
+
+        $audit->log(AuditLog::ACTION_RUNNER_REREGISTERED, 'runner', $runner->id, null, $context + [
+            'previous_token_revoked' => true,
+            'was_online' => $wasOnline,
+            'previous_last_seen_at' => $previousLastSeen,
+            'software_version' => $runner->software_version,
+        ]);
     }
 }

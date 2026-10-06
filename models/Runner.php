@@ -25,6 +25,9 @@ use yii\db\ActiveRecord;
  */
 class Runner extends ActiveRecord
 {
+    /** Seconds over which repeated self-registrations of one runner are counted. */
+    public const REREGISTRATION_WINDOW = 86400;
+
     public static function tableName(): string
     {
         return '{{%runner}}';

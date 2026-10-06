@@ -129,6 +129,44 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.5.0 or older: API permissions, runner tokens
+
+**The REST API enforces the same permissions as the web UI.** Until now
+several endpoints checked no permission at all: workflow templates and
+workflow jobs, notification templates, approval rules and approvals,
+analytics, and the read endpoints of credentials, schedules, runners, runner
+groups, projects, inventories, job templates and jobs. Every endpoint now
+requires the permission of the matching web page and answers `403` without
+it. What existing tokens notice:
+
+- Viewer tokens can no longer list schedules (that needs `job.launch`, as in
+  the web UI) or export analytics as CSV (`analytics.export`).
+- Tokens of users with a custom role need that role's view permissions for
+  reads, for example `project.view`.
+- Tokens of disabled users are rejected with `401`. Before, their requests
+  continued as a guest.
+
+The default roles keep everything they can do in the web UI.
+
+**Confirm dialogs no longer run names as code.** A runner name with a double
+quote could inject HTML attributes into the runner group page (stored
+cross-site scripting), and an apostrophe in a token, role or team name could
+break out of a confirm dialog's JavaScript. Runner names come from
+self-registration, so anyone with the bootstrap secret could plant one. If a
+runner group lists runners with unusual names, delete them and rotate
+`RUNNER_BOOTSTRAP_SECRET`.
+
+**Runner token resets are audited and shown.** When a runner registers again
+under an existing name, the server issues a new token and revokes the old
+one. This is now logged as `runner.reregistered` and shown on the runner group
+page and in the Runners API. The bundled runners of the prebuilt compose file
+and the deploy role keep their token in a named volume, so recreating them no
+longer re-registers them. Quickstart `--update` downloads the new compose
+file; manual prebuilt updates must download it as well.
+
+**The OpenAPI spec version follows the app version.** `info.version` in
+`/openapi.yaml` is now the Ansilume version instead of a separate number.
+
 ## After updating from 2.4.6 or older: runner network, Redis password, maintenance
 
 **Bundled runners get their own network.** Playbooks run on runners, and until

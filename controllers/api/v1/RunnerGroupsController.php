@@ -21,6 +21,17 @@ use yii\web\NotFoundHttpException;
  */
 class RunnerGroupsController extends BaseApiController
 {
+    protected function apiAccessRules(): array
+    {
+        return [
+            'index' => 'runner-group.view',
+            'view' => 'runner-group.view',
+            'create' => 'runner-group.create',
+            'update' => 'runner-group.update',
+            'delete' => 'runner-group.delete',
+        ];
+    }
+
     /**
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
