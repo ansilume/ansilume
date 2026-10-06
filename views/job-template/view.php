@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\JobTemplate $model */
 
+use app\components\LintVerdict;
 use app\helpers\TimeHelper;
 use yii\helpers\Html;
 
@@ -174,19 +175,12 @@ $this->title = $model->name;
     <div class="col-12">
         <div class="card">
             <?php
-            $lintBadge = '';
-            if ($model->lint_exit_code === null) {
-                $lintBadge = '<span class="badge text-bg-secondary">not run</span>';
-            } elseif ($model->lint_exit_code === 0) {
-                $lintBadge = '<span class="badge text-bg-success">clean</span>';
-            } else {
-                $lintBadge = '<span class="badge text-bg-warning">issues found</span>';
-            }
+            $lintVerdict = LintVerdict::of($model->lint_exit_code, $model->lint_output);
             ?>
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Ansible Lint <small class="text-muted fw-normal">(--profile production)</small></span>
                 <span>
-                    <?= $lintBadge // xss-ok: hardcoded badge HTML?>
+                    <span class="badge <?= Html::encode(LintVerdict::badgeClass($lintVerdict)) ?>" data-testid="lint-badge"><?= Html::encode(LintVerdict::label($lintVerdict)) ?></span>
                     <?php if ($model->lint_at !== null) : ?>
                         <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output?></small>
                     <?php endif; ?>
@@ -194,7 +188,14 @@ $this->title = $model->name;
             </div>
             <div class="card-body p-0">
                 <?php if ($model->lint_output) : ?>
+                    <?php if ($lintVerdict === LintVerdict::VAULT_SKIPPED) : ?>
+                        <p class="text-muted small px-3 pt-3 mb-2" data-testid="lint-vault-note"><?= Html::encode(LintVerdict::VAULT_NOTE) ?></p>
+                        <details><summary class="px-3 small">Show ansible-lint output</summary>
+                    <?php endif; ?>
                     <pre class="job-log m-0" id="template-lint-output" style="max-height:300px;overflow-y:auto;"></pre>
+                    <?php if ($lintVerdict === LintVerdict::VAULT_SKIPPED) : ?>
+                        </details>
+                    <?php endif; ?>
                     <script src="<?= \Yii::$app->request->baseUrl ?>/js/ansi_up.min.js"></script>
                     <script>
                     (function () {
@@ -204,7 +205,7 @@ $this->title = $model->name;
                         au.ansi_colors[0][4].rgb = [77, 159, 236];
                         au.ansi_colors[0][5].rgb = [198, 120, 221];
                         var el = document.getElementById('template-lint-output');
-                        el.innerHTML = au.ansi_to_html(<?= json_encode($model->lint_output) // xss-ok: json_encode escapes?>);
+                        el.innerHTML = au.ansi_to_html(<?= \yii\helpers\Json::htmlEncode($model->lint_output) // xss-ok: hex-escaped JSON?>);
                     })();
                     </script>
                 <?php else : ?>

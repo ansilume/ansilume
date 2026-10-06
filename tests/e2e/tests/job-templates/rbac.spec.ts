@@ -25,6 +25,17 @@ test.describe('Job Templates RBAC', () => {
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
+  test('viewer sees the neutral vault lint verdict', async ({ page }) => {
+    await page.goto('/job-template/index');
+    const link = page.locator('table.table tbody tr a', { hasText: /^e2e-vault-template$/ }).first();
+    if (!(await link.isVisible({ timeout: 2_000 }).catch(() => false))) {
+      test.skip(true, 'e2e-vault-template is not seeded');
+      return;
+    }
+    await link.click();
+    await expect(page.getByTestId('lint-badge')).toHaveText('not lint-checked: vault-encrypted vars_files');
+  });
+
   test('operator can create templates', async ({ page }) => {
     await page.goto('/job-template/create');
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);

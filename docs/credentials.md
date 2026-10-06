@@ -184,6 +184,17 @@ added to a custom runner image.
   the container environment; see
   [runners.md](runners.md#what-playbooks-can-see) for what that means
   for `RUNNER_BOOTSTRAP_SECRET`.
+- **Vault content on the server:** "Parse Inventory" and ansible-lint
+  run on the server, never with a vault password. A repository's
+  `ansible.cfg` vault settings (`vault_password_file`,
+  `vault_identity_list`, `ask_vault_pass`) are overridden with a random
+  decoy, so a committed password file is not used and a password script
+  never runs. Vault-encrypted `group_vars`/`host_vars` are skipped with
+  a notice, inline `!vault` values are shown as `[vault-encrypted]`, an
+  encrypted inventory file is reported as such, and lint of a playbook
+  with encrypted `vars_files` shows "not lint-checked" instead of
+  findings. Playbooks still decrypt normally on the runner with the
+  template's vault credential.
 - **In the UI:** the secret inputs are `type="password"` and forms
   never echo stored secrets back to the browser. Audit logs record
   every credential create / update / delete with only the non-secret

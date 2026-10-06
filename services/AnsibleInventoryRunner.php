@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\SubprocessEnvironment;
+use app\components\VaultIsolation;
 use yii\base\Component;
 
 /**
@@ -13,6 +14,9 @@ use yii\base\Component;
  * Handles process lifecycle: spawning, non-blocking I/O, timeout, and cleanup.
  * Designed to be used by InventoryService but kept separate so process management
  * does not inflate the service's complexity.
+ *
+ * Every run is vault-isolated ({@see VaultIsolation}): the server never runs
+ * a repository's vault password script and never decrypts vault content.
  */
 class AnsibleInventoryRunner extends Component
 {
@@ -24,6 +28,12 @@ class AnsibleInventoryRunner extends Component
      * ProjectService — point at a runtime dir prepared by the entrypoints.
      */
     public const ANSIBLE_HOME = '/var/www/runtime/ansible-home';
+
+    /** Exit code of ansible-inventory for parser errors, decryption failures included. */
+    public const EXIT_PARSER_ERROR = 4;
+
+    /** ANSIBLE_VARS_ENABLED value that matches no vars plugin: no group_vars/ or host_vars/. */
+    public const VARS_PLUGINS_DISABLED = 'ansilume_disabled';
 
     /** @var int Timeout in seconds for ansible-inventory execution. */
     public int $timeout = 30;
@@ -40,31 +50,81 @@ class AnsibleInventoryRunner extends Component
     /**
      * Run `ansible-inventory --list` against the given inventory path.
      *
-     * @return array{stdout?: string, error: ?string}
+     * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
      */
     public function run(string $inventoryPath, ?string $cwd = null): array
     {
-        $cmd = ['ansible-inventory', '--list', '-i', $inventoryPath];
+        return $this->execute($inventoryPath, $cwd, []);
+    }
 
-        $process = $this->openProcess($cmd, $pipes, $cwd);
+    /**
+     * Like run(), but loads no vars plugin, so group_vars/ and host_vars/ stay
+     * unread. Used when those hold vault-encrypted files: hosts and groups
+     * still come out complete.
+     *
+     * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
+     */
+    public function runWithoutVarsPlugins(string $inventoryPath, ?string $cwd = null): array
+    {
+        return $this->execute($inventoryPath, $cwd, ['ANSIBLE_VARS_ENABLED' => self::VARS_PLUGINS_DISABLED]);
+    }
+
+    /**
+     * @param array<string, string> $extraEnv
+     * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
+     */
+    protected function execute(string $inventoryPath, ?string $cwd, array $extraEnv): array
+    {
+        $vault = $this->vaultIsolation();
+        try {
+            $env = $this->buildProcessEnv(array_merge($vault->overrides(), $extraEnv));
+
+            return $this->runProcess(['ansible-inventory', '--list', '-i', $inventoryPath], $cwd, $env);
+        } catch (\RuntimeException $e) {
+            return self::result('', '', null, $e->getMessage());
+        } finally {
+            // After proc_close, or after the kill on timeout.
+            $vault->cleanup();
+        }
+    }
+
+    protected function vaultIsolation(): VaultIsolation
+    {
+        return new VaultIsolation();
+    }
+
+    /**
+     * @param string[] $cmd
+     * @param array<string, string> $env
+     * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
+     */
+    private function runProcess(array $cmd, ?string $cwd, array $env): array
+    {
+        $process = $this->openProcess($cmd, $pipes, $cwd, $env);
         if ($process === null) {
-            return ['groups' => [], 'hosts' => [], 'error' => 'Failed to start ansible-inventory process.'];
+            return self::result('', '', null, 'Failed to start ansible-inventory process.');
         }
 
         [$stdout, $stderr, $timedOut] = $this->readProcessOutput($pipes, $process);
-
         if ($timedOut) {
-            return ['groups' => [], 'hosts' => [], 'error' => 'ansible-inventory timed out.'];
+            return self::result($stdout, $stderr, null, 'ansible-inventory timed out.');
         }
 
         $exitCode = proc_close($process);
-
         if ($exitCode !== 0) {
             $errMsg = trim($stderr ?: $stdout);
-            return ['groups' => [], 'hosts' => [], 'error' => "ansible-inventory failed (exit {$exitCode}): {$errMsg}"];
+            return self::result($stdout, $stderr, $exitCode, "ansible-inventory failed (exit {$exitCode}): {$errMsg}");
         }
 
-        return ['stdout' => $stdout, 'error' => null];
+        return self::result($stdout, $stderr, 0, null);
+    }
+
+    /**
+     * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
+     */
+    private static function result(string $stdout, string $stderr, ?int $exitCode, ?string $error): array
+    {
+        return ['stdout' => $stdout, 'stderr' => $stderr, 'exit_code' => $exitCode, 'error' => $error];
     }
 
     /**
@@ -73,9 +133,10 @@ class AnsibleInventoryRunner extends Component
      *
      * @param string[] $cmd
      * @param resource[]|null $pipes
+     * @param array<string, string>|null $env defaults to buildProcessEnv()
      * @return resource|null
      */
-    protected function openProcess(array $cmd, ?array &$pipes, ?string $cwd = null)
+    protected function openProcess(array $cmd, ?array &$pipes, ?string $cwd = null, ?array $env = null)
     {
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -83,8 +144,7 @@ class AnsibleInventoryRunner extends Component
             2 => ['pipe', 'w'],
         ];
 
-        $env = $this->buildProcessEnv();
-        $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
+        $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env ?? $this->buildProcessEnv());
         if (!is_resource($process)) {
             return null;
         }
@@ -101,15 +161,17 @@ class AnsibleInventoryRunner extends Component
      * ANSIBLE_* settings) plus a pinned writable HOME and a UTF-8 locale.
      * Inventory scripts and plugins from the repository run in this process,
      * so it never gets the server's secrets. See {@see SubprocessEnvironment}.
+     * The overrides (vault isolation) win over forwarded ANSIBLE_* values.
      *
+     * @param array<string, string> $overrides
      * @return array<string, string>
      */
-    protected function buildProcessEnv(): array
+    protected function buildProcessEnv(array $overrides = []): array
     {
-        return SubprocessEnvironment::build(getenv() ?: [], [
+        return SubprocessEnvironment::build(getenv() ?: [], array_merge([
             'HOME' => self::ANSIBLE_HOME,
             'LANG' => 'C.UTF-8',
-        ]);
+        ], $overrides));
     }
 
     /**

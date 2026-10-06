@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\VaultIsolation;
+use app\components\VaultValueMasker;
 use app\models\Inventory;
 use app\models\Project;
 use yii\base\Component;
@@ -14,9 +16,28 @@ use yii\base\Component;
  * Delegates the actual `ansible-inventory --list` execution to
  * {@see AnsibleInventoryRunner} and focuses on resolution strategy,
  * caching, and output parsing.
+ *
+ * Vault content is never decrypted on the server: encrypted group_vars or
+ * host_vars are skipped with a notice, inline vault values are masked, and an
+ * encrypted inventory source is reported as such instead of as an empty
+ * inventory.
  */
 class InventoryService extends Component
 {
+    public const NOTICE_VARS_SKIPPED = 'Variables from group_vars/ and host_vars/ were not loaded because they '
+        . 'contain vault-encrypted files. Ansilume never decrypts vault content on the server. Hosts and groups '
+        . 'are complete; only variables defined inline in the inventory are shown.';
+
+    public const NOTICE_VAULT_VALUES = '%d vault-encrypted value(s) are shown as ' . VaultValueMasker::MARKER
+        . '. Ansilume never decrypts vault content on the server.';
+
+    public const ERROR_ENCRYPTED_SOURCE = 'The inventory source is vault-encrypted. Ansilume never decrypts vault '
+        . 'content on the server, so its hosts cannot be listed here. Jobs still read it on the runner with the '
+        . "template's vault credential.";
+
+    public const VAULT_ERROR_HINT = 'The inventory contains vault-encrypted content, which Ansilume never '
+        . 'decrypts on the server.';
+
     /** @var int Timeout in seconds for ansible-inventory execution. */
     public int $timeout = 30;
 
@@ -49,7 +70,7 @@ class InventoryService extends Component
     /**
      * Parse an inventory and return structured host/group data.
      *
-     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
     public function resolve(Inventory $inventory): array
     {
@@ -68,15 +89,16 @@ class InventoryService extends Component
     /**
      * Parse inventory and cache results in the database.
      *
-     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
     public function resolveAndCache(Inventory $inventory): array
     {
-        /** @var array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null} $result */
+        /** @var array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>} $result */
         $result = $this->resolve($inventory);
 
+        $cache = ['groups' => $result['groups'], 'hosts' => $result['hosts'], 'notices' => $result['notices'] ?? []];
         $inventory->parsed_hosts = $result['error'] === null
-            ? (json_encode(['groups' => $result['groups'], 'hosts' => $result['hosts']], JSON_UNESCAPED_SLASHES) ?: null)
+            ? (json_encode($cache, JSON_UNESCAPED_SLASHES) ?: null)
             : null;
         $inventory->parsed_error = $result['error'];
         $inventory->parsed_at = time();
@@ -88,7 +110,7 @@ class InventoryService extends Component
     /**
      * Return cached parse results, or null if not yet parsed.
      *
-     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}|null
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}|null
      */
     public function getCached(Inventory $inventory): ?array
     {
@@ -97,20 +119,23 @@ class InventoryService extends Component
         }
 
         if ($inventory->parsed_error !== null) {
-            return ['groups' => [], 'hosts' => [], 'error' => $inventory->parsed_error];
+            return ['groups' => [], 'hosts' => [], 'error' => $inventory->parsed_error, 'notices' => []];
         }
 
-        /** @var array<string, mixed> $data */
-        $data = json_decode($inventory->parsed_hosts ?? '{}', true) ?: [];
+        $decoded = json_decode($inventory->parsed_hosts ?? '{}', true);
+        /** @var array{groups?: array<string, mixed>, hosts?: array<string, mixed>, notices?: list<string>} $data */
+        $data = is_array($decoded) ? $decoded : [];
         return [
             'groups' => $data['groups'] ?? [],
             'hosts' => $data['hosts'] ?? [],
             'error' => null,
+            // Caches written before vault isolation have no notices.
+            'notices' => $data['notices'] ?? [],
         ];
     }
 
     /**
-     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
     protected function resolveStatic(Inventory $inventory): array
     {
@@ -136,7 +161,7 @@ class InventoryService extends Component
     }
 
     /**
-     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
     protected function resolveFile(Inventory $inventory): array
     {
@@ -182,23 +207,61 @@ class InventoryService extends Component
     /**
      * Run the inventory through the runner and parse the JSON output.
      *
-     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
     protected function runAndParse(string $inventoryPath, ?string $cwd = null): array
     {
+        $notices = [];
         $result = $this->runner()->run($inventoryPath, $cwd);
-
-        if ($result['error'] !== null) {
-            return ['groups' => [], 'hosts' => [], 'error' => $result['error']];
+        if (self::isEncryptedVarsFailure($result)) {
+            // Retried once: without vars plugins, encrypted group_vars/ and
+            // host_vars/ are not read at all.
+            $result = $this->runner()->runWithoutVarsPlugins($inventoryPath, $cwd);
+            $notices[] = self::NOTICE_VARS_SKIPPED;
         }
 
-        return $this->parseOutput($result['stdout'] ?? '');
+        $error = self::vaultAwareError($result);
+        if ($error !== null) {
+            return ['groups' => [], 'hosts' => [], 'error' => $error, 'notices' => []];
+        }
+
+        $parsed = $this->parseOutput($result['stdout']);
+        $parsed['notices'] = array_merge($notices, $parsed['notices'] ?? []);
+
+        return $parsed;
+    }
+
+    /**
+     * @param array{stdout: string, stderr: string, exit_code: int|null, error: string|null} $result
+     */
+    private static function isEncryptedVarsFailure(array $result): bool
+    {
+        return $result['error'] !== null
+            && $result['exit_code'] === AnsibleInventoryRunner::EXIT_PARSER_ERROR
+            && VaultIsolation::mentionsDecryptionFailure($result['stderr'] . "\n" . $result['error']);
+    }
+
+    /**
+     * The error to show, or null when the run produced a usable inventory.
+     * An encrypted inventory source makes ansible-inventory warn and print an
+     * empty inventory with exit 0, which must not look like "no hosts".
+     *
+     * @param array{stdout: string, stderr: string, exit_code: int|null, error: string|null} $result
+     */
+    private static function vaultAwareError(array $result): ?string
+    {
+        $mentionsVault = VaultIsolation::mentionsDecryptionFailure($result['stderr'] . "\n" . ($result['error'] ?? ''));
+        if ($result['error'] !== null) {
+            return $mentionsVault ? self::VAULT_ERROR_HINT . ' ' . $result['error'] : $result['error'];
+        }
+
+        return $mentionsVault ? self::ERROR_ENCRYPTED_SOURCE . "\n" . trim($result['stderr']) : null;
     }
 
     /**
      * Parse the JSON output of `ansible-inventory --list`.
      *
-     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null}
+     * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
     protected function parseOutput(string $json): array
     {
@@ -207,13 +270,18 @@ class InventoryService extends Component
             return ['groups' => [], 'hosts' => [], 'error' => 'Failed to parse ansible-inventory output.'];
         }
 
-        $groups = $this->extractGroups($data);
-        $hosts = $this->extractHosts($data, $groups);
+        $masker = new VaultValueMasker();
+        /** @var array<string, array{hosts: array<int, string>, children: array<int, string>, vars: array<string, mixed>}> $groups */
+        $groups = $masker->mask($this->extractGroups($data));
+        /** @var array<string, mixed> $hosts */
+        $hosts = $masker->mask($this->extractHosts($data, $groups));
 
         ksort($groups);
         ksort($hosts);
 
-        return ['groups' => $groups, 'hosts' => $hosts, 'error' => null];
+        $notices = $masker->maskedCount() > 0 ? [sprintf(self::NOTICE_VAULT_VALUES, $masker->maskedCount())] : [];
+
+        return ['groups' => $groups, 'hosts' => $hosts, 'error' => null, 'notices' => $notices];
     }
 
     /**

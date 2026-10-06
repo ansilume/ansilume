@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\SubprocessEnvironment;
+use app\components\VaultIsolation;
 use app\models\JobTemplate;
 use app\models\Project;
 use yii\base\Component;
@@ -125,13 +126,35 @@ class LintService extends Component
             $cmd[] = $playbook;
         }
 
+        $vault = $this->vaultIsolation();
+        try {
+            $env = $this->buildProcessEnv($cwd, $vault->overrides());
+            return $this->runProcess($cmd, $cwd, $env);
+        } catch (\RuntimeException $e) {
+            return ['Lint did not run: ' . $e->getMessage(), -1];
+        } finally {
+            $vault->cleanup();
+        }
+    }
+
+    protected function vaultIsolation(): VaultIsolation
+    {
+        return new VaultIsolation();
+    }
+
+    /**
+     * @param string[] $cmd
+     * @param array<string, string> $env
+     * @return array{0: string, 1: int}  [combined output, exit code]
+     */
+    private function runProcess(array $cmd, string $cwd, array $env): array
+    {
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
 
-        $env = $this->buildProcessEnv($cwd);
         $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
 
         if (!is_resource($process)) {
@@ -151,19 +174,22 @@ class LintService extends Component
 
     /**
      * Environment for ansible-lint. Lint runs ansible-playbook --syntax-check
-     * and loads repository-controlled code (an ansible.cfg vault password
-     * script, plugins, rule directories) inside the app or queue-worker
-     * container, so it must never inherit the server's environment with
-     * APP_SECRET_KEY, DB_PASSWORD and friends. See {@see SubprocessEnvironment}.
+     * and loads repository-controlled code (plugins, rule directories) inside
+     * the app or queue-worker container, so it must never inherit the
+     * server's environment with APP_SECRET_KEY, DB_PASSWORD and friends. See
+     * {@see SubprocessEnvironment}. The vault overrides ({@see VaultIsolation})
+     * come last: a repository's vault password script never runs, and vault
+     * content is never decrypted on the server.
      *
+     * @param array<string, string> $vaultOverrides
      * @return array<string, string>
      */
-    protected function buildProcessEnv(string $cwd): array
+    protected function buildProcessEnv(string $cwd, array $vaultOverrides = []): array
     {
-        return SubprocessEnvironment::build(getenv() ?: [], [
+        return SubprocessEnvironment::build(getenv() ?: [], array_merge([
             'HOME' => sys_get_temp_dir(),
             'ANSIBLE_HOME' => $this->ensureCacheDir($cwd),
-        ]);
+        ], $vaultOverrides));
     }
 
     /**

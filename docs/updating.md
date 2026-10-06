@@ -129,6 +129,28 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.5.1 or older: vault content stays encrypted on the server
+
+**"Parse Inventory" and lint no longer use a repository's vault settings.**
+Until now both honoured the project's `ansible.cfg`. With
+`vault_password_file` or `vault_identity_list` pointing at a script, the
+server ran that script, which is repository code, inside the app or
+queue-worker container. With a committed password file, it decrypted
+vaulted `group_vars`, `host_vars` or inventory files and cached the
+plaintext, which everyone who can open the inventory could read. Both now
+run with a random decoy password; see
+[troubleshooting.md](troubleshooting.md#parse-inventory-or-lint-mentions-vault-encrypted-content)
+for what the inventory and lint pages show instead.
+
+The update clears every cached parse result; click "Parse Inventory" again
+to rebuild it. If a file or dynamic inventory had vaulted `group_vars`,
+`host_vars` or an encrypted source whose password was reachable on the
+server (a committed password file, a password script, or an
+`ANSIBLE_VAULT_PASSWORD_FILE` set on the server), treat those values as
+disclosed to everyone with view access and rotate them. If people you do
+not fully trust could push to a project repository, also check its vault
+password scripts: they ran on the server.
+
 ## After updating from 2.5.0 or older: API permissions, runner tokens
 
 **The REST API enforces the same permissions as the web UI.** Until now
@@ -244,9 +266,8 @@ credentials. The runner logs at start which variables it does not forward.
 See [runners.md](runners.md#what-playbooks-can-see).
 
 Lint and inventory parsing on the server now see the same restricted set:
-`PATH`, locale, proxy and CA settings and `ANSIBLE_*` variables. If a lint
-setup relied on other variables, for example a vault password script that reads
-an env var, point `ANSIBLE_VAULT_PASSWORD_FILE` at a mounted file instead.
+`PATH`, locale, proxy and CA settings and `ANSIBLE_*` variables. (Since the
+release after 2.5.1 they never get a vault password at all, see above.)
 
 Update **every runner image** as well. Old runner images keep passing their
 full environment, including `RUNNER_BOOTSTRAP_SECRET`, to playbooks. Git

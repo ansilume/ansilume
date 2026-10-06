@@ -60,6 +60,25 @@ docker compose exec app php yii migrate/history
 docker compose exec app php yii migrate --interactive=0
 ```
 
+## Parse Inventory or lint mentions vault-encrypted content
+
+The server never decrypts vault content, not even with a password file or
+script that the repository's `ansible.cfg` names. What you see instead:
+
+- **"Variables from group_vars/ and host_vars/ were not loaded"**: those
+  directories hold vault-encrypted files. Hosts and groups are complete;
+  only variables written inline in the inventory are shown.
+- **`vault-encrypted` badges**: inline `!vault |` values. Their ciphertext
+  is not shown or cached.
+- **"The inventory source is vault-encrypted"**: the inventory file itself
+  is encrypted, so its hosts cannot be listed on the server.
+- **Lint badge "not lint-checked: vault-encrypted vars_files"**: the
+  playbook loads encrypted files, so ansible-lint could not check it. This
+  is not a finding.
+
+Jobs are not affected: the runner decrypts with the job template's vault
+credential.
+
 ## Runners show "unknown" name/group
 
 **Symptom:** Runner logs show `Runner 'unknown' started. Group: 'unknown'.`

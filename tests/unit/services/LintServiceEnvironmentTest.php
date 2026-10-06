@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services;
 
+use app\components\VaultIsolation;
 use app\services\LintService;
 use app\tests\unit\TemporaryEnvironment;
 use PHPUnit\Framework\TestCase;
@@ -41,6 +42,8 @@ class LintServiceEnvironmentTest extends TestCase
             'DB_PASSWORD' => 'leak-canary-db',
             'RUNNER_BOOTSTRAP_SECRET' => 'leak-canary-bootstrap',
             'ANSIBLE_STDOUT_CALLBACK' => 'yaml',
+            // A server-side vault password must not reach lint either.
+            'ANSIBLE_VAULT_PASSWORD_FILE' => '/etc/server-vault-password',
         ]);
     }
 
@@ -73,6 +76,68 @@ class LintServiceEnvironmentTest extends TestCase
         $this->assertStringNotContainsString('APP_SECRET_KEY=', $dump);
         $this->assertStringNotContainsString('DB_PASSWORD=', $dump);
         $this->assertStringNotContainsString('RUNNER_BOOTSTRAP_SECRET=', $dump);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function dumpedEnv(): array
+    {
+        $env = [];
+        foreach (explode("\n", (string)file_get_contents($this->dir . '/env.dump')) as $line) {
+            if (str_contains($line, '=')) {
+                [$name, $value] = explode('=', $line, 2);
+                $env[$name] = $value;
+            }
+        }
+
+        return $env;
+    }
+
+    /**
+     * Regression: lint honoured the repository's ansible.cfg vault settings,
+     * so it ran the repo's vault password script inside the server container.
+     */
+    public function testAnsibleLintOnlyGetsTheVaultDecoy(): void
+    {
+        $service = new class () extends LintService {
+            /** @return array{0: string, 1: int} */
+            public function runExecute(string $cwd): array
+            {
+                return $this->execute(null, $cwd);
+            }
+        };
+
+        $service->runExecute($this->dir . '/project');
+
+        $env = $this->dumpedEnv();
+        $decoy = $env['ANSIBLE_VAULT_PASSWORD_FILE'];
+        $this->assertStringContainsString('ansilume_vault_decoy_', $decoy);
+        $this->assertSame($decoy, $env['ANSIBLE_VAULT_IDENTITY_LIST']);
+        $this->assertSame('False', $env['ANSIBLE_ASK_VAULT_PASS']);
+        $this->assertFileDoesNotExist($decoy, 'the decoy is removed after lint');
+    }
+
+    public function testLintDoesNotRunWithoutVaultIsolation(): void
+    {
+        $service = new class () extends LintService {
+            /** @return array{0: string, 1: int} */
+            public function runExecute(string $cwd): array
+            {
+                return $this->execute(null, $cwd);
+            }
+
+            protected function vaultIsolation(): VaultIsolation
+            {
+                return new VaultIsolation('/nonexistent/' . uniqid('', true));
+            }
+        };
+
+        [$output, $exitCode] = $service->runExecute($this->dir . '/project');
+
+        $this->assertSame(-1, $exitCode);
+        $this->assertStringStartsWith('Lint did not run: Could not prepare vault isolation', $output);
+        $this->assertFileDoesNotExist($this->dir . '/env.dump', 'ansible-lint must not start');
     }
 
     public function testAnsibleLintKeepsWhatItNeeds(): void

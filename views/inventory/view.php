@@ -74,7 +74,9 @@ $this->title = $model->name;
 /** @var \app\services\InventoryService $invService */
 $invService = \Yii::$app->get('inventoryService');
 $cached = $invService->getCached($model);
-$cachedJson = $cached !== null ? json_encode($cached) : 'null';
+// htmlEncode: hex-escapes <, >, & and quotes, so cached values cannot end the script.
+$cachedJson = $cached !== null ? \yii\helpers\Json::htmlEncode($cached) : 'null';
+$vaultMarkerJson = \yii\helpers\Json::htmlEncode(\app\components\VaultValueMasker::MARKER);
 ?>
 <div class="mt-4">
     <div class="card">
@@ -104,11 +106,27 @@ $csrfToken = \Yii::$app->request->getCsrfToken();
 
 $js = <<<JS
 var cachedData = {$cachedJson};
+var VAULT_MARKER = {$vaultMarkerJson};
 
 function escapeHtml(str) {
     var div = document.createElement('div');
     div.appendChild(document.createTextNode(str));
     return div.innerHTML;
+}
+
+// Variables as escaped JSON, with masked vault values shown as a badge.
+function renderVars(vars) {
+    var marker = escapeHtml(JSON.stringify(VAULT_MARKER));
+    var badge = '<span class="badge text-bg-secondary" data-testid="vault-encrypted-badge"'
+        + ' title="Vault-encrypted value. Ansilume never decrypts vault content on the server.">vault-encrypted</span>';
+    return escapeHtml(JSON.stringify(vars, null, 2)).split(marker).join(badge);
+}
+
+function renderNotices(notices) {
+    return (notices || []).map(function (notice) {
+        return '<div class="alert alert-info py-2 mb-2" role="status" data-testid="inventory-notice">'
+            + escapeHtml(notice) + '</div>';
+    }).join('');
 }
 
 function renderInventory(data) {
@@ -126,7 +144,7 @@ function renderInventory(data) {
         return;
     }
 
-    var html = '';
+    var html = renderNotices(data.notices);
 
     // Groups
     var groupNames = Object.keys(data.groups).sort();
@@ -159,7 +177,7 @@ function renderInventory(data) {
             }
             if (varKeys.length) {
                 html += '<div><strong>Group vars:</strong>';
-                html += '<pre class="mb-0 mt-1" style="font-size:.85em">' + escapeHtml(JSON.stringify(vars, null, 2)) + '</pre>';
+                html += '<pre class="mb-0 mt-1" style="font-size:.85em">' + renderVars(vars) + '</pre>';
                 html += '</div>';
             }
             if (!hosts.length && !children.length && !varKeys.length) {
@@ -182,7 +200,7 @@ function renderInventory(data) {
             var varKeys = Object.keys(vars);
             html += '<tr><td><code>' + escapeHtml(h) + '</code></td><td>';
             if (varKeys.length) {
-                html += '<pre class="mb-0" style="font-size:.85em">' + escapeHtml(JSON.stringify(vars, null, 2)) + '</pre>';
+                html += '<pre class="mb-0" style="font-size:.85em">' + renderVars(vars) + '</pre>';
             } else {
                 html += '<span class="text-muted">—</span>';
             }
@@ -192,7 +210,7 @@ function renderInventory(data) {
     }
 
     if (!groupNames.length && !hostNames.length) {
-        html = '<p class="text-muted mb-0">No hosts or groups found.</p>';
+        html = renderNotices(data.notices) + '<p class="text-muted mb-0">No hosts or groups found.</p>';
     }
 
     container.innerHTML = html;

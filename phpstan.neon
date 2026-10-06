@@ -48,5 +48,3 @@ parameters:
         # mixed, method calls on mixed) are NOT suppressed.
         - '#Cannot cast mixed to (int|float|string)#'
 
-        # InventoryService::getCached() returns shape with mixed offsets from json_decode
-        - '#should return array\{groups: array<string, mixed>, hosts: array<string, mixed>, error: string\|null\}\|null but returns#'

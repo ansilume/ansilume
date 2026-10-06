@@ -54,15 +54,17 @@ class InventoryServiceTest extends TestCase
     /**
      * Create a stub runner that returns canned results without spawning processes.
      */
-    private function makeStubRunner(bool $available = true, ?array $runResult = null): AnsibleInventoryRunner
+    private function makeStubRunner(bool $available = true, ?array $runResult = null, ?array $retryResult = null): AnsibleInventoryRunner
     {
-        return new class ($available, $runResult) extends AnsibleInventoryRunner {
+        return new class ($available, $runResult, $retryResult) extends AnsibleInventoryRunner {
             public ?string $lastInventoryPath = null;
             public ?string $lastCwd = null;
+            public int $retries = 0;
 
             public function __construct(
                 private readonly bool $stubAvailable,
                 private readonly ?array $stubRunResult,
+                private readonly ?array $stubRetryResult,
             ) {
             }
 
@@ -76,11 +78,30 @@ class InventoryServiceTest extends TestCase
                 $this->lastInventoryPath = $inventoryPath;
                 $this->lastCwd = $cwd;
 
-                if ($this->stubRunResult !== null) {
-                    return $this->stubRunResult;
-                }
+                return self::complete($this->stubRunResult ?? ['stdout' => '{"_meta":{"hostvars":{}},"all":{"children":[]}}']);
+            }
 
-                return ['stdout' => '{"_meta":{"hostvars":{}},"all":{"children":[]}}', 'error' => null];
+            public function runWithoutVarsPlugins(string $inventoryPath, ?string $cwd = null): array
+            {
+                $this->retries++;
+
+                return self::complete($this->stubRetryResult ?? ['stdout' => '{"_meta":{"hostvars":{}},"all":{"children":[]}}']);
+            }
+
+            /**
+             * @param array<string, mixed> $result
+             * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
+             */
+            private static function complete(array $result): array
+            {
+                $error = $result['error'] ?? null;
+
+                return [
+                    'stdout' => (string)($result['stdout'] ?? ''),
+                    'stderr' => (string)($result['stderr'] ?? ''),
+                    'exit_code' => array_key_exists('exit_code', $result) ? $result['exit_code'] : ($error === null ? 0 : 1),
+                    'error' => $error,
+                ];
             }
         };
     }
@@ -671,6 +692,107 @@ class InventoryServiceTest extends TestCase
         $result = $service->resolve($inv);
 
         $this->assertStringContainsString('ansible-inventory failed', $result['error']);
+    }
+
+    // -------------------------------------------------------------------------
+    // Vault content is never decrypted on the server
+    // -------------------------------------------------------------------------
+
+    private const DECRYPTION_FAILURE = 'ERROR! Decryption failed (no vault secrets were found that could decrypt) on /p/inventory/group_vars/all.yml';
+
+    private const ONE_HOST = '{"_meta":{"hostvars":{"web1":{"ansible_host":"192.0.2.10"}}},"all":{"hosts":["web1"]}}';
+
+    private function serviceWithRunner(AnsibleInventoryRunner $runner): InventoryService
+    {
+        $service = new InventoryService();
+        $service->setRunner($runner);
+
+        return $service;
+    }
+
+    private function parse(InventoryService $service): array
+    {
+        $method = new \ReflectionMethod($service, 'runAndParse');
+
+        return $method->invoke($service, '/p/inventory/hosts.yml', '/p');
+    }
+
+    public function testEncryptedGroupVarsAreSkippedWithANotice(): void
+    {
+        $runner = $this->makeStubRunner(
+            true,
+            ['stderr' => self::DECRYPTION_FAILURE, 'exit_code' => 4, 'error' => 'ansible-inventory failed (exit 4): ' . self::DECRYPTION_FAILURE],
+            ['stdout' => self::ONE_HOST]
+        );
+
+        $result = $this->parse($this->serviceWithRunner($runner));
+
+        $this->assertSame(1, $runner->retries);
+        $this->assertNull($result['error']);
+        $this->assertArrayHasKey('web1', $result['hosts']);
+        $this->assertSame([InventoryService::NOTICE_VARS_SKIPPED], $result['notices']);
+    }
+
+    public function testUnrelatedFailuresAreNotRetried(): void
+    {
+        $runner = $this->makeStubRunner(true, ['stderr' => 'ERROR! Invalid YAML', 'exit_code' => 4, 'error' => 'ansible-inventory failed (exit 4): Invalid YAML']);
+
+        $result = $this->parse($this->serviceWithRunner($runner));
+
+        $this->assertSame(0, $runner->retries);
+        $this->assertSame('ansible-inventory failed (exit 4): Invalid YAML', $result['error']);
+    }
+
+    public function testAFailedRetryExplainsTheVaultContent(): void
+    {
+        $failure = ['stderr' => self::DECRYPTION_FAILURE, 'exit_code' => 4, 'error' => 'ansible-inventory failed (exit 4): ' . self::DECRYPTION_FAILURE];
+        $runner = $this->makeStubRunner(true, $failure, $failure);
+
+        $result = $this->parse($this->serviceWithRunner($runner));
+
+        $this->assertSame(1, $runner->retries);
+        $this->assertStringStartsWith(InventoryService::VAULT_ERROR_HINT . ' ansible-inventory failed (exit 4)', (string)$result['error']);
+        $this->assertSame([], $result['hosts']);
+    }
+
+    /**
+     * Regression: an encrypted inventory source made ansible-inventory warn
+     * and print an empty inventory with exit 0, shown as "no hosts".
+     */
+    public function testAnEncryptedSourceIsAnErrorNotAnEmptyInventory(): void
+    {
+        $warning = '[WARNING]: Unable to parse /p/encrypted.yml as an inventory source: Decryption failed (no vault secrets were found that could decrypt)';
+        $runner = $this->makeStubRunner(true, ['stdout' => '{"_meta":{"hostvars":{}},"all":{"children":["ungrouped"]}}', 'stderr' => $warning]);
+
+        $result = $this->parse($this->serviceWithRunner($runner));
+
+        $this->assertSame(InventoryService::ERROR_ENCRYPTED_SOURCE . "\n" . $warning, $result['error']);
+    }
+
+    public function testUnrelatedWarningsStillParse(): void
+    {
+        $runner = $this->makeStubRunner(true, ['stdout' => self::ONE_HOST, 'stderr' => '[WARNING]: Found variable using reserved name']);
+
+        $result = $this->parse($this->serviceWithRunner($runner));
+
+        $this->assertNull($result['error']);
+        $this->assertSame([], $result['notices']);
+    }
+
+    public function testInlineVaultValuesAreMaskedInGroupAndHostVars(): void
+    {
+        $json = json_encode([
+            '_meta' => ['hostvars' => ['web1' => ['db_password' => ['__ansible_vault' => "\$ANSIBLE_VAULT;1.1;AES256\n6162"]]]],
+            'all' => ['hosts' => ['web1'], 'vars' => ['api_token' => ['__ansible_vault' => 'x']]],
+        ]);
+        $runner = $this->makeStubRunner(true, ['stdout' => (string)$json]);
+
+        $result = $this->parse($this->serviceWithRunner($runner));
+
+        $this->assertSame('[vault-encrypted]', $result['hosts']['web1']['db_password']);
+        $this->assertSame('[vault-encrypted]', $result['groups']['all']['vars']['api_token']);
+        $this->assertSame([sprintf(InventoryService::NOTICE_VAULT_VALUES, 2)], $result['notices']);
+        $this->assertStringNotContainsString('ANSIBLE_VAULT', (string)json_encode($result));
     }
 
     public function testTimeoutPropertyIsConfigurable(): void

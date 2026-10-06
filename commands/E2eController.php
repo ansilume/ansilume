@@ -194,6 +194,7 @@ class E2eController extends Controller
         (new E2ePaginationSeeder($logger))->seed($userId);
         (new E2eSoftDeletedTemplateSeeder($logger))->seed($userId, $inventoryId, $runnerGroupId);
         (new E2eRunnerRegistrationSeeder($logger))->seed($userId);
+        (new E2eVaultFixtureSeeder($logger))->seed($userId, $runnerGroupId);
     }
 
     private function seedRunnerGroup(int $userId): int

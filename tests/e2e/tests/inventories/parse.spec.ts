@@ -10,7 +10,9 @@ import { test, expect } from '@playwright/test';
 test.describe('Inventory parse-hosts', () => {
   async function gotoFirstInventory(page: import('@playwright/test').Page): Promise<boolean> {
     await page.goto('/inventory/index');
-    const link = page.locator('table.table tbody tr a').first();
+    // The plain seeded inventory: the index lists newest first, and the vault
+    // fixtures (seeded later) deliberately fail or skip parts of the parse.
+    const link = page.locator('table.table tbody tr a', { hasText: /^e2e-inventory$/ }).first();
     if (!(await link.isVisible({ timeout: 2_000 }).catch(() => false))) {
       test.skip(true, 'No inventory seeded');
       return false;
