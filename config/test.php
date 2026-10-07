@@ -26,6 +26,11 @@ return [
         ],
         'db' => $db,
         'cache' => ['class' => 'yii\caching\ArrayCache'],
+        // Minimum bcrypt cost. Tests create thousands of users, and hashing
+        // their passwords at the default cost 13 dominated the suite's
+        // runtime, pushing the CI PHPUnit job past its time limit.
+        // Production keeps the default.
+        'security' => ['passwordHashCost' => 4],
         // Real Redis-backed queue so tests of the worker-snapshot
         // queue_depth and is_stuck logic can plant fixtures via
         // redis-cli and read them back through the same channel
