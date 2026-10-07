@@ -105,4 +105,22 @@ final class E2eFixtureHelper
 
         return $inventory;
     }
+
+    /**
+     * The owner of the runtime directory, for files a seeder writes there as
+     * root, so the user of a dev checkout can still remove them.
+     *
+     * @return array{uid: int, gid: int}|null null unless the seeder runs as root
+     */
+    public static function runtimeOwner(): ?array
+    {
+        if (!function_exists('posix_geteuid') || posix_geteuid() !== 0) {
+            return null;
+        }
+        $runtime = (string)\Yii::getAlias('@runtime');
+        $uid = fileowner($runtime);
+        $gid = filegroup($runtime);
+
+        return $uid === false || $gid === false ? null : ['uid' => $uid, 'gid' => $gid];
+    }
 }

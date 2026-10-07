@@ -22,7 +22,9 @@ use yii\base\Component;
  *
  * A template holds at most one vault password ({@see VaultCredentialRule}).
  * A save whose final set holds more is rejected, also when it keeps the
- * stored credentials of an older template that has two.
+ * stored credentials of an older template that has two. After a save the
+ * vault password is checked against the project's last vault scan
+ * ({@see VaultCheckService}).
  */
 class JobTemplateCredentialService extends Component
 {
@@ -52,6 +54,9 @@ class JobTemplateCredentialService extends Component
             CredentialAttachmentDiff::between($before, $after, $previousPrimary, $primary),
             $auditContext
         );
+        /** @var VaultCheckService $vaultChecks */
+        $vaultChecks = \Yii::$app->get('vaultCheckService');
+        $vaultChecks->checkTemplate($template);
 
         return true;
     }
@@ -87,6 +92,9 @@ class JobTemplateCredentialService extends Component
             CredentialAttachmentDiff::between([], array_values(array_filter(array_merge([$primary], $extras))), null, $primary),
             $auditContext
         );
+        /** @var VaultCheckService $vaultChecks */
+        $vaultChecks = \Yii::$app->get('vaultCheckService');
+        $vaultChecks->checkTemplate($clone);
 
         return true;
     }

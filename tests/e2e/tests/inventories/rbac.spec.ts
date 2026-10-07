@@ -1,6 +1,19 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
 import { BTN_CREATE } from '../../lib/selectors';
+
+/** Opens an inventory's page, paging through the list. */
+async function openInventory(page: Page, name: string) {
+  for (let listPage = 1; listPage <= 10; listPage++) {
+    await page.goto(`/inventory/index?page=${listPage}`);
+    const link = page.locator('table.table tbody tr a', { hasText: new RegExp(`^${name}$`) }).first();
+    if (await link.count() > 0) {
+      await link.click();
+      return;
+    }
+  }
+  throw new Error(`Inventory ${name} is not listed`);
+}
 
 test.describe('Inventories RBAC', () => {
 
@@ -34,6 +47,24 @@ test.describe('Inventories RBAC', () => {
   test('viewer gets 403 on create', async ({ page }) => {
     await page.goto('/inventory/create');
     await expectForbidden(page);
+  });
+
+  // Fixtures from commands/E2eTeamScopingSeeder.php: e2e-operator's team operates
+  // e2e-alpha-proj and may only view e2e-alpha-viewed-proj.
+  test('operator cannot move an inventory into a project their team only views', async ({ page }) => {
+    // Regression: saving checked only the project the inventory came from.
+    await openInventory(page, 'e2e-alpha-inv');
+    await page.getByRole('link', { name: 'Edit' }).first().click();
+    // The project field shows for file and dynamic inventories.
+    await page.locator('#inventory-type').selectOption('dynamic');
+    await page.locator('#inventory-project_id').selectOption({ label: 'e2e-alpha-viewed-proj' });
+    await page.locator('#inventory-source_path').fill('inventory.yml');
+    await page.getByRole('button', { name: 'Save Changes' }).click();
+    await expectForbidden(page);
+
+    await openInventory(page, 'e2e-alpha-inv');
+    await expect(page.locator('body')).toContainText('e2e-alpha-proj');
+    await expect(page.locator('body')).not.toContainText('e2e-alpha-viewed-proj');
   });
 
   test('operator can access index', async ({ page }) => {

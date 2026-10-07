@@ -86,10 +86,17 @@ class InventoryController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
-            \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_UPDATED, 'inventory', $model->id, null, ['name' => $model->name]);
-            $this->session()->setFlash('success', "Inventory \"{$model->name}\" updated.");
-            return $this->redirect(['view', 'id' => $model->id]);
+        if ($model->load((array)\Yii::$app->request->post())) {
+            // The project it moves to as well, not only the one it comes from.
+            $this->requireChildOperate($model->project_id);
+            if ($model->save()) {
+                \Yii::$app->get('auditService')->log(AuditLog::ACTION_INVENTORY_UPDATED, 'inventory', $model->id, null, ['name' => $model->name]);
+                /** @var \app\services\VaultCheckService $vaultChecks */
+                $vaultChecks = \Yii::$app->get('vaultCheckService');
+                $vaultChecks->checkTemplateIds($vaultChecks->templateIdsUsingInventory($model));
+                $this->session()->setFlash('success', "Inventory \"{$model->name}\" updated.");
+                return $this->redirect(['view', 'id' => $model->id]);
+            }
         }
         return $this->render('form', [
             'model' => $model,

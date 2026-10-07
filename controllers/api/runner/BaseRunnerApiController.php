@@ -18,6 +18,9 @@ use yii\web\UnauthorizedHttpException;
  */
 abstract class BaseRunnerApiController extends Controller
 {
+    /** Reported capability names looked at per request; the allowlist is far shorter. */
+    private const MAX_REPORTED_CAPABILITIES = 32;
+
     public $enableCsrfValidation = false;
 
     protected ?Runner $currentRunner = null;
@@ -66,6 +69,7 @@ abstract class BaseRunnerApiController extends Controller
             $runner->software_version = $reportedVersion;
         }
         $updates += $runner->transportChanges($_SERVER, time());
+        $updates += $this->capabilityChanges($runner);
         Runner::updateAll($updates, ['id' => $runner->id]);
         $runner->last_seen_at = time();
 
@@ -92,6 +96,47 @@ abstract class BaseRunnerApiController extends Controller
             return null;
         }
         return $trimmed;
+    }
+
+    /**
+     * Records the `capabilities` list from the JSON body: only names in
+     * Runner::CAPABILITIES, in that order, so the stored value stays short.
+     * Every request of a runner that knows about capabilities carries the
+     * field, so a request without it comes from an older runner build that
+     * supports none of them: a stored value is cleared (a downgraded runner
+     * must not keep claiming support). A field that is not a list is ignored.
+     *
+     * @return array<string, string|null> the column to update, [] when unchanged
+     */
+    private function capabilityChanges(Runner $runner): array
+    {
+        $body = \Yii::$app->request->bodyParams;
+        if (!is_array($body)) {
+            return [];
+        }
+        if (!array_key_exists('capabilities', $body)) {
+            $reported = null;
+        } elseif (is_array($body['capabilities']) && array_is_list($body['capabilities'])) {
+            $reported = self::knownCapabilities($body['capabilities']);
+        } else {
+            return [];
+        }
+        if ($reported === $runner->capabilities) {
+            return [];
+        }
+        $runner->capabilities = $reported;
+
+        return ['capabilities' => $reported];
+    }
+
+    /**
+     * @param list<mixed> $names
+     */
+    private static function knownCapabilities(array $names): string
+    {
+        $strings = array_filter(array_slice($names, 0, self::MAX_REPORTED_CAPABILITIES), 'is_string');
+
+        return implode(',', array_intersect(Runner::CAPABILITIES, $strings));
     }
 
     /**

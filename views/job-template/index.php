@@ -29,7 +29,7 @@ $this->title = 'Job Templates';
     <?php foreach ($warningCounts as $code => $count) : ?>
         <?php if ($count > 0) : ?>
             <div class="alert alert-warning" data-testid="template-warning-summary" data-code="<?= Html::encode($code) ?>">
-                <?= Html::encode($count . ' job template(s) have ' . JobTemplateWarnings::label($code) . '. They keep running, but need fixing.') ?>
+                <?= Html::encode(JobTemplateWarnings::summary($code, $count)) ?>
                 <?= Html::a('Show them', ['index', 'warning' => $code]) ?>
             </div>
         <?php endif; ?>

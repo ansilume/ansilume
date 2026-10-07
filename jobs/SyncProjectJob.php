@@ -8,17 +8,18 @@ use app\models\JobTemplate;
 use app\models\Project;
 use app\services\LintService;
 use app\services\ProjectService;
+use app\services\VaultScanService;
 use yii\base\BaseObject;
 use yii\queue\JobInterface;
 
 /**
  * Queue job that syncs a project's SCM repository.
  *
- * Two-phase shape: the SCM sync is the load-bearing step (its outcome
- * decides the project's status), the lint phase is opportunistic — it
- * runs *after* a successful sync to refresh the lint badge. A failure in
- * the lint phase must never push the project back into SYNCING/ERROR or
- * mask a successful sync.
+ * The SCM sync is the load-bearing step (its outcome decides the project's
+ * status). The vault scan and the lint phase are opportunistic: they run
+ * *after* a successful sync to refresh the vault overview and the lint
+ * badge. A failure in either must never push the project back into
+ * SYNCING/ERROR or mask a successful sync.
  */
 class SyncProjectJob extends BaseObject implements JobInterface
 {
@@ -49,6 +50,21 @@ class SyncProjectJob extends BaseObject implements JobInterface
             return;
         }
 
+        // Opportunistic vault scan: which encrypted files the checkout holds
+        // and whether each template's vault password opens them. Like lint,
+        // a failure here must not touch the committed sync.
+        try {
+            /** @var VaultScanService $vaultScan */
+            $vaultScan = \Yii::$app->get('vaultScanService');
+            $vaultScan->scanProject($project);
+        } catch (\Throwable $e) {
+            \Yii::warning(
+                "SyncProjectJob: vault scan for project #{$project->id} failed (sync still committed): "
+                    . $e->getMessage(),
+                __CLASS__,
+            );
+        }
+
         // Opportunistic lint phase. Anything thrown here is a lint-side
         // problem (tool missing, permission glitch, ansible-lint crash) —
         // the sync itself is already committed and should stay as SYNCED.
@@ -56,7 +72,8 @@ class SyncProjectJob extends BaseObject implements JobInterface
             /** @var LintService $lintSvc */
             $lintSvc = \Yii::$app->get('lintService');
             $lintSvc->runForProject($project);
-            foreach (JobTemplate::find()->where(['project_id' => $project->id])->all() as $tpl) {
+            // andWhere(): where() would replace the scope that hides deleted templates.
+            foreach (JobTemplate::find()->andWhere(['project_id' => $project->id])->all() as $tpl) {
                 $lintSvc->runForTemplate($tpl);
             }
         } catch (\Throwable $e) {

@@ -75,6 +75,23 @@ abstract class DbTestCase extends TestCase
         return $g;
     }
 
+    /**
+     * The project's vault scan time. A project without a scan is marked as
+     * scanned first, so a vault check stored with this time is current
+     * (checks from another scan count as stale).
+     */
+    protected function vaultScanTimeOf(int $projectId): int
+    {
+        $project = Project::findOne($projectId);
+        $this->assertNotNull($project, "project #{$projectId}");
+        if ($project->vault_scanned_at === null) {
+            $project->vault_scanned_at = 1760000000;
+            $project->save(false);
+        }
+
+        return (int)$project->vault_scanned_at;
+    }
+
     protected function createProject(int $createdBy): Project
     {
         $p = new Project();

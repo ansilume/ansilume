@@ -39,13 +39,13 @@ test.describe('Job Templates RBAC', () => {
   });
 
   test('viewer sees the neutral vault lint verdict', async ({ page }) => {
-    await page.goto('/job-template/index');
-    const link = page.locator('table.table tbody tr a', { hasText: /^e2e-vault-template$/ }).first();
-    if (!(await link.isVisible({ timeout: 2_000 }).catch(() => false))) {
+    // Pages through the list: other seeded templates push this one off page 1.
+    try {
+      await openTemplate(page, 'e2e-vault-template');
+    } catch {
       test.skip(true, 'e2e-vault-template is not seeded');
       return;
     }
-    await link.click();
     await expect(page.getByTestId('lint-badge')).toHaveText('not lint-checked: vault-encrypted vars_files');
   });
 

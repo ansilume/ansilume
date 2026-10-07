@@ -119,4 +119,13 @@ return [
     'vaultCredentialAssignmentService' => [
         'class' => 'app\services\VaultCredentialAssignmentService',
     ],
+    'vaultScanService' => [
+        'class' => 'app\services\VaultScanService',
+    ],
+    'vaultCheckService' => [
+        'class' => 'app\services\VaultCheckService',
+    ],
+    'vaultOverviewService' => [
+        'class' => 'app\services\VaultOverviewService',
+    ],
 ];

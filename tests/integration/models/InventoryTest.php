@@ -44,6 +44,24 @@ class InventoryTest extends DbTestCase
         $this->assertTrue($inv->validate());
     }
 
+    /**
+     * Regression: an unknown project id passed validation and failed on the
+     * foreign key with a server error.
+     */
+    public function testAnUnknownProjectIsAValidationError(): void
+    {
+        $user = $this->createUser();
+        $inv = new Inventory();
+        $inv->name = 'test';
+        $inv->inventory_type = Inventory::TYPE_STATIC;
+        $inv->content = "all:\n  hosts:\n    server1:\n";
+        $inv->project_id = 999999999;
+        $inv->created_by = $user->id;
+
+        $this->assertFalse($inv->validate());
+        $this->assertSame(['project_id' => ['The selected project does not exist.']], $inv->getErrors());
+    }
+
     // -- validation: inventory type ---------------------------------------------
 
     public function testValidationRejectsInvalidType(): void

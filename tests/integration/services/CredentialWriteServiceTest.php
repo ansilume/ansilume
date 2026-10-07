@@ -6,16 +6,25 @@ namespace app\tests\integration\services;
 
 use app\models\AuditLog;
 use app\models\Credential;
+use app\models\Inventory;
 use app\models\JobTemplate;
+use app\models\JobTemplateVaultCheck;
 use app\services\CredentialService;
 use app\services\CredentialWriteService;
 use app\tests\integration\DbTestCase;
+use app\tests\unit\components\vault\TemporaryTree;
 
 class CredentialWriteServiceTest extends DbTestCase
 {
+    use TemporaryTree;
+
+    private const DEV_PASSWORD = 'ansilume-test-dummy-dev';
+    private const PROD_PASSWORD = 'ansilume-test-dummy-prod';
+
     private CredentialWriteService $service;
     private CredentialService $credentials;
     private int $userId;
+    private ?Inventory $scannedInventory = null;
 
     protected function setUp(): void
     {
@@ -23,6 +32,12 @@ class CredentialWriteServiceTest extends DbTestCase
         $this->service = new CredentialWriteService();
         $this->credentials = \Yii::$app->get('credentialService');
         $this->userId = (int)$this->createUser('write')->id;
+    }
+
+    protected function tearDown(): void
+    {
+        $this->removeTrees();
+        parent::tearDown();
     }
 
     private function newCredential(string $type, string $name = ''): Credential
@@ -336,5 +351,166 @@ class CredentialWriteServiceTest extends DbTestCase
         $this->assertNotNull($stored);
         $this->assertSame('rotated', $stored->description);
         $this->assertSame(['vault_password' => 'new-secret'], $this->credentials->getSecrets($stored));
+    }
+
+    // -- vault checks ------------------------------------------------------------
+
+    /**
+     * The file inventory inventories/dev/hosts.yml of a manual project whose
+     * checkout holds the vault fixture's dev inventory, site.yml and vars,
+     * scanned once. The dev password opens its two vaults.
+     */
+    private function scannedDevInventory(): Inventory
+    {
+        if ($this->scannedInventory !== null) {
+            return $this->scannedInventory;
+        }
+        $root = $this->newTree();
+        foreach (['inventories/dev/hosts.yml', 'inventories/dev/group_vars/all/vault.yml', 'site.yml', 'vars/secrets.yml'] as $file) {
+            $this->put($root, $file, self::fixtureContent('repo/' . $file));
+        }
+        $project = $this->createProject($this->userId);
+        $project->local_path = $root;
+        $project->save(false);
+        $inventory = $this->createInventory($this->userId);
+        $inventory->inventory_type = Inventory::TYPE_FILE;
+        $inventory->project_id = $project->id;
+        $inventory->source_path = 'inventories/dev/hosts.yml';
+        $inventory->content = null;
+        $inventory->save(false);
+        $this->assertTrue(\Yii::$app->get('vaultScanService')->scanProject($project));
+
+        return $this->scannedInventory = $inventory;
+    }
+
+    /**
+     * A template of the scanned project, saved through the template service,
+     * which stores its vault check.
+     *
+     * @param list<int> $additionalIds
+     */
+    private function scannedTemplateWith(int $primaryId, array $additionalIds = []): JobTemplate
+    {
+        $inventory = $this->scannedDevInventory();
+        $template = $this->createJobTemplate(
+            (int)$inventory->project_id,
+            (int)$inventory->id,
+            (int)$this->createRunnerGroup($this->userId)->id,
+            $this->userId
+        );
+        $template->credential_id = $primaryId;
+        $this->assertTrue(\Yii::$app->get('jobTemplateCredentialService')->saveWithCredentials($template, $additionalIds));
+
+        return $template;
+    }
+
+    private static function vaultCheckOf(JobTemplate $template): JobTemplateVaultCheck
+    {
+        $check = JobTemplateVaultCheck::findOne($template->id);
+        self::assertNotNull($check);
+
+        return $check;
+    }
+
+    /**
+     * A check time no real check writes: a later re-check replaces it.
+     */
+    private static function markChecked(JobTemplate $template): void
+    {
+        JobTemplateVaultCheck::updateAll(['checked_at' => 1], ['job_template_id' => $template->id]);
+    }
+
+    public function testANewVaultSecretRechecksTheTemplatesUsingTheCredential(): void
+    {
+        $vault = $this->storedCredential(Credential::TYPE_VAULT, ['vault_password' => self::PROD_PASSWORD]);
+        $ssh = $this->createCredential($this->userId, Credential::TYPE_SSH_KEY);
+        $asPrimary = $this->scannedTemplateWith((int)$vault->id);
+        $asAdditional = $this->scannedTemplateWith((int)$ssh->id, [(int)$vault->id]);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_MISMATCH, self::vaultCheckOf($asPrimary)->status);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_MISMATCH, self::vaultCheckOf($asAdditional)->status);
+
+        $this->assertTrue($this->service->update($vault, ['vault_password' => self::DEV_PASSWORD]));
+
+        $this->assertSame(JobTemplateVaultCheck::STATUS_OK, self::vaultCheckOf($asPrimary)->status);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_OK, self::vaultCheckOf($asAdditional)->status);
+    }
+
+    public function testATypeChangeToVaultRechecksTheTemplatesUsingTheCredential(): void
+    {
+        $credential = $this->storedCredential(Credential::TYPE_TOKEN, ['token' => 'tok']);
+        $template = $this->scannedTemplateWith((int)$credential->id);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, self::vaultCheckOf($template)->status);
+        $credential->credential_type = Credential::TYPE_VAULT;
+
+        $this->assertTrue($this->service->update($credential, ['vault_password' => self::DEV_PASSWORD]));
+
+        $check = self::vaultCheckOf($template);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_OK, $check->status);
+        $this->assertSame((int)$credential->id, $check->credential_id);
+    }
+
+    public function testATypeChangeFromVaultRechecksTheTemplatesUsingTheCredential(): void
+    {
+        $credential = $this->storedCredential(Credential::TYPE_VAULT, ['vault_password' => self::DEV_PASSWORD]);
+        $template = $this->scannedTemplateWith((int)$credential->id);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_OK, self::vaultCheckOf($template)->status);
+        $credential->credential_type = Credential::TYPE_TOKEN;
+
+        $this->assertTrue($this->service->update($credential, ['token' => 'tok']));
+
+        $check = self::vaultCheckOf($template);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, $check->status);
+        $this->assertNull($check->credential_id);
+    }
+
+    public function testANewSecretOfAnotherTypeRechecksNoTemplate(): void
+    {
+        $credential = $this->storedCredential(Credential::TYPE_TOKEN, ['token' => 'old']);
+        $template = $this->scannedTemplateWith((int)$credential->id);
+        self::markChecked($template);
+
+        $this->assertTrue($this->service->update($credential, ['token' => 'new']));
+
+        $this->assertSame(1, self::vaultCheckOf($template)->checked_at);
+    }
+
+    public function testAVaultEditWithoutANewSecretRechecksNoTemplate(): void
+    {
+        $vault = $this->storedCredential(Credential::TYPE_VAULT, ['vault_password' => self::DEV_PASSWORD]);
+        $template = $this->scannedTemplateWith((int)$vault->id);
+        self::markChecked($template);
+        $vault->description = 'only the description changes';
+
+        $this->assertTrue($this->service->update($vault, ['vault_password' => '']));
+
+        $this->assertSame(1, self::vaultCheckOf($template)->checked_at);
+    }
+
+    public function testDeletingAVaultCredentialRechecksTheTemplatesThatUsedIt(): void
+    {
+        $vault = $this->storedCredential(Credential::TYPE_VAULT, ['vault_password' => self::DEV_PASSWORD]);
+        $ssh = $this->createCredential($this->userId, Credential::TYPE_SSH_KEY);
+        $asPrimary = $this->scannedTemplateWith((int)$vault->id);
+        $asAdditional = $this->scannedTemplateWith((int)$ssh->id, [(int)$vault->id]);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_OK, self::vaultCheckOf($asPrimary)->status);
+
+        $this->assertTrue($this->service->delete($vault, true, $this->userId)['deleted']);
+
+        foreach ([$asPrimary, $asAdditional] as $template) {
+            $check = self::vaultCheckOf($template);
+            $this->assertSame(JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, $check->status);
+            $this->assertNull($check->credential_id);
+        }
+    }
+
+    public function testDeletingACredentialOfAnotherTypeRechecksNoTemplate(): void
+    {
+        $token = $this->storedCredential(Credential::TYPE_TOKEN, ['token' => 't']);
+        $template = $this->scannedTemplateWith((int)$token->id);
+        self::markChecked($template);
+
+        $this->assertTrue($this->service->delete($token, true, $this->userId)['deleted']);
+
+        $this->assertSame(1, self::vaultCheckOf($template)->checked_at);
     }
 }

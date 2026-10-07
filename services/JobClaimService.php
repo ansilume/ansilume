@@ -94,6 +94,7 @@ class JobClaimService extends Component
 
             $tx->commit();
             $job->refresh();
+            $raw = $job->decodedRunnerPayload();
 
             \Yii::$app->get('auditService')->log(
                 AuditService::ACTION_JOB_STARTED,
@@ -103,7 +104,11 @@ class JobClaimService extends Component
                 [
                     'runner_id' => $runner->id,
                     'runner_name' => $runner->name,
-                    'credentials' => $this->credentialResolver()->describeForAudit($job->decodedRunnerPayload()),
+                    'credentials' => $this->credentialResolver()->describeForAudit($raw),
+                    // Runners without the capability apply the repository's
+                    // vault settings whatever the project says.
+                    'vault_password_source' => $this->resolveVaultPasswordSource($raw),
+                    'runner_supports_vault_password_source' => $runner->supports(Runner::CAPABILITY_VAULT_PASSWORD_SOURCE),
                 ]
             );
 
@@ -121,7 +126,7 @@ class JobClaimService extends Component
      *
      * @throws CredentialResolutionException when a credential of the job was
      *     deleted or cannot be decrypted; nothing is stored in that case
-     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, credentials: list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>, command: array<int, string>}
+     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, credentials: list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>, vault_password_source: 'ansilume'|'repository', command: array<int, string>}
      */
     public function buildExecutionPayload(Job $job): array
     {
@@ -159,6 +164,9 @@ class JobClaimService extends Component
             'timeout_minutes' => (int)($raw['timeout_minutes'] ?? $job->timeout_minutes ?? 120),
             'credential' => $credentials['credential'],
             'credentials' => $credentials['credentials'],
+            // Since 2.8. Older runners ignore it and apply the repository's
+            // ansible.cfg vault settings regardless.
+            'vault_password_source' => $this->resolveVaultPasswordSource($raw),
         ];
 
         $builder = new RunnerCommandBuilder();
@@ -235,6 +243,26 @@ class JobClaimService extends Component
             // credential(s) carried under `credential` / `credentials`.
             'scm_credential' => $this->credentialResolver()->resolveScmCredential($project),
         ];
+    }
+
+    /**
+     * Whether runners use only Ansilume's vault password ('ansilume') or also
+     * the repository's ansible.cfg vault settings ('repository'). Read at
+     * claim time like the scm fields, so a switch also reaches queued jobs.
+     * A project that is gone, or a stored value this version does not know,
+     * gets 'ansilume': the repository's vault settings never apply by
+     * accident.
+     *
+     * @param array<string, mixed> $payload
+     * @return 'ansilume'|'repository'
+     */
+    protected function resolveVaultPasswordSource(array $payload): string
+    {
+        /** @var Project|null $project */
+        $project = Project::findOne($payload['project_id'] ?? 0);
+        $source = $project?->vault_password_source;
+
+        return in_array($source, Project::VAULT_SOURCES, true) ? $source : Project::VAULT_SOURCE_ANSILUME;
     }
 
     /**

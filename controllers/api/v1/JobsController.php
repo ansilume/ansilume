@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\JobTemplateWarnings;
 use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobArtifact;
@@ -83,7 +84,7 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed, warnings: list<array{code: string, message: string, credential_ids: list<int>}>}|array{error: array{message: string}}
      */
     public function actionCreate(): array
     {
@@ -117,7 +118,8 @@ class JobsController extends BaseApiController
             /** @var JobLaunchService $svc */
             $svc = \Yii::$app->get('jobLaunchService');
             $job = $svc->launch($template, (int)($user->id ?? 0), $overrides);
-            return $this->success($this->serializeJob($job, true), 201);
+            // The template's warnings, as the launch page shows them: jobs are never blocked by them.
+            return $this->success($this->serializeJob($job, true), 201) + ['warnings' => JobTemplateWarnings::forTemplate($template)];
         } catch (\RuntimeException $e) {
             \Yii::error('Job launch failed: ' . $e->getMessage(), __CLASS__);
             return $this->error('Launch failed.', 500);

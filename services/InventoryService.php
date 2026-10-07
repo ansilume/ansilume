@@ -197,7 +197,11 @@ class InventoryService extends Component
         $realInventory = realpath($inventoryPath);
         $realProject = realpath($projectPath);
 
-        if ($realInventory === false || $realProject === false || !str_starts_with($realInventory, $realProject)) {
+        if ($realInventory === false || $realProject === false) {
+            return null;
+        }
+        // The separator matters: /projects/1 must not accept /projects/12/...
+        if ($realInventory !== $realProject && !str_starts_with($realInventory, $realProject . DIRECTORY_SEPARATOR)) {
             return null;
         }
 

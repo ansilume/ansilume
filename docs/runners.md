@@ -87,6 +87,8 @@ only receives:
 - proxy settings (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, also lowercase)
 - CA settings (`SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`)
 - every `ANSIBLE_*` variable, so Ansible settings on the runner keep working
+  (except the vault settings in "Ansilume only" projects, see
+  [Vault settings of the repository](#vault-settings-of-the-repository))
 - the variables listed in `RUNNER_ENV_PASSTHROUGH`
 - the env vars of Token credentials attached to the job template
 
@@ -119,6 +121,29 @@ register a runner in any runner group. On runners where not everyone who can
 run playbooks is trusted with that, configure `RUNNER_TOKEN` instead of
 `RUNNER_BOOTSTRAP_SECRET`. A runner token only grants access to that runner's
 own group.
+
+### Vault settings of the repository
+
+Each project chooses how runners treat the vault settings of the
+repository's `ansible.cfg` ([credentials.md](credentials.md#vault-passwords-on-runners)).
+The server sends the choice with every claimed job as
+`vault_password_source` (`ansilume` or `repository`). For `ansilume`, the
+runner points `ANSIBLE_VAULT_PASSWORD_FILE` and `ANSIBLE_VAULT_IDENTITY_LIST`
+at a random `0600` decoy in the temp directory, sets
+`ANSIBLE_ASK_VAULT_PASS=False` and starts `ansible-playbook` through
+`/usr/bin/env ANSIBLE_VAULT_ID_MATCH=`. These overrides win over the
+repository's `ansible.cfg`, over `ANSIBLE_*` variables of the runner host and
+over Token credentials with those names. The template's vault password still
+arrives as `--vault-password-file`; the decoy is deleted when the job ends. If
+the runner cannot create the decoy, the job fails with the reason instead of
+running with the repository's settings.
+
+Runners report what they support with every request
+(`capabilities: ["vault_password_source"]`, next to `software_version`); the
+Runners API shows it. Runners older than 2.8 report nothing and apply the
+repository's vault settings for every project; the vault card of an "Ansilume
+only" project lists those of its runner groups. A missing or unknown value
+from an older server means "repository" for a new runner.
 
 ---
 

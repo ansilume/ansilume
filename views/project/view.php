@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var app\models\Project $model */
 /** @var string[] $playbooks  Detected root-level playbook files */
 /** @var array    $tree       Directory tree nodes */
+/** @var array<string, mixed> $vault  VaultOverviewService::forProject() */
 
 use app\components\LintVerdict;
 use app\models\Project;
@@ -258,6 +259,8 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
                         <dt class="col-sm-4">Local path</dt>
                         <dd class="col-sm-8"><code><?= Html::encode($model->local_path) ?></code></dd>
                     <?php endif; ?>
+                    <dt class="col-sm-4">Vault passwords</dt>
+                    <dd class="col-sm-8" data-testid="project-vault-source"><?= Html::encode(Project::vaultSourceLabel((string)$model->vault_password_source)) ?></dd>
                     <dt class="col-sm-4">Last synced</dt>
                     <dd class="col-sm-8"><?= $model->last_synced_at ? date('Y-m-d H:i:s', $model->last_synced_at) : '—' ?></dd>
                     <dt class="col-sm-4">Created by</dt>
@@ -347,6 +350,8 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
         </div>
     </div>
 </div>
+
+<?= $this->render('_vault', ['project' => $model, 'vault' => $vault]) ?>
 
 <?php if (empty($playbooks) && empty($tree) && $model->status !== \app\models\Project::STATUS_SYNCED) : ?>
 <div class="row g-3 mt-1">

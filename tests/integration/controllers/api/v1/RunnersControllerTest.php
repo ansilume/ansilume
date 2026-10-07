@@ -161,6 +161,35 @@ class RunnersControllerTest extends WebControllerTestCase
         );
     }
 
+    /**
+     * API clients see which runners honour a project's vault password
+     * source: only names the server knows, an empty list when unknown.
+     */
+    public function testRunnerPayloadReportsCapabilities(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $group = $this->createRunnerGroup($userId);
+        $capable = $this->createRunner($group->id, $userId);
+        $older = $this->createRunner($group->id, $userId);
+        $none = $this->createRunner($group->id, $userId);
+        $mixed = $this->createRunner($group->id, $userId);
+        Runner::updateAll(['capabilities' => 'vault_password_source'], ['id' => $capable->id]);
+        Runner::updateAll(['capabilities' => ''], ['id' => $none->id]);
+        Runner::updateAll(['capabilities' => 'teleport,vault_password_source'], ['id' => $mixed->id]);
+
+        /** @var array<string, mixed> $view */
+        $view = $this->callSuccess($this->ctrl->actionView($capable->id));
+        $this->assertSame([Runner::CAPABILITY_VAULT_PASSWORD_SOURCE], $view['capabilities']);
+
+        $this->setQueryParams(['group_id' => $group->id]);
+        $byId = array_column($this->ctrl->actionIndex()['data'], null, 'id');
+        $this->assertSame(['vault_password_source'], $byId[$capable->id]['capabilities']);
+        $this->assertSame([], $byId[$older->id]['capabilities'], 'never reported');
+        $this->assertSame([], $byId[$none->id]['capabilities']);
+        $this->assertSame(['vault_password_source'], $byId[$mixed->id]['capabilities'], 'unknown names are left out');
+    }
+
     public function testViewReturns404(): void
     {
         $this->authenticateWithAdmin();

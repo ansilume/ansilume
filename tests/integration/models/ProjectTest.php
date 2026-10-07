@@ -6,6 +6,7 @@ namespace app\tests\integration\models;
 
 use app\models\Credential;
 use app\models\Project;
+use app\models\ProjectVaultEntry;
 use app\tests\integration\DbTestCase;
 
 class ProjectTest extends DbTestCase
@@ -350,6 +351,177 @@ class ProjectTest extends DbTestCase
         $user = $this->createUser();
         $project = $this->createProject($user->id);
         $this->assertIsArray($project->inventories);
+    }
+
+    // -- vault_password_source --------------------------------------------------
+
+    public function testValidationDefaultsTheVaultSourceOfANewProjectToAnsilume(): void
+    {
+        $user = $this->createUser();
+        $p = new Project();
+        $p->name = 'vault-default-' . uniqid();
+        $p->scm_type = Project::SCM_TYPE_MANUAL;
+        $p->scm_branch = 'main';
+        $p->status = Project::STATUS_NEW;
+        $p->created_by = $user->id;
+
+        $this->assertTrue($p->save());
+
+        $this->assertSame(Project::VAULT_SOURCE_ANSILUME, $p->vault_password_source);
+        $p->refresh();
+        $this->assertSame(Project::VAULT_SOURCE_ANSILUME, $p->vault_password_source);
+    }
+
+    /**
+     * Rows written without the column (save(false), raw inserts) get the
+     * column default: new projects are 'Ansilume only'.
+     */
+    public function testTheDatabaseDefaultsTheVaultSourceToAnsilume(): void
+    {
+        $project = $this->createProject($this->createUser()->id);
+        $project->refresh();
+
+        $this->assertSame(Project::VAULT_SOURCE_ANSILUME, $project->vault_password_source);
+    }
+
+    /**
+     * Regression: an existing project with an emptied vault source was
+     * quietly given 'ansilume' by the default rule.
+     */
+    public function testAnExistingProjectWithAnEmptyVaultSourceDoesNotValidate(): void
+    {
+        $project = $this->createProject((int)$this->createUser('vault-src')->id);
+        $project->vault_password_source = '';
+
+        $this->assertFalse($project->validate(['vault_password_source']));
+        $this->assertSame('', $project->vault_password_source);
+        $this->assertSame(['Vault Password Source cannot be blank.'], $project->getErrors('vault_password_source'));
+    }
+
+    public function testAnExplicitVaultSourceSurvivesValidation(): void
+    {
+        $p = new Project();
+        $p->vault_password_source = Project::VAULT_SOURCE_REPOSITORY;
+
+        $this->assertTrue($p->validate(['vault_password_source']));
+        $this->assertSame(Project::VAULT_SOURCE_REPOSITORY, $p->vault_password_source);
+    }
+
+    public function testValidationAcceptsBothVaultSources(): void
+    {
+        foreach (['ansilume', 'repository'] as $source) {
+            $p = new Project();
+            $p->vault_password_source = $source;
+            $this->assertTrue($p->validate(['vault_password_source']), "'{$source}' should be valid");
+        }
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function invalidVaultSourceProvider(): array
+    {
+        return [
+            'unknown name' => ['ansible-cfg-only'],
+            'wrong case' => ['Ansilume'],
+            'padded' => [' repository'],
+            'a label' => ['Ansilume only'],
+        ];
+    }
+
+    /**
+     * @dataProvider invalidVaultSourceProvider
+     */
+    public function testValidationRejectsAnUnknownVaultSource(string $source): void
+    {
+        $p = new Project();
+        $p->vault_password_source = $source;
+
+        $this->assertFalse($p->validate(['vault_password_source']));
+        $this->assertSame(['Vault Password Source is invalid.'], $p->getErrors('vault_password_source'));
+    }
+
+    public function testVaultSourceLabel(): void
+    {
+        $this->assertSame('Ansilume only', Project::vaultSourceLabel(Project::VAULT_SOURCE_ANSILUME));
+        $this->assertSame('Ansilume and repository', Project::vaultSourceLabel(Project::VAULT_SOURCE_REPOSITORY));
+        $this->assertSame('something-else', Project::vaultSourceLabel('something-else'), 'unknown values are shown as they are');
+        $this->assertSame('', Project::vaultSourceLabel(''));
+    }
+
+    // -- repositorySuppliesVaultPasswords -----------------------------------------
+
+    /**
+     * @return array<string, array{0: string, 1: string|null, 2: bool}>
+     */
+    public static function repositoryPasswordsProvider(): array
+    {
+        $passwordFile = (string)json_encode(['cfg' => ['vault_password_file' => '.vault_pass']]);
+
+        return [
+            'Ansilume only ignores a repository password file' => [Project::VAULT_SOURCE_ANSILUME, $passwordFile, false],
+            'never scanned' => [Project::VAULT_SOURCE_REPOSITORY, null, false],
+            'summary is not JSON' => [Project::VAULT_SOURCE_REPOSITORY, '{"cfg": {"vault_password_file": ".vault_pass"', false],
+            'summary is a JSON scalar' => [Project::VAULT_SOURCE_REPOSITORY, '"vault_password_file"', false],
+            'summary without ansible.cfg settings' => [Project::VAULT_SOURCE_REPOSITORY, '{"findings": []}', false],
+            'settings are not an object' => [Project::VAULT_SOURCE_REPOSITORY, '{"cfg": ".vault_pass"}', false],
+            'no password source in ansible.cfg' => [
+                Project::VAULT_SOURCE_REPOSITORY,
+                (string)json_encode(['cfg' => ['vault_password_file' => '', 'vault_identity_list' => null, 'ask_vault_pass' => true, 'vault_id_match' => true]]),
+                false,
+            ],
+            'a mistyped password file' => [Project::VAULT_SOURCE_REPOSITORY, (string)json_encode(['cfg' => ['vault_password_file' => true]]), false],
+            'a password file' => [Project::VAULT_SOURCE_REPOSITORY, $passwordFile, true],
+            'a vault identity list' => [Project::VAULT_SOURCE_REPOSITORY, (string)json_encode(['cfg' => ['vault_identity_list' => 'prod@prod.pw']]), true],
+        ];
+    }
+
+    /**
+     * True only in 'Ansilume and repository' mode with a password source in
+     * the scanned ansible.cfg: then runners get passwords Ansilume cannot
+     * check.
+     *
+     * @dataProvider repositoryPasswordsProvider
+     */
+    public function testRepositorySuppliesVaultPasswords(string $source, ?string $summary, bool $expected): void
+    {
+        $p = new Project();
+        $p->vault_password_source = $source;
+        $p->vault_scan_summary = $summary;
+
+        $this->assertSame($expected, $p->repositorySuppliesVaultPasswords());
+    }
+
+    // -- vaultEntries -------------------------------------------------------------
+
+    public function testVaultEntriesAreThisProjectsEntriesByPathAndLine(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $other = $this->createProject($user->id);
+        $inline12 = $this->vaultEntry((int)$project->id, 'group_vars/all.yml', 12);
+        $file = $this->vaultEntry((int)$project->id, 'vars/secrets.yml', null);
+        $inline3 = $this->vaultEntry((int)$project->id, 'group_vars/all.yml', 3);
+        $this->vaultEntry((int)$other->id, 'aaa.yml', null);
+
+        $ids = array_map(static fn (ProjectVaultEntry $entry): int => (int)$entry->id, $project->vaultEntries);
+
+        $this->assertSame([(int)$inline3->id, (int)$inline12->id, (int)$file->id], $ids);
+        $this->assertSame([], $this->createProject($user->id)->vaultEntries);
+    }
+
+    private function vaultEntry(int $projectId, string $path, ?int $line): ProjectVaultEntry
+    {
+        $entry = new ProjectVaultEntry();
+        $entry->project_id = $projectId;
+        $entry->path = $path;
+        $entry->kind = $line === null ? ProjectVaultEntry::KIND_FILE : ProjectVaultEntry::KIND_INLINE;
+        $entry->line = $line;
+        $entry->var_key = $line === null ? null : 'key_' . $line;
+        $entry->format_version = '1.1';
+        $entry->save(false);
+
+        return $entry;
     }
 
     // -- persistence round-trip ------------------------------------------------

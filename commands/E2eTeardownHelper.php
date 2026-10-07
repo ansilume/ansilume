@@ -50,6 +50,8 @@ class E2eTeardownHelper
     {
         $this->teardownEntities();
         $this->teardownUsers();
+        (new E2eVaultScanSeeder($this->logger))->teardown();
+        (new E2eVaultEdgeSeeder($this->logger))->teardown();
     }
 
     private function teardownEntities(): void

@@ -184,6 +184,18 @@ class JobTemplateController extends BaseController
     }
 
     /**
+     * Launches that skip the launch page (dashboard quick launch, a form
+     * posted elsewhere) still show the template's warnings, after the fact.
+     */
+    private function flashTemplateWarnings(JobTemplate $template): void
+    {
+        $warnings = JobTemplateWarnings::forTemplate($template);
+        if ($warnings !== []) {
+            $this->session()->setFlash('warning', implode(' ', array_column($warnings, 'message')));
+        }
+    }
+
+    /**
      * Only inventories the user may see: the form offers no others, and a
      * crafted request must not reach another team's hosts.
      */
@@ -315,12 +327,17 @@ class JobTemplateController extends BaseController
                 $svc = \Yii::$app->get('jobLaunchService');
                 $job = $svc->launch($template, (int)(\Yii::$app->user->id ?? 0), $overrides);
                 $this->session()->setFlash('success', "Job #{$job->id} queued.");
+                $this->flashTemplateWarnings($template);
                 return $this->redirect(['/job/view', 'id' => $job->id]);
             } catch (\RuntimeException $e) {
                 $this->session()->setFlash('danger', 'Launch failed: ' . $e->getMessage());
             }
         }
-        return $this->render('launch', ['template' => $template, 'attachedCredentials' => $this->credentialService()->describe($template)]);
+        return $this->render('launch', [
+            'template' => $template,
+            'attachedCredentials' => $this->credentialService()->describe($template),
+            'warnings' => JobTemplateWarnings::forTemplate($template),
+        ]);
     }
 
     public function actionGenerateTriggerToken(int $id): Response

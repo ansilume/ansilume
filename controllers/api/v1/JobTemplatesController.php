@@ -46,7 +46,7 @@ class JobTemplatesController extends BaseApiController
     public function actionIndex(): array
     {
         $query = JobTemplate::find()
-            ->with(['project', 'inventory', 'credential', 'jobTemplateCredentials.credential'])
+            ->with(['project', 'inventory', 'credential', 'jobTemplateCredentials.credential', 'vaultCheck.credential'])
             ->orderBy(['job_template.id' => SORT_DESC]);
         $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
         if ($filter !== null) {

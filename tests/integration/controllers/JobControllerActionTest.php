@@ -17,6 +17,9 @@ class JobControllerActionTest extends WebControllerTestCase
 {
     private string $tempDir;
 
+    /** @var array<string, mixed> application components replaced by a test */
+    private array $original = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -26,6 +29,10 @@ class JobControllerActionTest extends WebControllerTestCase
 
     protected function tearDown(): void
     {
+        foreach ($this->original as $id => $component) {
+            \Yii::$app->set($id, $component);
+        }
+        $this->original = [];
         $this->removeDir($this->tempDir);
         parent::tearDown();
     }
@@ -76,6 +83,90 @@ class JobControllerActionTest extends WebControllerTestCase
         };
     }
 
+    // ─── relaunch ───────────────────────────────────────────────────
+
+    /**
+     * Regression: a relaunch skips the launch page and showed none of the
+     * template's warnings. The job still starts; the warning follows.
+     */
+    public function testARelaunchFlashesTheTemplateWarnings(): void
+    {
+        [$job, $template] = $this->finishedJob();
+        $check = new \app\models\JobTemplateVaultCheck([
+            'job_template_id' => $template->id,
+            'status' => \app\models\JobTemplateVaultCheck::STATUS_MISSING_PASSWORD,
+            'relevant_count' => 2,
+            'unopened_count' => 0,
+            'checked_at' => time(),
+            'scanned_at' => $this->vaultScanTimeOf((int)$template->project_id),
+        ]);
+        $check->save(false);
+        $this->stubJobLaunchService();
+        \Yii::$app->session->removeAllFlashes();
+
+        $this->makeController()->actionRelaunch((int)$job->id);
+
+        $flashes = \Yii::$app->session->getAllFlashes();
+        $this->assertStringStartsWith('Re-launched as Job #', (string)$flashes['success']);
+        $this->assertSame(
+            'This template has no vault password, but it probably loads 2 encrypted files or values. '
+            . 'Jobs fail when Ansible needs one of them. Attach the vault password of this environment.',
+            $flashes['warning']
+        );
+    }
+
+    public function testARelaunchWithoutWarningsFlashesNoWarning(): void
+    {
+        [$job] = $this->finishedJob();
+        $this->stubJobLaunchService();
+        \Yii::$app->session->removeAllFlashes();
+
+        $this->makeController()->actionRelaunch((int)$job->id);
+
+        $this->assertArrayNotHasKey('warning', \Yii::$app->session->getAllFlashes());
+        $this->assertArrayHasKey('success', \Yii::$app->session->getAllFlashes());
+    }
+
+    /**
+     * @return array{0: \app\models\Job, 1: \app\models\JobTemplate}
+     */
+    private function finishedJob(): array
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $template = $this->createJobTemplate(
+            $this->createProject($user->id)->id,
+            $this->createInventory($user->id)->id,
+            $this->createRunnerGroup($user->id)->id,
+            $user->id
+        );
+
+        return [$this->createJob($template->id, $user->id, \app\models\Job::STATUS_SUCCEEDED), $template];
+    }
+
+    private function stubJobLaunchService(): void
+    {
+        $this->original['jobLaunchService'] = \Yii::$app->get('jobLaunchService');
+        \Yii::$app->set('jobLaunchService', new class extends \app\services\JobLaunchService {
+            public function launch(\app\models\JobTemplate $template, int $userId, array $overrides = []): \app\models\Job
+            {
+                $job = new \app\models\Job();
+                $job->job_template_id = $template->id;
+                $job->launched_by = $userId;
+                $job->status = \app\models\Job::STATUS_QUEUED;
+                $job->timeout_minutes = 120;
+                $job->has_changes = 0;
+                $job->queued_at = time();
+                $job->created_at = time();
+                $job->updated_at = time();
+                $job->save(false);
+
+                return $job;
+            }
+        });
+    }
+
+    // ─── view ───────────────────────────────────────────────────────
     // ─── view ───────────────────────────────────────────────────────
 
     /**

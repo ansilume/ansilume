@@ -4,16 +4,19 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers\api\v1;
 
+use app\components\JobTemplateWarnings;
 use app\controllers\api\v1\JobsController;
 use app\models\ApiToken;
 use app\models\Credential;
 use app\models\Job;
 use app\models\JobTemplate;
+use app\models\JobTemplateVaultCheck;
 use app\tests\integration\controllers\WebControllerTestCase;
 
 /**
- * Jobs API: launching by job_template_id (the documented field) and the
- * credentials a job uses, without secrets, on single-job responses.
+ * Jobs API: launching by job_template_id (the documented field), the
+ * template's warnings in the launch response, and the credentials a job
+ * uses, without secrets, on single-job responses.
  */
 class JobsControllerCredentialsTest extends WebControllerTestCase
 {
@@ -108,6 +111,81 @@ class JobsControllerCredentialsTest extends WebControllerTestCase
         $this->assertSame(['error' => ['message' => 'Job template #999999 not found.']], $result);
     }
 
+    // -- Launch response: the template's warnings ----------------------------
+
+    public function testTheLaunchOfATemplateWithoutProblemsCarriesNoWarnings(): void
+    {
+        [$template] = $this->templateWithCredential();
+        $this->setBody(['job_template_id' => $template->id]);
+
+        $result = $this->ctrl->actionCreate();
+
+        $this->assertSame(201, \Yii::$app->response->statusCode);
+        $this->assertSame(['data', 'warnings'], array_keys($result));
+        $this->assertSame([], $result['warnings']);
+    }
+
+    /**
+     * Warnings never block a launch: the job is queued, and the response
+     * tells the client what the job may run into.
+     */
+    public function testTheLaunchCarriesTheVaultWarningOfTheTemplate(): void
+    {
+        $template = $this->templateWithVaultCheck(Credential::TYPE_VAULT, JobTemplateVaultCheck::STATUS_MISMATCH, [
+            ['path' => 'group_vars/all.yml', 'line' => 3, 'key' => 'app_secret'],
+            ['path' => 'vars/secrets.yml', 'line' => null, 'key' => null],
+        ]);
+        $vault = $template->credential;
+        $this->assertNotNull($vault);
+        $this->setBody(['job_template_id' => $template->id]);
+
+        $result = $this->ctrl->actionCreate();
+
+        $this->assertSame(201, \Yii::$app->response->statusCode, (string)json_encode($result));
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISMATCH,
+            'message' => sprintf(
+                'The vault password "%s" does not open 2 of the 4 encrypted files or values this template probably loads: '
+                . 'group_vars/all.yml:3, vars/secrets.yml. Jobs fail when Ansible needs one of them. '
+                . 'Check the password and the inventory; if the files changed, rescan the project.',
+                $vault->name
+            ),
+            'credential_ids' => [(int)$vault->id],
+        ]], $result['warnings']);
+        $job = Job::findOne((int)$result['data']['id']);
+        $this->assertNotNull($job);
+        $this->assertSame((int)$template->id, (int)$job->job_template_id);
+        $this->assertSame(Job::STATUS_QUEUED, $job->status);
+    }
+
+    public function testTheLaunchCarriesTheWarningAboutAMissingVaultPassword(): void
+    {
+        $template = $this->templateWithVaultCheck(Credential::TYPE_TOKEN, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, []);
+        $this->setBody(['job_template_id' => $template->id]);
+
+        $result = $this->ctrl->actionCreate();
+
+        $this->assertSame(201, \Yii::$app->response->statusCode, (string)json_encode($result));
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISSING,
+            'message' => 'This template has no vault password, but it probably loads 4 encrypted files or values. '
+                . 'Jobs fail when Ansible needs one of them. Attach the vault password of this environment.',
+            'credential_ids' => [],
+        ]], $result['warnings']);
+    }
+
+    public function testARejectedLaunchCarriesNoWarnings(): void
+    {
+        $template = $this->templateWithVaultCheck(Credential::TYPE_TOKEN, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, []);
+        $this->setBody(['job_template_id' => $template->id]);
+        $this->authenticateWithoutRole();
+
+        $result = $this->ctrl->actionCreate();
+
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'Forbidden.']], $result);
+    }
+
     public function testViewNamesADeletedCredentialFromTheLaunchSnapshot(): void
     {
         [$template, $credential] = $this->templateWithCredential();
@@ -170,6 +248,46 @@ class JobsControllerCredentialsTest extends WebControllerTestCase
         $template->refresh();
 
         return [$template, $credential];
+    }
+
+    /**
+     * A template with one credential of the given type as primary and a
+     * vault check (as VaultCheckService stores it) over 4 encrypted values.
+     *
+     * @param list<array{path: string, line: int|null, key: string|null}> $unopened
+     */
+    private function templateWithVaultCheck(string $credentialType, string $status, array $unopened): JobTemplate
+    {
+        [$template, $credential] = $this->templateWithCredential();
+        $credential->credential_type = $credentialType;
+        $credential->save(false);
+        $check = new JobTemplateVaultCheck();
+        $check->job_template_id = (int)$template->id;
+        $check->status = $status;
+        $check->credential_id = $credentialType === Credential::TYPE_VAULT ? (int)$credential->id : null;
+        $check->relevant_count = 4;
+        $check->unopened_count = count($unopened);
+        $check->unopened = $unopened === [] ? null : (string)json_encode($unopened);
+        $check->checked_at = time();
+        $check->scanned_at = $this->vaultScanTimeOf((int)$template->project_id);
+        $this->assertTrue($check->save(false));
+        $template->refresh();
+
+        return $template;
+    }
+
+    /**
+     * Switches to a user without any role, who may not launch jobs.
+     */
+    private function authenticateWithoutRole(): void
+    {
+        $user = $this->createUser('jobs-api-norole');
+        ['raw' => $raw] = ApiToken::generate((int)$user->id, 'jobs-api-norole-token');
+        \Yii::$app->request->headers->set('Authorization', 'Bearer ' . $raw);
+        /** @var \yii\web\User<\yii\web\IdentityInterface> $userComponent */
+        $userComponent = \Yii::$app->user;
+        $userComponent->logout(false);
+        $userComponent->loginByAccessToken($raw);
     }
 
     /**

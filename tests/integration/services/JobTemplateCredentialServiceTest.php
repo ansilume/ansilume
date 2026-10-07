@@ -6,20 +6,35 @@ namespace app\tests\integration\services;
 
 use app\models\AuditLog;
 use app\models\Credential;
+use app\models\Inventory;
 use app\models\JobTemplate;
+use app\models\JobTemplateVaultCheck;
 use app\services\JobTemplateCredentialService;
 use app\tests\integration\DbTestCase;
+use app\tests\unit\components\vault\TemporaryTree;
 
 class JobTemplateCredentialServiceTest extends DbTestCase
 {
+    use TemporaryTree;
+
+    private const DEV_PASSWORD = 'ansilume-test-dummy-dev';
+    private const PROD_PASSWORD = 'ansilume-test-dummy-prod';
+
     private JobTemplateCredentialService $service;
     private int $userId;
+    private ?Inventory $scannedInventory = null;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->service = new JobTemplateCredentialService();
         $this->userId = (int)$this->createUser('jtc')->id;
+    }
+
+    protected function tearDown(): void
+    {
+        $this->removeTrees();
+        parent::tearDown();
     }
 
     private function newTemplate(?int $primary): JobTemplate
@@ -578,5 +593,124 @@ class JobTemplateCredentialServiceTest extends DbTestCase
         ], Credential::describeInOrder([$token->id, 999_999_999, $ssh->id, $vault->id]));
         $this->assertSame([], Credential::describeInOrder([999_999_999]));
         $this->assertSame([], Credential::describeInOrder([]));
+    }
+
+    // -- vault checks ------------------------------------------------------------
+
+    /**
+     * The file inventory inventories/dev/hosts.yml of a manual project whose
+     * checkout holds the vault fixture's dev inventory, site.yml and vars,
+     * scanned once. The dev password opens its two vaults.
+     */
+    private function scannedDevInventory(): Inventory
+    {
+        if ($this->scannedInventory !== null) {
+            return $this->scannedInventory;
+        }
+        $root = $this->newTree();
+        foreach (['inventories/dev/hosts.yml', 'inventories/dev/group_vars/all/vault.yml', 'site.yml', 'vars/secrets.yml'] as $file) {
+            $this->put($root, $file, self::fixtureContent('repo/' . $file));
+        }
+        $project = $this->createProject($this->userId);
+        $project->local_path = $root;
+        $project->save(false);
+        $inventory = $this->createInventory($this->userId);
+        $inventory->inventory_type = Inventory::TYPE_FILE;
+        $inventory->project_id = $project->id;
+        $inventory->source_path = 'inventories/dev/hosts.yml';
+        $inventory->content = null;
+        $inventory->save(false);
+        $this->assertTrue(\Yii::$app->get('vaultScanService')->scanProject($project));
+
+        return $this->scannedInventory = $inventory;
+    }
+
+    /**
+     * An unsaved template of the scanned project, running site.yml against
+     * its dev inventory.
+     */
+    private function newScannedTemplate(?int $primary): JobTemplate
+    {
+        $inventory = $this->scannedDevInventory();
+        $template = $this->newTemplate($primary);
+        $template->project_id = $inventory->project_id;
+        $template->inventory_id = $inventory->id;
+
+        return $template;
+    }
+
+    private function vaultWith(string $password): Credential
+    {
+        $credential = $this->createCredential($this->userId, Credential::TYPE_VAULT);
+        $credential->secret_data = \Yii::$app->get('credentialService')->encryptSecrets(['vault_password' => $password]);
+        $credential->save(false);
+
+        return $credential;
+    }
+
+    private static function vaultCheckOf(JobTemplate $template): JobTemplateVaultCheck
+    {
+        $check = JobTemplateVaultCheck::findOne($template->id);
+        self::assertNotNull($check);
+
+        return $check;
+    }
+
+    public function testASavedTemplateGetsItsVaultPasswordChecked(): void
+    {
+        $prod = $this->vaultWith(self::PROD_PASSWORD);
+        $dev = $this->vaultWith(self::DEV_PASSWORD);
+        $template = $this->newScannedTemplate($prod->id);
+
+        $this->assertTrue($this->service->saveWithCredentials($template, []));
+
+        $check = self::vaultCheckOf($template);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_MISMATCH, $check->status);
+        $this->assertSame((int)$prod->id, $check->credential_id);
+        $this->assertSame(
+            ['inventories/dev/group_vars/all/vault.yml', 'vars/secrets.yml'],
+            array_column($check->unopenedEntries(), 'path')
+        );
+
+        $template->credential_id = $dev->id;
+        $this->assertTrue($this->service->saveWithCredentials($template, null));
+
+        $check = self::vaultCheckOf($template);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_OK, $check->status);
+        $this->assertSame((int)$dev->id, $check->credential_id);
+        $this->assertNull($check->unopened);
+    }
+
+    public function testARejectedSaveLeavesTheVaultCheckAlone(): void
+    {
+        $dev = $this->vaultWith(self::DEV_PASSWORD);
+        $template = $this->newScannedTemplate($dev->id);
+        $this->assertTrue($this->service->saveWithCredentials($template, []));
+        JobTemplateVaultCheck::updateAll(['checked_at' => 1], ['job_template_id' => $template->id]);
+
+        $this->assertFalse($this->service->saveWithCredentials($template, [$this->vaultWith(self::PROD_PASSWORD)->id]));
+
+        $this->assertSame(1, self::vaultCheckOf($template)->checked_at);
+    }
+
+    /**
+     * The clone gets the source's credentials, the vault password among
+     * them, and a check of its own.
+     */
+    public function testAClonedTemplateGetsItsVaultPasswordChecked(): void
+    {
+        $ssh = $this->createCredential($this->userId, Credential::TYPE_SSH_KEY);
+        $dev = $this->vaultWith(self::DEV_PASSWORD);
+        $source = $this->newScannedTemplate($ssh->id);
+        $this->assertTrue($this->service->saveWithCredentials($source, [$dev->id]));
+        $clone = $this->newScannedTemplate($ssh->id);
+        $clone->name = $source->name . ' (copy)';
+
+        $this->assertTrue($this->service->copyWithCredentials($clone, JobTemplate::findOne($source->id)));
+
+        $check = self::vaultCheckOf($clone);
+        $this->assertSame(JobTemplateVaultCheck::STATUS_OK, $check->status);
+        $this->assertSame((int)$dev->id, $check->credential_id);
+        $this->assertSame(2, $check->relevant_count);
     }
 }

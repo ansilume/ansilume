@@ -110,6 +110,9 @@ class ProjectsController extends BaseApiController
             null,
             ['name' => $model->name, 'scm_type' => $model->scm_type, 'source' => 'api']
         );
+        /** @var \app\services\VaultScanService $vaultScan */
+        $vaultScan = \Yii::$app->get('vaultScanService');
+        $vaultScan->afterProjectSave($model, null, ['source' => 'api']);
 
         if ($model->scm_type === Project::SCM_TYPE_GIT) {
             /** @var ProjectService $svc */
@@ -136,6 +139,7 @@ class ProjectsController extends BaseApiController
         if ($userId === null || !$this->checker()->canOperate($userId, $model->id)) {
             return $this->error('Forbidden.', 403);
         }
+        $previousSource = (string)$model->vault_password_source;
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
 
@@ -145,6 +149,9 @@ class ProjectsController extends BaseApiController
         if (!$model->save(false)) {
             return $this->error('Failed to save project.', 422);
         }
+        /** @var \app\services\VaultScanService $vaultScan */
+        $vaultScan = \Yii::$app->get('vaultScanService');
+        $vaultScan->afterProjectSave($model, $previousSource, ['source' => 'api']);
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_PROJECT_UPDATED,
@@ -240,7 +247,7 @@ class ProjectsController extends BaseApiController
      */
     private function applyBody(Project $model, array $body): void
     {
-        foreach (['name', 'description', 'scm_type', 'scm_url', 'scm_branch'] as $field) {
+        foreach (['name', 'description', 'scm_type', 'scm_url', 'scm_branch', 'vault_password_source'] as $field) {
             if (!array_key_exists($field, $body)) {
                 continue;
             }
@@ -257,7 +264,7 @@ class ProjectsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, name: string, description: string|null, scm_type: string, scm_url: string|null, scm_branch: string, status: string, last_synced_at: int|null, created_at: int}
+     * @return array{id: int, name: string, description: string|null, scm_type: string, scm_url: string|null, scm_branch: string, status: string, last_synced_at: int|null, created_at: int, vault_password_source: string, vault_scanned_at: int|null}
      */
     private function serialize(Project $p): array
     {
@@ -271,6 +278,8 @@ class ProjectsController extends BaseApiController
             'status' => $p->status,
             'last_synced_at' => $p->last_synced_at,
             'created_at' => $p->created_at,
+            'vault_password_source' => (string)$p->vault_password_source,
+            'vault_scanned_at' => $p->vault_scanned_at === null ? null : (int)$p->vault_scanned_at,
         ];
     }
 

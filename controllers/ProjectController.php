@@ -10,6 +10,7 @@ use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Project;
 use app\models\ProjectSyncLog;
+use app\models\User;
 use app\services\LintService;
 use app\services\ProjectAccessChecker;
 use app\services\ProjectDeletionService;
@@ -75,7 +76,16 @@ class ProjectController extends BaseController
             $playbooks = $scanner->detectPlaybooks($localPath);
             $tree = $scanner->buildTree($localPath, $localPath);
         }
-        return $this->render('view', ['model' => $model, 'playbooks' => $playbooks, 'tree' => $tree]);
+        /** @var \app\services\VaultOverviewService $vaultOverview */
+        $vaultOverview = \Yii::$app->get('vaultOverviewService');
+        $identity = \Yii::$app->user->identity;
+        $superadmin = $identity instanceof User && (bool)$identity->is_superadmin;
+        return $this->render('view', [
+            'model' => $model,
+            'playbooks' => $playbooks,
+            'tree' => $tree,
+            'vault' => $vaultOverview->forProject($model, static fn (string $permission): bool => $superadmin || \Yii::$app->user->can($permission)),
+        ]);
     }
 
     /**
@@ -133,6 +143,9 @@ class ProjectController extends BaseController
             $model->created_by = (int)\Yii::$app->user->id;
             if ($model->save()) {
                 \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_CREATED, 'project', $model->id, null, ['name' => $model->name]);
+                /** @var \app\services\VaultScanService $vaultScan */
+                $vaultScan = \Yii::$app->get('vaultScanService');
+                $vaultScan->afterProjectSave($model, null);
                 if ($model->scm_type === Project::SCM_TYPE_GIT && $model->scm_url) {
                     /** @var ProjectService $svc */
                     $svc = \Yii::$app->get('projectService');
@@ -151,8 +164,12 @@ class ProjectController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireAccess($model, true);
+        $previousSource = (string)$model->vault_password_source;
         if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
             \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_UPDATED, 'project', $model->id, null, ['name' => $model->name]);
+            /** @var \app\services\VaultScanService $vaultScan */
+            $vaultScan = \Yii::$app->get('vaultScanService');
+            $vaultScan->afterProjectSave($model, $previousSource);
             if ($model->scm_type === Project::SCM_TYPE_GIT && $model->scm_url) {
                 /** @var ProjectService $svc */
                 $svc = \Yii::$app->get('projectService');

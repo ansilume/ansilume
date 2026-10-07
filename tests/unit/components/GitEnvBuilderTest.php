@@ -8,10 +8,10 @@ use app\components\GitEnvBuilder;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Direct unit coverage for GitEnvBuilder. The RunnerControllerTest also
- * exercises the same behaviour end-to-end through RunnerController's
- * delegate, but these tests keep the helper self-testable and pin the
- * exact SSH option set that the runner relies on.
+ * Direct unit coverage for GitEnvBuilder. RunnerControllerSyncProjectTest
+ * also exercises the same behaviour end-to-end through RunnerProjectSync,
+ * but these tests keep the helper self-testable and pin the exact SSH
+ * option set that the runner relies on.
  */
 class GitEnvBuilderTest extends TestCase
 {

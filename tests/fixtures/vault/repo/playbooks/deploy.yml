@@ -1,0 +1,11 @@
+---
+- name: Deploy
+  hosts: web
+  gather_facts: false
+  vars_files:
+    - ../vars/secrets.yml
+    - deploy-vars.yml
+  tasks:
+    - name: Show that the vault values loaded
+      ansible.builtin.debug:
+        msg: "{{ db_password | length }} {{ deploy_token | length }}"

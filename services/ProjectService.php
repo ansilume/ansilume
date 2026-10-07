@@ -86,6 +86,13 @@ class ProjectService extends Component
         }
 
         if (empty($project->scm_url)) {
+            // Fail the sync instead of leaving the project on "syncing" until
+            // the stale-sync sweeper notices it.
+            $project->status = Project::STATUS_ERROR;
+            $project->last_sync_error = 'This git project has no repository URL.';
+            $project->sync_started_at = null;
+            $project->save(false);
+            $this->notifySyncTransition($project);
             throw new \RuntimeException("Project #{$project->id} has no SCM URL.");
         }
 

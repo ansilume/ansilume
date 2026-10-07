@@ -7,9 +7,15 @@ namespace app\tests\integration\controllers;
 use app\controllers\ProjectController;
 use app\models\AuditLog;
 use app\models\Credential;
+use app\models\Inventory;
+use app\models\JobTemplate;
+use app\models\JobTemplateVaultCheck;
 use app\models\Project;
 use app\models\ProjectSyncLog;
+use app\models\ProjectVaultEntry;
 use app\services\ProjectService;
+use app\services\VaultOverviewService;
+use app\services\VaultScanService;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
@@ -27,6 +33,9 @@ class ProjectControllerActionTest extends WebControllerTestCase
 {
     /** @var list<array{string, \yii\base\Component}> */
     private array $swappedServices = [];
+
+    /** @var list<string> */
+    private array $tempDirs = [];
 
     protected function setUp(): void
     {
@@ -61,6 +70,10 @@ class ProjectControllerActionTest extends WebControllerTestCase
             \Yii::$app->set($id, $original);
         }
         $this->swappedServices = [];
+        foreach ($this->tempDirs as $dir) {
+            $this->removeTree($dir);
+        }
+        $this->tempDirs = [];
         parent::tearDown();
     }
 
@@ -1026,6 +1039,244 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $this->assertIsArray($ctrl->capturedParams['tree']);
     }
 
+    // ── Vault: overview on the project page ─────────────────────────────────
+
+    public function testViewPassesTheVaultOverviewOfTheProject(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->local_path = '/tmp/nonexistent-manual-project';
+        $project->vault_scanned_at = 1700000000;
+        $project->vault_scan_summary = (string)json_encode(['cfg' => ['vault_password_file' => '.vault_pass'], 'findings' => [], 'files_scanned' => 2]);
+        $project->save(false);
+        $entry = new ProjectVaultEntry();
+        $entry->project_id = (int)$project->id;
+        $entry->path = 'inventories/prod/group_vars/all/vault.yml';
+        $entry->kind = ProjectVaultEntry::KIND_FILE;
+        $entry->vault_id = 'prod';
+        $entry->format_version = '1.2';
+        $entry->save(false);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$project->id);
+
+        /** @var VaultOverviewService $overview */
+        $overview = \Yii::$app->get('vaultOverviewService');
+        // A superadmin sees every detail.
+        $this->assertSame($overview->forProject($this->reloadProject($project), static fn (): bool => true), $ctrl->capturedParams['vault']);
+        $vault = $ctrl->capturedParams['vault'];
+        $this->assertIsArray($vault);
+        $this->assertSame(Project::VAULT_SOURCE_ANSILUME, $vault['password_source']);
+        $this->assertSame(1700000000, $vault['scanned_at']);
+        $this->assertSame(['prod'], $vault['vault_ids']);
+        $this->assertSame('.vault_pass', $vault['repository_settings']['vault_password_file']);
+    }
+
+    /**
+     * Regression: the vault card showed runner names, groups and versions
+     * and the names of vault passwords to anyone who may see the project.
+     * They follow runner-group.view and credential.view or job-template.view.
+     */
+    public function testTheVaultOverviewOnThePageFollowsThePermissionsOfTheViewer(): void
+    {
+        $user = $this->createUser('vault-card');
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $role = $auth->createRole('vault-card-' . uniqid());
+        $auth->add($role);
+        $projectView = $auth->getPermission('project.view');
+        $this->assertNotNull($projectView);
+        $auth->addChild($role, $projectView);
+        $auth->assign($role, (string)$user->id);
+        $this->loginAs($user);
+        $project = $this->createProject((int)$user->id);
+        $project->vault_scanned_at = 1700000000;
+        $project->save(false);
+        $group = $this->createRunnerGroup((int)$user->id);
+        $template = $this->createJobTemplate((int)$project->id, (int)$this->createInventory((int)$user->id)->id, (int)$group->id, (int)$user->id);
+        $vault = $this->createCredential((int)$user->id, Credential::TYPE_VAULT);
+        (new JobTemplateVaultCheck([
+            'job_template_id' => $template->id,
+            'status' => JobTemplateVaultCheck::STATUS_OK,
+            'credential_id' => $vault->id,
+            'relevant_count' => 1,
+            'checked_at' => 1700000100,
+            'scanned_at' => 1700000000,
+        ]))->save(false);
+        $this->createRunner((int)$group->id, (int)$user->id);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$project->id);
+
+        $vaultCard = $ctrl->capturedParams['vault'];
+        $this->assertIsArray($vaultCard);
+        $this->assertSame([], $vaultCard['runners_without_support']);
+        $this->assertSame(1, $vaultCard['runners_without_support_count']);
+        $this->assertSame(['id' => (int)$vault->id, 'name' => null], $vaultCard['templates'][0]['credential']);
+    }
+
+    // ── Vault: password source changes on update ────────────────────────────
+
+    /**
+     * @return array<string, array{0: string, 1: string, 2: string, 3: string}>
+     */
+    public static function vaultSourceChangeProvider(): array
+    {
+        return [
+            'to Ansilume and repository' => [
+                Project::VAULT_SOURCE_ANSILUME,
+                Project::VAULT_SOURCE_REPOSITORY,
+                JobTemplateVaultCheck::STATUS_MISSING_PASSWORD,
+                JobTemplateVaultCheck::STATUS_REPO_MANAGED,
+            ],
+            'back to Ansilume only' => [
+                Project::VAULT_SOURCE_REPOSITORY,
+                Project::VAULT_SOURCE_ANSILUME,
+                JobTemplateVaultCheck::STATUS_REPO_MANAGED,
+                JobTemplateVaultCheck::STATUS_MISSING_PASSWORD,
+            ],
+        ];
+    }
+
+    /**
+     * The fixture repository's ansible.cfg brings a vault password file: in
+     * 'Ansilume and repository' mode a template without a vault password is
+     * fine (the repository supplies one), in 'Ansilume only' mode it is not.
+     * Switching the mode is audited and re-checks the templates at once.
+     *
+     * @dataProvider vaultSourceChangeProvider
+     */
+    public function testUpdateAuditsAVaultSourceChangeAndRechecksTheTemplates(string $from, string $to, string $statusBefore, string $statusAfter): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        [$project, $template, $root] = $this->scannedVaultProject($user->id, $from);
+        $this->assertSame($statusBefore, $this->vaultCheckStatus($template));
+
+        $this->setPost(['Project' => [
+            'name' => $project->name,
+            'scm_type' => Project::SCM_TYPE_MANUAL,
+            'local_path' => $root,
+            'vault_password_source' => $to,
+        ]]);
+        $result = $this->makeController()->actionUpdate((int)$project->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertSame($to, $this->reloadProject($project)->vault_password_source);
+        $this->assertSame(
+            [['user_id' => (int)$user->id, 'metadata' => ['name' => $project->name, 'from' => $from, 'to' => $to]]],
+            $this->vaultSourceAudits($project)
+        );
+        $this->assertSame($statusAfter, $this->vaultCheckStatus($template), 'the templates are re-checked against the new mode');
+    }
+
+    /**
+     * @return array<string, array{0: bool}>
+     */
+    public static function unchangedVaultSourceProvider(): array
+    {
+        return [
+            'the same value posted' => [true],
+            'the field not posted' => [false],
+        ];
+    }
+
+    /**
+     * No source change, no audit entry. A manual project never syncs, so
+     * saving it scans its files again, and that re-checks the templates.
+     *
+     * @dataProvider unchangedVaultSourceProvider
+     */
+    public function testUpdateWithoutAVaultSourceChangeDoesNotAuditButRescansAManualProject(bool $postTheField): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        [$project, $template, $root] = $this->scannedVaultProject($user->id, Project::VAULT_SOURCE_ANSILUME);
+        // A sentinel no real check would store: a re-check would replace it.
+        JobTemplateVaultCheck::updateAll(['status' => JobTemplateVaultCheck::STATUS_STALE, 'checked_at' => 1], ['job_template_id' => $template->id]);
+
+        $fields = ['name' => 'renamed-' . uniqid(), 'scm_type' => Project::SCM_TYPE_MANUAL, 'local_path' => $root];
+        if ($postTheField) {
+            $fields['vault_password_source'] = Project::VAULT_SOURCE_ANSILUME;
+        }
+        $this->setPost(['Project' => $fields]);
+        $this->makeController()->actionUpdate((int)$project->id);
+
+        $this->assertSame($fields['name'], $this->reloadProject($project)->name, 'the update itself went through');
+        $this->assertSame([], $this->vaultSourceAudits($project));
+        $check = JobTemplateVaultCheck::findOne($template->id);
+        $this->assertNotNull($check);
+        $this->assertNotSame(JobTemplateVaultCheck::STATUS_STALE, $check->status, 'the save rescanned the manual project');
+        $this->assertGreaterThan(1, (int)$check->checked_at);
+    }
+
+    /**
+     * Manual projects never sync, so the scan runs when they are saved:
+     * without it their templates would never get a vault check.
+     */
+    public function testCreatingAManualProjectScansItsFiles(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $root = sys_get_temp_dir() . '/ansilume-project-vault-' . bin2hex(random_bytes(6));
+        $this->tempDirs[] = $root;
+        $this->copyTree(dirname(__DIR__, 2) . '/fixtures/vault/repo', $root);
+        $name = 'manual-vault-' . uniqid();
+        $this->setPost(['Project' => ['name' => $name, 'scm_type' => Project::SCM_TYPE_MANUAL, 'local_path' => $root]]);
+
+        $this->makeController()->actionCreate();
+
+        $project = Project::findOne(['name' => $name]);
+        $this->assertNotNull($project);
+        $this->assertNotNull($project->vault_scanned_at);
+        $this->assertNull($project->vault_scan_error);
+        $this->assertCount(7, $project->vaultEntries);
+    }
+
+    public function testCreatingAGitProjectWaitsForItsFirstSync(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $name = 'git-vault-' . uniqid();
+        $this->setPost(['Project' => [
+            'name' => $name,
+            'scm_type' => Project::SCM_TYPE_GIT,
+            'scm_url' => 'https://git.example.com/ops/playbooks.git',
+            'scm_branch' => 'main',
+        ]]);
+
+        $this->makeController()->actionCreate();
+
+        $project = Project::findOne(['name' => $name]);
+        $this->assertNotNull($project);
+        $this->assertNull($project->vault_scanned_at);
+        $this->assertNull($project->vault_scan_error);
+    }
+
+    public function testUpdateRejectsAnUnknownVaultSource(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+
+        $this->setPost(['Project' => [
+            'name' => $project->name,
+            'scm_type' => Project::SCM_TYPE_MANUAL,
+            'vault_password_source' => 'ansible-cfg-only',
+        ]]);
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$project->id);
+
+        $this->assertSame('rendered:form', $result);
+        $model = $ctrl->capturedParams['model'];
+        $this->assertInstanceOf(Project::class, $model);
+        $this->assertSame(['Vault Password Source is invalid.'], $model->getErrors('vault_password_source'));
+        $this->assertSame(Project::VAULT_SOURCE_ANSILUME, $this->reloadProject($project)->vault_password_source);
+        $this->assertSame([], $this->vaultSourceAudits($project));
+        $this->assertNull(AuditLog::findOne(['action' => AuditLog::ACTION_PROJECT_UPDATED, 'object_id' => $project->id]));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private function createSuperadmin(string $suffix = ''): \app\models\User
@@ -1034,6 +1285,100 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $u->is_superadmin = 1;
         $u->save(false);
         return $u;
+    }
+
+    private function reloadProject(Project $project): Project
+    {
+        $fresh = Project::findOne($project->id);
+        $this->assertNotNull($fresh);
+        return $fresh;
+    }
+
+    /**
+     * A manual project on a private copy of the fixture repository
+     * (tests/fixtures/vault/repo), scanned, with one template that loads
+     * encrypted files (site.yml on the dev inventory) and has no vault
+     * password.
+     *
+     * @return array{0: Project, 1: JobTemplate, 2: string}
+     */
+    private function scannedVaultProject(int $userId, string $source): array
+    {
+        $root = sys_get_temp_dir() . '/ansilume-project-vault-' . bin2hex(random_bytes(6));
+        $this->tempDirs[] = $root;
+        $this->copyTree(dirname(__DIR__, 2) . '/fixtures/vault/repo', $root);
+        $project = $this->createProject($userId);
+        $project->local_path = $root;
+        $project->vault_password_source = $source;
+        $project->save(false);
+        $inventory = $this->createInventory($userId);
+        $inventory->inventory_type = Inventory::TYPE_FILE;
+        $inventory->content = null;
+        $inventory->source_path = 'inventories/dev/hosts.yml';
+        $inventory->project_id = (int)$project->id;
+        $inventory->save(false);
+        $template = $this->createJobTemplate((int)$project->id, (int)$inventory->id, (int)$this->createRunnerGroup($userId)->id, $userId);
+        /** @var VaultScanService $scans */
+        $scans = \Yii::$app->get('vaultScanService');
+        $this->assertTrue($scans->scanProject($this->reloadProject($project)));
+
+        return [$this->reloadProject($project), $template, $root];
+    }
+
+    private function vaultCheckStatus(JobTemplate $template): ?string
+    {
+        return JobTemplateVaultCheck::findOne($template->id)?->status;
+    }
+
+    /**
+     * @return list<array{user_id: int|null, metadata: mixed}>
+     */
+    private function vaultSourceAudits(Project $project): array
+    {
+        $logs = AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_PROJECT_VAULT_SOURCE_CHANGED, 'object_type' => 'project', 'object_id' => $project->id])
+            ->orderBy(['id' => SORT_ASC])
+            ->all();
+
+        return array_map(static fn (AuditLog $log): array => [
+            'user_id' => $log->user_id === null ? null : (int)$log->user_id,
+            'metadata' => json_decode((string)$log->metadata, true),
+        ], $logs);
+    }
+
+    private function copyTree(string $source, string $target): void
+    {
+        mkdir($target, 0755, true);
+        foreach ((array)scandir($source) as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $from = $source . '/' . $name;
+            if (is_dir($from)) {
+                $this->copyTree($from, $target . '/' . $name);
+            } else {
+                copy($from, $target . '/' . $name);
+            }
+        }
+    }
+
+    private function removeTree(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach ((array)scandir($dir) as $name) {
+            if ($name === '.' || $name === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $name;
+            if (is_dir($path) && !is_link($path)) {
+                $this->removeTree($path);
+            } else {
+                unlink($path);
+            }
+        }
+        rmdir($dir);
     }
 
     private function swapService(string $id, \yii\base\Component $replacement): void

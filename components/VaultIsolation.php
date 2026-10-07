@@ -7,19 +7,21 @@ namespace app\components;
 use app\helpers\FileHelper;
 
 /**
- * Keeps server-side Ansible runs (inventory parsing, lint) away from vault
- * content.
+ * Neutralises the vault settings of a project's ansible.cfg.
  *
  * A project's ansible.cfg can name a vault password file or script, or a
- * vault identity list. The server would then run that script, which is
- * repository code, and decrypt vaulted group_vars, host_vars or inventory
- * files; the plaintext ended up in the inventory cache every viewer can read.
- * Environment variables take precedence over ansible.cfg, so these overrides
- * point every vault setting at a random decoy file: Ansible tries the decoy
- * as the password, decryption fails, and no repository script runs.
+ * vault identity list. Environment variables take precedence over
+ * ansible.cfg, so these overrides point every vault setting at a random decoy
+ * file and turn the vault password prompt off: Ansible tries the decoy as a
+ * password and no repository script runs.
  *
- * Not used for playbook runs: those happen on runners, with the vault
- * credential of the job template.
+ * - Server-side runs (inventory parsing, lint) never decrypt: the server
+ *   would otherwise run the repository's script and the plaintext would end
+ *   up in the inventory cache every viewer can read. Decryption fails.
+ * - Playbook runs on runners use it for projects whose vault password source
+ *   is 'ansilume' ({@see RunnerVaultMode}): the job template's vault password
+ *   still arrives as --vault-password-file, which Ansible combines with the
+ *   decoy, so vault files decrypt with Ansilume's password only.
  */
 final class VaultIsolation
 {
@@ -42,9 +44,10 @@ final class VaultIsolation
      * Environment overrides, to be applied after the ANSIBLE_* allowlist.
      *
      * vault_id_match is left alone: the setting is untyped, so only an empty
-     * value means off, and proc_open() drops empty variables. A repository
-     * that turns matching on only keeps Ansible from trying the decoy on files
-     * with another vault id; decryption fails either way.
+     * value means off, and proc_open() drops empty variables. On the server a
+     * repository that turns matching on only keeps Ansible from trying the
+     * decoy on files with another vault id; decryption fails either way.
+     * Playbook runs clear it with an env(1) prefix ({@see RunnerVaultMode}).
      *
      * @return array<string, string>
      * @throws \RuntimeException when the decoy cannot be created; callers must

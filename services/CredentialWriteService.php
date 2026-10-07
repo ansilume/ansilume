@@ -83,6 +83,7 @@ class CredentialWriteService extends Component
             $entry['previous_type'] = $previousType;
         }
         $this->audit(AuditLog::ACTION_CREDENTIAL_UPDATED, $credential, $entry + $auditContext);
+        $this->refreshVaultChecks($credential, $typeChanged, $secretChanged);
 
         return true;
     }
@@ -108,10 +109,24 @@ class CredentialWriteService extends Component
             $entry['projects'] = $usage->projectTotal;
             $entry['pending_jobs'] = $usage->pendingJobCount;
         }
+        // Collected first: the database detaches the credential on delete.
+        $affected = $credential->credential_type === Credential::TYPE_VAULT ? $this->vaultChecks()->templateIdsUsingCredential($credential) : [];
         $credential->delete();
         $this->audit(AuditLog::ACTION_CREDENTIAL_DELETED, $credential, $entry + $auditContext);
+        $this->vaultChecks()->checkTemplateIds($affected);
 
         return ['deleted' => true, 'usage' => $usage];
+    }
+
+    /**
+     * A new vault secret, or a type change to or from Vault Secret, changes
+     * whether templates using the credential open their encrypted files.
+     */
+    private function refreshVaultChecks(Credential $credential, bool $typeChanged, bool $secretChanged): void
+    {
+        if ($typeChanged || ($secretChanged && $credential->credential_type === Credential::TYPE_VAULT)) {
+            $this->vaultChecks()->checkTemplateIds($this->vaultChecks()->templateIdsUsingCredential($credential));
+        }
     }
 
     /**
@@ -185,6 +200,14 @@ class CredentialWriteService extends Component
     {
         /** @var CredentialService $service */
         $service = \Yii::$app->get('credentialService');
+
+        return $service;
+    }
+
+    private function vaultChecks(): VaultCheckService
+    {
+        /** @var VaultCheckService $service */
+        $service = \Yii::$app->get('vaultCheckService');
 
         return $service;
     }

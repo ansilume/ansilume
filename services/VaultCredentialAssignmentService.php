@@ -22,7 +22,8 @@ use yii\base\Component;
  *
  * The request is checked first, and nothing is written when it is invalid:
  * the credential must be a vault password with a usable secret, and the
- * caller must be allowed to change every listed template.
+ * caller must be allowed to change every listed template. The vault checks
+ * of all saved templates share one run (VaultCheckService::batch()).
  */
 class VaultCredentialAssignmentService extends Component
 {
@@ -73,10 +74,16 @@ class VaultCredentialAssignmentService extends Component
     public function assign(Credential $vault, array $templateIds, ?int $userId, array $auditContext = []): VaultAssignmentResult
     {
         $this->checkVault($vault);
-        $items = [];
-        foreach ($this->checkedTemplates($this->checkedIds($templateIds), $userId) as $template) {
-            $items[] = $this->assignTo($vault, $template, $auditContext);
-        }
+        $templates = $this->checkedTemplates($this->checkedIds($templateIds), $userId);
+        /** @var VaultCheckService $vaultChecks */
+        $vaultChecks = \Yii::$app->get('vaultCheckService');
+        // One run of vault checks for all templates: together they take no
+        // longer than its time budget.
+        /** @var list<array{job_template_id: int, name: string, status: string, replaced: list<array{id: int, name: string}>, error: string|null}> $items */
+        $items = $vaultChecks->batch(fn (): array => array_map(
+            fn (JobTemplate $template): array => $this->assignTo($vault, $template, $auditContext),
+            $templates
+        ));
 
         return new VaultAssignmentResult((int)$vault->id, (string)$vault->name, $items);
     }

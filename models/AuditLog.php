@@ -38,6 +38,8 @@ class AuditLog extends ActiveRecord
     public const ACTION_PROJECT_DELETED = 'project.deleted';
     public const ACTION_PROJECT_SYNCED = 'project.synced';
     public const ACTION_PROJECT_LINTED = 'project.linted';
+    public const ACTION_PROJECT_VAULT_SCANNED = 'project.vault-scanned';
+    public const ACTION_PROJECT_VAULT_SOURCE_CHANGED = 'project.vault-source-changed';
 
     // -- Inventory actions -----------------------------------------------------
     public const ACTION_INVENTORY_CREATED = 'inventory.created';

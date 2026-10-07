@@ -1,0 +1,13 @@
+---
+- name: Site
+  hosts: all
+  gather_facts: false
+  vars:
+    env_name: dev
+  vars_files:
+    - vars/secrets.yml
+    - "vars/{{ env_name }}.yml"
+  tasks:
+    - name: Show that the vault values loaded
+      ansible.builtin.debug:
+        msg: "{{ db_password | length }} {{ app_secret | length }} {{ group_secret | length }}"

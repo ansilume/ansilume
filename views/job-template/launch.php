@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\JobTemplate $template */
 /** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
+/** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings from JobTemplateWarnings */
 
 use app\components\SurveyField;
 use yii\helpers\Html;
@@ -27,6 +28,7 @@ $hasSurvey = !empty($surveyFields);
 <?php if ($template->inventory !== null) : ?>
     <?= $this->render('/inventory/_localhost-warning', ['inventory' => $template->inventory]) ?>
 <?php endif; ?>
+<?= $this->render('_warnings', ['warnings' => $warnings]) ?>
 
 <div class="card mb-3">
     <div class="card-header">Template Summary</div>

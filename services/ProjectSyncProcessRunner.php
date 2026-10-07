@@ -141,7 +141,17 @@ class ProjectSyncProcessRunner
         $waitSeconds = (int)min(1, max(0, $remaining));
         $waitMicros = (int)(($remaining - $waitSeconds) * 1_000_000);
 
-        $ready = stream_select($read, $write, $except, $waitSeconds, $waitMicros);
+        try {
+            $ready = stream_select($read, $write, $except, $waitSeconds, $waitMicros);
+        } catch (\ErrorException $e) {
+            // The queue worker's SIGALRM heartbeat interrupts select(), and
+            // Yii turns the "Interrupted system call" warning into an
+            // exception. Nothing is lost: the next pass selects again.
+            if (!str_contains($e->getMessage(), 'Interrupted system call')) {
+                throw $e;
+            }
+            return;
+        }
         if ($ready === false || $ready === 0) {
             return;
         }

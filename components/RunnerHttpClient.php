@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\components;
 
+use app\models\Runner;
+
 /**
  * Minimal HTTP client for runner ↔ server communication.
  *
@@ -11,6 +13,13 @@ namespace app\components;
  */
 class RunnerHttpClient
 {
+    /**
+     * Features this runner build implements, reported with every request so
+     * the server knows which runners honour them. Older servers ignore the
+     * field.
+     */
+    public const CAPABILITIES = [Runner::CAPABILITY_VAULT_PASSWORD_SOURCE];
+
     private string $apiUrl;
     private string $token;
     private int $lastHttpStatus = 0;
@@ -36,17 +45,20 @@ class RunnerHttpClient
      *
      * Every request automatically carries `software_version` from the
      * local VERSION file (read via `Yii::$app->params['version']`) so the
-     * server can track which version each runner is actually running.
-     * Callers can override the value by passing their own
-     * `software_version` key in $body — useful for tests; in practice
-     * nothing does.
+     * server can track which version each runner is actually running, and
+     * `capabilities` ({@see CAPABILITIES}) so it knows which features the
+     * runner honours. Callers can override either value by passing their
+     * own key in $body — useful for tests; in practice nothing does.
      *
      * @param array<string, mixed> $body
      * @return array<string, mixed>|null
      */
     public function post(string $path, array $body): ?array
     {
-        $body = array_merge(['software_version' => $this->softwareVersion()], $body);
+        $body = array_merge(
+            ['software_version' => $this->softwareVersion(), 'capabilities' => self::CAPABILITIES],
+            $body
+        );
         return $this->httpPost($path, $body, [
             'Authorization: Bearer ' . $this->token,
         ]);
@@ -70,7 +82,7 @@ class RunnerHttpClient
      * @param string[] $extraHeaders Additional HTTP headers.
      * @return array<string, mixed>|null
      */
-    private function httpPost(string $path, array $body, array $extraHeaders = []): ?array
+    protected function httpPost(string $path, array $body, array $extraHeaders = []): ?array
     {
         $url = $this->apiUrl . $path;
         $payload = json_encode($body);

@@ -70,6 +70,7 @@ class ApiAccessRulesTest extends WebControllerTestCase
             'test' => 'notification-template.update', 'delete' => 'notification-template.delete',
         ],
         'Profile' => ['change-password' => '@'],
+        'ProjectVault' => ['view' => 'project.view', 'scan' => 'project.update'],
         'Projects' => [
             'index' => 'project.view', 'view' => 'project.view', 'create' => 'project.create',
             'update' => 'project.update', 'sync' => 'project.update', 'delete' => 'project.delete',

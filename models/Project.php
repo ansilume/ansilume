@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\vault\AnsibleCfgVaultSettings;
 use yii\db\ActiveRecord;
 
 /**
@@ -23,6 +24,11 @@ use yii\db\ActiveRecord;
  * @property string|null $lint_output       Last ansible-lint output (full project)
  * @property int|null    $lint_at           Unix timestamp of last project lint run
  * @property int|null    $lint_exit_code    Exit code of last project lint run (0 = clean)
+ * @property string      $vault_password_source 'ansilume' or 'repository', see VAULT_SOURCE_*
+ * @property int|null    $vault_scanned_at  Unix timestamp of the last vault scan
+ * @property string|null $vault_scan_commit Commit the last vault scan saw
+ * @property string|null $vault_scan_summary JSON: ansible.cfg vault settings, findings, limits
+ * @property string|null $vault_scan_error  Why the last vault scan could not run
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at
@@ -31,6 +37,7 @@ use yii\db\ActiveRecord;
  * @property Credential|null $scmCredential
  * @property JobTemplate[]   $jobTemplates
  * @property Inventory[]     $inventories
+ * @property ProjectVaultEntry[] $vaultEntries
  */
 class Project extends ActiveRecord
 {
@@ -41,6 +48,12 @@ class Project extends ActiveRecord
 
     public const SCM_TYPE_GIT = 'git';
     public const SCM_TYPE_MANUAL = 'manual';
+
+    /** Runners use only Ansilume's vault password; the repository's ansible.cfg vault settings are neutralised. */
+    public const VAULT_SOURCE_ANSILUME = 'ansilume';
+    /** Runners also apply the repository's ansible.cfg vault settings (the behaviour before 2.8). */
+    public const VAULT_SOURCE_REPOSITORY = 'repository';
+    public const VAULT_SOURCES = [self::VAULT_SOURCE_ANSILUME, self::VAULT_SOURCE_REPOSITORY];
 
     public static function tableName(): string
     {
@@ -66,7 +79,69 @@ class Project extends ActiveRecord
             [['scm_credential_id'], 'exist', 'skipOnError' => true, 'targetClass' => Credential::class, 'targetAttribute' => ['scm_credential_id' => 'id']],
             [['scm_credential_id'], 'validateScmCredentialType'],
             [['status'], 'in', 'range' => [self::STATUS_NEW, self::STATUS_SYNCING, self::STATUS_SYNCED, self::STATUS_ERROR]],
+            // New projects only: an empty value on update is an error, never a silent switch.
+            [['vault_password_source'], 'default', 'value' => self::VAULT_SOURCE_ANSILUME, 'when' => fn (self $m): bool => $m->isNewRecord],
+            [['vault_password_source'], 'required'],
+            [['vault_password_source'], 'in', 'range' => self::VAULT_SOURCES],
         ];
+    }
+
+    public static function vaultSourceLabel(string $source): string
+    {
+        return match ($source) {
+            self::VAULT_SOURCE_ANSILUME => 'Ansilume only',
+            self::VAULT_SOURCE_REPOSITORY => 'Ansilume and repository',
+            default => $source,
+        };
+    }
+
+    /**
+     * The vault settings of the repository's ansible.cfg that jobs get, as the
+     * last vault scan read them: in 'Ansilume and repository' mode only; null
+     * in 'Ansilume only' mode, where runners neutralise them.
+     */
+    public function repositoryVaultSettings(): ?AnsibleCfgVaultSettings
+    {
+        if ($this->vault_password_source !== self::VAULT_SOURCE_REPOSITORY) {
+            return null;
+        }
+        $cfg = $this->vaultScanSummary()['cfg'] ?? null;
+
+        return AnsibleCfgVaultSettings::fromArray(is_array($cfg) ? $cfg : []);
+    }
+
+    /**
+     * True in 'Ansilume and repository' mode when the last vault scan found a
+     * vault_password_file or vault_identity_list in the repository's
+     * ansible.cfg: runners then get passwords Ansilume cannot see or check.
+     */
+    public function repositorySuppliesVaultPasswords(): bool
+    {
+        return $this->repositoryVaultSettings()?->definesPasswordSource() ?? false;
+    }
+
+    /**
+     * Whether the last vault scan stopped at a limit, so it may have missed
+     * vault content.
+     */
+    public function vaultScanTruncated(): bool
+    {
+        return ($this->vaultScanSummary()['truncated'] ?? false) === true;
+    }
+
+    /**
+     * @return array<mixed> the decoded vault_scan_summary, [] when there is none
+     */
+    private function vaultScanSummary(): array
+    {
+        $summary = json_decode((string)$this->vault_scan_summary, true);
+
+        return is_array($summary) ? $summary : [];
+    }
+
+    public function getVaultEntries(): \yii\db\ActiveQuery
+    {
+        return $this->hasMany(ProjectVaultEntry::class, ['project_id' => 'id'])->orderBy(['path' => SORT_ASC, 'line' => SORT_ASC]);
     }
 
     public function getScmCredential(): \yii\db\ActiveQuery

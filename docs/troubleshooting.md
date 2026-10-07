@@ -127,6 +127,84 @@ which works with any project. Older templates keep running with a warning;
 find them with the template list's warning filter or
 `GET /api/v1/job-templates?warning=inventory_other_project`.
 
+## Template warns that its vault password does not open files
+
+**Symptom:** The template page, the launch page or the API shows
+`vault_password_mismatch` ("The vault password ... does not open ...") or
+`vault_password_missing`.
+
+**Cause:** The project's last vault scan found encrypted files or values next
+to the template's inventory or playbook (or in its `vars_files`) that the
+template's vault password does not open, without decrypting anything. With one
+vault file per environment, the template usually has the password of another
+environment, or its inventory points to the wrong environment.
+
+**Fix:** Attach the vault password of the right environment, or fix the
+inventory. The project's **Vault files** card lists, per template, the files
+the password does not open. If the repository changed since the last sync,
+sync the project: every sync scans again, and **Rescan** only reads the
+checkout of the last sync. For a manual project whose files you changed by
+hand, click **Rescan**. If the project uses "Ansilume and repository" and the
+repository's `ansible.cfg` sets `vault_id_match`, Ansible tries the template's
+password only on vaults without a vault ID or with the ID `default`; the
+warning then says so, and the card marks those files with `vault_id_match`.
+The check cannot know which groups a play targets, so it may name
+`group_vars` files a run never loads; the warning never blocks a job.
+
+## Template warns about damaged vault files or an incomplete vault check
+
+**Symptom:** The template shows `vault_file_damaged` ("Ansible cannot read ...
+whatever the password") or `vault_check_incomplete` ("The vault check of this
+template is incomplete"); its row on the project's vault card says "damaged
+vault files" or "not fully checked".
+
+**Cause and fix:**
+
+- `vault_file_damaged`: a vault file or inline value the template loads is
+  damaged, for example by trailing spaces or an editor that re-wrapped it. The
+  **Problem** column of the vault card says what is wrong. Encrypt the value
+  again with `ansible-vault` and commit it.
+- `vault_check_incomplete`, "the scan stopped at a limit": the checkout has
+  more than 20000 files or 2000 encrypted values, or scanning took longer than
+  10 seconds; vendored collections or virtualenvs in the repository are the
+  usual cause. Remove them from the repository.
+- `vault_check_incomplete`, "ran out of time": the checks of one sync, rescan
+  or save share 30 seconds, and the repository has very many or very large
+  encrypted files. The next sync or rescan checks the remaining templates first.
+- `vault_check_incomplete`, "not valid UTF-8": file names Ansilume cannot
+  store, so it cannot check those files. Rename them.
+
+## Jobs fail to decrypt after switching to "Ansilume only"
+
+**Symptom:** After setting a project's vault passwords to "Ansilume only",
+jobs fail with `Attempting to decrypt but no vault secrets found` or
+`Decryption failed`.
+
+**Cause:** The repository's `ansible.cfg` supplied the password (a
+`vault_password_file`, a script or vault identities), and runners now ignore
+it.
+
+**Fix:** Attach the vault password to the job templates (or use **Assign to
+job templates** on the vault credential), or switch the project back to
+"Ansilume and repository". The project's vault card shows which templates lack
+a matching password.
+
+## Vault card lists runners older than 2.8
+
+**Symptom:** The vault card of an "Ansilume only" project lists runners that
+apply the repository's vault settings anyway.
+
+**Cause:** Those runners run an image older than 2.8; they do not know the
+setting and keep the repository's vault settings for every project.
+
+**Fix:** Update the runner image (prebuilt: `docker compose pull && docker
+compose up -d`; external runners: the new `ansilume-runner` image; runners
+without Docker: `git pull`, `composer install --no-dev --optimize-autoloader`
+and restart the process; dev checkout: `docker compose up -d
+--force-recreate`, which also restarts the queue worker and lets `app` run the
+migrations). Without `runner-group.view` the card shows only how many runners
+are affected.
+
 ## Runner group page warns about plain HTTP
 
 **Symptom:** A runner shows "Plain HTTP" in the Transport column, and the

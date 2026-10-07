@@ -59,6 +59,16 @@ foreach ($scmCredentials as $c) {
         ])->hint('Absolute path on the host where playbooks and roles are located. The worker must have read access to this directory.') ?>
     </div>
 
+    <?= $form->field($model, 'vault_password_source')->dropDownList([
+        Project::VAULT_SOURCE_ANSILUME => Project::vaultSourceLabel(Project::VAULT_SOURCE_ANSILUME),
+        Project::VAULT_SOURCE_REPOSITORY => Project::vaultSourceLabel(Project::VAULT_SOURCE_REPOSITORY),
+    ])->label('Vault passwords on runners')->hint(
+        '"Ansilume only": runners use only the vault password attached to the job template and ignore the vault settings '
+        . 'of the repository\'s ansible.cfg (vault_password_file, vault_identity_list, ask_vault_pass, vault_id_match). '
+        . '"Ansilume and repository": runners also apply those settings, so a password file or script from the repository '
+        . 'is used as well. Runners older than 2.8 always behave like "Ansilume and repository".'
+    ) ?>
+
     <div class="mt-3">
         <?= Html::submitButton($model->isNewRecord ? 'Create Project' : 'Save Changes', ['class' => 'btn btn-primary']) ?>
         <?= Html::a('Cancel', $model->isNewRecord ? ['index'] : ['view', 'id' => $model->id], ['class' => 'btn btn-outline-secondary ms-2']) ?>

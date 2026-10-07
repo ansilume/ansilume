@@ -129,6 +129,10 @@ class InventoriesController extends BaseApiController
         }
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
+        // The project it moves to as well, not only the one it comes from.
+        if (!$this->checker()->canOperateChildResource($userId, $model->project_id)) {
+            return $this->error('Forbidden.', 403);
+        }
 
         if (!$model->save()) {
             return $this->error($this->firstError($model), 422);
@@ -141,6 +145,9 @@ class InventoriesController extends BaseApiController
             null,
             ['name' => $model->name]
         );
+        /** @var \app\services\VaultCheckService $vaultChecks */
+        $vaultChecks = \Yii::$app->get('vaultCheckService');
+        $vaultChecks->checkTemplateIds($vaultChecks->templateIdsUsingInventory($model));
 
         return $this->success($this->serialize($model));
     }

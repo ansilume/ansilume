@@ -129,6 +129,76 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.7.x or older: vault scan, vault passwords on runners
+
+**Vault files are scanned.** Every sync now scans the project checkout for
+ansible-vault content without decrypting it, and checks whether each job
+template's vault password opens the encrypted files the template probably
+loads. Existing projects get their first scan at the next sync; manual
+projects, which never sync, at their next save or with **Rescan** on the
+project page (or `POST /api/v1/projects/{id}/vault/scan`). The project page
+shows a **Vault files** card; templates whose vault password does not fit,
+that load damaged vault files, or whose check could not cover everything get
+a warning on their page, on the launch page and in the API. Warnings never
+block a job. The checks of one sync, rescan or save share a time budget of
+30 seconds. See [credentials.md](credentials.md#vault-files-in-your-repository).
+
+**Vault passwords on runners.** Each project now has a setting for the vault
+settings of the repository's `ansible.cfg`. Existing projects keep "Ansilume
+and repository", the behaviour so far; new projects start with "Ansilume
+only", where runners ignore the repository's `vault_password_file`,
+`vault_identity_list`, `ask_vault_pass` and `vault_id_match`. Before
+switching a project, check its vault card: templates that relied on a
+password file or script in the repository need their vault password attached
+in Ansilume. Every switch is audited.
+
+**Update the runners.** "Ansilume only" needs runners of 2.8 or newer; older
+runners keep applying the repository's settings, and the vault card names
+them.
+
+- Prebuilt images: `docker compose pull && docker compose up -d` updates the
+  bundled runner.
+- External runners: deploy the new `ghcr.io/ansilume/ansilume-runner` image.
+- Runners installed without Docker: `git pull && composer install --no-dev
+  --optimize-autoloader`, then restart the process
+  (`sudo systemctl restart ansilume-runner`).
+- Dev checkout: after `git pull`, run `docker compose up -d --force-recreate`.
+  The containers bind-mount the code, but `app` runs the migrations only when
+  it starts, and `queue-worker` and the runners are long-lived processes that
+  keep the old code until they restart; without the restart the queue worker
+  never scans after a sync. `docker compose restart app queue-worker runner-1
+  runner-2` does the same.
+
+No Dockerfile or entrypoint change is needed.
+
+**Fixes that change behaviour:**
+
+- Moving an inventory into another project now needs operator access to the
+  new project as well (403 otherwise), in the web UI and with
+  `PUT /api/v1/inventories/{id}`.
+- A git project without a repository URL fails its sync right away instead of
+  staying on "syncing".
+- Syncs no longer fail at random when the queue worker's heartbeat interrupts
+  git output, and deleted job templates are no longer linted.
+- "Parse Inventory" no longer accepts an inventory path that resolves into a
+  sibling project directory with the same prefix (for example `projects/12`
+  for project 1).
+- An inventory with an unknown project id is rejected with a validation error
+  (`422` in the API) instead of failing with a server error.
+- Launches that skip the launch page (the dashboard's quick launch, relaunch)
+  show the template's warnings as a notice on the job page.
+- `PUT /api/v1/projects/{id}` with an empty `vault_password_source` is rejected
+  (`422`) instead of switching the project to "Ansilume only".
+
+**API contract change:** `Project` gains `vault_password_source` (writable)
+and `vault_scanned_at`, and the documented schema now matches the response
+(`status` and `last_synced_at`; there is no `updated_at`). New endpoints
+`GET /api/v1/projects/{id}/vault` and `POST /api/v1/projects/{id}/vault/scan`.
+`POST /api/v1/jobs` answers with the template's `warnings` next to `data`.
+Job templates can carry the warnings `vault_password_mismatch`,
+`vault_password_missing`, `vault_file_damaged` and `vault_check_incomplete`,
+also as `?warning=` filters. Runners carry `capabilities`.
+
 ## After updating from 2.6.0 or older: vault passwords, inventories, runner transport
 
 **One vault password per job template.** Ansible gets one vault password from

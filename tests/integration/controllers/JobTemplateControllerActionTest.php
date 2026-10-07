@@ -11,6 +11,7 @@ use app\models\Credential;
 use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
+use app\models\JobTemplateVaultCheck;
 use app\models\TeamProject;
 use app\models\User;
 use app\services\CredentialWriteService;
@@ -18,8 +19,11 @@ use app\services\JobLaunchService;
 use app\services\JobTemplateCredentialService;
 use app\services\LintService;
 use yii\data\ActiveDataProvider;
+use yii\helpers\Html;
+use yii\web\AssetManager;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
+use yii\web\View;
 
 /**
  * Exercises JobTemplateController actions.
@@ -127,11 +131,19 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertSame([
             JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS => $adminBefore[JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS] + 2,
             JobTemplateWarnings::INVENTORY_OTHER_PROJECT => $adminBefore[JobTemplateWarnings::INVENTORY_OTHER_PROJECT] + 2,
+            JobTemplateWarnings::VAULT_PASSWORD_MISMATCH => $adminBefore[JobTemplateWarnings::VAULT_PASSWORD_MISMATCH],
+            JobTemplateWarnings::VAULT_PASSWORD_MISSING => $adminBefore[JobTemplateWarnings::VAULT_PASSWORD_MISSING],
+            JobTemplateWarnings::VAULT_FILE_DAMAGED => $adminBefore[JobTemplateWarnings::VAULT_FILE_DAMAGED],
+            JobTemplateWarnings::VAULT_CHECK_INCOMPLETE => $adminBefore[JobTemplateWarnings::VAULT_CHECK_INCOMPLETE],
         ], $this->warningCountsFor($admin), 'admins count every template');
         $memberCounts = $this->warningCountsFor($member);
         $this->assertSame([
             JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS => $memberBefore[JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS] + 1,
             JobTemplateWarnings::INVENTORY_OTHER_PROJECT => $memberBefore[JobTemplateWarnings::INVENTORY_OTHER_PROJECT] + 1,
+            JobTemplateWarnings::VAULT_PASSWORD_MISMATCH => $memberBefore[JobTemplateWarnings::VAULT_PASSWORD_MISMATCH],
+            JobTemplateWarnings::VAULT_PASSWORD_MISSING => $memberBefore[JobTemplateWarnings::VAULT_PASSWORD_MISSING],
+            JobTemplateWarnings::VAULT_FILE_DAMAGED => $memberBefore[JobTemplateWarnings::VAULT_FILE_DAMAGED],
+            JobTemplateWarnings::VAULT_CHECK_INCOMPLETE => $memberBefore[JobTemplateWarnings::VAULT_CHECK_INCOMPLETE],
         ], $memberCounts, 'the member counts only templates of open projects and of the own team');
 
         // Unfiltered there is no active warning, and a filter leaves the counts alone.
@@ -1082,6 +1094,186 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $ctrl->actionLaunch();
     }
 
+    // ── actionLaunch(): template warnings ───────────────────────────────────
+
+    /**
+     * Regression: a launch that skips the launch page (dashboard quick
+     * launch posts straight to it) never showed the template's warnings.
+     * The job still starts; the warning follows as a flash.
+     */
+    public function testALaunchPostedWithoutThePageFlashesTheTemplateWarnings(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $tpl = $this->makeTemplate((int)$user->id);
+        $this->storeVaultCheck($tpl, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, null, 3);
+        \Yii::$app->session->removeAllFlashes();
+        $this->setPost(['id' => (string)$tpl->id]);
+
+        $result = $this->makeController()->actionLaunch();
+
+        $this->assertInstanceOf(Response::class, $result);
+        $flashes = \Yii::$app->session->getAllFlashes();
+        $this->assertStringStartsWith('Job #', (string)$flashes['success']);
+        $this->assertSame(
+            'This template has no vault password, but it probably loads 3 encrypted files or values. '
+            . 'Jobs fail when Ansible needs one of them. Attach the vault password of this environment.',
+            $flashes['warning']
+        );
+    }
+
+    public function testALaunchWithoutWarningsFlashesNoWarning(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $tpl = $this->makeTemplate((int)$user->id);
+        \Yii::$app->session->removeAllFlashes();
+        $this->setPost(['id' => (string)$tpl->id]);
+
+        $this->makeController()->actionLaunch();
+
+        $this->assertArrayNotHasKey('warning', \Yii::$app->session->getAllFlashes());
+    }
+
+    public function testTheLaunchPageShowsTheVaultWarningOfTheTemplate(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vault = $this->storedVault($userId, 'prod-vault');
+        // Credential names are user input: the page must print them escaped.
+        $vault->name = '<script>alert(1)</script> prod-vault';
+        $vault->save(false);
+        $tpl = $this->makeTemplate($userId);
+        $tpl->credential_id = $vault->id;
+        $tpl->save(false);
+        $this->storeVaultCheck($tpl, JobTemplateVaultCheck::STATUS_MISMATCH, (int)$vault->id, 3, [
+            ['path' => 'inventories/prod/group_vars/all/vault.yml', 'line' => null, 'key' => null],
+            ['path' => 'inventories/prod/host_vars/prod-web1.yml', 'line' => 2, 'key' => 'host_secret'],
+        ]);
+        $this->setQueryParams(['id' => (string)$tpl->id]);
+
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:launch', $ctrl->actionLaunch());
+
+        $message = sprintf(
+            'The vault password "%s" does not open 2 of the 3 encrypted files or values this template probably loads: '
+            . 'inventories/prod/group_vars/all/vault.yml, inventories/prod/host_vars/prod-web1.yml:2. '
+            . 'Jobs fail when Ansible needs one of them. Check the password and the inventory; if the files changed, rescan the project.',
+            $vault->name
+        );
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISMATCH,
+            'message' => $message,
+            'credential_ids' => [(int)$vault->id],
+        ]], $ctrl->capturedParams['warnings']);
+        $html = $this->renderLaunchPage($ctrl->capturedParams);
+        $this->assertSame([JobTemplateWarnings::VAULT_PASSWORD_MISMATCH], $this->renderedWarningCodes($html));
+        $this->assertStringContainsString(Html::encode($message), $html);
+        $this->assertStringNotContainsString('<script>alert(1)</script>', $html);
+    }
+
+    public function testTheLaunchPageShowsEveryWarningOfTheTemplateInOrder(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $tpl = $this->templateWithInventory($userId, $this->otherProjectInventory($userId));
+        $vaultA = $this->storedVault($userId, 'vault-a');
+        $this->giveTwoVaults($tpl, $vaultA, $this->storedVault($userId, 'vault-b'));
+        $this->storeVaultCheck($tpl, JobTemplateVaultCheck::STATUS_UNUSABLE_PASSWORD, (int)$vaultA->id, 2);
+        $this->setQueryParams(['id' => (string)$tpl->id]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionLaunch();
+
+        $expected = [
+            JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS,
+            JobTemplateWarnings::INVENTORY_OTHER_PROJECT,
+            JobTemplateWarnings::VAULT_PASSWORD_MISMATCH,
+        ];
+        $this->assertSame($expected, array_column($ctrl->capturedParams['warnings'], 'code'));
+        $html = $this->renderLaunchPage($ctrl->capturedParams);
+        $this->assertSame($expected, $this->renderedWarningCodes($html));
+        $this->assertStringContainsString(
+            Html::encode("The vault password \"{$vaultA->name}\" has no usable secret, so jobs fail."),
+            $html
+        );
+    }
+
+    public function testTheLaunchPageOfATemplateWithoutProblemsShowsNoWarning(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vault = $this->storedVault($userId, 'dev-vault');
+        $tpl = $this->makeTemplate($userId);
+        $tpl->credential_id = $vault->id;
+        $tpl->save(false);
+        $this->storeVaultCheck($tpl, JobTemplateVaultCheck::STATUS_OK, (int)$vault->id, 3);
+        $this->setQueryParams(['id' => (string)$tpl->id]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionLaunch();
+
+        $this->assertSame([], $ctrl->capturedParams['warnings']);
+        $html = $this->renderLaunchPage($ctrl->capturedParams);
+        $this->assertSame([], $this->renderedWarningCodes($html));
+        $this->assertStringContainsString('id="launch-form"', $html, 'the page itself rendered');
+    }
+
+    public function testAFailedLaunchShowsTheWarningsAgain(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $tpl = $this->makeTemplate((int)$user->id);
+        $this->storeVaultCheck($tpl, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, null, 4);
+        /** @var object{throwOnLaunch: bool} $svc */
+        $svc = \Yii::$app->get('jobLaunchService');
+        $svc->throwOnLaunch = true;
+        $this->setQueryParams(['id' => (string)$tpl->id]);
+        $this->setPost([]);
+
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:launch', $ctrl->actionLaunch());
+
+        $this->assertArrayHasKey('danger', \Yii::$app->session->getAllFlashes());
+        $message = 'This template has no vault password, but it probably loads 4 encrypted files or values. '
+            . 'Jobs fail when Ansible needs one of them. Attach the vault password of this environment.';
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISSING,
+            'message' => $message,
+            'credential_ids' => [],
+        ]], $ctrl->capturedParams['warnings']);
+        $html = $this->renderLaunchPage($ctrl->capturedParams);
+        $this->assertSame([JobTemplateWarnings::VAULT_PASSWORD_MISSING], $this->renderedWarningCodes($html));
+        $this->assertStringContainsString(Html::encode($message), $html);
+    }
+
+    /**
+     * Vault warnings are informational: the launch still queues the job.
+     */
+    public function testAVaultWarningDoesNotBlockTheLaunch(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $tpl = $this->makeTemplate((int)$user->id);
+        $this->storeVaultCheck($tpl, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, null, 4);
+        $this->setQueryParams(['id' => (string)$tpl->id]);
+        $this->setPost([]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionLaunch();
+
+        $this->assertInstanceOf(Response::class, $result);
+        /** @var object{launchCalls: int} $svc */
+        $svc = \Yii::$app->get('jobLaunchService');
+        $this->assertSame(1, $svc->launchCalls);
+        $this->assertIsArray($ctrl->capturedRedirect);
+        $this->assertSame('/job/view', $ctrl->capturedRedirect[0]);
+        $this->assertSame('', $ctrl->capturedView, 'the launch page is not rendered again');
+    }
+
     // ── actionGenerateTriggerToken() / actionRevokeTriggerToken() ───────────
 
     public function testGenerateTriggerTokenAudits(): void
@@ -1504,6 +1696,68 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
                 "template #{$template->id} is listed without the warning"
             );
         }
+    }
+
+    /**
+     * Stores a template's vault check the way VaultCheckService does.
+     *
+     * @param list<array{path: string, line: int|null, key: string|null}> $unopened
+     */
+    private function storeVaultCheck(
+        JobTemplate $template,
+        string $status,
+        ?int $credentialId,
+        int $relevantCount,
+        array $unopened = []
+    ): void {
+        $check = new JobTemplateVaultCheck();
+        $check->job_template_id = (int)$template->id;
+        $check->status = $status;
+        $check->credential_id = $credentialId;
+        $check->relevant_count = $relevantCount;
+        $check->unopened_count = count($unopened);
+        $check->unopened = $unopened === [] ? null : (string)json_encode($unopened);
+        $check->checked_at = time();
+        $check->scanned_at = $this->vaultScanTimeOf((int)$template->project_id);
+        $this->assertTrue($check->save(false));
+    }
+
+    /**
+     * The real launch view, rendered with what actionLaunch passed to it.
+     * The console application of the tests has no web root, so asset
+     * bundles are dummies; view, asset manager and controller are restored.
+     *
+     * @param array<string, mixed> $params
+     */
+    private function renderLaunchPage(array $params): string
+    {
+        $components = \Yii::$app->getComponents(true);
+        $originals = ['view' => $components['view'] ?? null, 'assetManager' => $components['assetManager'] ?? null];
+        $previousController = \Yii::$app->controller;
+        \Yii::$app->set('assetManager', new AssetManager(['bundles' => false, 'basePath' => sys_get_temp_dir(), 'baseUrl' => '/assets']));
+        \Yii::$app->set('view', new View());
+        $ctrl = new JobTemplateController('job-template', \Yii::$app);
+        \Yii::$app->controller = $ctrl;
+        try {
+            return $ctrl->renderPartial('launch', $params);
+        } finally {
+            \Yii::$app->controller = $previousController;
+            foreach ($originals as $id => $definition) {
+                \Yii::$app->set($id, $definition);
+            }
+        }
+    }
+
+    /**
+     * The codes of the warning alerts on a rendered page, in page order.
+     *
+     * @return list<string>
+     */
+    private function renderedWarningCodes(string $html): array
+    {
+        preg_match_all('/data-testid="template-warning" data-code="([^"]*)"/', $html, $matches);
+
+        return $matches[1];
     }
 
     private function auditCount(string $action, int $templateId): int

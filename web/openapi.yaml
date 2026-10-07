@@ -138,7 +138,10 @@ paths:
     put:
       tags: [Projects]
       summary: Update a project
-      description: Requires `project.update`.
+      description: |
+        Requires `project.update` and operator access. Changing
+        `vault_password_source` is audited as `project.vault-source-changed`
+        and re-checks the project's job templates against the last vault scan.
       requestBody:
         required: true
         content:
@@ -161,6 +164,43 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/projects/{id}/vault:
+    get:
+      tags: [Projects]
+      summary: Vault overview of a project
+      description: |
+        Requires `project.view` and view access to the project. The last scan
+        of the checkout for ansible-vault content (encrypted files and inline
+        `!vault` values, vault IDs, the vault settings of the repository's
+        ansible.cfg, findings) and, per job template, whether its vault
+        password opens the encrypted files it probably loads. Checked without
+        decrypting; nothing in it is secret. Runner names, groups and versions
+        need `runner-group.view` (otherwise only their number), the names of
+        vault passwords `credential.view` or `job-template.view` (otherwise
+        only their id).
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/ProjectVaultResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/projects/{id}/vault/scan:
+    post:
+      tags: [Projects]
+      summary: Rescan a project checkout for vault content
+      description: |
+        Requires `project.update` and operator access. Scans the checkout as
+        it is now (it does not fetch: a git project's checkout changes only
+        with a sync, and every sync scans it), re-checks every job template of
+        the project and answers with the overview. Audited as
+        `project.vault-scanned`. Without a checkout, `error` says so and the
+        overview is empty. The checks of one rescan share a time budget of
+        30 seconds; templates it does not finish get the status `incomplete`
+        with the reason `time_limit` and go first next time.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '200': { $ref: '#/components/responses/ProjectVaultResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/projects/{id}/sync:
     post:
       tags: [Projects]
@@ -233,9 +273,11 @@ paths:
       tags: [Inventories]
       summary: Update an inventory
       description: |
-        Requires `inventory.update`. Changing the type or the project is
-        rejected with 422 when job templates of another project would then
-        use a file or dynamic inventory of this project.
+        Requires `inventory.update` and operator access to the inventory's
+        project and, when `project_id` changes, to the new project (403
+        otherwise). Changing the type or the project is rejected with 422 when
+        job templates of another project would then use a file or dynamic
+        inventory of this project.
       requestBody:
         required: true
         content:
@@ -424,7 +466,7 @@ paths:
           in: query
           required: false
           description: Only templates with this warning, see JobTemplateWarning.
-          schema: { type: string, enum: [multiple_vault_credentials, inventory_other_project] }
+          schema: { type: string, enum: [multiple_vault_credentials, inventory_other_project, vault_password_mismatch, vault_password_missing, vault_file_damaged, vault_check_incomplete] }
       responses:
         '200':
           description: Paginated list
@@ -519,14 +561,16 @@ paths:
       summary: Launch a job from a template
       description: |
         Requires `job.launch` and operator access to the template's project.
-        The response lists the credentials the job will use.
+        The response lists the credentials the job will use and the
+        template's warnings (e.g. a vault password that does not open the
+        template's encrypted files); warnings never block a launch.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/JobLaunchInput' }
       responses:
-        '201': { $ref: '#/components/responses/JobDetailResponse' }
+        '201': { $ref: '#/components/responses/JobLaunchResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -1970,6 +2014,25 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/JobDetail' }
+    JobLaunchResponse:
+      description: The launched job, with the template's warnings
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/JobDetail' }
+              warnings:
+                type: array
+                items: { $ref: '#/components/schemas/JobTemplateWarning' }
+    ProjectVaultResponse:
+      description: Vault overview of the project
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/ProjectVault' }
     ProjectResponse:
       description: Project
       content:
@@ -2091,8 +2154,135 @@ components:
         scm_type:    { type: string, enum: [manual, git] }
         scm_url:     { type: string, nullable: true }
         scm_branch:  { type: string, nullable: true }
+        status:      { type: string, enum: [new, syncing, synced, error] }
+        last_synced_at: { type: integer, nullable: true, description: Unix timestamp }
         created_at:  { type: integer, description: Unix timestamp }
-        updated_at:  { type: integer }
+        vault_password_source:
+          type: string
+          enum: [ansilume, repository]
+          description: |
+            `ansilume`: runners use only the job template's vault password and
+            ignore the vault settings of the repository's ansible.cfg (default
+            for new projects). `repository`: runners also apply them (projects
+            created before 2.8). Runners older than 2.8 always behave like
+            `repository`.
+        vault_scanned_at: { type: integer, nullable: true, description: Unix timestamp of the last vault scan }
+    ProjectVault:
+      type: object
+      properties:
+        password_source: { type: string, enum: [ansilume, repository] }
+        password_source_label: { type: string, example: Ansilume only }
+        scanned_at: { type: integer, nullable: true }
+        commit: { type: string, nullable: true, description: "The commit the scan saw, for git projects" }
+        error: { type: string, nullable: true, description: "Why there is no scan, e.g. no checkout yet" }
+        truncated: { type: boolean, description: "The scan stopped at a limit (files, size, entries or time)" }
+        files_scanned: { type: integer }
+        repository_settings:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/ProjectVaultSettings' }]
+        findings: { type: array, items: { $ref: '#/components/schemas/ProjectVaultFinding' } }
+        vault_ids: { type: array, items: { type: string }, example: [prod] }
+        entries: { type: array, items: { $ref: '#/components/schemas/ProjectVaultEntry' } }
+        templates: { type: array, items: { $ref: '#/components/schemas/ProjectVaultTemplate' } }
+        runners_without_support:
+          type: array
+          description: |
+            In `ansilume` mode, runners of the project's runner groups that are
+            too old to ignore the repository's vault settings. Empty without
+            `runner-group.view`; runners_without_support_count still counts them.
+          items: { $ref: '#/components/schemas/ProjectVaultRunner' }
+        runners_without_support_count: { type: integer, description: "How many such runners there are, whatever the viewer may see" }
+    ProjectVaultSettings:
+      type: object
+      description: Vault settings found in the repository's ansible.cfg.
+      properties:
+        vault_password_file: { type: string, nullable: true }
+        vault_identity_list: { type: string, nullable: true }
+        ask_vault_pass: { type: boolean }
+        vault_id_match: { type: boolean }
+        vault_encrypt_salt: { type: boolean }
+    ProjectVaultFinding:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [password_file_committed, password_script, ask_vault_pass, vault_id_match, encrypt_salt, malformed, truncated]
+        path: { type: string, nullable: true }
+        message: { type: string }
+    ProjectVaultEntry:
+      type: object
+      properties:
+        path: { type: string, example: inventories/prod/group_vars/all/vault.yml }
+        kind: { type: string, enum: [file, inline] }
+        line: { type: integer, nullable: true, description: First line of an inline value }
+        key: { type: string, nullable: true, description: Variable name of an inline value }
+        vault_id: { type: string, nullable: true, description: Vault ID from a format 1.2 header }
+        format_version: { type: string, nullable: true, example: '1.2' }
+        error: { type: string, nullable: true, description: Why Ansible cannot read it }
+    ProjectVaultTemplate:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        status:
+          type: string
+          nullable: true
+          enum: [ok, mismatch, missing_password, unusable_password, repo_managed, no_files, stale, damaged, incomplete]
+          description: |
+            `ok`: the vault password opens every encrypted file and value the
+            template probably loads. `mismatch`: it does not open some (or, with
+            vault_id_match in the repository's ansible.cfg in `repository` mode,
+            cannot be tried on them). `missing_password`: the template has none.
+            `unusable_password`: its secret cannot be used. `repo_managed`: the
+            repository's ansible.cfg supplies passwords Ansilume cannot check.
+            `no_files`: nothing encrypted to load. `stale`: the checkout changed
+            since the scan, or the check is from an older scan. `damaged`: some
+            of them are damaged, Ansible cannot read them whatever the password.
+            `incomplete`: not everything could be checked, see
+            incomplete_reason. null: not checked yet.
+        incomplete_reason:
+          type: string
+          nullable: true
+          enum: [scan_limit, time_limit, file_name]
+          description: |
+            For `incomplete`. `scan_limit`: the scan stopped at a limit, so it
+            may have missed files. `time_limit`: the check ran out of time.
+            `file_name`: file names that are not valid UTF-8 (listed in unopened).
+        credential:
+          type: object
+          nullable: true
+          properties:
+            id: { type: integer }
+            name: { type: string, nullable: true, description: "null without credential.view or job-template.view" }
+        relevant_count: { type: integer }
+        unopened_count:
+          type: integer
+          description: |
+            How many entries are behind the status: those the vault password
+            does not open (`mismatch`, `repo_managed`), the damaged ones
+            (`damaged`), those with unreadable file names (`incomplete`).
+        unopened:
+          type: array
+          description: "The first of them (at most 40)"
+          items:
+            type: object
+            properties:
+              path: { type: string }
+              line: { type: integer, nullable: true }
+              key: { type: string, nullable: true }
+              reason:
+                type: string
+                nullable: true
+                enum: [vault_id_match]
+                description: "vault_id_match: the password is not tried on this vault ID. null: the password does not open it"
+        checked_at: { type: integer, nullable: true }
+    ProjectVaultRunner:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        group: { type: string, nullable: true }
+        software_version: { type: string, nullable: true }
     ProjectList:
       type: object
       properties:
@@ -2323,7 +2513,7 @@ components:
         has_survey:      { type: boolean }
         warnings:
           type: array
-          description: Problems of templates saved before Ansilume rejected them. Such templates keep running.
+          description: Problems jobs of this template may run into. They never block a launch.
           items: { $ref: '#/components/schemas/JobTemplateWarning' }
         created_at:      { type: integer }
         updated_at:      { type: integer }
@@ -2332,16 +2522,26 @@ components:
       properties:
         code:
           type: string
-          enum: [multiple_vault_credentials, inventory_other_project]
+          enum: [multiple_vault_credentials, inventory_other_project, vault_password_mismatch, vault_password_missing, vault_file_damaged, vault_check_incomplete]
           description: |
             `multiple_vault_credentials`: more than one vault password; Ansible
             only gets the first. `inventory_other_project`: a file or dynamic
             inventory of another project, which the runner never reads.
+            `vault_password_mismatch`: the vault password does not open some
+            encrypted files or values the template probably loads, or has no
+            usable secret. `vault_password_missing`: the template probably
+            loads encrypted content but has no vault password.
+            `vault_file_damaged`: encrypted files or values it probably loads
+            are damaged; Ansible cannot read them. `vault_check_incomplete`:
+            the check could not cover everything (a limit of the scan or the
+            check, or file names that are not UTF-8). The vault warnings come
+            from the project's last vault scan; a check from an older scan
+            gives none.
         message: { type: string }
         credential_ids:
           type: array
           items: { type: integer }
-          description: For multiple_vault_credentials, the vault passwords that are ignored.
+          description: For multiple_vault_credentials, the vault passwords that are ignored; for vault_password_mismatch, the checked one.
     JobTemplateCredential:
       type: object
       properties:
@@ -2531,6 +2731,10 @@ components:
         scm_url: { type: string, nullable: true }
         scm_branch: { type: string, nullable: true }
         scm_credential_id: { type: integer, nullable: true }
+        vault_password_source:
+          type: string
+          enum: [ansilume, repository]
+          description: Defaults to `ansilume` for new projects.
 
     JobTemplateInput:
       type: object
@@ -2614,6 +2818,17 @@ components:
             `null` for runners that have not yet reported (pre-upgrade
             images). Capped at 32 characters on the server side.
           example: "2.2.16"
+        capabilities:
+          type: array
+          items: { type: string, enum: [vault_password_source] }
+          description: >-
+            Features the runner reported on its most recent request, limited to
+            names this server knows. `vault_password_source`: the runner honours a
+            project's vault password source and, for "Ansilume only" projects,
+            neutralises the repository's ansible.cfg vault settings. Empty for
+            runners that report nothing, including every runner older than 2.8;
+            those apply the repository's vault settings whatever the project says.
+          example: [vault_password_source]
         transport:
           type: string
           nullable: true

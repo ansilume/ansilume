@@ -24,22 +24,25 @@ class JobClaimServiceTest extends TestCase
      * Default no-DB service: returns a fixed project path, static localhost inventory, and optional credential.
      *
      * @param array{scm_type: string, scm_url: string|null, scm_branch: string|null}|null $scm
+     * @param 'ansilume'|'repository' $vaultSource
      */
     private function makeService(
         string $projectPath = '/var/projects/default',
         ?array $inventory = null,
         ?array $credential = null,
         ?array $scm = null,
+        string $vaultSource = Project::VAULT_SOURCE_ANSILUME,
     ): JobClaimService {
         $inv = $inventory ?? ['type' => 'static', 'content' => "localhost\n", 'path' => null];
         $scmData = $scm ?? ['scm_type' => 'manual', 'scm_url' => null, 'scm_branch' => null, 'scm_credential' => null];
 
-        return new class ($projectPath, $inv, $credential, $scmData) extends JobClaimService {
+        return new class ($projectPath, $inv, $credential, $scmData, $vaultSource) extends JobClaimService {
             public function __construct(
                 private readonly string $projectPath,
                 private readonly array $inv,
                 private readonly ?array $cred,
                 private readonly array $scmData,
+                private readonly string $vaultSource,
             ) {
             }
 
@@ -51,6 +54,11 @@ class JobClaimServiceTest extends TestCase
             protected function resolveProjectScm(array $payload): array
             {
                 return $this->scmData;
+            }
+
+            protected function resolveVaultPasswordSource(array $payload): string
+            {
+                return $this->vaultSource;
             }
 
             protected function resolveInventory(array $payload): array
@@ -128,6 +136,11 @@ class JobClaimServiceTest extends TestCase
             protected function resolveProjectScm(array $payload): array
             {
                 return ['scm_type' => 'manual', 'scm_url' => null, 'scm_branch' => null, 'scm_credential' => null];
+            }
+
+            protected function resolveVaultPasswordSource(array $payload): string
+            {
+                return Project::VAULT_SOURCE_ANSILUME;
             }
 
             protected function resolveInventory(array $payload): array
@@ -387,6 +400,46 @@ class JobClaimServiceTest extends TestCase
         $this->assertIsArray($payload['scm_credential']);
         $this->assertSame('ssh_key', $payload['scm_credential']['credential_type']);
         $this->assertArrayHasKey('private_key', $payload['scm_credential']['secrets']);
+    }
+
+    /**
+     * @return array<string, array{0: 'ansilume'|'repository'}>
+     */
+    public static function vaultSourceProvider(): array
+    {
+        return [
+            'Ansilume only' => [Project::VAULT_SOURCE_ANSILUME],
+            'Ansilume and repository' => [Project::VAULT_SOURCE_REPOSITORY],
+        ];
+    }
+
+    /**
+     * The runner learns the project's vault password source from the
+     * payload; a runner that does not know the field ignores it.
+     *
+     * @dataProvider vaultSourceProvider
+     * @param 'ansilume'|'repository' $source
+     */
+    public function testPayloadCarriesTheProjectsVaultPasswordSource(string $source): void
+    {
+        $payload = $this->makeService(vaultSource: $source)->buildExecutionPayload($this->makeJob(1, ['project_id' => 4]));
+
+        $this->assertSame($source, $payload['vault_password_source']);
+    }
+
+    /**
+     * Old runners execute `command` verbatim, so the vault mode must never
+     * change it: the runner adds its own prefix when it honours the mode.
+     */
+    public function testTheVaultPasswordSourceLeavesTheServerCommandAlone(): void
+    {
+        $job = $this->makeJob(1, ['playbook' => 'site.yml']);
+
+        $ansilume = $this->makeService(vaultSource: Project::VAULT_SOURCE_ANSILUME)->buildExecutionPayload($job);
+        $repository = $this->makeService(vaultSource: Project::VAULT_SOURCE_REPOSITORY)->buildExecutionPayload($job);
+
+        $this->assertSame($repository['command'], $ansilume['command']);
+        $this->assertSame('ansible-playbook', $ansilume['command'][0]);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

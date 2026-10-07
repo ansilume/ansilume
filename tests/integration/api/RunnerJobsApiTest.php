@@ -252,6 +252,9 @@ class RunnerJobsApiTest extends DbTestCase
         $this->assertArrayHasKey('playbook_path', $payload);
         $this->assertArrayHasKey('command', $payload);
         $this->assertSame($claimed->id, $payload['job_id']);
+        // Since 2.8: runners neutralise the repository's vault settings
+        // unless the project keeps them ('repository').
+        $this->assertSame(\app\models\Project::VAULT_SOURCE_ANSILUME, $payload['vault_password_source']);
     }
 
     /** Seed a minimal JobTask row — enough to clear the "did nothing" gate. */

@@ -22,6 +22,7 @@ use yii\db\ActiveRecord;
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at
+ * @property string|null $capabilities Comma-separated features the runner reported, see CAPABILITIES
  *
  * @property RunnerGroup $group
  * @property User        $creator
@@ -31,6 +32,11 @@ class Runner extends ActiveRecord
 {
     /** Seconds over which repeated self-registrations of one runner are counted. */
     public const REREGISTRATION_WINDOW = 86400;
+
+    /** The runner neutralises the repository's ansible.cfg vault settings when a project asks for it. */
+    public const CAPABILITY_VAULT_PASSWORD_SOURCE = 'vault_password_source';
+    /** Every capability the server records; runners may report others, which are ignored. */
+    public const CAPABILITIES = [self::CAPABILITY_VAULT_PASSWORD_SOURCE];
 
     public static function tableName(): string
     {
@@ -54,7 +60,23 @@ class Runner extends ActiveRecord
             [['transport'], 'in', 'range' => RunnerTransportClassifier::TRANSPORTS],
             [['remote_addr'], 'string', 'max' => 45],
             [['plaintext_seen_at'], 'integer'],
+            [['capabilities'], 'string', 'max' => 255],
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function capabilityList(): array
+    {
+        $names = array_map('trim', explode(',', (string)$this->capabilities));
+
+        return array_values(array_intersect(self::CAPABILITIES, $names));
+    }
+
+    public function supports(string $capability): bool
+    {
+        return in_array($capability, $this->capabilityList(), true);
     }
 
     public function getGroup(): \yii\db\ActiveQuery

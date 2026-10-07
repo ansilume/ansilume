@@ -198,6 +198,8 @@ class E2eController extends Controller
         (new E2eCredentialUsageSeeder($logger))->seed($userId, $projectId, $inventoryId, $runnerGroupId);
         (new E2eVaultAssignmentSeeder($logger))->seed($userId, $runnerGroupId);
         (new E2eInventoryProjectSeeder($logger))->seed($userId, $runnerGroupId);
+        (new E2eVaultScanSeeder($logger))->seed($userId, $runnerGroupId);
+        (new E2eVaultEdgeSeeder($logger))->seed($userId, $runnerGroupId);
     }
 
     private function seedRunnerGroup(int $userId): int

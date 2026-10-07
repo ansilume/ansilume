@@ -10,10 +10,13 @@ use app\models\ApiToken;
 use app\models\Credential;
 use app\models\Inventory;
 use app\models\JobTemplate;
+use app\models\JobTemplateVaultCheck;
 use app\models\TeamProject;
 use app\models\User;
 use app\services\CredentialWriteService;
+use app\services\VaultScanService;
 use app\tests\integration\controllers\WebControllerTestCase;
+use yii\helpers\FileHelper;
 
 /**
  * Integration tests for the Job Templates API controller.
@@ -24,11 +27,22 @@ use app\tests\integration\controllers\WebControllerTestCase;
 class JobTemplatesControllerTest extends WebControllerTestCase
 {
     private JobTemplatesController $ctrl;
+    /** A copy of the vault fixture repository, removed after the test. */
+    private ?string $checkout = null;
 
     protected function setUp(): void
     {
         parent::setUp();
         $this->ctrl = new JobTemplatesController('api/v1/job-templates', \Yii::$app);
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->checkout !== null) {
+            FileHelper::removeDirectory($this->checkout);
+            $this->checkout = null;
+        }
+        parent::tearDown();
     }
 
     // -- Index ----------------------------------------------------------------
@@ -456,6 +470,107 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         );
     }
 
+    public function testViewWarnsAboutAVaultPasswordThatDoesNotOpenTheEncryptedFiles(): void
+    {
+        $this->authenticateWithAdmin();
+        [$template, $vault] = $this->vaultCheckedTemplate((int)\Yii::$app->user->id, JobTemplateVaultCheck::STATUS_MISMATCH);
+        $this->assertNotNull($vault);
+
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionView((int)$template->id));
+
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISMATCH,
+            'message' => sprintf(
+                'The vault password "%s" does not open 1 of the 2 encrypted files or values this template probably loads: '
+                . 'inventories/prod/host_vars/prod-web1.yml:2. Jobs fail when Ansible needs one of them. '
+                . 'Check the password and the inventory; if the files changed, rescan the project.',
+                $vault->name
+            ),
+            'credential_ids' => [(int)$vault->id],
+        ]], $item['warnings']);
+    }
+
+    public function testViewWarnsAboutAVaultPasswordWithoutAUsableSecret(): void
+    {
+        $this->authenticateWithAdmin();
+        [$template, $vault] = $this->vaultCheckedTemplate((int)\Yii::$app->user->id, JobTemplateVaultCheck::STATUS_UNUSABLE_PASSWORD);
+        $this->assertNotNull($vault);
+
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionView((int)$template->id));
+
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISMATCH,
+            'message' => sprintf(
+                'The vault password "%s" has no usable secret, so jobs fail. Enter its secret on the credential page.',
+                $vault->name
+            ),
+            'credential_ids' => [(int)$vault->id],
+        ]], $item['warnings']);
+    }
+
+    public function testViewWarnsAboutAMissingVaultPassword(): void
+    {
+        $this->authenticateWithAdmin();
+        [$template] = $this->vaultCheckedTemplate((int)\Yii::$app->user->id, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD);
+
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionView((int)$template->id));
+
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISSING,
+            'message' => 'This template has no vault password, but it probably loads 2 encrypted files or values. '
+                . 'Jobs fail when Ansible needs one of them. Attach the vault password of this environment.',
+            'credential_ids' => [],
+        ]], $item['warnings']);
+    }
+
+    /**
+     * A save checks the template against the project's last vault scan, and
+     * the response already carries the result. The vault fixture repository
+     * with site.yml: no vault password, then the dev password on the dev
+     * inventory (it opens everything there), then the prod inventory.
+     */
+    public function testTheSaveResponseCarriesTheFreshVaultCheck(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $project = $this->createProject($userId);
+        $project->local_path = $this->copyVaultRepository();
+        $project->save(false);
+        $devInventory = $this->repositoryInventory($userId, (int)$project->id, 'inventories/dev/hosts.yml');
+        $prodInventory = $this->repositoryInventory($userId, (int)$project->id, 'inventories/prod/hosts.yml');
+        $template = $this->createJobTemplate((int)$project->id, (int)$devInventory->id, (int)$this->createRunnerGroup($userId)->id, $userId);
+        /** @var VaultScanService $scans */
+        $scans = \Yii::$app->get('vaultScanService');
+        $this->assertTrue($scans->scanProject($project));
+
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionView((int)$template->id));
+        $this->assertSame([JobTemplateWarnings::VAULT_PASSWORD_MISSING], array_column($item['warnings'], 'code'), 'after the scan');
+
+        $vault = $this->storedVault('dev-vault', 'ansilume-test-dummy-dev');
+        $this->setBody(['credential_id' => $vault->id]);
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionUpdate((int)$template->id));
+        $this->assertSame([], $item['warnings'], 'the dev password opens every encrypted value of the dev inventory');
+
+        $this->setBody(['inventory_id' => $prodInventory->id]);
+        /** @var array<string, mixed> $item */
+        $item = $this->callSuccess($this->ctrl->actionUpdate((int)$template->id));
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISMATCH,
+            'message' => sprintf(
+                'The vault password "%s" does not open 2 of the 4 encrypted files or values this template probably loads: '
+                . 'inventories/prod/group_vars/all/vault.yml, inventories/prod/host_vars/prod-web1.yml:2. '
+                . 'Jobs fail when Ansible needs one of them. Check the password and the inventory; if the files changed, rescan the project.',
+                $vault->name
+            ),
+            'credential_ids' => [(int)$vault->id],
+        ]], $item['warnings']);
+    }
+
     /**
      * @return array<string, array{0: string}>
      */
@@ -464,6 +579,8 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         return [
             'more than one vault password' => [JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS],
             'inventory of another project' => [JobTemplateWarnings::INVENTORY_OTHER_PROJECT],
+            'vault password that does not open the files' => [JobTemplateWarnings::VAULT_PASSWORD_MISMATCH],
+            'no vault password' => [JobTemplateWarnings::VAULT_PASSWORD_MISSING],
         ];
     }
 
@@ -488,6 +605,11 @@ class JobTemplatesControllerTest extends WebControllerTestCase
                 $parents['group'],
                 $userId
             ),
+            JobTemplateWarnings::VAULT_PASSWORD_MISMATCH => $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_MISMATCH)[0],
+            JobTemplateWarnings::VAULT_PASSWORD_MISSING => $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD)[0],
+            // Vault checks that found no problem are no warning.
+            'vault password opens everything' => $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_OK)[0],
+            'vault passwords from the repository' => $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_REPO_MANAGED)[0],
         ];
         $this->setQueryParams(['warning' => $code]);
 
@@ -536,6 +658,78 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         $this->assertSame([$newer->name, $older->name], array_column($mine, 'name'));
     }
 
+    public function testTheMismatchFilterAlsoListsPasswordsWithoutAUsableSecret(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        [$unusable, $vault] = $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_UNUSABLE_PASSWORD);
+        $this->assertNotNull($vault);
+        [$stale] = $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_STALE);
+        [$noFiles] = $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_NO_FILES);
+        $this->setQueryParams(['warning' => JobTemplateWarnings::VAULT_PASSWORD_MISMATCH]);
+
+        $result = $this->ctrl->actionIndex();
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertArrayHasKey('data', $result);
+        $items = array_column($result['data'], null, 'id');
+        $this->assertArrayHasKey((int)$unusable->id, $items);
+        $this->assertArrayNotHasKey((int)$stale->id, $items, 'a stale check is no warning');
+        $this->assertArrayNotHasKey((int)$noFiles->id, $items, 'no encrypted files is no warning');
+        $this->assertSame([[
+            'code' => JobTemplateWarnings::VAULT_PASSWORD_MISMATCH,
+            'message' => sprintf(
+                'The vault password "%s" has no usable secret, so jobs fail. Enter its secret on the credential page.',
+                $vault->name
+            ),
+            'credential_ids' => [(int)$vault->id],
+        ]], $items[(int)$unusable->id]['warnings']);
+    }
+
+    /**
+     * The template list carries the vault warnings of each template, as the
+     * single-template view does.
+     */
+    public function testTheUnfilteredListCarriesTheVaultWarningsOfEachTemplate(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        [$mismatch] = $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_MISMATCH);
+        [$missing] = $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD);
+        [$ok] = $this->vaultCheckedTemplate($userId, JobTemplateVaultCheck::STATUS_OK);
+
+        $result = $this->ctrl->actionIndex();
+
+        $this->assertArrayHasKey('data', $result);
+        $items = array_column($result['data'], null, 'id');
+        // Created last, so they are on the first page (newest first).
+        $this->assertArrayHasKey((int)$mismatch->id, $items);
+        $this->assertSame([JobTemplateWarnings::VAULT_PASSWORD_MISMATCH], array_column($items[(int)$mismatch->id]['warnings'], 'code'));
+        $this->assertSame([JobTemplateWarnings::VAULT_PASSWORD_MISSING], array_column($items[(int)$missing->id]['warnings'], 'code'));
+        $this->assertSame([], $items[(int)$ok->id]['warnings']);
+    }
+
+    public function testTheVaultWarningFilterOnlyListsTemplatesTheUserMaySee(): void
+    {
+        $viewer = $this->authenticateWithRole('viewer');
+        $ownerId = (int)$this->createUser('jt-api-vault-owner')->id;
+        [$visible] = $this->vaultCheckedTemplate($ownerId, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD);
+        $team = $this->createTeam($ownerId);
+        $this->addTeamMember((int)$team->id, (int)$viewer->id);
+        $this->createTeamProject((int)$team->id, (int)$visible->project_id, TeamProject::ROLE_VIEWER);
+        [$hidden] = $this->vaultCheckedTemplate($ownerId, JobTemplateVaultCheck::STATUS_MISSING_PASSWORD);
+        $this->createTeamProject((int)$this->createTeam($ownerId)->id, (int)$hidden->project_id);
+        $this->setQueryParams(['warning' => JobTemplateWarnings::VAULT_PASSWORD_MISSING]);
+
+        $result = (new JobTemplatesController('api/v1/job-templates', \Yii::$app))->runAction('index');
+
+        $this->assertIsArray($result);
+        $this->assertArrayHasKey('data', $result);
+        $ids = array_column($result['data'], 'id');
+        $this->assertContains((int)$visible->id, $ids);
+        $this->assertNotContains((int)$hidden->id, $ids, 'a template of another team is not listed');
+    }
+
     public function testIndexWithAnUnknownWarningIs422NamingTheValidCodes(): void
     {
         $this->authenticateWithAdmin();
@@ -545,7 +739,7 @@ class JobTemplatesControllerTest extends WebControllerTestCase
 
         $this->assertSame(422, \Yii::$app->response->statusCode);
         $this->assertSame(
-            ['error' => ['message' => 'Unknown warning. Use one of: multiple_vault_credentials, inventory_other_project.']],
+            ['error' => ['message' => 'Unknown warning. Use one of: multiple_vault_credentials, inventory_other_project, vault_password_mismatch, vault_password_missing, vault_file_damaged, vault_check_incomplete.']],
             $result
         );
     }
@@ -563,7 +757,7 @@ class JobTemplatesControllerTest extends WebControllerTestCase
 
         $this->assertSame(422, \Yii::$app->response->statusCode);
         $this->assertSame(
-            ['error' => ['message' => 'Unknown warning. Use one of: multiple_vault_credentials, inventory_other_project.']],
+            ['error' => ['message' => 'Unknown warning. Use one of: multiple_vault_credentials, inventory_other_project, vault_password_mismatch, vault_password_missing, vault_file_damaged, vault_check_incomplete.']],
             $result
         );
     }
@@ -832,7 +1026,7 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         ];
     }
 
-    private function storedVault(string $label): Credential
+    private function storedVault(string $label, string $password = 'vault-secret'): Credential
     {
         $credential = new Credential();
         $credential->name = $label . '-' . uniqid('', true);
@@ -840,7 +1034,7 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         $credential->created_by = (int)\Yii::$app->user->id;
         /** @var CredentialWriteService $writer */
         $writer = \Yii::$app->get('credentialWriteService');
-        $this->assertTrue($writer->create($credential, ['vault_password' => 'vault-secret']), (string)json_encode($credential->errors));
+        $this->assertTrue($writer->create($credential, ['vault_password' => $password]), (string)json_encode($credential->errors));
 
         return $credential;
     }
@@ -868,6 +1062,38 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         return $template;
     }
 
+    /**
+     * A template of a project of its own whose vault check (as
+     * VaultCheckService stores it) has the given status: 2 encrypted values,
+     * one of them unopened. The template has a vault password, except for
+     * missing_password and repo_managed.
+     *
+     * @return array{0: JobTemplate, 1: Credential|null}
+     */
+    private function vaultCheckedTemplate(int $userId, string $status): array
+    {
+        $parents = $this->templateParents($userId);
+        $template = $this->createJobTemplate($parents['project'], $parents['inventory'], $parents['group'], $userId);
+        $vault = null;
+        if (!in_array($status, [JobTemplateVaultCheck::STATUS_MISSING_PASSWORD, JobTemplateVaultCheck::STATUS_REPO_MANAGED], true)) {
+            $vault = $this->storedVault('checked-vault');
+            $template->credential_id = $vault->id;
+            $template->save(false);
+        }
+        $check = new JobTemplateVaultCheck();
+        $check->job_template_id = (int)$template->id;
+        $check->status = $status;
+        $check->credential_id = $vault === null ? null : (int)$vault->id;
+        $check->relevant_count = 2;
+        $check->unopened_count = 1;
+        $check->unopened = (string)json_encode([['path' => 'inventories/prod/host_vars/prod-web1.yml', 'line' => 2, 'key' => 'host_secret']]);
+        $check->checked_at = time();
+        $check->scanned_at = $this->vaultScanTimeOf((int)$template->project_id);
+        $this->assertTrue($check->save(false));
+
+        return [$template, $vault];
+    }
+
     private function inventory(int $userId, string $type, ?int $projectId): Inventory
     {
         $inventory = new Inventory();
@@ -880,6 +1106,30 @@ class JobTemplatesControllerTest extends WebControllerTestCase
         $inventory->save(false);
 
         return $inventory;
+    }
+
+    /**
+     * A file inventory of the project, read from the project's checkout.
+     */
+    private function repositoryInventory(int $userId, int $projectId, string $sourcePath): Inventory
+    {
+        $inventory = $this->inventory($userId, Inventory::TYPE_FILE, $projectId);
+        $inventory->source_path = $sourcePath;
+        $inventory->save(false);
+
+        return $inventory;
+    }
+
+    /**
+     * A copy of tests/fixtures/vault/repo in the temp directory, removed in
+     * tearDown(); the fixtures themselves stay untouched.
+     */
+    private function copyVaultRepository(): string
+    {
+        $this->checkout = sys_get_temp_dir() . '/ansilume-jt-api-' . bin2hex(random_bytes(6));
+        FileHelper::copyDirectory(dirname(__DIR__, 4) . '/fixtures/vault/repo', $this->checkout);
+
+        return $this->checkout;
     }
 
     /**

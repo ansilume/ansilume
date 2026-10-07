@@ -155,7 +155,98 @@ looked fine but never used the second. Now:
 
 If your repository has one vault file per environment, such as DEV, TEST
 and PROD with different passwords, give each environment its own job
-template with its own vault password.
+template with its own vault password. The [vault check](#vault-files-in-your-repository)
+then tells you when a template got the password of another environment.
+
+## Vault files in your repository
+
+After every sync Ansilume scans the project checkout for ansible-vault
+content, without decrypting anything:
+
+- encrypted files (`$ANSIBLE_VAULT;1.1;AES256`, and `1.2` with a vault ID),
+- inline `!vault |` values in YAML files,
+- the vault settings of the repository's `ansible.cfg`
+  (`vault_password_file`, `vault_identity_list`, `ask_vault_pass`,
+  `vault_id_match`, `vault_encrypt_salt`),
+- findings such as a committed plaintext password file (`.vault_pass`, or
+  a `vault_password_file` that is not a script), a password script, files
+  Ansible cannot read, or a scan that stopped at a limit.
+
+Manual projects never sync: they are scanned when they are saved, and
+**Rescan** on the project page (or `POST /api/v1/projects/{id}/vault/scan`)
+scans any project on demand, for example after files changed by hand.
+Rescan reads the checkout as it is; for a git project that is the commit of
+the last sync, so after a push, sync the project instead (every sync
+scans). The scan stores paths, vault IDs and a fingerprint of the
+encrypted content, never plaintext or a password.
+
+### Does the template's vault password fit?
+
+For each job template Ansilume then checks whether its vault password
+opens the encrypted files and values the template probably loads:
+
+- `group_vars/` and `host_vars/` next to the template's inventory (the
+  inventory directory, or the directory of an inventory file) and next to
+  its playbook,
+- the inventory source itself, if it is encrypted,
+- the playbook's `vars_files` with literal paths.
+
+A directory or file that is a symlink inside the repository (for example
+`inventories/staging/group_vars -> ../prod/group_vars`) counts under its
+real path, as Ansible follows it. Symlinks further down, inside
+`group_vars/` or `host_vars/`, are not followed by the check.
+
+The check verifies the HMAC of each vault envelope with the password,
+the same check Ansible runs before decrypting, so it never produces
+plaintext. It runs again when the template, its vault password or its
+inventory changes. The template page, the launch page, the template list
+and the API show a warning when
+
+- the password does not open a file (`vault_password_mismatch`), also when
+  the project uses the repository's settings and its `ansible.cfg` sets
+  `vault_id_match`: Ansible then tries the template's password only on
+  vaults without a vault ID or with the ID `default`;
+- the template loads encrypted files but has no vault password
+  (`vault_password_missing`);
+- a file it loads is damaged, so Ansible cannot read it whatever the
+  password (`vault_file_damaged`); the vault card says what is wrong;
+- the check could not cover everything (`vault_check_incomplete`): the
+  scan stopped at a limit, the check ran out of time, or a file name is
+  not valid UTF-8.
+
+Warnings never block a job: Ansible loads `group_vars` only for the groups
+a play targets, so the check may name files a run never reads.
+
+The checks of one sync, rescan or save share a time budget of 30 seconds,
+so a repository with very many or very large encrypted files cannot hold
+up a request or the queue worker. Templates a run does not finish are
+shown as "not fully checked" and are checked first the next time.
+
+The project page has a **Vault files** card with the scan, the findings
+and, per job template, whether its vault password fits. The same data is
+available from `GET /api/v1/projects/{id}/vault`.
+
+### Vault passwords on runners
+
+Each project chooses how runners treat the vault settings of the
+repository's `ansible.cfg`:
+
+| Setting | Runners use |
+|---------|-------------|
+| Ansilume only | Only the job template's vault password. `vault_password_file`, `vault_identity_list`, `ask_vault_pass` and `vault_id_match` from the repository are ignored, so a committed password file is not used, a password script never runs and Ansible never waits for a prompt. |
+| Ansilume and repository | The job template's vault password and the repository's settings, as before 2.8. |
+
+New projects start with "Ansilume only"; projects created before 2.8
+keep "Ansilume and repository". Change it in the project form or with
+`PUT /api/v1/projects/{id}` (`vault_password_source`: `ansilume` or
+`repository`); every change is audited as `project.vault-source-changed`.
+
+"Ansilume only" needs runners of 2.8 or newer. Older runners keep the
+repository's settings regardless; the vault card lists such runners of
+the project's runner groups. In "Ansilume and repository" mode with a
+password file or vault identities in the repository, Ansilume cannot see
+those passwords, so templates without a matching password of their own
+are shown as "repository supplies passwords" instead of a warning.
 
 ## Assigning a vault password to several job templates
 
@@ -336,8 +427,11 @@ added to a custom runner image.
   a notice, inline `!vault` values are shown as `[vault-encrypted]`, an
   encrypted inventory file is reported as such, and lint of a playbook
   with encrypted `vars_files` shows "not lint-checked" instead of
-  findings. Playbooks still decrypt normally on the runner with the
-  template's vault credential.
+  findings. The [vault check](#does-the-templates-vault-password-fit)
+  only verifies the envelope's HMAC and never decrypts. Playbooks
+  decrypt on the runner with the template's vault credential; with
+  "Ansilume only" the runner applies the same decoy to the repository's
+  vault settings, see [Vault passwords on runners](#vault-passwords-on-runners).
 - **In the UI:** the secret inputs are `type="password"` and forms
   never echo stored secrets back to the browser. Audit logs record
   every credential create / update / delete with only the non-secret

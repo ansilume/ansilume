@@ -61,6 +61,15 @@ class Inventory extends ActiveRecord
                 'whenClient' => "function(attr, val) { return $('#inventory-type').val() === 'file'; }",
             ],
             [['project_id', 'created_by'], 'integer'],
+            // An unknown id would otherwise fail on the foreign key with a server error.
+            [
+                ['project_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => Project::class,
+                'targetAttribute' => ['project_id' => 'id'],
+                'message' => 'The selected project does not exist.',
+            ],
             [['content'], 'validateYaml'],
             [['project_id'], 'validateTemplateProjects', 'skipOnEmpty' => false,
                 'when' => fn (self $m): bool => !$m->isNewRecord

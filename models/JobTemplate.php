@@ -37,6 +37,7 @@ use yii\validators\Validator;
  * @property int         $created_at
  * @property int         $updated_at
  * @property int|null    $deleted_at    Unix timestamp when soft-deleted (null = active)
+ * @property JobTemplateVaultCheck|null $vaultCheck
  *
  * @property Project     $project
  * @property Inventory   $inventory
@@ -310,6 +311,11 @@ class JobTemplate extends ActiveRecord
     public function getRunnerGroup(): \yii\db\ActiveQuery
     {
         return $this->hasOne(RunnerGroup::class, ['id' => 'runner_group_id']);
+    }
+
+    public function getVaultCheck(): \yii\db\ActiveQuery
+    {
+        return $this->hasOne(JobTemplateVaultCheck::class, ['job_template_id' => 'id']);
     }
 
     public function getApprovalRule(): \yii\db\ActiveQuery

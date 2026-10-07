@@ -160,6 +160,11 @@ class JobController extends BaseController
             $svc = \Yii::$app->get('jobLaunchService');
             $job = $svc->launch($template, (int)\Yii::$app->user->id, $overrides);
             $this->session()->setFlash('success', "Re-launched as Job #{$job->id}.");
+            // A relaunch skips the launch page: its warnings show afterwards.
+            $warnings = \app\components\JobTemplateWarnings::forTemplate($template);
+            if ($warnings !== []) {
+                $this->session()->setFlash('warning', implode(' ', array_column($warnings, 'message')));
+            }
             return $this->redirect(['view', 'id' => $job->id]);
         } catch (\RuntimeException $e) {
             $this->session()->setFlash('danger', 'Re-launch failed: ' . $e->getMessage());
