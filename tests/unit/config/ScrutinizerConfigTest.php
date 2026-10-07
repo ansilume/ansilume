@@ -96,6 +96,35 @@ class ScrutinizerConfigTest extends TestCase
         }
     }
 
+    /**
+     * Regression: an unquoted step containing a colon followed by a space
+     * ("$h: no such host") parsed as a mapping, and Scrutinizer aborted the
+     * whole inspection with "Config Error: Unrecognized option".
+     */
+    public function testEveryStepIsACommandScrutinizerAccepts(): void
+    {
+        $allowed = ['analysis', 'background', 'command', 'coverage', 'cwd', 'environment', 'idle_timeout', 'not_if', 'on_node', 'only_if', 'record_video', 'stop_on_failure', 'title', 'use_website_config'];
+        $build = $this->config()['build'];
+        $lists = ['dependencies.override' => $build['dependencies']['override']];
+        foreach ($build['nodes'] as $name => $node) {
+            foreach ($node['tests'] ?? [] as $phase => $steps) {
+                $lists["nodes.{$name}.tests.{$phase}"] = $steps;
+            }
+        }
+
+        foreach ($lists as $where => $steps) {
+            $this->assertIsArray($steps, $where);
+            foreach ($steps as $index => $step) {
+                if (is_string($step)) {
+                    continue;
+                }
+                $this->assertIsArray($step, "{$where}.{$index}");
+                $this->assertArrayHasKey('command', $step, "{$where}.{$index} is a mapping without a command: " . json_encode($step));
+                $this->assertSame([], array_diff(array_keys($step), $allowed), "{$where}.{$index} has options Scrutinizer rejects");
+            }
+        }
+    }
+
     public function testEveryNodeInstallsTheDependencies(): void
     {
         $build = $this->config()['build'];

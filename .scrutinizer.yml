@@ -34,7 +34,8 @@ build:
           # Diagnostics only, they never fail the build: what listens on the
           # database and Redis ports, and which service host names exist.
           - (command -v ss >/dev/null && ss -ltn) || (command -v netstat >/dev/null && netstat -ltn) || echo "neither ss nor netstat available"
-          - for h in mariadb mysql redis; do getent hosts "$h" || echo "$h: no such host"; done
+          # Quoted: unquoted, the colon in the echo text made this a YAML mapping.
+          - 'for h in mariadb mysql redis; do getent hosts "$h" || echo "no such host: $h"; done'
           - (docker ps -a 2>/dev/null && for c in $(docker ps -aq); do docker logs --tail 20 "$c" 2>&1; done) || echo "no docker CLI in the build"
           # Waits for the database with bounded attempts, creates the
           # databases and the user, and writes the answering host into .env.
