@@ -75,6 +75,27 @@ class ScrutinizerConfigTest extends TestCase
         $this->assertContains('vendor/bin/phpunit --testsuite=Unit --colors=never --coverage-clover clover.xml', $commands);
     }
 
+    /**
+     * Scrutinizer's mysql 5.7 service accepted connections but never
+     * answered. The build now uses the database of docker-compose.yml, and
+     * a bounded script instead of an inline loop that waited for hours.
+     */
+    public function testTheDatabaseServiceMatchesDockerComposeAndTheWaitIsBounded(): void
+    {
+        $config = $this->config();
+        $compose = Yaml::parseFile(dirname(__DIR__, 3) . '/docker-compose.yml');
+        $this->assertIsArray($compose);
+        [$image, $version] = explode(':', (string)$compose['services']['db']['image'], 2);
+
+        $this->assertSame([$image => $version], array_intersect_key(array_map('strval', $config['build']['services']), [$image => true]));
+        $this->assertArrayNotHasKey('mysql', $config['build']['services']);
+        $before = self::commands($config['build']['nodes']['tests']['tests']['before']);
+        $this->assertContains('php tests/ci/scrutinizer-db-setup.php', $before);
+        foreach ($before as $command) {
+            $this->assertStringNotContainsString('new PDO', $command, 'no unbounded inline wait loop');
+        }
+    }
+
     public function testEveryNodeInstallsTheDependencies(): void
     {
         $build = $this->config()['build'];
