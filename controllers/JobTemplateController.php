@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\JobTemplateWarnings;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Inventory;
@@ -59,16 +60,20 @@ class JobTemplateController extends BaseController
         if ($filter !== null) {
             $query->andWhere($filter);
         }
+        $warningCounts = JobTemplateWarnings::counts(clone $query);
+        $warning = \Yii::$app->request->get('warning', '');
+        $activeWarning = is_string($warning) && JobTemplateWarnings::filter($query, $warning) ? $warning : null;
 
         $dataProvider = new ActiveDataProvider([
             'query' => $query,
             'pagination' => ['pageSize' => 20],
             'sort' => [
                 'defaultOrder' => ['name' => SORT_ASC],
+                // Qualified: the warning filter joins the inventory table.
                 'attributes' => [
-                    'id',
-                    'name',
-                    'playbook',
+                    'id' => ['asc' => ['{{%job_template}}.id' => SORT_ASC], 'desc' => ['{{%job_template}}.id' => SORT_DESC]],
+                    'name' => ['asc' => ['{{%job_template}}.name' => SORT_ASC], 'desc' => ['{{%job_template}}.name' => SORT_DESC]],
+                    'playbook' => ['asc' => ['{{%job_template}}.playbook' => SORT_ASC], 'desc' => ['{{%job_template}}.playbook' => SORT_DESC]],
                     'project' => [
                         'asc' => ['{{%project}}.name' => SORT_ASC],
                         'desc' => ['{{%project}}.name' => SORT_DESC],
@@ -98,14 +103,22 @@ class JobTemplateController extends BaseController
             $query->leftJoin('{{%runner_group}}', '{{%runner_group}}.id = {{%job_template}}.runner_group_id');
         }
 
-        return $this->render('index', ['dataProvider' => $dataProvider]);
+        return $this->render('index', [
+            'dataProvider' => $dataProvider,
+            'activeWarning' => $activeWarning,
+            'warningCounts' => $warningCounts,
+        ]);
     }
 
     public function actionView(int $id): string
     {
         $model = $this->findModel($id);
         $this->requireChildView($model->project_id);
-        return $this->render('view', ['model' => $model, 'attachedCredentials' => $this->credentialService()->describe($model)]);
+        return $this->render('view', [
+            'model' => $model,
+            'attachedCredentials' => $this->credentialService()->describe($model),
+            'warnings' => JobTemplateWarnings::forTemplate($model),
+        ]);
     }
 
     public function actionCreate(?int $project_id = null, ?string $playbook = null): Response|string
@@ -125,6 +138,7 @@ class JobTemplateController extends BaseController
         }
         if ($model->load((array)\Yii::$app->request->post())) {
             $this->requireChildOperate($model->project_id);
+            $this->restrictInventories($model);
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             if ($this->credentialService()->saveWithCredentials($model, $this->postedCredentialIds())) {
                 /** @var \app\services\LintService $lintService */
@@ -143,6 +157,9 @@ class JobTemplateController extends BaseController
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
         if ($model->load((array)\Yii::$app->request->post())) {
+            // The project it moves to as well, not only the one it comes from.
+            $this->requireChildOperate($model->project_id);
+            $this->restrictInventories($model);
             if ($this->credentialService()->saveWithCredentials($model, $this->postedCredentialIds())) {
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
@@ -164,6 +181,15 @@ class JobTemplateController extends BaseController
     private function postedCredentialIds(): array
     {
         return array_values((array)\Yii::$app->request->post('credential_ids', []));
+    }
+
+    /**
+     * Only inventories the user may see: the form offers no others, and a
+     * crafted request must not reach another team's hosts.
+     */
+    private function restrictInventories(JobTemplate $model): void
+    {
+        $model->restrictInventories($this->checker()->buildChildResourceFilter($this->currentUserId(), 'inventory.project_id'));
     }
 
     private function credentialService(): \app\services\JobTemplateCredentialService
@@ -203,7 +229,8 @@ class JobTemplateController extends BaseController
     public function actionClone(int $id): Response
     {
         $source = $this->findModel($id);
-        $this->requireChildView($source->project_id);
+        // The clone is created in the source's project.
+        $this->requireChildOperate($source->project_id);
 
         $clone = new JobTemplate();
         foreach ($source->attributes as $attr => $value) {
@@ -225,13 +252,14 @@ class JobTemplateController extends BaseController
         }
         $clone->name = $this->resolveCloneName($source->name);
         $clone->created_by = (int)(\Yii::$app->user->id ?? 0);
+        $this->restrictInventories($clone);
 
         $cloned = $this->credentialService()->copyWithCredentials($clone, $source, [
             'cloned_from' => $source->id,
             'cloned_from_name' => $source->name,
         ]);
         if (!$cloned) {
-            $this->session()->setFlash('danger', 'Clone failed: ' . json_encode($clone->errors));
+            $this->session()->setFlash('danger', 'Clone failed: ' . implode(' ', $clone->getFirstErrors()) . ' Fix the source template first.');
             return $this->redirect(['view', 'id' => $source->id]);
         }
 
@@ -348,7 +376,7 @@ class JobTemplateController extends BaseController
             $projectQuery->andWhere($projectFilter);
         }
 
-        $inventoryQuery = Inventory::find()->orderBy('name');
+        $inventoryQuery = Inventory::find()->with('project')->orderBy('name');
         $inventoryFilter = $checker->buildChildResourceFilter($userId, 'inventory.project_id');
         if ($inventoryFilter !== null) {
             $inventoryQuery->andWhere($inventoryFilter);
@@ -363,6 +391,8 @@ class JobTemplateController extends BaseController
                 ? array_map(static fn (mixed $id): int => is_numeric($id) ? (int)$id : 0, $selectedCredentialIds)
                 : ($model->isNewRecord ? [] : $this->credentialService()->additionalIds($model)),
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
+            // From the stored template, not from a rejected submission.
+            'warnings' => $model->isNewRecord ? [] : JobTemplateWarnings::forTemplate($this->findModel((int)$model->id)),
         ];
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\RunnerTransportClassifier;
 use yii\db\ActiveRecord;
 
 /**
@@ -15,6 +16,9 @@ use yii\db\ActiveRecord;
  * @property int|null    $last_seen_at
  * @property int|null    $offline_notified_at
  * @property string|null $software_version    Semver reported by the runner on each heartbeat; null for pre-upgrade runners
+ * @property string|null $transport           https, http_internal or http_external (RunnerTransportClassifier); null until seen
+ * @property string|null $remote_addr         client address of the last request
+ * @property int|null    $plaintext_seen_at   last plain HTTP request from outside the trusted networks
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at
@@ -47,6 +51,9 @@ class Runner extends ActiveRecord
             [['description'], 'string', 'max' => 1000],
             [['token_hash'], 'string', 'max' => 64],
             [['software_version'], 'string', 'max' => 32],
+            [['transport'], 'in', 'range' => RunnerTransportClassifier::TRANSPORTS],
+            [['remote_addr'], 'string', 'max' => 45],
+            [['plaintext_seen_at'], 'integer'],
         ];
     }
 
@@ -121,5 +128,37 @@ class Runner extends ActiveRecord
         /** @var static|null $result */
         $result = static::findOne(['token_hash' => hash('sha256', $rawToken)]);
         return $result;
+    }
+
+    /**
+     * Records how this request reached the server and returns the changed
+     * columns for the caller's update (see RunnerTransportClassifier).
+     *
+     * @param array<array-key, mixed> $server $_SERVER
+     * @return array<string, string|int>
+     */
+    public function transportChanges(array $server, int $now): array
+    {
+        $changes = RunnerTransportClassifier::changes(
+            ['transport' => $this->transport, 'remote_addr' => $this->remote_addr],
+            $server,
+            RunnerTransportClassifier::networks((string)(\Yii::$app->params['runnerTrustedNetworks'] ?? '')),
+            $now
+        );
+        foreach ($changes as $column => $value) {
+            $this->$column = $value;
+        }
+
+        return $changes;
+    }
+
+    /**
+     * True when the last request came over plain HTTP from outside the
+     * trusted networks: claim responses then carry decrypted credentials
+     * in clear.
+     */
+    public function hasInsecureTransport(): bool
+    {
+        return $this->transport === RunnerTransportClassifier::HTTP_EXTERNAL;
     }
 }

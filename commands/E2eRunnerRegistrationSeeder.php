@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\RunnerTransportClassifier;
 use app\models\AuditLog;
 use app\models\Runner;
 use app\models\RunnerGroup;
@@ -25,6 +26,8 @@ class E2eRunnerRegistrationSeeder
     public const GROUP = 'e2e-runner-group-2';
     public const QUOTE_RUNNER = 'e2e-quote-runner" data-e2e-injected="1';
     public const REREGISTERED_RUNNER = 'e2e-reregistered-runner';
+    /** Talks plain HTTP from a public address: runner-groups/plaintext-transport.spec.ts. */
+    public const PLAINTEXT_RUNNER = 'e2e-plaintext-runner';
 
     /** @var callable(string): void */
     private $logger;
@@ -45,6 +48,14 @@ class E2eRunnerRegistrationSeeder
 
         $this->ensureRunner((int)$group->id, self::QUOTE_RUNNER, $userId);
         $this->ensureRecentReregistrations($this->ensureRunner((int)$group->id, self::REREGISTERED_RUNNER, $userId), 2);
+
+        // Re-asserted on every seed: online, last seen over plain HTTP from outside.
+        $plaintext = $this->ensureRunner((int)$group->id, self::PLAINTEXT_RUNNER, $userId);
+        $plaintext->transport = RunnerTransportClassifier::HTTP_EXTERNAL;
+        $plaintext->remote_addr = '203.0.113.7';
+        $plaintext->last_seen_at = time();
+        $plaintext->plaintext_seen_at = time();
+        $plaintext->save(false);
     }
 
     private function ensureRecentReregistrations(Runner $runner, int $count): void

@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\JobTemplate $model */
 /** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
+/** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings from JobTemplateWarnings */
 
 use app\components\LintVerdict;
 use app\helpers\TimeHelper;
@@ -46,6 +47,7 @@ $this->title = $model->name;
 <?php if ($model->inventory !== null) : ?>
     <?= $this->render('/inventory/_localhost-warning', ['inventory' => $model->inventory]) ?>
 <?php endif; ?>
+<?= $this->render('_warnings', ['warnings' => $warnings]) ?>
 
 <div class="row g-3">
     <div class="col-lg-6">

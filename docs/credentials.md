@@ -8,8 +8,9 @@ every log path (`CredentialService::redact()`).
 
 A job template may attach **multiple credentials** at once. The primary
 credential claims the Ansible connection slots (`--user`,
-`--private-key`, `--vault-password-file`); additional credentials
-contribute secret environment variables that playbooks read at runtime.
+`--private-key`); additional credentials contribute secret environment
+variables that playbooks read at runtime. A template has at most one
+vault password, see [One vault password per job template](#one-vault-password-per-job-template).
 This lets a single template combine an SSH key with a 1Password service-
 account token with an API key, without juggling multiple templates.
 
@@ -123,9 +124,10 @@ What happens with them:
    it starts, with the reason in the job log. Before 2.6.0 such a
    credential was skipped and the job ran without it.
 3. The runner feeds the list through `CredentialInjector::injectAll()`:
-   - SSH Key / Username+Password / Vault: first-wins on their slot.
+   - SSH Key / Username+Password: first-wins on their slot.
      If you attach two SSH keys, only the primary wins; extras are
      skipped with an info-level log entry.
+   - Vault: the one vault password becomes `--vault-password-file`.
    - Token: every distinct `env_var_name` becomes its own env var.
 4. Runs `ansible-playbook` with the merged args and env.
 5. Deletes any temp files (private keys, passwords, vault-password
@@ -133,6 +135,73 @@ What happens with them:
 
 The audit log records which runner started the job and which
 credentials it got, by name and role, never their secrets.
+
+## One vault password per job template
+
+Ansible gets one vault password from Ansilume. Before 2.7.0 the runner
+silently ignored any further vault credential, so a template with two
+looked fine but never used the second. Now:
+
+- **Saving** a template with more than one vault password is rejected,
+  as primary or additional credential, in the form and with `422` in the
+  API. The error names the vault passwords involved.
+- **Older templates** that already have two keep running with the one
+  that takes precedence, the primary first, then the additional ones as
+  listed. Their page shows which one is used and which is ignored, and
+  the template list offers a filter for them. Their next save is
+  rejected until only one is left.
+- **Changing a credential's type** to Vault Secret is rejected while a
+  template that uses it already has another vault password.
+
+If your repository has one vault file per environment, such as DEV, TEST
+and PROD with different passwords, give each environment its own job
+template with its own vault password.
+
+## Assigning a vault password to several job templates
+
+The page of a vault password has **Assign to job templates**. It lists
+every job template you may change, with its current vault password, and
+assigns this one to the ones you select:
+
+- A template without a vault password gets it as the last additional
+  credential.
+- A template with another vault password gets it replaced in the same
+  position, so a primary stays primary. Any further vault password is
+  detached, which also fixes older templates that have two.
+- Templates that already have exactly this one stay unchanged.
+
+Each changed template is audited as `job-template.updated`, with the
+credentials that were attached and detached. Jobs that already wait keep
+the vault password they were launched with. The assignment needs the
+`job-template.update` and `credential.view` permissions, and it is only
+offered for vault passwords with a usable secret. One request changes at
+most 500 job templates; "select all" selects the first 500, and a second
+round assigns the rest.
+
+The API offers the same: `GET /api/v1/credentials/{id}/job-templates`
+lists the templates you may change, and `POST` with
+`{"job_template_ids": [12, 15]}` assigns the vault password and answers
+with the outcome per template. A rejected request changes nothing, and
+`error.job_template_ids` names the templates that were not found or may
+not be changed.
+
+## Rotating a vault password
+
+Changing a vault password takes two steps, and jobs that start in
+between fail to decrypt. Recommended order:
+
+1. Pause the schedules of the affected templates and let running jobs
+   finish.
+2. Re-encrypt the vault files with `ansible-vault rekey`, then commit
+   and push.
+3. Right away, enter the new password on the credential page. Ansilume
+   decrypts credentials when a runner claims a job, so jobs claimed
+   afterwards get the new password.
+4. Sync the project, run one job in check mode, then resume the
+   schedules.
+
+To move templates to a new vault credential instead of changing the
+secret, use [Assign to job templates](#assigning-a-vault-password-to-several-job-templates).
 
 ## Example: 1Password lookup
 
@@ -240,7 +309,9 @@ added to a custom runner image.
   so credentials have to be entered again after a key change.
 - **In transit:** when a runner claims a job, the server decrypts the
   job's credentials and sends them to that runner in the claim response.
-  Use HTTPS for runners that are not on the server host. The runner
+  Use HTTPS for runners that are not on the server host. The runner group
+  page flags runners that connect over plain HTTP from outside the trusted
+  networks, see [runners.md](runners.md#plain-http-warning). The runner
   writes private keys, SSH passwords and vault passwords to `0600` temp
   files and puts tokens (and, for compatibility, `ANSIBLE_SSH_PASS`)
   into the playbook environment. Temp files are unlinked in a `finally`

@@ -6,6 +6,7 @@ namespace app\models;
 
 use app\components\SurveyField;
 use yii\db\ActiveRecord;
+use yii\validators\Validator;
 
 /**
  * @property int         $id
@@ -110,6 +111,31 @@ class JobTemplate extends ActiveRecord
             [['survey_fields'], 'validateJson'],
             [['trigger_token'], 'string', 'max' => 64],
             [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'approval_rule_id', 'created_by'], 'integer'],
+            // Unknown ids would otherwise fail on the foreign keys with a server error.
+            [
+                ['project_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => Project::class,
+                'targetAttribute' => ['project_id' => 'id'],
+                'message' => 'The selected project does not exist.',
+            ],
+            [
+                ['runner_group_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => RunnerGroup::class,
+                'targetAttribute' => ['runner_group_id' => 'id'],
+                'message' => 'The selected runner group does not exist.',
+            ],
+            [
+                ['approval_rule_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => ApprovalRule::class,
+                'targetAttribute' => ['approval_rule_id' => 'id'],
+                'message' => 'The selected approval rule does not exist.',
+            ],
             [
                 ['credential_id'],
                 'exist',
@@ -118,7 +144,84 @@ class JobTemplate extends ActiveRecord
                 'targetAttribute' => ['credential_id' => 'id'],
                 'message' => 'The selected credential does not exist.',
             ],
+            [
+                ['inventory_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => Inventory::class,
+                'targetAttribute' => ['inventory_id' => 'id'],
+                'message' => 'The selected inventory does not exist.',
+            ],
+            // New templates, and changes of project or inventory only: older
+            // templates keep running and show a warning instead.
+            [
+                ['inventory_id'],
+                'validateInventoryProject',
+                'skipOnError' => true,
+                'when' => fn (self $m): bool => $m->isNewRecord
+                    || $m->isAttributeChanged('inventory_id', false)
+                    || $m->isAttributeChanged('project_id', false),
+            ],
         ];
+    }
+
+    /**
+     * File and dynamic inventories must come from the template's project: the
+     * runner checks out only that project and looks for the inventory there.
+     */
+    public function validateInventoryProject(string $attribute): void
+    {
+        // Without a valid project there is nothing to compare with.
+        if ($this->hasErrors('project_id')) {
+            return;
+        }
+        $inventory = Inventory::findOne((int)$this->inventory_id);
+        if ($inventory === null || !$inventory->belongsToOtherProjectThan((int)$this->project_id)) {
+            return;
+        }
+        $this->addError($attribute, sprintf(
+            'File and dynamic inventories must belong to the job template\'s project, but "%s" belongs to another project. '
+            . 'Choose an inventory of this project or a static inventory.',
+            $inventory->name
+        ));
+    }
+
+    /**
+     * Accept only inventories that match $filter, the acting user's team
+     * filter ({@see \app\services\ProjectAccessChecker::buildChildResourceFilter()}
+     * on inventory.project_id), so a crafted request cannot point a template
+     * at an inventory of a project the user cannot see. Unknown and hidden
+     * inventories get the same message. An unchanged inventory is not
+     * checked again.
+     *
+     * The check runs before every other rule: the inventory project rule
+     * names the inventory in its message, which would give hidden names away.
+     *
+     * @param array<int|string, mixed>|null $filter null: every inventory
+     */
+    public function restrictInventories(?array $filter): void
+    {
+        if ($filter === null) {
+            return;
+        }
+        $visible = Validator::createValidator('exist', $this, ['inventory_id'], [
+            'targetClass' => Inventory::class,
+            'targetAttribute' => ['inventory_id' => 'id'],
+            'filter' => $filter,
+            'message' => 'The selected inventory does not exist.',
+            'when' => fn (self $m): bool => $m->isNewRecord || $m->isAttributeChanged('inventory_id', false),
+        ]);
+        $validators = $this->getValidators();
+        $validators->exchangeArray(array_merge([$visible], $validators->getArrayCopy()));
+    }
+
+    /**
+     * True when the stored inventory is a file or dynamic inventory of
+     * another project (templates saved before that was rejected).
+     */
+    public function hasCrossProjectInventory(): bool
+    {
+        return $this->inventory !== null && $this->inventory->belongsToOtherProjectThan((int)$this->project_id);
     }
 
     public function attributeLabels(): array

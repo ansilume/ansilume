@@ -1,5 +1,18 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
+
+/** Opens a template's page, paging through the list sorted by name. */
+async function openTemplate(page: Page, name: string) {
+  for (let listPage = 1; listPage <= 10; listPage++) {
+    await page.goto(`/job-template/index?sort=name&page=${listPage}`);
+    const link = page.locator('#template-table tbody tr a', { hasText: new RegExp(`^${name}$`) }).first();
+    if (await link.count() > 0) {
+      await link.click();
+      return;
+    }
+  }
+  throw new Error(`Job template ${name} is not listed`);
+}
 
 test.describe('Job Templates RBAC', () => {
 
@@ -42,22 +55,49 @@ test.describe('Job Templates RBAC', () => {
   });
 
   test('viewer gets 403 on template launch URL', async ({ page }) => {
-    await page.goto('/job-template/index');
-    const row = page.locator('table.table tbody tr').filter({
-      hasText: 'e2e-template',
-    }).first();
-    if (!(await row.isVisible({ timeout: 2_000 }).catch(() => false))) {
-      test.skip(true, 'No e2e-template seeded');
-      return;
-    }
-    const link = row.locator('a').first();
-    const href = await link.getAttribute('href');
-    const match = href?.match(/id=(\d+)/);
-    if (!match) {
-      test.skip(true, 'Template link has no numeric id');
-      return;
-    }
-    await page.goto(`/job-template/launch?id=${match[1]}`);
+    // Regression: the check looked for e2e-template, which belongs to a team
+    // the viewer is not in, and skipped itself, so it tested nothing.
+    // e2e-beta-tmpl is in the viewer's own team project, where the team even
+    // has the operator role: the viewer role alone must block the launch.
+    await openTemplate(page, 'e2e-beta-tmpl');
+    const match = page.url().match(/id=(\d+)/);
+    expect(match, 'the template page has a numeric id').not.toBeNull();
+    await page.goto(`/job-template/launch?id=${match?.[1]}`);
     await expectForbidden(page);
+  });
+
+  // Fixtures from commands/E2eTeamScopingSeeder.php: e2e-operator's team operates
+  // e2e-alpha-proj and may only view e2e-alpha-viewed-proj.
+  test('operator cannot clone a template of a project their team only views', async ({ page }) => {
+    // Regression: clone needed only view access and created the copy in that project.
+    await openTemplate(page, 'e2e-alpha-viewed-tmpl');
+    await page.getByRole('button', { name: 'Clone' }).click();
+    await expectForbidden(page);
+
+    await page.goto('/job-template/index?sort=-id');
+    await expect(page.locator('#template-table tbody')).not.toContainText('e2e-alpha-viewed-tmpl (copy)');
+  });
+
+  test('operator cannot move a template into a project their team only views', async ({ page }) => {
+    // Regression: saving checked only the project the template came from.
+    await openTemplate(page, 'e2e-alpha-tmpl');
+    await page.getByRole('link', { name: 'Edit' }).first().click();
+    await page.locator('#jobtemplate-project_id').selectOption({ label: 'e2e-alpha-viewed-proj' });
+    await page.getByRole('button', { name: 'Save Changes' }).click();
+    await expectForbidden(page);
+
+    await openTemplate(page, 'e2e-alpha-tmpl');
+    await expect(page.locator('body')).toContainText('e2e-alpha-proj');
+    await expect(page.locator('body')).not.toContainText('e2e-alpha-viewed-proj');
+  });
+
+  // Fixtures from commands/E2eVaultAssignmentSeeder.php and E2eInventoryProjectSeeder.php (open projects)
+  test('viewer sees the warnings of older templates', async ({ page }) => {
+    for (const [name, code] of [['e2e-two-vaults-legacy', 'multiple_vault_credentials'], ['e2e-xproj-legacy', 'inventory_other_project']]) {
+      await page.goto('/job-template/index?sort=-id');
+      await page.locator('#template-table tbody tr', { hasText: name }).first()
+        .locator('a', { hasText: new RegExp(`^${name}$`) }).click();
+      await expect(page.locator(`[data-testid="template-warning"][data-code="${code}"]`)).toBeVisible();
+    }
   });
 });

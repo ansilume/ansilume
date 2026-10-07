@@ -85,6 +85,50 @@ share_network() {
     return 1
 }
 
+# Reports how each runner reaches the server. Reads lines of
+# "name|group|transport|remote_addr|online|plaintext_age" (online: 1 or 0;
+# plaintext_age: seconds since the last plain HTTP request from outside the
+# trusted networks, empty if never). Claim responses carry decrypted
+# credentials, so plain HTTP from outside is a failure.
+report_runner_transport() {
+    local name group transport addr online age
+    while IFS='|' read -r name group transport addr online age; do
+        [ -z "$name" ] && continue
+        case "$transport" in
+            https)
+                ok "Runner '${name}' (${group}): HTTPS" ;;
+            http_internal)
+                info "Runner '${name}' (${group}): plain HTTP from a trusted network (${addr})" ;;
+            http_external)
+                if [ "$online" = "1" ]; then
+                    fail "Runner '${name}' (${group}): plain HTTP from ${addr}, outside the trusted networks; credentials travel in clear"
+                else
+                    warn "Runner '${name}' (${group}, offline): last connected over plain HTTP from ${addr}"
+                fi ;;
+            *)
+                info "Runner '${name}' (${group}): transport unknown, no request since the upgrade" ;;
+        esac
+        if [ "$transport" != "http_external" ] && [ -n "$age" ] && [ "$age" -lt 604800 ]; then
+            warn "Runner '${name}' (${group}): used plain HTTP from outside within the last 7 days; rotate the credentials it received"
+        fi
+    done
+}
+
+# Reports the trusted networks in use (first line, comma-separated) and the
+# RUNNER_TRUSTED_NETWORKS entries ignored as invalid (second line, may be
+# empty). A value replaces the defaults, so a typo silently keeps them.
+report_trusted_networks() {
+    local effective="" ignored=""
+    IFS= read -r effective || true
+    IFS= read -r ignored || true
+    if [ -n "$effective" ]; then
+        info "Trusted networks in use: ${effective} (RUNNER_TRUSTED_NETWORKS; unset means loopback and the private ranges)"
+    fi
+    if [ -n "$ignored" ]; then
+        warn "RUNNER_TRUSTED_NETWORKS entries ignored as invalid: ${ignored}. Separate entries with commas."
+    fi
+}
+
 # PHP prelude for in-container deep probes. Boots a console application the
 # same way ./yii does: load .env first (the dev checkout injects only APP_ENV
 # into the app container, so DB_* must come from the bind-mounted .env; in
@@ -96,6 +140,16 @@ PHP_BOOT="
     require '/var/www/vendor/yiisoft/yii2/Yii.php';
     \$app = new yii\console\Application(require '/var/www/config/console.php');
 "
+
+# One "name|group|transport|remote_addr|online|plaintext_age" line per runner
+# for report_runner_transport(). "|" and control characters in names become
+# spaces, so a name cannot break into lines that pass for other runners.
+RUNNER_TRANSPORT_LINE_PHP='
+    $runnerTransportLine = static function (string $name, string $group, string $transport, string $addr, bool $online, ?int $age): string {
+        $clean = static fn (string $value): string => (string)preg_replace("/[|[:cntrl:]]/", " ", $value);
+        return implode("|", [$clean($name), $clean($group), $transport, $addr, $online ? "1" : "0", $age === null ? "" : (string)$age]) . "\n";
+    };
+'
 
 # ── Preamble ─────────────────────────────────────────────────────────────────
 
@@ -500,6 +554,45 @@ if [ -n "$app_container" ]; then
         fi
     else
         info "No projects found or could not query project status"
+    fi
+fi
+
+# ── 10b2. Runner transport ──────────────────────────────────────────────────
+
+if [ -n "$app_container" ]; then
+    section "Runner Transport"
+
+    transport_output=$(docker exec "$app_container" php -r "
+        ${PHP_BOOT}
+        ${RUNNER_TRANSPORT_LINE_PHP}
+        \$now = time();
+        foreach (app\models\Runner::find()->with('group')->orderBy(['name' => SORT_ASC])->all() as \$r) {
+            echo \$runnerTransportLine(
+                (string)\$r->name,
+                (string)(\$r->group->name ?? ''),
+                (string)\$r->transport,
+                (string)\$r->remote_addr,
+                \$r->isOnline(),
+                \$r->plaintext_seen_at === null ? null : \$now - (int)\$r->plaintext_seen_at
+            );
+        }
+    " 2>/dev/null || true)
+
+    if [ -n "$transport_output" ]; then
+        report_runner_transport <<< "$transport_output"
+    else
+        info "No runners registered, or the runner table could not be queried"
+    fi
+
+    trusted_output=$(docker exec "$app_container" php -r "
+        ${PHP_BOOT}
+        \$configured = (string)(\$app->params['runnerTrustedNetworks'] ?? '');
+        echo implode(', ', app\components\RunnerTransportClassifier::networks(\$configured)), \"\n\";
+        echo implode(', ', app\components\RunnerTransportClassifier::ignoredEntries(\$configured)), \"\n\";
+    " 2>/dev/null || true)
+    if [ -n "$trusted_output" ]; then
+        info ""
+        report_trusted_networks <<< "$trusted_output"
     fi
 fi
 

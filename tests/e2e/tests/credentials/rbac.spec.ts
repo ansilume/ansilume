@@ -65,4 +65,30 @@ test.describe('Credentials RBAC', () => {
 
     expect(await page.content()).not.toContain('e2e-usage-token-secret-value');
   });
+
+  // Fixtures from commands/E2eVaultAssignmentSeeder.php
+  test('viewer cannot assign a vault password to job templates', async ({ page }) => {
+    await page.goto('/credential/index');
+    await page.locator('#credential-table tbody tr', { hasText: 'e2e-vault-assign-a' }).first()
+      .locator('a', { hasText: 'e2e-vault-assign-a' }).click();
+    await expect(page.locator('#credential-assign-templates')).toHaveCount(0);
+
+    const id = new URL(page.url()).searchParams.get('id');
+    await page.goto(`/credential-assignment/index?id=${id}`);
+    await expectForbidden(page);
+  });
+
+  test('operator is only offered job templates they may change', async ({ page }) => {
+    await page.goto('/credential/index');
+    await page.locator('#credential-table tbody tr', { hasText: 'e2e-vault-assign-a' }).first()
+      .locator('a', { hasText: 'e2e-vault-assign-a' }).click();
+    await page.locator('#credential-assign-templates').click();
+
+    const picker = page.locator('#vault-assign-templates');
+    await expect(picker).toContainText('e2e-vault-bulk-none');
+    // Another team's project, which the operator cannot even see.
+    await expect(picker).not.toContainText('e2e-vault-bulk-beta');
+    // A project the operator's team may only view (E2eTeamScopingSeeder): seeing is not changing.
+    await expect(picker).not.toContainText('e2e-alpha-viewed-tmpl');
+  });
 });

@@ -32,8 +32,16 @@ $deleteConfirm = $usage->isInUse()
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>
+        <?php if ($model->credential_type === Credential::TYPE_VAULT && \Yii::$app->user?->can('job-template.update')) : ?>
+            <?php if ($secretStatus === CredentialService::SECRET_STATUS_OK) : ?>
+                <?= Html::a('Assign to job templates', ['/credential-assignment/index', 'id' => $model->id], ['class' => 'btn btn-outline-primary', 'id' => 'credential-assign-templates']) ?>
+            <?php else : ?>
+                <button type="button" class="btn btn-outline-primary" id="credential-assign-templates" disabled
+                        title="Enter a usable secret first">Assign to job templates</button>
+            <?php endif; ?>
+        <?php endif; ?>
         <?php if (\Yii::$app->user?->can('credential.update')) : ?>
-            <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
+            <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary ms-1']) ?>
         <?php endif; ?>
         <?php if (\Yii::$app->user?->can('credential.delete')) : ?>
             <form method="post" action="<?= Html::encode(Url::to(['delete', 'id' => $model->id])) ?>" style="display:inline" id="credential-delete-form"

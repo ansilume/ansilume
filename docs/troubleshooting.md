@@ -98,6 +98,53 @@ The job never started, so no credential was used and nothing ran on the
 target hosts. The project's SCM credential is checked the same way, shown
 as `(scm)` in the message.
 
+## Saving a job template fails: only one vault password
+
+**Symptom:** Saving or cloning a job template fails with `Only one vault
+password can be attached to a job template.`, or its page warns that a vault
+password is ignored.
+
+**Cause:** Ansible gets one vault password from Ansilume. Templates saved
+before 2.7.0 could hold two, and the runner silently used only the first.
+
+**Fix:** Edit the template and keep one vault password, or use **Assign to job
+templates** on the page of the vault password you want, which replaces the
+other one. The template list shows all affected templates through its warning
+filter, and the API through `GET /api/v1/job-templates?warning=multiple_vault_credentials`.
+
+## Saving a job template fails: the inventory belongs to another project
+
+**Symptom:** `File and dynamic inventories must belong to the job template's
+project`, or the template page warns about an inventory of another project.
+
+**Cause:** The runner checks out only the template's project and looks for a
+file or dynamic inventory there. With an inventory of another project, jobs
+read a file of the same name in the wrong project, or none at all, while
+"Parse Inventory" previews the other project's hosts.
+
+**Fix:** Pick an inventory of the template's project, or a static inventory,
+which works with any project. Older templates keep running with a warning;
+find them with the template list's warning filter or
+`GET /api/v1/job-templates?warning=inventory_other_project`.
+
+## Runner group page warns about plain HTTP
+
+**Symptom:** A runner shows "Plain HTTP" in the Transport column, and the
+runner group page shows a red warning.
+
+**Cause:** The runner talks to the server over plain HTTP from outside the
+trusted networks, so claim responses carry decrypted credentials in clear.
+
+**Fix:** Set the runner's `API_URL` to an `https://` address behind a TLS
+reverse proxy that sets `X-Forwarded-Proto` and `X-Forwarded-For`, then
+rotate the credentials it received. If the runner really sits in a trusted
+network, set `RUNNER_TRUSTED_NETWORKS` to all trusted networks, that one
+included. A value replaces the defaults, so also list the ranges of the
+bundled runners and of your reverse proxy, for example
+`127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,198.51.100.0/24`.
+`bin/diagnose` shows the list in use; see
+[runners.md](runners.md#plain-http-warning).
+
 ## Runners show "unknown" name/group
 
 **Symptom:** Runner logs show `Runner 'unknown' started. Group: 'unknown'.`

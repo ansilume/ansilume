@@ -156,6 +156,18 @@ abstract class BaseApiController extends Controller
     }
 
     /**
+     * The ?page= query parameter as a page number; 1 when it is missing or
+     * not a positive integer. Query parameters are strings, and paginated()
+     * takes an int under strict_types.
+     */
+    protected function requestedPage(): int
+    {
+        $page = \Yii::$app->request->get('page', 1);
+
+        return is_numeric($page) ? max(1, (int)$page) : 1;
+    }
+
+    /**
      * @param array<int, mixed> $items
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */

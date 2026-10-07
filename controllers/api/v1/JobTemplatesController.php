@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\JobTemplateWarnings;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\JobTemplate;
@@ -37,24 +38,30 @@ class JobTemplatesController extends BaseApiController
     }
 
     /**
-     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     * Optional ?warning=<code> lists only templates with that warning
+     * (see JobTemplateWarnings).
+     *
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}|array{error: array{message: string}}
      */
     public function actionIndex(): array
     {
         $query = JobTemplate::find()
             ->with(['project', 'inventory', 'credential', 'jobTemplateCredentials.credential'])
-            ->orderBy(['id' => SORT_DESC]);
+            ->orderBy(['job_template.id' => SORT_DESC]);
         $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
         if ($filter !== null) {
             $query->andWhere($filter);
+        }
+        $warning = \Yii::$app->request->get('warning', '');
+        if ($warning !== '' && (!is_string($warning) || !JobTemplateWarnings::filter($query, $warning))) {
+            return $this->error('Unknown warning. Use one of: ' . implode(', ', JobTemplateWarnings::CODES) . '.', 422);
         }
 
         $dp = new ActiveDataProvider([
             'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
-        /** @var int $page */
-        $page = \Yii::$app->request->get('page', 1);
+        $page = $this->requestedPage();
 
         return $this->paginated(
             array_map(fn ($t) => $this->serialize($t), $dp->getModels()),
@@ -100,6 +107,7 @@ class JobTemplatesController extends BaseApiController
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
         }
+        $this->restrictInventories($model, $userId);
 
         $credentialIds = $this->readCredentialIds($body);
         if ($credentialIds === false) {
@@ -130,6 +138,11 @@ class JobTemplatesController extends BaseApiController
         }
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
+        // The project it moves to as well, not only the one it comes from.
+        if (!$this->checker()->canOperateChildResource($userId, $model->project_id)) {
+            return $this->error('Forbidden.', 403);
+        }
+        $this->restrictInventories($model, $userId);
 
         $credentialIds = $this->readCredentialIds($body);
         if ($credentialIds === false) {
@@ -229,7 +242,16 @@ class JobTemplatesController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, name: string, description: string|null, project_id: int|null, project_name: string|null, inventory_id: int|null, inventory_name: string|null, credential_id: int|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string|null, become_user: string|null, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, created_at: int, updated_at: int}
+     * Only inventories the user may see, so a request cannot point the
+     * template at another team's hosts.
+     */
+    private function restrictInventories(JobTemplate $model, int $userId): void
+    {
+        $model->restrictInventories($this->checker()->buildChildResourceFilter($userId, 'inventory.project_id'));
+    }
+
+    /**
+     * @return array<string, mixed>
      */
     private function serialize(JobTemplate $t): array
     {
@@ -258,6 +280,7 @@ class JobTemplatesController extends BaseApiController
             'tags' => $t->tags,
             'skip_tags' => $t->skip_tags,
             'has_survey' => $t->hasSurvey(),
+            'warnings' => JobTemplateWarnings::forTemplate($t),
             'created_at' => $t->created_at,
             'updated_at' => $t->updated_at,
         ];

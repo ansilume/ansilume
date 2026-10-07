@@ -4,11 +4,18 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\components\JobTemplateWarnings;
 use app\controllers\JobTemplateController;
 use app\models\AuditLog;
+use app\models\Credential;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
+use app\models\TeamProject;
+use app\models\User;
+use app\services\CredentialWriteService;
 use app\services\JobLaunchService;
+use app\services\JobTemplateCredentialService;
 use app\services\LintService;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
@@ -84,6 +91,220 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertInstanceOf(ActiveDataProvider::class, $ctrl->capturedParams['dataProvider']);
     }
 
+    // ── actionIndex(): template warnings ────────────────────────────────────
+
+    public function testIndexCountsTheWarningsOfTheTemplatesTheUserMaySee(): void
+    {
+        $admin = $this->createUser('jt-warn-admin');
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $adminRole = $auth->getRole('admin');
+        $this->assertNotNull($adminRole);
+        $auth->assign($adminRole, (string)$admin->id);
+        $member = $this->createUser('jt-warn-member');
+        $adminBefore = $this->warningCountsFor($admin);
+        $memberBefore = $this->warningCountsFor($member);
+        $ownerId = (int)$admin->id;
+        $vaultA = $this->storedVault($ownerId, 'vault-a');
+        $vaultB = $this->storedVault($ownerId, 'vault-b');
+
+        // Open project: every user sees it.
+        $this->giveTwoVaults($this->makeTemplate($ownerId), $vaultA, $vaultB);
+        // Restricted to the member's team.
+        $teamTemplate = $this->templateWithInventory($ownerId, $this->otherProjectInventory($ownerId));
+        $team = $this->createTeam($ownerId);
+        $this->addTeamMember((int)$team->id, (int)$member->id);
+        $this->createTeamProject((int)$team->id, (int)$teamTemplate->project_id, TeamProject::ROLE_VIEWER);
+        // Restricted to another team: both warnings, but hidden from the member.
+        $hidden = $this->templateWithInventory($ownerId, $this->otherProjectInventory($ownerId));
+        $this->giveTwoVaults($hidden, $vaultA, $vaultB);
+        $this->createTeamProject((int)$this->createTeam($ownerId)->id, (int)$hidden->project_id);
+        // No warning: one vault password and a static inventory.
+        $clean = $this->makeTemplate($ownerId);
+        $clean->credential_id = $vaultA->id;
+        $clean->save(false);
+
+        $this->assertSame([
+            JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS => $adminBefore[JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS] + 2,
+            JobTemplateWarnings::INVENTORY_OTHER_PROJECT => $adminBefore[JobTemplateWarnings::INVENTORY_OTHER_PROJECT] + 2,
+        ], $this->warningCountsFor($admin), 'admins count every template');
+        $memberCounts = $this->warningCountsFor($member);
+        $this->assertSame([
+            JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS => $memberBefore[JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS] + 1,
+            JobTemplateWarnings::INVENTORY_OTHER_PROJECT => $memberBefore[JobTemplateWarnings::INVENTORY_OTHER_PROJECT] + 1,
+        ], $memberCounts, 'the member counts only templates of open projects and of the own team');
+
+        // Unfiltered there is no active warning, and a filter leaves the counts alone.
+        $this->assertNull($this->indexParams()['activeWarning']);
+        $this->assertSame(
+            $memberCounts,
+            $this->indexParams(['warning' => JobTemplateWarnings::INVENTORY_OTHER_PROJECT])['warningCounts']
+        );
+    }
+
+    public function testIndexFilteredByMultipleVaultCredentialsListsOnlyThoseTemplates(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vaultA = $this->storedVault($userId, 'vault-a');
+        $vaultB = $this->storedVault($userId, 'vault-b');
+        $primaryAndAdditional = $this->makeTemplate($userId);
+        $this->giveTwoVaults($primaryAndAdditional, $vaultA, $vaultB);
+        $additionalOnly = $this->makeTemplate($userId);
+        $this->attachInOrder($additionalOnly, [$vaultA, $vaultB]);
+        // One vault password, stored the way the service stores a primary:
+        // as credential_id and as the first pivot row.
+        $oneVault = $this->makeTemplate($userId);
+        $oneVault->credential_id = $vaultA->id;
+        $this->assertTrue($this->credentialService()->saveWithCredentials($oneVault, [$this->createCredential($userId)->id]));
+        $clean = $this->makeTemplate($userId);
+
+        $params = $this->indexParams(['warning' => JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS]);
+
+        $this->assertSame(JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS, $params['activeWarning']);
+        $listed = $this->listedIds($params);
+        $this->assertContains((int)$primaryAndAdditional->id, $listed);
+        $this->assertContains((int)$additionalOnly->id, $listed);
+        $this->assertNotContains((int)$oneVault->id, $listed);
+        $this->assertNotContains((int)$clean->id, $listed);
+        $this->assertEveryListedTemplateHas(JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS, $params);
+    }
+
+    public function testIndexFilteredByInventoryOfAnotherProjectListsOnlyThoseTemplates(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $file = $this->templateWithInventory($userId, $this->otherProjectInventory($userId));
+        $dynamic = $this->templateWithInventory($userId, $this->otherProjectInventory($userId, Inventory::TYPE_DYNAMIC));
+        $ownInventory = $this->otherProjectInventory($userId);
+        $own = $this->createJobTemplate(
+            (int)$ownInventory->project_id,
+            (int)$ownInventory->id,
+            (int)$this->createRunnerGroup($userId)->id,
+            $userId
+        );
+        // Static inventories work with any project, even when one is set.
+        $static = $this->templateWithInventory($userId, $this->otherProjectInventory($userId, Inventory::TYPE_STATIC));
+        // A dynamic inventory without a project counts as the template's own.
+        $unbound = $this->templateWithInventory($userId, $this->inventory($userId, Inventory::TYPE_DYNAMIC, null));
+
+        $params = $this->indexParams(['warning' => JobTemplateWarnings::INVENTORY_OTHER_PROJECT]);
+
+        $this->assertSame(JobTemplateWarnings::INVENTORY_OTHER_PROJECT, $params['activeWarning']);
+        $listed = $this->listedIds($params);
+        $this->assertContains((int)$file->id, $listed);
+        $this->assertContains((int)$dynamic->id, $listed);
+        $this->assertNotContains((int)$own->id, $listed);
+        $this->assertNotContains((int)$static->id, $listed);
+        $this->assertNotContains((int)$unbound->id, $listed);
+        $this->assertEveryListedTemplateHas(JobTemplateWarnings::INVENTORY_OTHER_PROJECT, $params);
+    }
+
+    /**
+     * Regression: ?warning[]=x reached a (string) cast, and the "Array to
+     * string conversion" warning turned into a server error.
+     */
+    public function testIndexIgnoresAWarningGivenAsAnArray(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $legacy = $this->makeTemplate((int)$user->id);
+        $this->giveTwoVaults($legacy, $this->storedVault((int)$user->id, 'vault-a'), $this->storedVault((int)$user->id, 'vault-b'));
+
+        $params = $this->indexParams(['warning' => [JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS]]);
+
+        $this->assertNull($params['activeWarning']);
+        $this->assertContains((int)$legacy->id, $this->listedIds($params));
+    }
+
+    public function testIndexIgnoresAnUnknownWarningCode(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $legacy = $this->makeTemplate($userId);
+        $this->giveTwoVaults($legacy, $this->storedVault($userId, 'vault-a'), $this->storedVault($userId, 'vault-b'));
+        $clean = $this->makeTemplate($userId);
+
+        $params = $this->indexParams(['warning' => 'no_such_warning']);
+
+        $this->assertNull($params['activeWarning']);
+        $listed = $this->listedIds($params);
+        $this->assertContains((int)$legacy->id, $listed, 'the list is not filtered');
+        $this->assertContains((int)$clean->id, $listed, 'the list is not filtered');
+        $this->assertSame(JobTemplateWarnings::CODES, array_keys($params['warningCounts']));
+    }
+
+    /**
+     * Template "b" is created first (lower id), and its inventory and
+     * project names sort before those of template "a". A null sort sends no
+     * sort parameter at all (an empty one would switch off the default
+     * order).
+     *
+     * @return array<string, array{0: string|null, 1: list<string>}>
+     */
+    public static function inventoryFilteredSortProvider(): array
+    {
+        return [
+            'default order' => [null, ['a', 'b']],
+            'name' => ['name', ['a', 'b']],
+            'name descending' => ['-name', ['b', 'a']],
+            'id' => ['id', ['b', 'a']],
+            'id descending' => ['-id', ['a', 'b']],
+            'inventory' => ['inventory', ['b', 'a']],
+            'inventory descending' => ['-inventory', ['a', 'b']],
+            'project' => ['project', ['b', 'a']],
+        ];
+    }
+
+    /**
+     * Sorting the list filtered by inventory_other_project. The filter joins
+     * the inventory table, which has id and name columns of its own, and
+     * sorting by inventory joins that table a second time. Every sort must
+     * still order by the right table and fill the templates with their own
+     * columns, not with the inventory's.
+     *
+     * Guards the table-qualified sort attributes, introduced against
+     * ambiguous columns. Note: MariaDB resolves an unqualified ORDER BY name
+     * or id against the job_template.* select list Yii uses for joined
+     * queries, so the former unqualified attributes pass as well; this fails
+     * once a select or join change lets the columns clash.
+     *
+     * @dataProvider inventoryFilteredSortProvider
+     * @param list<string> $expected template keys in listed order
+     */
+    public function testIndexSortsTheListFilteredByInventoryOfAnotherProject(?string $sort, array $expected): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $templates = [];
+        $templates['b'] = $this->crossProjectTemplateNamed($userId, 'b', 'a');
+        $templates['a'] = $this->crossProjectTemplateNamed($userId, 'a', 'b');
+
+        $query = ['warning' => JobTemplateWarnings::INVENTORY_OTHER_PROJECT];
+        if ($sort !== null) {
+            $query['sort'] = $sort;
+        }
+        $listed = $this->listedTemplates($this->indexParams($query));
+
+        $mine = array_values(array_filter(
+            $listed,
+            static fn (JobTemplate $t): bool => in_array((int)$t->id, [(int)$templates['a']->id, (int)$templates['b']->id], true)
+        ));
+        $this->assertSame(
+            array_map(static fn (string $key): int => (int)$templates[$key]->id, $expected),
+            array_map(static fn (JobTemplate $t): int => (int)$t->id, $mine)
+        );
+        $this->assertSame(
+            array_map(static fn (string $key): string => $templates[$key]->name, $expected),
+            array_map(static fn (JobTemplate $t): string => $t->name, $mine),
+            'the templates carry their own names, not those of the joined inventory'
+        );
+    }
+
     // ── actionView() ─────────────────────────────────────────────────────────
 
     public function testViewRendersModel(): void
@@ -135,6 +356,55 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $ctrl = $this->makeController();
         $this->expectException(NotFoundHttpException::class);
         $ctrl->actionView(9999999);
+    }
+
+    public function testViewPassesTheWarningsOfALegacyTemplate(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $inventory = $this->otherProjectInventory($userId);
+        $template = $this->templateWithInventory($userId, $inventory);
+        $vaultA = $this->storedVault($userId, 'vault-a');
+        $vaultB = $this->storedVault($userId, 'vault-b');
+        $this->giveTwoVaults($template, $vaultA, $vaultB);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$template->id);
+
+        $warnings = $ctrl->capturedParams['warnings'];
+        $this->assertSame(
+            [JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS, JobTemplateWarnings::INVENTORY_OTHER_PROJECT],
+            array_column($warnings, 'code')
+        );
+        $this->assertSame([(int)$vaultB->id], $warnings[0]['credential_ids'], 'the vault password Ansible ignores');
+        $this->assertStringContainsString(
+            "\"{$vaultA->name}\" takes precedence and \"{$vaultB->name}\" is ignored",
+            $warnings[0]['message']
+        );
+        $this->assertSame([], $warnings[1]['credential_ids']);
+        $this->assertStringContainsString("\"{$inventory->name}\" is a file or dynamic inventory of another project", $warnings[1]['message']);
+    }
+
+    public function testViewPassesNoWarningsForATemplateWithOneVaultAndAnInventoryOfItsProject(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $inventory = $this->otherProjectInventory($userId);
+        $template = $this->createJobTemplate(
+            (int)$inventory->project_id,
+            (int)$inventory->id,
+            (int)$this->createRunnerGroup($userId)->id,
+            $userId
+        );
+        $template->credential_id = $this->storedVault($userId, 'vault-only')->id;
+        $this->assertTrue($this->credentialService()->saveWithCredentials($template, [$this->createCredential($userId)->id]));
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$template->id);
+
+        $this->assertSame([], $ctrl->capturedParams['warnings']);
     }
 
     // ── actionCreate() ───────────────────────────────────────────────────────
@@ -320,6 +590,44 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertSame([$extra->id], $ctrl->capturedParams['selectedCredentialIds']);
     }
 
+    public function testCreatingATemplateWithTwoVaultsIsRejected(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $vaultA = $this->storedVault((int)$user->id, 'vault-a');
+        $vaultB = $this->storedVault((int)$user->id, 'vault-b');
+        $name = 'tpl-two-vaults-' . uniqid('', true);
+        $this->setPost($this->templatePost($user, $name, ['credential_id' => $vaultA->id]) + [
+            'credential_ids' => [(string)$vaultB->id],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionCreate();
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertSame($this->vaultConflictMessage($vaultA, $vaultB), $ctrl->capturedParams['model']->getFirstError('credential_ids'));
+        $this->assertSame([], $ctrl->capturedParams['warnings'], 'a new template has no stored state to warn about');
+        $this->assertNull(JobTemplate::findOne(['name' => $name]));
+    }
+
+    public function testCreatingATemplateWithAnInventoryOfAnotherProjectIsRejected(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $inventory = $this->otherProjectInventory((int)$user->id);
+        $name = 'tpl-other-inventory-' . uniqid('', true);
+        $post = $this->templatePost($user, $name);
+        $post['JobTemplate']['inventory_id'] = $inventory->id;
+        $this->setPost($post);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionCreate();
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertSame($this->inventoryMessage($inventory), $ctrl->capturedParams['model']->getFirstError('inventory_id'));
+        $this->assertNull(JobTemplate::findOne(['name' => $name]));
+    }
+
     // ── actionUpdate() ───────────────────────────────────────────────────────
 
     public function testUpdatePersistsChanges(): void
@@ -369,6 +677,98 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
 
         $this->assertSame('rendered:form', $result);
         $this->assertSame($tpl->id, $ctrl->capturedParams['model']->id);
+    }
+
+    // ── actionUpdate(): vault passwords and warnings ────────────────────────
+
+    public function testTheEditFormShowsTheWarningsOfALegacyTemplate(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vaultA = $this->storedVault($userId, 'vault-a');
+        $vaultB = $this->storedVault($userId, 'vault-b');
+        $template = $this->makeTemplate($userId);
+        $this->giveTwoVaults($template, $vaultA, $vaultB);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionUpdate((int)$template->id);
+
+        $warnings = $ctrl->capturedParams['warnings'];
+        $this->assertSame([JobTemplateWarnings::MULTIPLE_VAULT_CREDENTIALS], array_column($warnings, 'code'));
+        $this->assertSame([(int)$vaultB->id], $warnings[0]['credential_ids']);
+    }
+
+    /**
+     * A rejected submission must not change what the form warns about: the
+     * warnings describe the stored template, which keeps running as it is.
+     */
+    public function testTheEditFormWarnsAboutTheStoredTemplateNotAboutARejectedSubmission(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vaultA = $this->storedVault($userId, 'vault-a');
+        $vaultB = $this->storedVault($userId, 'vault-b');
+        // Stored: an inventory of another project and one vault password.
+        $otherInventory = $this->otherProjectInventory($userId);
+        $template = $this->templateWithInventory($userId, $otherInventory);
+        $template->credential_id = $vaultA->id;
+        $template->save(false);
+        $this->attachInOrder($template, [$vaultA]);
+        // Submitted: a static inventory, and vault B as primary next to vault A.
+        $this->setPost([
+            'JobTemplate' => ['inventory_id' => $this->createInventory($userId)->id, 'credential_id' => $vaultB->id],
+            'credential_ids' => [(string)$vaultA->id],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$template->id);
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertSame($this->vaultConflictMessage($vaultB, $vaultA), $ctrl->capturedParams['model']->getFirstError('credential_ids'));
+        $this->assertSame(
+            [JobTemplateWarnings::INVENTORY_OTHER_PROJECT],
+            array_column($ctrl->capturedParams['warnings'], 'code'),
+            'the stored inventory, not the submitted one; the stored single vault, not the submitted two'
+        );
+        $stored = JobTemplate::findOne($template->id);
+        $this->assertNotNull($stored);
+        $this->assertSame((int)$otherInventory->id, (int)$stored->inventory_id);
+        $this->assertSame([(int)$vaultA->id], array_column($stored->credentialSnapshot(), 'id'));
+    }
+
+    public function testAnEditThatAddsASecondVaultIsRejectedAndSavesNothing(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vaultA = $this->storedVault($userId, 'vault-a');
+        $vaultB = $this->storedVault($userId, 'vault-b');
+        $template = $this->makeTemplate($userId);
+        $template->credential_id = $vaultA->id;
+        $this->assertTrue($this->credentialService()->saveWithCredentials($template, []));
+        $updatesBefore = $this->auditCount(AuditLog::ACTION_TEMPLATE_UPDATED, (int)$template->id);
+        $this->setPost([
+            'JobTemplate' => ['name' => 'renamed-' . uniqid('', true)],
+            'credential_ids' => [(string)$vaultB->id],
+        ]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$template->id);
+
+        $this->assertSame('rendered:form', $result);
+        $this->assertSame($this->vaultConflictMessage($vaultA, $vaultB), $ctrl->capturedParams['model']->getFirstError('credential_ids'));
+        $this->assertSame([(int)$vaultB->id], $ctrl->capturedParams['selectedCredentialIds'], 'the submitted selection is shown again');
+        $this->assertSame([], $ctrl->capturedParams['warnings'], 'the stored template has one vault password');
+        $stored = JobTemplate::findOne($template->id);
+        $this->assertNotNull($stored);
+        $this->assertSame($template->name, $stored->name);
+        $this->assertSame([(int)$vaultA->id], array_column($stored->credentialSnapshot(), 'id'));
+        $this->assertSame($updatesBefore, $this->auditCount(AuditLog::ACTION_TEMPLATE_UPDATED, (int)$template->id));
+        /** @var object{runCalls: int} $lint */
+        $lint = \Yii::$app->get('lintService');
+        $this->assertSame(0, $lint->runCalls);
     }
 
     // ── actionDelete() ───────────────────────────────────────────────────────
@@ -511,6 +911,85 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $ctrl->actionClone(9999999);
     }
 
+    /**
+     * Regression: a failed clone flashed the JSON of the model errors
+     * ("Clone failed: {"credential_ids":[...]}").
+     */
+    public function testCloningALegacyTwoVaultTemplateFailsWithAReadableMessage(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vaultA = $this->storedVault($userId, 'vault-a');
+        $vaultB = $this->storedVault($userId, 'vault-b');
+        $source = $this->makeTemplate($userId);
+        $this->giveTwoVaults($source, $vaultA, $vaultB);
+        $templatesBefore = JobTemplate::find()->count();
+        \Yii::$app->session->removeAllFlashes();
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionClone((int)$source->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertSame(['view', 'id' => (int)$source->id], $ctrl->capturedRedirect, 'back to the source template');
+        $flash = (string)\Yii::$app->session->getFlash('danger');
+        $this->assertStringStartsWith('Clone failed: Only one vault password', $flash);
+        $this->assertSame('Clone failed: ' . $this->vaultConflictMessage($vaultA, $vaultB) . ' Fix the source template first.', $flash);
+        $this->assertStringNotContainsString('{', $flash, 'no JSON dump of the model errors');
+        $this->assertFalse(\Yii::$app->session->hasFlash('success'));
+        $this->assertSame($templatesBefore, JobTemplate::find()->count(), 'no clone is created');
+        $this->assertNull(JobTemplate::findOne(['name' => $source->name . ' (copy)']));
+    }
+
+    /**
+     * Regression: a failed clone flashed the JSON of the model errors.
+     */
+    public function testCloningATemplateWithAnInventoryOfAnotherProjectFailsWithAReadableMessage(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $inventory = $this->otherProjectInventory($userId);
+        $source = $this->templateWithInventory($userId, $inventory);
+        $templatesBefore = JobTemplate::find()->count();
+        \Yii::$app->session->removeAllFlashes();
+
+        $ctrl = $this->makeController();
+        $ctrl->actionClone((int)$source->id);
+
+        $this->assertSame(['view', 'id' => (int)$source->id], $ctrl->capturedRedirect);
+        $this->assertSame(
+            'Clone failed: ' . $this->inventoryMessage($inventory) . ' Fix the source template first.',
+            \Yii::$app->session->getFlash('danger')
+        );
+        $this->assertSame($templatesBefore, JobTemplate::find()->count(), 'no clone is created');
+    }
+
+    public function testCloningATemplateWithOneVaultCopiesItOnce(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $userId = (int)$user->id;
+        $vault = $this->storedVault($userId, 'vault-only');
+        $token = $this->createCredential($userId);
+        $source = $this->makeTemplate($userId);
+        $source->credential_id = $vault->id;
+        // Stores the vault password as primary and as the first pivot row.
+        $this->assertTrue($this->credentialService()->saveWithCredentials($source, [$token->id]));
+
+        $ctrl = $this->makeController();
+        $ctrl->actionClone((int)$source->id);
+
+        $clone = JobTemplate::findOne(['name' => $source->name . ' (copy)']);
+        $this->assertNotNull($clone);
+        $this->assertSame(['update', 'id' => (int)$clone->id], $ctrl->capturedRedirect);
+        $this->assertSame(
+            [[(int)$vault->id, Credential::ROLE_PRIMARY], [(int)$token->id, Credential::ROLE_ADDITIONAL]],
+            array_map(static fn (array $c): array => [$c['id'], $c['role']], $clone->credentialSnapshot())
+        );
+        $this->assertSame([], JobTemplateWarnings::forTemplate($clone));
+    }
+
     // ── actionLaunch() ───────────────────────────────────────────────────────
 
     public function testLaunchRendersFormOnGet(): void
@@ -651,6 +1130,180 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         ]));
     }
 
+    // ── Team scoping on save ─────────────────────────────────────────────────
+
+    /**
+     * Regression: update checked operate access on the stored project only,
+     * so a team operator could move a template into a project of another
+     * team, or into one their team may only view.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function projectTheUserMayNotOperateProvider(): array
+    {
+        return ['another team\'s project' => ['foreign'], 'a project the team only views' => ['viewed']];
+    }
+
+    /**
+     * @dataProvider projectTheUserMayNotOperateProvider
+     */
+    public function testUpdateCannotMoveATemplateIntoAProjectTheUserMayNotOperate(string $target): void
+    {
+        $scope = $this->teamScope();
+        $template = $this->createJobTemplate($scope['own'], $scope['ownInventory'], $scope['group'], $scope['userId']);
+        $this->setPost(['JobTemplate' => ['project_id' => (string)$scope[$target]]]);
+
+        try {
+            $this->makeController()->actionUpdate((int)$template->id);
+            $this->fail('Moving the template into that project must be forbidden.');
+        } catch (\yii\web\ForbiddenHttpException $e) {
+            $this->assertSame('You do not have permission to modify this resource.', $e->getMessage());
+        }
+        $this->assertSame($scope['own'], (int)JobTemplate::findOne($template->id)?->project_id);
+    }
+
+    /**
+     * Regression: the form offers only inventories the user may see, but the
+     * submitted id was not checked, so a crafted request could run playbooks
+     * against another team's hosts. File and dynamic inventories of another
+     * project also failed the project rule, whose message named them: the
+     * visibility check must come first, so hidden names stay hidden.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function hiddenInventoryTypeProvider(): array
+    {
+        return [
+            'static' => [Inventory::TYPE_STATIC],
+            'file' => [Inventory::TYPE_FILE],
+            'dynamic' => [Inventory::TYPE_DYNAMIC],
+        ];
+    }
+
+    /**
+     * @dataProvider hiddenInventoryTypeProvider
+     */
+    public function testCreateRejectsAnInventoryOfAProjectTheUserCannotSee(string $type): void
+    {
+        $scope = $this->teamScope();
+        $hidden = $this->inventory($scope['userId'], $type, $scope['foreign']);
+        $user = User::findOne($scope['userId']);
+        $this->assertNotNull($user);
+        $post = $this->templatePost($user, 'tpl-hidden-inventory');
+        $post['JobTemplate']['inventory_id'] = (string)$hidden->id;
+        $this->setPost($post);
+
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:form', $ctrl->actionCreate());
+
+        $this->assertSame(['inventory_id' => ['The selected inventory does not exist.']], $ctrl->capturedParams['model']->getErrors());
+        $this->assertNull(JobTemplate::findOne(['name' => 'tpl-hidden-inventory']));
+    }
+
+    public function testUpdateRejectsSwitchingToAnInventoryTheUserCannotSee(): void
+    {
+        $scope = $this->teamScope();
+        $template = $this->createJobTemplate($scope['own'], $scope['ownInventory'], $scope['group'], $scope['userId']);
+        $this->setPost(['JobTemplate' => ['inventory_id' => (string)$scope['foreignInventory']]]);
+
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:form', $ctrl->actionUpdate((int)$template->id));
+
+        $this->assertSame(['inventory_id' => ['The selected inventory does not exist.']], $ctrl->capturedParams['model']->getErrors());
+        $this->assertSame($scope['ownInventory'], (int)JobTemplate::findOne($template->id)?->inventory_id);
+    }
+
+    /**
+     * A template that already uses such an inventory keeps saving as long
+     * as the inventory stays, like the other inventory rules.
+     */
+    public function testAnUnchangedHiddenInventoryDoesNotBlockOtherChanges(): void
+    {
+        $scope = $this->teamScope();
+        $template = $this->createJobTemplate($scope['own'], $scope['foreignInventory'], $scope['group'], $scope['userId']);
+        $this->setPost(['JobTemplate' => ['name' => 'tpl-renamed-hidden', 'inventory_id' => (string)$scope['foreignInventory']]]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionUpdate((int)$template->id);
+
+        $this->assertSame(['view', 'id' => $template->id], $ctrl->capturedRedirect);
+        $this->assertSame('tpl-renamed-hidden', JobTemplate::findOne($template->id)?->name);
+    }
+
+    /**
+     * Regression: clone needed only view access, so a member whose team only
+     * views a project could create templates in it.
+     */
+    public function testCloneInAProjectTheTeamOnlyViewsIsForbidden(): void
+    {
+        $scope = $this->teamScope();
+        $template = $this->createJobTemplate($scope['viewed'], $scope['ownInventory'], $scope['group'], $scope['userId']);
+        $before = (int)JobTemplate::find()->count();
+
+        $this->expectException(\yii\web\ForbiddenHttpException::class);
+        try {
+            $this->makeController()->actionClone((int)$template->id);
+        } finally {
+            $this->assertSame($before, (int)JobTemplate::find()->count());
+        }
+    }
+
+    /**
+     * Cloning a template whose inventory the user cannot see is rejected
+     * like saving one: the clone would be a new reference to it.
+     */
+    public function testCloneOfATemplateWithAHiddenInventoryIsRejected(): void
+    {
+        $scope = $this->teamScope();
+        $template = $this->createJobTemplate($scope['own'], $scope['foreignInventory'], $scope['group'], $scope['userId']);
+        $before = (int)JobTemplate::find()->count();
+
+        $ctrl = $this->makeController();
+        $ctrl->actionClone((int)$template->id);
+
+        $this->assertSame(['view', 'id' => $template->id], $ctrl->capturedRedirect);
+        $this->assertSame(
+            ['danger' => 'Clone failed: The selected inventory does not exist. Fix the source template first.'],
+            \Yii::$app->session->getAllFlashes()
+        );
+        $this->assertSame($before, (int)JobTemplate::find()->count());
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * A logged-in user without RBAC admin whose team operates "own" and only
+     * views "viewed"; "foreign" belongs to another team and has a static
+     * inventory the user cannot see.
+     *
+     * @return array{userId: int, own: int, viewed: int, foreign: int, ownInventory: int, foreignInventory: int, group: int}
+     */
+    private function teamScope(): array
+    {
+        \Yii::$app->session->removeAllFlashes();
+        $admin = (int)$this->createUser('scope-admin')->id;
+        $member = $this->createUser('scope-member');
+        $own = (int)$this->createProject($admin)->id;
+        $viewed = (int)$this->createProject($admin)->id;
+        $foreign = (int)$this->createProject($admin)->id;
+        $team = (int)$this->createTeam($admin)->id;
+        $this->addTeamMember($team, (int)$member->id);
+        $this->createTeamProject($team, $own, TeamProject::ROLE_OPERATOR);
+        $this->createTeamProject($team, $viewed, TeamProject::ROLE_VIEWER);
+        $this->createTeamProject((int)$this->createTeam($admin)->id, $foreign, TeamProject::ROLE_OPERATOR);
+        $this->loginAs($member);
+
+        return [
+            'userId' => (int)$member->id,
+            'own' => $own,
+            'viewed' => $viewed,
+            'foreign' => $foreign,
+            'ownInventory' => (int)$this->inventory($admin, Inventory::TYPE_STATIC, $own)->id,
+            'foreignInventory' => (int)$this->inventory($admin, Inventory::TYPE_STATIC, $foreign)->id,
+            'group' => (int)$this->createRunnerGroup($admin)->id,
+        ];
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private function makeTemplate(int $userId): JobTemplate
@@ -659,6 +1312,205 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $inventory = $this->createInventory($userId);
         $group = $this->createRunnerGroup($userId);
         return $this->createJobTemplate((int)$project->id, (int)$inventory->id, (int)$group->id, $userId);
+    }
+
+    private function credentialService(): JobTemplateCredentialService
+    {
+        /** @var JobTemplateCredentialService $service */
+        $service = \Yii::$app->get('jobTemplateCredentialService');
+        return $service;
+    }
+
+    /**
+     * A vault password credential with a stored secret.
+     */
+    private function storedVault(int $userId, string $label): Credential
+    {
+        $credential = new Credential();
+        $credential->name = $label . '-' . uniqid('', true);
+        $credential->credential_type = Credential::TYPE_VAULT;
+        $credential->created_by = $userId;
+        /** @var CredentialWriteService $writer */
+        $writer = \Yii::$app->get('credentialWriteService');
+        $this->assertTrue($writer->create($credential, ['vault_password' => 'vault-secret']), (string)json_encode($credential->errors));
+        return $credential;
+    }
+
+    /**
+     * Writes pivot rows directly, in the given order, as templates were
+     * stored before a second vault password was rejected.
+     *
+     * @param list<Credential> $credentials
+     */
+    private function attachInOrder(JobTemplate $template, array $credentials): void
+    {
+        foreach ($credentials as $sortOrder => $credential) {
+            \Yii::$app->db->createCommand()->insert('{{%job_template_credential}}', [
+                'job_template_id' => $template->id,
+                'credential_id' => $credential->id,
+                'sort_order' => $sortOrder,
+            ])->execute();
+        }
+    }
+
+    /**
+     * Turns $template into a legacy template with two vault passwords:
+     * $primary as primary credential (and first pivot row, as the service
+     * stores a primary) and $additional as additional credential.
+     */
+    private function giveTwoVaults(JobTemplate $template, Credential $primary, Credential $additional): void
+    {
+        $template->credential_id = $primary->id;
+        $template->save(false);
+        $this->attachInOrder($template, [$primary, $additional]);
+    }
+
+    private function inventory(int $userId, string $type, ?int $projectId): Inventory
+    {
+        $inventory = new Inventory();
+        $inventory->name = $type . '-inventory-' . uniqid('', true);
+        $inventory->inventory_type = $type;
+        $inventory->content = $type === Inventory::TYPE_STATIC ? "localhost\n" : null;
+        $inventory->source_path = $type === Inventory::TYPE_STATIC ? null : 'inventories/hosts.yml';
+        $inventory->project_id = $projectId;
+        $inventory->created_by = $userId;
+        $inventory->save(false);
+        return $inventory;
+    }
+
+    /**
+     * An inventory (a file inventory by default) of a project of its own.
+     */
+    private function otherProjectInventory(int $userId, string $type = Inventory::TYPE_FILE): Inventory
+    {
+        return $this->inventory($userId, $type, (int)$this->createProject($userId)->id);
+    }
+
+    /**
+     * A template of a new project that uses $inventory.
+     */
+    private function templateWithInventory(int $userId, Inventory $inventory): JobTemplate
+    {
+        return $this->createJobTemplate(
+            (int)$this->createProject($userId)->id,
+            (int)$inventory->id,
+            (int)$this->createRunnerGroup($userId)->id,
+            $userId
+        );
+    }
+
+    /**
+     * A template with a file inventory of another project, named
+     * "<prefix>-template-…"; its inventory and its project are named
+     * "<sortPrefix>-…".
+     */
+    private function crossProjectTemplateNamed(int $userId, string $prefix, string $sortPrefix): JobTemplate
+    {
+        $inventory = $this->otherProjectInventory($userId);
+        $inventory->name = $sortPrefix . '-inventory-' . uniqid('', true);
+        $inventory->save(false);
+        $template = $this->templateWithInventory($userId, $inventory);
+        $template->name = $prefix . '-template-' . uniqid('', true);
+        $template->save(false);
+        $project = $template->project;
+        $project->name = $sortPrefix . '-project-' . uniqid('', true);
+        $project->save(false);
+        return $template;
+    }
+
+    private function vaultConflictMessage(Credential $first, Credential $second): string
+    {
+        return sprintf(
+            'Only one vault password can be attached to a job template. "%s" and "%s" are both vault passwords; keep one of them.',
+            $first->name,
+            $second->name
+        );
+    }
+
+    private function inventoryMessage(Inventory $inventory): string
+    {
+        return sprintf(
+            'File and dynamic inventories must belong to the job template\'s project, but "%s" belongs to another project. '
+            . 'Choose an inventory of this project or a static inventory.',
+            $inventory->name
+        );
+    }
+
+    /**
+     * What actionIndex passes to the view for the given query parameters.
+     *
+     * @param array<string, mixed> $query
+     * @return array<string, mixed>
+     */
+    private function indexParams(array $query = []): array
+    {
+        $this->setQueryParams($query);
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:index', $ctrl->actionIndex());
+        return $ctrl->capturedParams;
+    }
+
+    /**
+     * The warning counts of the template list as $user sees it.
+     *
+     * @return array<string, int> code => number of templates
+     */
+    private function warningCountsFor(User $user): array
+    {
+        $this->loginAs($user);
+        $counts = $this->indexParams()['warningCounts'];
+        $this->assertIsArray($counts);
+        $this->assertSame(JobTemplateWarnings::CODES, array_keys($counts), 'one count per warning code');
+        /** @var array<string, int> $counts */
+        return $counts;
+    }
+
+    /**
+     * Every template of the data provider in listed order, all pages.
+     *
+     * @param array<string, mixed> $params what actionIndex passed to the view
+     * @return list<JobTemplate>
+     */
+    private function listedTemplates(array $params): array
+    {
+        $provider = $params['dataProvider'];
+        $this->assertInstanceOf(ActiveDataProvider::class, $provider);
+        $provider->pagination = false;
+        /** @var list<JobTemplate> $models */
+        $models = array_values($provider->getModels());
+        return $models;
+    }
+
+    /**
+     * @param array<string, mixed> $params what actionIndex passed to the view
+     * @return list<int>
+     */
+    private function listedIds(array $params): array
+    {
+        return array_map(static fn (JobTemplate $t): int => (int)$t->id, $this->listedTemplates($params));
+    }
+
+    /**
+     * The SQL filter and JobTemplateWarnings::forTemplate() must agree.
+     *
+     * @param array<string, mixed> $params what actionIndex passed to the view
+     */
+    private function assertEveryListedTemplateHas(string $code, array $params): void
+    {
+        foreach ($this->listedTemplates($params) as $template) {
+            $this->assertContains(
+                $code,
+                array_column(JobTemplateWarnings::forTemplate($template), 'code'),
+                "template #{$template->id} is listed without the warning"
+            );
+        }
+    }
+
+    private function auditCount(string $action, int $templateId): int
+    {
+        return (int)AuditLog::find()
+            ->where(['action' => $action, 'object_type' => 'job_template', 'object_id' => $templateId])
+            ->count();
     }
 
     private function swapService(string $id, \yii\base\Component $replacement): void
@@ -675,6 +1527,8 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
             public string $capturedView = '';
             /** @var array<string, mixed> */
             public array $capturedParams = [];
+            /** @var mixed the route passed to redirect() */
+            public mixed $capturedRedirect = null;
 
             public function render($view, $params = []): string
             {
@@ -686,6 +1540,7 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
 
             public function redirect($url, $statusCode = 302): \yii\web\Response
             {
+                $this->capturedRedirect = $url;
                 $r = new \yii\web\Response();
                 $r->content = 'redirected';
                 return $r;

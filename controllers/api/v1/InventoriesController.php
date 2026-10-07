@@ -49,8 +49,7 @@ class InventoriesController extends BaseApiController
             'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
-        /** @var int $page */
-        $page = \Yii::$app->request->get('page', 1);
+        $page = $this->requestedPage();
 
         return $this->paginated(
             array_map(fn ($inv) => $this->serialize($inv), $dp->getModels()),

@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
+/** @var string|null $activeWarning the warning code the list is filtered by */
+/** @var array<string, int> $warningCounts templates per warning code */
 
+use app\components\JobTemplateWarnings;
 use yii\helpers\Html;
 use yii\widgets\LinkPager;
 
@@ -16,6 +19,22 @@ $this->title = 'Job Templates';
         <?= Html::a('New Template', ['create'], ['class' => 'btn btn-primary']) ?>
     <?php endif; ?>
 </div>
+
+<?php if ($activeWarning !== null) : ?>
+    <div class="alert alert-info" data-testid="template-warning-filter">
+        <?= Html::encode('Showing job templates with ' . JobTemplateWarnings::label($activeWarning) . '.') ?>
+        <?= Html::a('Show all', ['index']) ?>
+    </div>
+<?php else : ?>
+    <?php foreach ($warningCounts as $code => $count) : ?>
+        <?php if ($count > 0) : ?>
+            <div class="alert alert-warning" data-testid="template-warning-summary" data-code="<?= Html::encode($code) ?>">
+                <?= Html::encode($count . ' job template(s) have ' . JobTemplateWarnings::label($code) . '. They keep running, but need fixing.') ?>
+                <?= Html::a('Show them', ['index', 'warning' => $code]) ?>
+            </div>
+        <?php endif; ?>
+    <?php endforeach; ?>
+<?php endif; ?>
 
 <?php $models = $dataProvider->getModels(); ?>
 <?php if (empty($models)) : ?>

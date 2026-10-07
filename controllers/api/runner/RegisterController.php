@@ -102,6 +102,11 @@ class RegisterController extends Controller
             $this->extractReportedVersion($body),
         );
         $this->auditRegistration($runner, $group, $existing !== null, $wasOnline, $previousLastSeen);
+        // The bootstrap secret and the new token travel in this request too.
+        $transport = $runner->transportChanges($_SERVER, time());
+        if ($transport !== []) {
+            Runner::updateAll($transport, ['id' => $runner->id]);
+        }
 
         return [
             'ok' => true,

@@ -59,6 +59,8 @@ No other ports or protocols are required. The runner uses:
 
 If your server uses HTTPS with a self-signed certificate, ensure the runner's
 CA trust store includes it, or set `API_URL` with `http://` for testing.
+Claim responses carry decrypted credentials, so a runner that talks plain HTTP
+from outside the trusted networks is flagged, see [Plain HTTP warning](#plain-http-warning).
 
 ---
 
@@ -308,9 +310,67 @@ location /api/runner/v1/ {
     allow 10.0.0.0/8;
     allow 192.168.1.0/24;
     deny all;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_pass http://localhost:8080;
 }
 ```
+
+The two `proxy_set_header` lines let Ansilume see that a runner connected
+over HTTPS, see [Plain HTTP warning](#plain-http-warning). Caddy and Traefik
+send these headers by default.
+
+## Plain HTTP warning
+
+When a runner claims a job, the claim response carries the job's credentials
+in decrypted form, and every request carries the runner token. The server
+records how each runner's last request arrived and shows it in the
+**Transport** column of the runner group page, in the Runners API (`transport`,
+`transport_insecure`, `remote_addr`, `plaintext_seen_at`) and in `bin/diagnose`:
+
+| Transport | Meaning |
+|-----------|---------|
+| HTTPS | TLS, directly or through a trusted reverse proxy that sends `X-Forwarded-Proto: https` |
+| HTTP, internal | Plain HTTP from a trusted network, such as the bundled runners on the internal Docker network |
+| Plain HTTP | Plain HTTP from outside the trusted networks. The runner group page shows a red warning |
+| unknown | No request since the upgrade |
+
+The trusted networks come from `RUNNER_TRUSTED_NETWORKS` on the server, a
+comma-separated list of IP addresses or ranges. The default covers loopback
+and the private ranges `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and
+`fc00::/7`, so bundled runners and a reverse proxy on the same host count as
+internal. A value replaces the defaults: narrow it, for example to your Docker
+networks, if plain HTTP across your LAN should be flagged too, and keep the
+ranges the bundled runners and your reverse proxy connect from. Invalid
+entries, such as a prefix longer than 32 (IPv4) or 128 (IPv6) bits or a list
+separated by spaces, are ignored; when none is valid the defaults apply.
+`bin/diagnose` shows the list in use and names ignored entries.
+
+Forwarding headers (`X-Forwarded-For` with `X-Forwarded-Proto`, and
+`Forwarded`) count only when the request comes from a trusted address, so a
+remote runner that connects directly cannot hide the warning. Behind a reverse
+proxy, the proxy must set those headers itself instead of passing the client's
+through: a header the proxy forwards unchanged comes from the client. When the
+families disagree, the less secure answer wins, so such a header can add a
+warning but not remove one, as long as the proxy sets the family it uses. With
+nginx, `proxy_set_header X-Forwarded-Proto $scheme;` and
+`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (see above)
+are enough. Apache needs
+`RequestHeader set X-Forwarded-Proto expr=%{REQUEST_SCHEME}` next to
+`ProxyPass`, HAProxy `http-request set-header X-Forwarded-Proto https if { ssl_fc }`
+and `http-request set-header X-Forwarded-Proto http if !{ ssl_fc }` next to
+`option forwardfor`.
+
+The check relies on the address the server sees. When Docker's userland proxy
+relays the published port, for example for IPv6 clients on an IPv4-only
+network, every client arrives from the bridge gateway, which is a private
+address, so a remote runner on plain HTTP shows as internal. Use HTTPS for
+every runner outside the server's host regardless of what the page says.
+
+To fix a flagged runner, point its `API_URL` at an `https://` address behind a
+TLS reverse proxy, then rotate the credentials it received. The page keeps
+showing when plain HTTP was last seen. The warning is for visibility only: it
+does not block runners, and no runner update is needed.
 
 ---
 
@@ -362,6 +422,7 @@ After starting a runner, verify it registered and is online:
 | `SSL certificate problem` | Self-signed cert | Add CA to trust store or use HTTP for testing |
 | Runner shows "Offline" in UI | Heartbeat not reaching server | Check outbound connectivity, proxy settings |
 | Runner online but no jobs claimed | Wrong runner group | Ensure the job template's runner group matches |
+| Runner group page shows "Plain HTTP" for a runner | The runner talks plain HTTP from outside the trusted networks | Use an `https://` `API_URL` behind a TLS reverse proxy that sends `X-Forwarded-Proto`, see [Plain HTTP warning](#plain-http-warning) |
 
 ---
 
@@ -375,7 +436,8 @@ After starting a runner, verify it registered and is online:
 - **Runner token**: The self-registration token is cached in `runtime/`. Protect
   this directory. If compromised, regenerate the runner's token from the UI.
 - **Network**: Use HTTPS in production. When a runner claims a job, the server
-  sends it the job's credentials in decrypted form over this connection.
+  sends it the job's credentials in decrypted form over this connection. The
+  runner group page flags plain HTTP, see [Plain HTTP warning](#plain-http-warning).
 - **Runner isolation**: Runners execute Ansible playbooks with whatever system
   privileges they have. Run the container as a non-root user (the Docker image
   defaults to `www-data`). The bundled runners of the prebuilt compose file

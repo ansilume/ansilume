@@ -34,6 +34,10 @@ return [
     'senderName' => 'Ansilume',
     'jobWorkspacePath' => $_ENV['JOB_WORKSPACE_PATH'] ?? '/tmp/ansilume/jobs',
     'jobLogPath' => $_ENV['JOB_LOG_PATH'] ?? '/var/www/runtime/job-logs',
+    // Comma-separated IP ranges whose runners and proxies count as internal;
+    // empty means loopback, RFC 1918 and IPv6 unique local addresses. A value
+    // replaces those defaults.
+    'runnerTrustedNetworks' => (string)($_ENV['RUNNER_TRUSTED_NETWORKS'] ?? ''),
     'ldap' => [
         'enabled' => filter_var($_ENV['LDAP_ENABLED'] ?? false, FILTER_VALIDATE_BOOLEAN),
         'host' => (string)($_ENV['LDAP_HOST'] ?? ''),

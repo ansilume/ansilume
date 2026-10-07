@@ -30,6 +30,12 @@ use yii\base\Component;
 class ProjectAccessChecker extends Component
 {
     /**
+     * Matches no row. A bare ['0=1'] is not a valid Yii condition: the query
+     * builder reads it as an operator without operands and throws.
+     */
+    public const DENY_ALL = ['and', '0=1'];
+
+    /**
      * Returns true if the user can view the given project.
      */
     public function canView(int $userId, int $projectId): bool
@@ -140,7 +146,7 @@ class ProjectAccessChecker extends Component
     public function buildProjectFilter(?int $userId): ?array
     {
         if ($userId === null) {
-            return ['0=1'];
+            return self::DENY_ALL;
         }
 
         if ($this->isUnrestricted($userId)) {
@@ -172,7 +178,7 @@ class ProjectAccessChecker extends Component
     public function buildChildResourceFilter(?int $userId, string $projectIdColumn): ?array
     {
         if ($userId === null) {
-            return ['0=1'];
+            return self::DENY_ALL;
         }
 
         if ($this->isUnrestricted($userId)) {
@@ -195,6 +201,33 @@ class ProjectAccessChecker extends Component
     }
 
     /**
+     * Like buildChildResourceFilter(), but for operate access: global rows,
+     * open projects, and restricted projects where the user holds the
+     * operator role in a team.
+     *
+     * @return array<int|string, mixed>|null
+     */
+    public function buildChildOperateFilter(?int $userId, string $projectIdColumn): ?array
+    {
+        if ($userId === null) {
+            return self::DENY_ALL;
+        }
+        if ($this->isUnrestricted($userId)) {
+            return null;
+        }
+        $allRestrictedIds = $this->getRestrictedProjectIds();
+        if (empty($allRestrictedIds)) {
+            return null;
+        }
+
+        return ['or',
+            [$projectIdColumn => null],
+            ['not in', $projectIdColumn, $allRestrictedIds],
+            ['in', $projectIdColumn, $this->getAccessibleProjectIds($userId, TeamProject::ROLE_OPERATOR)],
+        ];
+    }
+
+    /**
      * Build a query condition for the job table, filtering via job_template.project_id.
      *
      * Uses a subquery to find accessible job_template IDs rather than
@@ -205,7 +238,7 @@ class ProjectAccessChecker extends Component
     public function buildJobFilter(?int $userId): ?array
     {
         if ($userId === null) {
-            return ['0=1'];
+            return self::DENY_ALL;
         }
 
         if ($this->isUnrestricted($userId)) {
@@ -260,17 +293,22 @@ class ProjectAccessChecker extends Component
     }
 
     /**
-     * Get IDs of projects accessible to a user via team membership.
+     * Get IDs of projects accessible to a user via team membership, optionally
+     * only those where the team holds the given role.
      *
      * @return int[]
      */
-    private function getAccessibleProjectIds(int $userId): array
+    private function getAccessibleProjectIds(int $userId, ?string $role = null): array
     {
-        return array_map('intval', TeamProject::find()
+        $query = TeamProject::find()
             ->innerJoinWith('team.teamMembers', false)
             ->where(['team_member.user_id' => $userId])
             ->select('team_project.project_id')
-            ->distinct()
-            ->column());
+            ->distinct();
+        if ($role !== null) {
+            $query->andWhere(['team_project.role' => $role]);
+        }
+
+        return array_map('intval', $query->column());
     }
 }

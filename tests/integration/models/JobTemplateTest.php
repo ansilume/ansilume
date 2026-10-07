@@ -64,6 +64,90 @@ class JobTemplateTest extends DbTestCase
         $this->assertTrue($tpl->validate());
     }
 
+    // -- validation: referenced records -----------------------------------------
+
+    /**
+     * Regression: unknown ids passed validation and the save then failed on
+     * the foreign key, which the web UI and the API showed as a server error.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function unknownReferenceProvider(): array
+    {
+        return [
+            'project' => ['project_id', 'The selected project does not exist.'],
+            'runner group' => ['runner_group_id', 'The selected runner group does not exist.'],
+            'approval rule' => ['approval_rule_id', 'The selected approval rule does not exist.'],
+        ];
+    }
+
+    /**
+     * @dataProvider unknownReferenceProvider
+     */
+    public function testAnUnknownReferenceIsAValidationError(string $attribute, string $message): void
+    {
+        $tpl = $this->validTemplate();
+        $tpl->$attribute = 999999999;
+
+        $this->assertFalse($tpl->save());
+        $this->assertSame([$attribute => [$message]], $tpl->getErrors());
+    }
+
+    /**
+     * Without a valid project the inventory cannot belong to "another"
+     * project, so only the project error is shown.
+     */
+    public function testAnUnknownProjectIsTheOnlyErrorForAProjectBoundInventory(): void
+    {
+        $tpl = $this->validTemplate();
+        $inventory = \app\models\Inventory::findOne($tpl->inventory_id);
+        $this->assertNotNull($inventory);
+        $inventory->inventory_type = \app\models\Inventory::TYPE_FILE;
+        $inventory->source_path = 'inventories/hosts.yml';
+        $inventory->project_id = $tpl->project_id;
+        $inventory->save(false);
+        $tpl->project_id = 999999999;
+
+        $this->assertFalse($tpl->validate());
+        $this->assertSame(['project_id' => ['The selected project does not exist.']], $tpl->getErrors());
+    }
+
+    public function testAMissingProjectIsTheOnlyErrorForAProjectBoundInventory(): void
+    {
+        $tpl = $this->validTemplate();
+        $inventory = \app\models\Inventory::findOne($tpl->inventory_id);
+        $this->assertNotNull($inventory);
+        $inventory->inventory_type = \app\models\Inventory::TYPE_DYNAMIC;
+        $inventory->source_path = 'inventories/aws_ec2.yml';
+        $inventory->project_id = (int)$this->createProject((int)$tpl->created_by)->id;
+        $inventory->save(false);
+        $tpl->project_id = null;
+
+        $this->assertFalse($tpl->validate());
+        $this->assertSame(['project_id'], array_keys($tpl->getErrors()));
+    }
+
+    private function validTemplate(): JobTemplate
+    {
+        $user = $this->createUser();
+        $tpl = new JobTemplate();
+        $tpl->name = 'Deploy';
+        $tpl->project_id = $this->createProject($user->id)->id;
+        $tpl->inventory_id = $this->createInventory($user->id)->id;
+        $tpl->runner_group_id = $this->createRunnerGroup($user->id)->id;
+        $tpl->playbook = 'site.yml';
+        $tpl->verbosity = 0;
+        $tpl->forks = 5;
+        $tpl->become = false;
+        $tpl->become_method = 'sudo';
+        $tpl->become_user = 'root';
+        $tpl->timeout_minutes = 120;
+        $tpl->created_by = $user->id;
+        $this->assertTrue($tpl->validate(), (string)json_encode($tpl->getErrors()));
+
+        return $tpl;
+    }
+
     // -- validation: verbosity --------------------------------------------------
 
     public function testVerbosityRejectsNegative(): void

@@ -7,7 +7,6 @@ namespace app\commands;
 use app\models\Credential;
 use app\models\Job;
 use app\models\JobTemplate;
-use app\services\CredentialService;
 
 /**
  * Seeds credentials and templates for the credential specs:
@@ -48,76 +47,21 @@ class E2eCredentialUsageSeeder
 
     public function seed(int $userId, int $projectId, int $inventoryId, int $runnerGroupId): void
     {
-        $primary = $this->ensureCredential(self::PRIMARY, Credential::TYPE_SSH_KEY, $userId, [
+        $primary = E2eFixtureHelper::credential(self::PRIMARY, Credential::TYPE_SSH_KEY, $userId, [
             'private_key' => "-----BEGIN OPENSSH PRIVATE KEY-----\ne2e-placeholder\n-----END OPENSSH PRIVATE KEY-----\n",
         ], 'deploy');
-        $token = $this->ensureCredential(self::TOKEN, Credential::TYPE_TOKEN, $userId, ['token' => self::TOKEN_SECRET]);
+        $token = E2eFixtureHelper::credential(self::TOKEN, Credential::TYPE_TOKEN, $userId, ['token' => self::TOKEN_SECRET]);
         $token->env_var_name = self::TOKEN_ENV_VAR;
         $token->save(false);
-        $this->ensureCredential(self::INCOMPLETE, Credential::TYPE_VAULT, $userId, null);
-        $broken = $this->ensureCredential(self::UNDECRYPTABLE, Credential::TYPE_SSH_KEY, $userId, null);
+        E2eFixtureHelper::credential(self::INCOMPLETE, Credential::TYPE_VAULT, $userId, null);
+        $broken = E2eFixtureHelper::credential(self::UNDECRYPTABLE, Credential::TYPE_SSH_KEY, $userId, null);
         $broken->secret_data = 'not-a-ciphertext';
         $broken->save(false);
 
-        $template = $this->ensureTemplate(self::TEMPLATE, [$projectId, $inventoryId, $runnerGroupId], $userId, $primary, [$token]);
-        $this->ensureTemplate(self::FORCE_TEMPLATE, [$projectId, $inventoryId, $runnerGroupId], $userId, null, []);
+        $template = E2eFixtureHelper::template(self::TEMPLATE, [$projectId, $inventoryId, $runnerGroupId], $userId, $primary, [$token]);
+        E2eFixtureHelper::template(self::FORCE_TEMPLATE, [$projectId, $inventoryId, $runnerGroupId], $userId, null, []);
         $this->ensureJob($template, $userId, $primary, $token);
         ($this->logger)("  Seeded credential usage fixtures (template ID {$template->id}).\n");
-    }
-
-    /**
-     * @param array<string, string>|null $secrets null stores no secret
-     */
-    private function ensureCredential(string $name, string $type, int $userId, ?array $secrets, ?string $username = null): Credential
-    {
-        $credential = Credential::findOne(['name' => $name]) ?? new Credential();
-        $credential->name = $name;
-        $credential->credential_type = $type;
-        $credential->username = $username;
-        $credential->env_var_name = null;
-        $credential->secret_data = null;
-        $credential->created_by = $userId;
-        $credential->save(false);
-        if ($secrets !== null) {
-            /** @var CredentialService $service */
-            $service = \Yii::$app->get('credentialService');
-            $service->storeSecrets($credential, $secrets);
-        }
-
-        return $credential;
-    }
-
-    /**
-     * @param array{0: int, 1: int, 2: int} $parents project, inventory and runner group ids
-     * @param list<Credential> $additional
-     */
-    private function ensureTemplate(string $name, array $parents, int $userId, ?Credential $primary, array $additional): JobTemplate
-    {
-        $template = JobTemplate::findOne(['name' => $name]) ?? new JobTemplate();
-        $template->name = $name;
-        $template->project_id = $parents[0];
-        $template->inventory_id = $parents[1];
-        $template->runner_group_id = $parents[2];
-        $template->credential_id = $primary?->id;
-        $template->playbook = 'site.yml';
-        $template->verbosity = 0;
-        $template->forks = 5;
-        $template->become = false;
-        $template->timeout_minutes = 30;
-        $template->created_by = $userId;
-        $template->save(false);
-
-        $db = \Yii::$app->db;
-        $db->createCommand()->delete('{{%job_template_credential}}', ['job_template_id' => $template->id])->execute();
-        foreach ($additional as $position => $credential) {
-            $db->createCommand()->insert('{{%job_template_credential}}', [
-                'job_template_id' => $template->id,
-                'credential_id' => $credential->id,
-                'sort_order' => $position,
-            ])->execute();
-        }
-
-        return $template;
     }
 
     private function ensureJob(JobTemplate $template, int $userId, Credential $primary, Credential $token): void

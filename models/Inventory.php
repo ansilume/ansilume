@@ -43,6 +43,8 @@ class Inventory extends ActiveRecord
     public function rules(): array
     {
         return [
+            // The form posts '' for "no project".
+            [['project_id'], 'default', 'value' => null],
             [['name', 'inventory_type'], 'required'],
             [['name'], 'string', 'max' => 128],
             [['description'], 'string', 'max' => 1000],
@@ -60,7 +62,69 @@ class Inventory extends ActiveRecord
             ],
             [['project_id', 'created_by'], 'integer'],
             [['content'], 'validateYaml'],
+            [['project_id'], 'validateTemplateProjects', 'skipOnEmpty' => false,
+                'when' => fn (self $m): bool => !$m->isNewRecord
+                    && ($m->isAttributeChanged('inventory_type', false) || $m->isAttributeChanged('project_id', false)),
+            ],
         ];
+    }
+
+    /**
+     * File and dynamic inventories live in a project's checkout; static ones
+     * stand alone and work for any project.
+     */
+    public function isProjectBound(): bool
+    {
+        return in_array($this->inventory_type, [self::TYPE_FILE, self::TYPE_DYNAMIC], true);
+    }
+
+    /**
+     * True for a file or dynamic inventory of a project other than
+     * $projectId. The runner checks out only the job template's project and
+     * looks for the inventory there, so it never reads this one. A dynamic
+     * inventory without a project counts as the template's own.
+     */
+    public function belongsToOtherProjectThan(int $projectId): bool
+    {
+        $boundTo = $this->boundProjectId();
+
+        return $boundTo !== null && $boundTo !== $projectId;
+    }
+
+    /**
+     * Changing the type or the project must not turn this inventory into a
+     * project-bound inventory of another project for the job templates that
+     * already use it.
+     */
+    public function validateTemplateProjects(string $attribute): void
+    {
+        $boundTo = $this->boundProjectId();
+        if ($boundTo === null) {
+            return;
+        }
+        // andWhere(): where() would replace the scope that hides deleted templates.
+        $count = (int)JobTemplate::find()
+            ->andWhere(['inventory_id' => $this->id])
+            ->andWhere(['<>', 'project_id', $boundTo])
+            ->count();
+        if ($count > 0) {
+            $this->addError(
+                $attribute,
+                "{$count} job template(s) of other projects use this inventory. File and dynamic inventories can only "
+                . 'be used by job templates of their own project; switch those templates to another inventory first.'
+            );
+        }
+    }
+
+    /**
+     * The project of a file or dynamic inventory; null for static ones and
+     * for dynamic ones without a project (also an empty form value).
+     */
+    private function boundProjectId(): ?int
+    {
+        $projectId = (int)$this->project_id;
+
+        return $this->isProjectBound() && $projectId > 0 ? $projectId : null;
     }
 
     public function validateSourcePath(string $attribute): void

@@ -51,8 +51,7 @@ class RunnersController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
 
-        /** @var int $page */
-        $page = \Yii::$app->request->get('page', 1);
+        $page = $this->requestedPage();
 
         /** @var Runner[] $runners */
         $runners = $dp->getModels();
@@ -191,7 +190,7 @@ class RunnersController extends BaseApiController
 
     /**
      * @param array{last_at: int, recent: int}|null $reregistration
-     * @return array{id: int, name: string, description: string|null, runner_group_id: int, runner_group_name: string|null, is_online: bool, last_seen_at: int|null, software_version: string|null, last_reregistered_at: int|null, reregistrations_24h: int, created_at: int}
+     * @return array{id: int, name: string, description: string|null, runner_group_id: int, runner_group_name: string|null, is_online: bool, last_seen_at: int|null, software_version: string|null, transport: string|null, transport_insecure: bool, remote_addr: string|null, plaintext_seen_at: int|null, last_reregistered_at: int|null, reregistrations_24h: int, created_at: int}
      */
     private function serialize(Runner $r, ?array $reregistration): array
     {
@@ -206,6 +205,10 @@ class RunnersController extends BaseApiController
             'is_online' => $r->isOnline(),
             'last_seen_at' => $r->last_seen_at,
             'software_version' => $r->software_version,
+            'transport' => $r->transport,
+            'transport_insecure' => $r->hasInsecureTransport(),
+            'remote_addr' => $r->remote_addr,
+            'plaintext_seen_at' => $r->plaintext_seen_at,
             'last_reregistered_at' => $reregistration['last_at'] ?? null,
             'reregistrations_24h' => $reregistration['recent'] ?? 0,
             'created_at' => $r->created_at,
@@ -213,7 +216,7 @@ class RunnersController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, name: string, description: string|null, runner_group_id: int, runner_group_name: string|null, is_online: bool, last_seen_at: int|null, software_version: string|null, last_reregistered_at: int|null, reregistrations_24h: int, created_at: int}
+     * @return array{id: int, name: string, description: string|null, runner_group_id: int, runner_group_name: string|null, is_online: bool, last_seen_at: int|null, software_version: string|null, transport: string|null, transport_insecure: bool, remote_addr: string|null, plaintext_seen_at: int|null, last_reregistered_at: int|null, reregistrations_24h: int, created_at: int}
      */
     private function serializeOne(Runner $r): array
     {

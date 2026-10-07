@@ -65,6 +65,7 @@ abstract class BaseRunnerApiController extends Controller
             $updates['software_version'] = $reportedVersion;
             $runner->software_version = $reportedVersion;
         }
+        $updates += $runner->transportChanges($_SERVER, time());
         Runner::updateAll($updates, ['id' => $runner->id]);
         $runner->last_seen_at = time();
 

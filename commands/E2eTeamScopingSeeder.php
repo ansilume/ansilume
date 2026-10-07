@@ -16,7 +16,9 @@ use app\models\User;
  * Seeds team scoping test data for E2E tests.
  *
  * Creates two isolated teams (alpha/beta) with separate projects,
- * templates, and inventories for resource isolation testing.
+ * templates, and inventories for resource isolation testing, plus a project
+ * that team-alpha may only view (e2e-alpha-viewed-proj) with a template, for
+ * the operator's "may view but not change" checks.
  */
 class E2eTeamScopingSeeder
 {
@@ -40,6 +42,7 @@ class E2eTeamScopingSeeder
         $teamAlpha = Team::find()->where(['name' => self::PREFIX . 'team-alpha'])->one();
         if ($teamAlpha !== null) {
             ($this->logger)("  Team scoping data already exists.\n");
+            $this->seedViewedProject((int)$teamAlpha->id, $runnerGroupId, $userId);
             return;
         }
 
@@ -52,10 +55,32 @@ class E2eTeamScopingSeeder
         $this->createTemplate('alpha-tmpl', $projectAlpha->id, $invAlpha->id, $runnerGroupId, $userId);
         $this->createTemplate('beta-tmpl', $projectBeta->id, $invBeta->id, $runnerGroupId, $userId);
 
-        $this->createTeamWithMember('team-alpha', 'Team Alpha for scoping tests', $projectAlpha->id, 'e2e-operator', $userId);
+        $teamAlphaId = $this->createTeamWithMember('team-alpha', 'Team Alpha for scoping tests', $projectAlpha->id, 'e2e-operator', $userId);
         $this->createTeamWithMember('team-beta', 'Team Beta for scoping tests', $projectBeta->id, 'e2e-viewer', $userId);
+        $this->seedViewedProject($teamAlphaId, $runnerGroupId, $userId);
 
         ($this->logger)("  Created team scoping data (alpha/beta teams, projects, templates, inventories).\n");
+    }
+
+    /**
+     * A project team-alpha may only view, with a static inventory and a
+     * template. Idempotent: skipped when the project exists.
+     */
+    private function seedViewedProject(int $teamAlphaId, int $runnerGroupId, int $userId): void
+    {
+        if (Project::find()->where(['name' => self::PREFIX . 'alpha-viewed-proj'])->exists()) {
+            return;
+        }
+        $project = $this->createProject('alpha-viewed-proj', $userId);
+        $inventory = $this->createInventory('alpha-viewed-inv', "alpha-viewed-host\n", $project->id, $userId);
+        $this->createTemplate('alpha-viewed-tmpl', $project->id, $inventory->id, $runnerGroupId, $userId);
+
+        $tp = new TeamProject();
+        $tp->team_id = $teamAlphaId;
+        $tp->project_id = $project->id;
+        $tp->role = TeamProject::ROLE_VIEWER;
+        $tp->created_at = time();
+        $tp->save(false);
     }
 
     private function createProject(string $suffix, int $userId): Project
@@ -111,7 +136,7 @@ class E2eTeamScopingSeeder
         int $projectId,
         string $memberUsername,
         int $userId
-    ): void {
+    ): int {
         $team = new Team();
         $team->name = self::PREFIX . $suffix;
         $team->description = $description;
@@ -134,5 +159,7 @@ class E2eTeamScopingSeeder
             $member->created_at = time();
             $member->save(false);
         }
+
+        return (int)$team->id;
     }
 }

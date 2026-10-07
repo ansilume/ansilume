@@ -32,4 +32,12 @@ test.describe('Runner Groups RBAC', () => {
     await page.goto('/runner-group/create');
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
+
+  // Fixture from commands/E2eRunnerRegistrationSeeder.php
+  test('viewer sees the plain HTTP warning of a runner group', async ({ page }) => {
+    await page.goto('/runner-group/index');
+    await page.locator('table.table tbody tr a', { hasText: 'e2e-runner-group-2' }).first().click();
+
+    await expect(page.getByTestId('runner-group-plaintext-warning')).toContainText('e2e-plaintext-runner');
+  });
 });

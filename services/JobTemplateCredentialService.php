@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\CredentialAttachmentDiff;
+use app\components\VaultCredentialRule;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\JobTemplate;
@@ -18,6 +19,10 @@ use yii\base\Component;
  * then the additional ones in the given order (pivot sort_order). The
  * template row and the pivot rows change in one transaction, and the audit
  * entry records which credentials were attached or detached.
+ *
+ * A template holds at most one vault password ({@see VaultCredentialRule}).
+ * A save whose final set holds more is rejected, also when it keeps the
+ * stored credentials of an older template that has two.
  */
 class JobTemplateCredentialService extends Component
 {
@@ -30,13 +35,12 @@ class JobTemplateCredentialService extends Component
     {
         $isNew = $template->isNewRecord;
         [$previousPrimary, $before] = $this->storedState($template);
-        if (!$template->validate()) {
-            return false;
-        }
-
+        // validate() clears earlier errors, so it runs first; the credentials
+        // are checked even when it fails, and the form shows all errors at once.
+        $valid = $template->validate();
         $primary = self::positiveIntOrNull($template->credential_id);
         $extras = $this->resolveExtras($template, $additionalIds, $before, [$previousPrimary, $primary]);
-        if ($extras === null) {
+        if ($extras === null || $this->rejectsSecondVault($template, $this->described($primary, $extras)) || !$valid) {
             return false;
         }
         $syncPivot = $isNew || $additionalIds !== null || $primary !== $previousPrimary;
@@ -59,13 +63,18 @@ class JobTemplateCredentialService extends Component
      */
     public function copyWithCredentials(JobTemplate $clone, JobTemplate $source, array $auditContext = []): bool
     {
-        $ids = array_column($this->describe($source), 'id');
+        // The clone's own primary first, then the source's other credentials:
+        // the set that is written, and so the set the vault rule checks.
+        $primary = self::positiveIntOrNull($clone->credential_id);
+        $extras = array_values(array_diff(array_column($this->describe($source), 'id'), [$primary]));
+        if ($this->rejectsSecondVault($clone, $this->described($primary, $extras))) {
+            return false;
+        }
         $saved = false;
-        $this->inTransaction(function () use ($clone, $ids, &$saved): void {
+        $this->inTransaction(function () use ($clone, $primary, $extras, &$saved): void {
             $saved = $clone->save();
             if ($saved) {
-                $primary = self::positiveIntOrNull($clone->credential_id);
-                $this->writePivot((int)$clone->id, $primary, array_values(array_diff($ids, [$primary])));
+                $this->writePivot((int)$clone->id, $primary, $extras);
             }
         });
         if (!$saved) {
@@ -75,7 +84,7 @@ class JobTemplateCredentialService extends Component
         $this->audit(
             AuditLog::ACTION_TEMPLATE_CREATED,
             $clone,
-            CredentialAttachmentDiff::between([], $ids, null, self::positiveIntOrNull($clone->credential_id)),
+            CredentialAttachmentDiff::between([], array_values(array_filter(array_merge([$primary], $extras))), null, $primary),
             $auditContext
         );
 
@@ -160,6 +169,34 @@ class JobTemplateCredentialService extends Component
         unset($template->jobTemplateCredentials, $template->credential);
 
         return $extras === null ? $before : array_values(array_filter(array_merge([$primary], $extras)));
+    }
+
+    /**
+     * The primary and the additional credentials in precedence order.
+     *
+     * @param list<int> $extras
+     * @return list<array{id: int, name: string, credential_type: string}>
+     */
+    private function described(?int $primary, array $extras): array
+    {
+        return Credential::describeInOrder(array_values(array_filter(array_merge([$primary], $extras))));
+    }
+
+    /**
+     * True, with an error on credential_ids, when the credentials hold more
+     * than one vault password.
+     *
+     * @param list<array{id: int, name: string, credential_type: string}> $ordered primary first
+     */
+    private function rejectsSecondVault(JobTemplate $template, array $ordered): bool
+    {
+        $vaults = VaultCredentialRule::vaults($ordered);
+        if (count($vaults) < 2) {
+            return false;
+        }
+        $template->addError('credential_ids', VaultCredentialRule::conflictMessage($vaults));
+
+        return true;
     }
 
     /**

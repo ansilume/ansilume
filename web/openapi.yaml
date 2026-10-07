@@ -232,7 +232,10 @@ paths:
     put:
       tags: [Inventories]
       summary: Update an inventory
-      description: Requires `inventory.update`.
+      description: |
+        Requires `inventory.update`. Changing the type or the project is
+        rejected with 422 when job templates of another project would then
+        use a file or dynamic inventory of this project.
       requestBody:
         required: true
         content:
@@ -333,7 +336,9 @@ paths:
         `secrets` is omitted or its values are blank, the stored secret is
         kept; a submitted secret replaces it. Changing `credential_type`
         requires the new type's secret (422 otherwise), so no secret of the
-        old type stays behind.
+        old type stays behind. Changing it to `vault` is rejected with 422
+        while a job template using the credential already has another vault
+        password.
       requestBody:
         required: true
         content:
@@ -365,21 +370,77 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/CredentialInUse' }
 
+  /api/v1/credentials/{id}/job-templates:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+    get:
+      tags: [Credentials]
+      summary: Job templates a vault password can be assigned to
+      description: |
+        Requires `job-template.update` and `credential.view`. Lists the job
+        templates the caller may change, with their current vault passwords.
+      responses:
+        '200': { $ref: '#/components/responses/VaultAssignmentCandidatesResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    post:
+      tags: [Credentials]
+      summary: Assign a vault password to several job templates
+      description: |
+        Requires `job-template.update` and `credential.view`. A template that
+        has another vault password gets it replaced in the same position (a
+        primary stays primary); any further vault password is detached, so
+        each template ends up with exactly this one. Each changed template is
+        audited as `job-template.updated`. Jobs that already wait keep the
+        credentials they were launched with.
+
+        Nothing is written when the request is invalid: 422 for a credential
+        that is not a vault password or has no usable secret, a malformed or
+        empty list, more than 500 IDs, or IDs of templates that do not exist
+        or that the caller cannot see; 403 for templates the caller can see
+        but not change. `error.job_template_ids` names the offending IDs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VaultAssignmentInput' }
+            example:
+              job_template_ids: [12, 15]
+      responses:
+        '200': { $ref: '#/components/responses/VaultAssignmentResponse' }
+        '403': { $ref: '#/components/responses/VaultAssignmentRejected' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/VaultAssignmentRejected' }
+
   # ─────────────────────────── Job Templates ───────────────────────────
   /api/v1/job-templates:
     get:
       tags: [Job Templates]
       summary: List job templates
-      parameters: [{ $ref: '#/components/parameters/Page' }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - name: warning
+          in: query
+          required: false
+          description: Only templates with this warning, see JobTemplateWarning.
+          schema: { type: string, enum: [multiple_vault_credentials, inventory_other_project] }
       responses:
         '200':
           description: Paginated list
           content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateList' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
     post:
       tags: [Job Templates]
       summary: Create a job template
-      description: Requires `job-template.create`.
+      description: |
+        Requires `job-template.create` and operator access to the project
+        (403 otherwise). Rejected with 422 when the credentials hold more than
+        one vault password, when a file or dynamic inventory belongs to another
+        project than the template, and when the project, inventory, runner
+        group or approval rule does not exist. An inventory of a project the
+        caller cannot see counts as not existing.
       requestBody:
         required: true
         content:
@@ -409,7 +470,17 @@ paths:
     put:
       tags: [Job Templates]
       summary: Update a job template
-      description: Requires `job-template.update`.
+      description: |
+        Requires `job-template.update` and operator access to the template's
+        project and, when `project_id` changes, to the new project (403
+        otherwise). Rejected with 422 while the template holds more than one
+        vault password, also when the request leaves `credential_ids` out;
+        send `credential_ids` with one vault password at most. Changing
+        `project_id` or `inventory_id` to a file or dynamic inventory of
+        another project is rejected too; older templates that already have one
+        keep working and report the `inventory_other_project` warning. A new
+        inventory must exist and belong to a project the caller can see, as on
+        create.
       requestBody:
         required: true
         content:
@@ -1869,9 +1940,28 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/CredentialDetail' }
+    VaultAssignmentCandidatesResponse:
+      description: Job templates the caller may change
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { type: array, items: { $ref: '#/components/schemas/VaultAssignmentCandidate' } }
+    VaultAssignmentResponse:
+      description: Outcome per job template
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/VaultAssignmentResult' }
     CredentialInUse:
       description: The credential is in use; nothing was deleted
       content: { application/json: { schema: { $ref: '#/components/schemas/CredentialInUseError' } } }
+    VaultAssignmentRejected:
+      description: The request was rejected; nothing was written
+      content: { application/json: { schema: { $ref: '#/components/schemas/VaultAssignmentError' } } }
     JobDetailResponse:
       description: Job with its credentials (secrets never included)
       content:
@@ -2115,6 +2205,63 @@ components:
         hidden_job_template_count: { type: integer }
         hidden_project_count: { type: integer }
         pending_job_count: { type: integer, description: "Jobs that have not started yet (pending, queued or waiting for approval) and need the credential." }
+    VaultAssignmentCandidate:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        project_id: { type: integer }
+        project_name: { type: string, nullable: true }
+        current:
+          type: string
+          enum: [none, this, other, multiple]
+          description: The template's vault passwords now. `multiple` marks a template with more than one.
+        vaults:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+    VaultAssignmentInput:
+      type: object
+      required: [job_template_ids]
+      properties:
+        job_template_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items: { type: integer, minimum: 1 }
+    VaultAssignmentItem:
+      type: object
+      properties:
+        job_template_id: { type: integer }
+        name: { type: string }
+        status:
+          type: string
+          enum: [assigned, replaced, unchanged, failed]
+        replaced:
+          type: array
+          description: The vault passwords this one replaced or detached.
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+        error: { type: string, nullable: true, description: "Why the template could not be saved (status failed)." }
+    VaultAssignmentResult:
+      type: object
+      properties:
+        credential_id: { type: integer }
+        credential_name: { type: string }
+        results: { type: array, items: { $ref: '#/components/schemas/VaultAssignmentItem' } }
+        summary:
+          type: object
+          properties:
+            assigned: { type: integer }
+            replaced: { type: integer }
+            unchanged: { type: integer }
+            failed: { type: integer }
     CredentialInUseError:
       type: object
       properties:
@@ -2125,6 +2272,24 @@ components:
               type: string
               example: 'Credential "deploy-key" is in use by 2 job template(s). Pass force=1 to delete it anyway; it will be detached from all of them.'
             used_by: { $ref: '#/components/schemas/CredentialUsage' }
+    VaultAssignmentError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: string
+              example: 'You may not change job template(s) #12, #15.'
+            job_template_ids:
+              type: array
+              items: { type: integer }
+              example: [12, 15]
+              description: >-
+                The job template IDs the error is about: not found (422) or
+                not changeable (403). Absent for errors about the credential
+                or the shape of the list.
 
     JobTemplate:
       type: object
@@ -2156,8 +2321,27 @@ components:
         tags:            { type: string, nullable: true }
         skip_tags:       { type: string, nullable: true }
         has_survey:      { type: boolean }
+        warnings:
+          type: array
+          description: Problems of templates saved before Ansilume rejected them. Such templates keep running.
+          items: { $ref: '#/components/schemas/JobTemplateWarning' }
         created_at:      { type: integer }
         updated_at:      { type: integer }
+    JobTemplateWarning:
+      type: object
+      properties:
+        code:
+          type: string
+          enum: [multiple_vault_credentials, inventory_other_project]
+          description: |
+            `multiple_vault_credentials`: more than one vault password; Ansible
+            only gets the first. `inventory_other_project`: a file or dynamic
+            inventory of another project, which the runner never reads.
+        message: { type: string }
+        credential_ids:
+          type: array
+          items: { type: integer }
+          description: For multiple_vault_credentials, the vault passwords that are ignored.
     JobTemplateCredential:
       type: object
       properties:
@@ -2355,7 +2539,7 @@ components:
         name: { type: string, maxLength: 128 }
         description: { type: string, nullable: true }
         project_id: { type: integer }
-        inventory_id: { type: integer }
+        inventory_id: { type: integer, description: "A file or dynamic inventory must belong to project_id; static inventories work with any project." }
         credential_id: { type: integer, nullable: true, description: "The primary credential. Its username and key win over the additional ones." }
         credential_ids:
           type: array
@@ -2364,7 +2548,8 @@ components:
             The additional credentials in precedence order. Omit the key to
             keep the current ones; `[]` removes them all. The primary
             credential and duplicates are skipped. Unknown IDs are rejected
-            with 422.
+            with 422. At most one vault password across the primary and the
+            additional credentials; more is rejected with 422.
         playbook: { type: string }
         extra_vars: { type: string, nullable: true }
         verbosity: { type: integer, minimum: 0, maximum: 5, default: 0 }
@@ -2429,6 +2614,21 @@ components:
             `null` for runners that have not yet reported (pre-upgrade
             images). Capped at 32 characters on the server side.
           example: "2.2.16"
+        transport:
+          type: string
+          nullable: true
+          enum: [https, http_internal, http_external]
+          description: |
+            How the runner's last request reached the server. `http_internal`:
+            plain HTTP from a trusted network (RUNNER_TRUSTED_NETWORKS, by
+            default loopback and private ranges, which covers the bundled
+            runners). `http_external`: plain HTTP from elsewhere, so claim
+            responses carry decrypted credentials in clear. X-Forwarded-Proto
+            and X-Forwarded-For count only from trusted peers. `null` until the
+            first request after the upgrade.
+        transport_insecure: { type: boolean, description: "True for http_external." }
+        remote_addr: { type: string, nullable: true, example: "203.0.113.7", description: "Client address of the last request." }
+        plaintext_seen_at: { type: integer, nullable: true, description: "Last http_external request; kept after a fix." }
         last_reregistered_at:
           type: integer
           nullable: true

@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers\api\v1;
 
+use app\components\RunnerTransportClassifier;
 use app\controllers\api\v1\RunnersController;
 use app\models\ApiToken;
 use app\models\Job;
+use app\models\Runner;
 use app\tests\integration\controllers\WebControllerTestCase;
 
 /**
@@ -102,6 +104,61 @@ class RunnersControllerTest extends WebControllerTestCase
         $this->assertSame(2, $byId[$runner->id]['reregistrations_24h']);
         $this->assertNull($byId[$untouched->id]['last_reregistered_at']);
         $this->assertSame(0, $byId[$untouched->id]['reregistrations_24h']);
+    }
+
+    /**
+     * API clients get the same transport picture as the runner group page:
+     * plain HTTP from outside is flagged, and plaintext_seen_at survives a
+     * fix so operators know which runner received credentials in clear.
+     */
+    public function testRunnerPayloadReportsTheTransport(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $group = $this->createRunnerGroup($userId);
+        $insecure = $this->createRunner($group->id, $userId);
+        $fixed = $this->createRunner($group->id, $userId);
+        $internal = $this->createRunner($group->id, $userId);
+        $unseen = $this->createRunner($group->id, $userId);
+        $seenAt = time() - 3600;
+        Runner::updateAll(
+            ['transport' => RunnerTransportClassifier::HTTP_EXTERNAL, 'remote_addr' => '203.0.113.10', 'plaintext_seen_at' => $seenAt],
+            ['id' => $insecure->id]
+        );
+        Runner::updateAll(
+            ['transport' => RunnerTransportClassifier::HTTPS, 'remote_addr' => '198.51.100.7', 'plaintext_seen_at' => $seenAt - 60],
+            ['id' => $fixed->id]
+        );
+        Runner::updateAll(
+            ['transport' => RunnerTransportClassifier::HTTP_INTERNAL, 'remote_addr' => '172.18.0.5'],
+            ['id' => $internal->id]
+        );
+
+        /** @var array<string, mixed> $view */
+        $view = $this->callSuccess($this->ctrl->actionView($insecure->id));
+        $this->assertSame(
+            ['transport' => 'http_external', 'transport_insecure' => true, 'remote_addr' => '203.0.113.10', 'plaintext_seen_at' => $seenAt],
+            $this->transportFields($view)
+        );
+
+        $this->setQueryParams(['group_id' => $group->id]);
+        $byId = array_column($this->ctrl->actionIndex()['data'], null, 'id');
+        $this->assertSame(
+            ['transport' => 'http_external', 'transport_insecure' => true, 'remote_addr' => '203.0.113.10', 'plaintext_seen_at' => $seenAt],
+            $this->transportFields($byId[$insecure->id])
+        );
+        $this->assertSame(
+            ['transport' => 'https', 'transport_insecure' => false, 'remote_addr' => '198.51.100.7', 'plaintext_seen_at' => $seenAt - 60],
+            $this->transportFields($byId[$fixed->id])
+        );
+        $this->assertSame(
+            ['transport' => 'http_internal', 'transport_insecure' => false, 'remote_addr' => '172.18.0.5', 'plaintext_seen_at' => null],
+            $this->transportFields($byId[$internal->id])
+        );
+        $this->assertSame(
+            ['transport' => null, 'transport_insecure' => false, 'remote_addr' => null, 'plaintext_seen_at' => null],
+            $this->transportFields($byId[$unseen->id])
+        );
     }
 
     public function testViewReturns404(): void
@@ -252,6 +309,20 @@ class RunnersControllerTest extends WebControllerTestCase
     {
         $this->assertArrayHasKey('data', $result);
         return $result['data'];
+    }
+
+    /**
+     * @param array<string, mixed> $item
+     * @return array<string, mixed>
+     */
+    private function transportFields(array $item): array
+    {
+        $fields = [];
+        foreach (['transport', 'transport_insecure', 'remote_addr', 'plaintext_seen_at'] as $key) {
+            $this->assertArrayHasKey($key, $item);
+            $fields[$key] = $item[$key];
+        }
+        return $fields;
     }
 
     private function authenticateAs(string $label): void

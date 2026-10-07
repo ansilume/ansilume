@@ -82,6 +82,30 @@ class Credential extends ActiveRecord
         return $this->hasOne(User::class, ['id' => 'created_by']);
     }
 
+    /**
+     * Id, name and type of the given credentials in the given order. Unknown
+     * ids are skipped.
+     *
+     * @param list<int> $ids
+     * @return list<array{id: int, name: string, credential_type: string}>
+     */
+    public static function describeInOrder(array $ids): array
+    {
+        if ($ids === []) {
+            return [];
+        }
+        /** @var array<int, array{id: int|string, name: string, credential_type: string}> $rows */
+        $rows = static::find()->select(['id', 'name', 'credential_type'])->where(['id' => $ids])->indexBy('id')->asArray()->all();
+        $described = [];
+        foreach ($ids as $id) {
+            if (isset($rows[$id])) {
+                $described[] = ['id' => $id, 'name' => (string)$rows[$id]['name'], 'credential_type' => (string)$rows[$id]['credential_type']];
+            }
+        }
+
+        return $described;
+    }
+
     public static function typeLabel(string $type): string
     {
         return match ($type) {

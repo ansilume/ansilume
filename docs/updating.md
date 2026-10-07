@@ -129,6 +129,60 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.6.0 or older: vault passwords, inventories, runner transport
+
+**One vault password per job template.** Ansible gets one vault password from
+Ansilume, and the runner used to ignore any further vault credential without
+a word. Saving or cloning a template with two is now rejected, in the form and
+with `422` in the API. Templates that already have two keep running with the
+one that takes precedence; their page says which one is ignored, and their
+next save is rejected until one is removed. Changing a credential's type to
+Vault Secret is rejected while a template using it already has another vault
+password.
+
+**Assigning a vault password to several job templates.** The page of a vault
+password has **Assign to job templates**: it replaces another vault password
+in place and fixes templates that have two. The API equivalent is
+`POST /api/v1/credentials/{id}/job-templates`.
+
+**File and dynamic inventories must come from the template's project.** The
+runner checks out only the template's project, so such an inventory of
+another project was never read; jobs used a same-named file of the wrong
+project or none at all. Saving a new template with such an inventory, or
+changing a template's project or inventory so that it ends up with one, is
+rejected; existing templates keep running and show a warning. Changing an
+inventory's type or project is rejected when templates of another project
+would then use it.
+
+**Runner transport is visible.** The runner group page, the Runners API and
+`bin/diagnose` show whether each runner connects over HTTPS, over plain HTTP
+from a trusted network, or over plain HTTP from outside, where credentials
+travel in clear. Trusted networks default to loopback and the private ranges;
+set `RUNNER_TRUSTED_NETWORKS` to change them (a value replaces the defaults).
+A TLS reverse proxy in front of Ansilume should set `X-Forwarded-Proto` and
+`X-Forwarded-For`. No runner image update is needed for any of this.
+
+**Team scoping on job template saves.** Saving a job template now checks the
+project it moves to, not only the one it comes from, and cloning needs operate
+access to the template's project (view access was enough before). A new or
+changed inventory must be one the user may see; an inventory of another team's
+project is reported as not existing. Templates that already use such an
+inventory keep saving as long as the inventory stays. Unknown projects, runner
+groups and approval rules are validation errors instead of server errors.
+
+**Find what needs fixing.** The job template list shows a banner per warning
+with a link to the affected templates; the API offers
+`GET /api/v1/job-templates?warning=multiple_vault_credentials` and
+`?warning=inventory_other_project`, and every job template carries a `warnings`
+list.
+
+**API contract change:** `POST` and `PUT /api/v1/job-templates` answer `422`
+in the cases above, also for a `PUT` that leaves `credential_ids` out on a
+template with two vault passwords, and for unknown or hidden references. A
+`PUT` that moves a template into a project the caller may not operate answers
+`403`. `PUT /api/v1/credentials/{id}` and `PUT /api/v1/inventories/{id}` answer
+`422` for the type changes described above.
+
 ## After updating from 2.5.2 or older: credentials
 
 **Jobs no longer run without a credential they need.** A credential that

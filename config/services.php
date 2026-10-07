@@ -116,4 +116,7 @@ return [
     'credentialWriteService' => [
         'class' => 'app\services\CredentialWriteService',
     ],
+    'vaultCredentialAssignmentService' => [
+        'class' => 'app\services\VaultCredentialAssignmentService',
+    ],
 ];

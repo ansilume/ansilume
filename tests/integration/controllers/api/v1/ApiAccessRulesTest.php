@@ -45,6 +45,7 @@ class ApiAccessRulesTest extends WebControllerTestCase
             'approve' => 'approval.decide', 'reject' => 'approval.decide',
         ],
         'AuditLogs' => ['index' => 'user.view', 'view' => 'user.view'],
+        'CredentialAssignments' => ['index' => 'job-template.update', 'create' => 'job-template.update'],
         'Credentials' => [
             'index' => 'credential.view', 'view' => 'credential.view', 'create' => 'credential.create',
             'update' => 'credential.update', 'delete' => 'credential.delete',

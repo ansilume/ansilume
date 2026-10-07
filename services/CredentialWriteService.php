@@ -67,6 +67,9 @@ class CredentialWriteService extends Component
             $credential->addError('secrets', CredentialSecretPolicy::missingMessage($type, $missing, true));
             return false;
         }
+        if ($typeChanged && $type === Credential::TYPE_VAULT && $this->wouldDoubleVault($credential)) {
+            return false;
+        }
 
         $changedFields = $this->changedFields($credential);
         $secretChanged = $provided !== [];
@@ -109,6 +112,27 @@ class CredentialWriteService extends Component
         $this->audit(AuditLog::ACTION_CREDENTIAL_DELETED, $credential, $entry + $auditContext);
 
         return ['deleted' => true, 'usage' => $usage];
+    }
+
+    /**
+     * True, with an error on credential_type, when templates using this
+     * credential already hold another vault password. A template can only
+     * have one. Names stay out of the message: they may belong to projects
+     * the user cannot see.
+     */
+    private function wouldDoubleVault(Credential $credential): bool
+    {
+        $count = $this->usageService()->templatesWithAnotherVaultCount($credential);
+        if ($count === 0) {
+            return false;
+        }
+        $credential->addError(
+            'credential_type',
+            "Changing the type to Vault Secret would give {$count} job template(s) a second vault password, and a template can only have one. "
+            . 'Detach this credential from them or remove their other vault password first.'
+        );
+
+        return true;
     }
 
     /**

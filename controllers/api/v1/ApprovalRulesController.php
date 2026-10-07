@@ -34,8 +34,7 @@ class ApprovalRulesController extends BaseApiController
             'query' => ApprovalRule::find()->orderBy(['id' => SORT_DESC]),
             'pagination' => ['pageSize' => 25],
         ]);
-        /** @var int $page */
-        $page = \Yii::$app->request->get('page', 1);
+        $page = $this->requestedPage();
 
         return $this->paginated(
             array_map(fn ($m) => $this->serialize($m), $dp->getModels()),

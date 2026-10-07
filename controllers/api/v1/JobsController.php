@@ -54,8 +54,7 @@ class JobsController extends BaseApiController
 
         $jobs = $dp->getModels();
         $total = $dp->totalCount;
-        /** @var int $page */
-        $page = \Yii::$app->request->get('page', 1);
+        $page = $this->requestedPage();
         $per = 25;
 
         return $this->paginated(

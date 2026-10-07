@@ -8,6 +8,7 @@ declare(strict_types=1);
 /** @var app\models\Inventory[] $inventories */
 /** @var app\models\Credential[] $credentials */
 /** @var app\models\RunnerGroup[] $runnerGroups */
+/** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings */
 
 use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
@@ -27,6 +28,8 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     </ol>
 </nav>
 <h2><?= Html::encode($this->title) ?></h2>
+
+<?= $this->render('_warnings', ['warnings' => $warnings]) ?>
 
 <?php $form = ActiveForm::begin(['id' => 'jt-form']); ?>
 
@@ -49,9 +52,11 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     <div class="row g-2">
         <div class="col-md-6">
             <?= $form->field($model, 'inventory_id')->dropDownList(
-                ArrayHelper::map($inventories, 'id', 'name'),
+                ArrayHelper::map($inventories, 'id', static fn (\app\models\Inventory $inventory): string => $inventory->isProjectBound()
+                    ? $inventory->name . ' (' . $inventory->inventory_type . ', ' . ($inventory->project->name ?? 'no project') . ')'
+                    : $inventory->name),
                 ['prompt' => '— Select inventory —']
-            ) ?>
+            )->hint('File and dynamic inventories must belong to the selected project; static inventories work with any project.') ?>
         </div>
         <div class="col-md-6">
             <?= $form->field($model, 'credential_id')->dropDownList(
@@ -92,7 +97,8 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
             <div class="form-text">
                 Tokens are injected as environment variables (see the credential's <em>Env var name</em>).
                 Credentials apply in order: the primary credential first, then the checked ones as listed.
-                For <code>--user</code>, <code>--private-key</code> and <code>--vault-password-file</code> the first credential that provides one wins, so only one vault password is passed.
+                For <code>--user</code> and <code>--private-key</code> the first credential that provides one wins.
+                At most one vault password can be attached, as primary or additional credential.
             </div>
         <?php endif; ?>
     </div>

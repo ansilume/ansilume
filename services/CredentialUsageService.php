@@ -65,6 +65,29 @@ class CredentialUsageService extends Component
     }
 
     /**
+     * How many templates use the credential and already hold another vault
+     * password. Turning the credential into a vault password would give
+     * each of them a second one.
+     */
+    public function templatesWithAnotherVaultCount(Credential $credential): int
+    {
+        $id = (int)$credential->id;
+        $count = 0;
+        /** @var list<JobTemplate> $templates */
+        $templates = $this->templateQuery($id)->with(['credential', 'jobTemplateCredentials.credential'])->all();
+        foreach ($templates as $template) {
+            foreach ($template->orderedCredentials() as $other) {
+                if ((int)$other->id !== $id && $other->credential_type === Credential::TYPE_VAULT) {
+                    $count++;
+                    break;
+                }
+            }
+        }
+
+        return $count;
+    }
+
+    /**
      * Templates using the credential as primary or additional credential.
      */
     private function templateQuery(int $credentialId): ActiveQuery

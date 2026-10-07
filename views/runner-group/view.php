@@ -8,6 +8,7 @@ declare(strict_types=1);
 /** @var app\models\RunnerGroup[] $allGroups */
 /** @var array<int, array{last_at: int, recent: int}> $reregistrations */
 
+use app\components\RunnerTransportClassifier;
 use app\helpers\ConfirmHelper;
 use app\helpers\TimeHelper;
 use app\models\AuditLog;
@@ -102,6 +103,18 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
 </div>
 <?php endif; ?>
 
+<?php $insecureRunners = array_values(array_filter($runners, fn ($r) => $r->hasInsecureTransport())); ?>
+<?php if ($insecureRunners !== []) : ?>
+    <div class="alert alert-danger" role="alert" data-testid="runner-group-plaintext-warning">
+        <?= Html::encode(
+            implode(', ', array_map(fn ($r) => '"' . $r->name . '"', $insecureRunners))
+            . ' connect' . (count($insecureRunners) === 1 ? 's' : '') . ' over plain HTTP from outside the trusted networks. '
+            . 'Claim responses carry decrypted credentials, and every request carries the runner token, in clear. '
+            . 'Point API_URL at an https:// address behind a TLS reverse proxy, then rotate the credentials these runners received.'
+        ) ?>
+    </div>
+<?php endif; ?>
+
 <!-- Runners list -->
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
@@ -122,6 +135,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                     <th>Name</th>
                     <th>Status</th>
                     <th>Version</th>
+                    <th>Transport</th>
                     <th>Last seen</th>
                     <th>Description</th>
                     <th></th>
@@ -163,6 +177,23 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token');
                             <?php endif; ?>
                         <?php else : ?>
                             <span class="badge text-bg-secondary" title="Runner has not yet reported a version — probably a pre-upgrade image.">unknown</span>
+                        <?php endif; ?>
+                    </td>
+                    <td data-testid="runner-transport" data-transport="<?= Html::encode((string)$runner->transport) ?>">
+                        <?php if ($runner->transport === RunnerTransportClassifier::HTTPS) : ?>
+                            <span class="badge text-bg-success">HTTPS</span>
+                        <?php elseif ($runner->transport === RunnerTransportClassifier::HTTP_INTERNAL) : ?>
+                            <span class="badge text-bg-secondary" title="Plain HTTP from a trusted network (RUNNER_TRUSTED_NETWORKS), such as the bundled runners' Docker network.">HTTP, internal</span>
+                        <?php elseif ($runner->hasInsecureTransport()) : ?>
+                            <span class="badge text-bg-danger" data-testid="runner-transport-insecure" title="Plain HTTP from outside the trusted networks: credentials and the runner token travel in clear.">Plain HTTP</span>
+                        <?php else : ?>
+                            <span class="badge text-bg-secondary" title="No request seen since the upgrade.">unknown</span>
+                        <?php endif; ?>
+                        <?php if ($runner->remote_addr !== null) : ?>
+                            <div class="small text-muted"><?= Html::encode($runner->remote_addr) ?></div>
+                        <?php endif; ?>
+                        <?php if ($runner->plaintext_seen_at !== null && !$runner->hasInsecureTransport()) : ?>
+                            <div class="small text-muted" data-testid="runner-plaintext-history"><?= Html::encode('plain HTTP seen ' . TimeHelper::ago($runner->plaintext_seen_at)) ?></div>
                         <?php endif; ?>
                     </td>
                     <td class="text-muted small">

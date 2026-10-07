@@ -46,6 +46,14 @@ class CredentialUsageServiceTest extends DbTestCase
         $job->save(false);
     }
 
+    /**
+     * @param list<int> $additionalIds
+     */
+    private function attach(\app\models\JobTemplate $template, array $additionalIds): void
+    {
+        $this->assertTrue(\Yii::$app->get('jobTemplateCredentialService')->saveWithCredentials($template, $additionalIds));
+    }
+
     public function testEveryKindOfUsageIsFound(): void
     {
         $credential = $this->createCredential($this->adminId);
@@ -93,5 +101,62 @@ class CredentialUsageServiceTest extends DbTestCase
         $this->assertSame(1, $usage->jobTemplateTotal);
         $this->assertSame(1, $usage->hiddenJobTemplateCount());
         $this->assertStringNotContainsString((string)$hidden->name, $usage->summary());
+    }
+
+    public function testTemplatesWithAnotherVaultCountCountsPrimaryAndAdditionalUsages(): void
+    {
+        $credential = $this->createCredential($this->adminId, Credential::TYPE_TOKEN);
+        $vaultA = $this->createCredential($this->adminId, Credential::TYPE_VAULT);
+        $vaultB = $this->createCredential($this->adminId, Credential::TYPE_VAULT);
+        $ssh = $this->createCredential($this->adminId, Credential::TYPE_SSH_KEY);
+        // The other vault password is the primary, the credential an additional one.
+        $this->attach($this->template($vaultA->id), [$credential->id]);
+        // The credential is the primary, the other vault password an additional one.
+        $this->attach($this->template($credential->id), [$ssh->id, $vaultB->id]);
+        // Uses the credential, but holds no vault password.
+        $this->attach($this->template($credential->id), [$ssh->id]);
+        // Holds a vault password, but does not use the credential.
+        $this->attach($this->template($vaultA->id), [$ssh->id]);
+        // A deleted template never runs again.
+        $deleted = $this->template($vaultB->id);
+        $this->attach($deleted, [$credential->id]);
+        $deleted->softDelete();
+
+        $this->assertSame(2, $this->service->templatesWithAnotherVaultCount($credential));
+    }
+
+    /**
+     * A template saved before the one-vault rule may hold two other vault
+     * passwords; it is still one template.
+     */
+    public function testATemplateWithSeveralOtherVaultsCountsOnce(): void
+    {
+        $credential = $this->createCredential($this->adminId, Credential::TYPE_TOKEN);
+        $legacy = $this->template($credential->id);
+        $otherVaults = [
+            $this->createCredential($this->adminId, Credential::TYPE_VAULT),
+            $this->createCredential($this->adminId, Credential::TYPE_VAULT),
+        ];
+        foreach ($otherVaults as $order => $vault) {
+            \Yii::$app->db->createCommand()->insert('{{%job_template_credential}}', [
+                'job_template_id' => $legacy->id,
+                'credential_id' => $vault->id,
+                'sort_order' => $order + 1,
+            ])->execute();
+        }
+
+        $this->assertSame(1, $this->service->templatesWithAnotherVaultCount($credential));
+    }
+
+    public function testTheCredentialItselfIsNotAnotherVault(): void
+    {
+        $vault = $this->createCredential($this->adminId, Credential::TYPE_VAULT);
+        $ssh = $this->createCredential($this->adminId, Credential::TYPE_SSH_KEY);
+        // As primary, the vault password sits in the primary slot and in the pivot.
+        $this->attach($this->template($vault->id), [$ssh->id]);
+        $this->attach($this->template($ssh->id), [$vault->id]);
+
+        $this->assertSame(0, $this->service->templatesWithAnotherVaultCount($vault));
+        $this->assertSame(0, $this->service->templatesWithAnotherVaultCount($this->createCredential($this->adminId)), 'unused');
     }
 }
