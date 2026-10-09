@@ -168,6 +168,7 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 | [Monitoring](docs/monitoring.md) | Prometheus metrics, health endpoint |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and the diagnostics script |
 | [Releasing](docs/releasing.md) | Release process |
+| [Continuous integration](docs/ci.md) | What GitHub Actions and Scrutinizer check, and why Scrutinizer runs no tests |
 
 ---
 

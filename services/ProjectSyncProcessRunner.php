@@ -139,7 +139,7 @@ class ProjectSyncProcessRunner
         $write = null;
         $except = null;
         $waitSeconds = (int)min(1, max(0, $remaining));
-        $waitMicros = (int)(($remaining - $waitSeconds) * 1_000_000);
+        $waitMicros = (int)(($remaining - $waitSeconds) * 1000000);
 
         try {
             $ready = stream_select($read, $write, $except, $waitSeconds, $waitMicros);
@@ -206,7 +206,7 @@ class ProjectSyncProcessRunner
                 $stillRunning = false;
                 break;
             }
-            usleep(100_000);
+            usleep(100000);
         }
 
         if ($stillRunning && is_resource($process)) {

@@ -34,7 +34,7 @@ class E2eCredentialUsageSeeder
     public const REMOVED_NAME = 'e2e-cred-removed-key';
 
     /** An id no credential has: the job's snapshot names it as deleted. */
-    private const REMOVED_ID = 2_000_000_000;
+    private const REMOVED_ID = 2000000000;
 
     /** @var callable(string): void */
     private $logger;

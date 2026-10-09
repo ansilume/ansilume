@@ -251,7 +251,7 @@ class JobCompletionService extends Component
     }
 
     /** Maximum log chunk size in bytes (1 MB). */
-    private const MAX_LOG_CHUNK_SIZE = 1_048_576;
+    private const MAX_LOG_CHUNK_SIZE = 1048576;
 
     public function appendLog(Job $job, string $stream, string $content, int $sequence): void
     {

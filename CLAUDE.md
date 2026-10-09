@@ -163,6 +163,8 @@ All code must pass Scrutinizer-CI without issues. Proactively avoid common findi
 - **PHPDoc array shapes**: Use explicit keys (`array{0: string, 1: int}`) not positional (`array{string, int}`).
 - **Return type analysis**: Avoid extracting methods where the return type depends on pass-by-reference semantics (e.g. `stream_select`) — Scrutinizer's static analysis cannot follow these correctly.
 - **Spacing**: No alignment spacing. Single space around `=` and `=>`.
+- **No numeric literal separators**: write `1048576`, not `1_048_576`. Scrutinizer's parser fails on them and skips the whole file. `tests/unit/config/ScrutinizerConfigTest.php` enforces this for every analysed file.
+- **Scrutinizer only analyses**: `.scrutinizer.yml` is the complete config (the settings on scrutinizer-ci.com stay empty) and runs PHP/JavaScript analysis and PSR-12, nothing else. Never add services, PHPUnit, migrations or `.env` setup there; its services and toolchain broke builds for months, and every test already runs in GitHub Actions. Read `docs/ci.md` before changing `.scrutinizer.yml`; `ScrutinizerConfigTest` enforces the rules.
 
 ### Formatting
 - **No alignment spacing.** Always use exactly one space around `=` and `=>`. Never pad with extra spaces to align columns. Scrutinizer and phpcs enforce this.
@@ -408,6 +410,7 @@ When the user says "PUSH IT", follow this exact sequence:
    - **MAJOR** — breaking-change release. Action: `./bin/release major`, then `git push --follow-tags`.
 
    Use `header: "Release type"` and a clear question like "Wie soll ich pushen?" / "How should I push this?". Do NOT ask via plain text — the picker is the source of truth so the answer is unambiguous and consistent across every PUSH IT cycle.
+5. **After the push, check the pushed commit** once GitHub Actions and Scrutinizer have finished, with the commands in `docs/ci.md`, and report both results. A red build in either is fixed before new work starts.
 
 Never push without all green test suites. Never skip asking about the release type.
 

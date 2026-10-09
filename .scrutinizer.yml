@@ -1,14 +1,19 @@
+# The complete Scrutinizer config. The repository settings on
+# scrutinizer-ci.com stay empty: Scrutinizer merges them first and this file
+# wins on conflicts, but a list here replaces the list there, which once
+# dropped the JavaScript analysis without anyone noticing.
+#
+# Scrutinizer only analyses the code: PHP and JavaScript analysis in the
+# analysis node, PSR-12 in the tests node. It never runs PHPUnit and never
+# starts services; every test suite runs in GitHub Actions against the docker
+# compose stack. Its database and Redis services often accepted connections
+# without ever answering, so tests here failed for reasons unrelated to the
+# code. Read docs/ci.md before changing this file;
+# tests/unit/config/ScrutinizerConfigTest.php enforces these rules.
 build:
   environment:
     php:
       version: "8.2"
-      pecl_extensions:
-        - pcov
-  services:
-    # The same database as docker-compose.yml. The mysql 5.7 service accepted
-    # connections but never answered, see tests/ci/scrutinizer-db-setup.php.
-    mariadb: 10.11
-    redis: 7
   dependencies:
     override:
       - composer self-update --2
@@ -21,36 +26,22 @@ build:
     # exit code 127. PSR-12 runs in the tests node with the phpcs from
     # require-dev instead.
     analysis:
+      project_setup:
+        override:
+          - 'true'
       tests:
         override:
           - php-scrutinizer-run
-    # Named "tests" on purpose: the repository config in Scrutinizer's web UI
-    # enables a "tests" node with auto-detected commands, which run PHPUnit
-    # without the database below. A node of the same name here replaces it.
+          - js-scrutinizer-run
+    # Named "tests" on purpose: Scrutinizer's default config enables a
+    # "tests" node with auto-detected commands, which would run PHPUnit
+    # without a database. A node of the same name here replaces it. It runs
+    # PSR-12 with the project's own phpcs, same scope as bin/tests-style.sh,
+    # and nothing else.
     tests:
       tests:
-        before:
-          - printf 'DB_HOST=127.0.0.1\nDB_USER=ansilume\nDB_PASSWORD=secret\nDB_NAME=ansilume\nDB_TEST_NAME=ansilume_test\nREDIS_HOST=127.0.0.1\nAPP_SECRET_KEY=scrutinizer-test-key-that-is-32-bytes!\n' > .env
-          # Diagnostics only, they never fail the build: what listens on the
-          # database and Redis ports, and which service host names exist.
-          - (command -v ss >/dev/null && ss -ltn) || (command -v netstat >/dev/null && netstat -ltn) || echo "neither ss nor netstat available"
-          # Quoted: unquoted, the colon in the echo text made this a YAML mapping.
-          - 'for h in mariadb mysql redis; do getent hosts "$h" || echo "no such host: $h"; done'
-          - (docker ps -a 2>/dev/null && for c in $(docker ps -aq); do docker logs --tail 20 "$c" 2>&1; done) || echo "no docker CLI in the build"
-          # Waits for the database with bounded attempts, creates the
-          # databases and the user, and writes the answering host into .env.
-          # The mysql CLI is not in Scrutinizer's build image (exit 127 on v2.4.5).
-          - php tests/ci/scrutinizer-db-setup.php
-          - php yii migrate --interactive=0
-          - sed -i 's/DB_NAME=ansilume/DB_NAME=ansilume_test/' .env && php yii migrate --interactive=0 && sed -i 's/DB_NAME=ansilume_test/DB_NAME=ansilume/' .env
         override:
-          # PSR-12 with the project's own phpcs, same scope as bin/tests-style.sh.
           - vendor/bin/phpcs --standard=PSR12 --extensions=php --warning-severity=0 --ignore=vendor,.composer,runtime,@runtime,web/assets,docker,migrations,tests -q .
-          -
-            command: vendor/bin/phpunit --testsuite=Unit --colors=never --coverage-clover clover.xml
-            coverage:
-              file: clover.xml
-              format: php-clover
 
 checks:
   php:
@@ -61,6 +52,18 @@ checks:
     # - PSR-12 requires spaces around bitwise OR: CONST_A | CONST_B
     spacing_of_function_arguments: false
     spacing_around_non_conditional_operators: false
+  javascript: true
+
+# Style of the fixes Scrutinizer suggests, matching PSR-12 and CLAUDE.md:
+# no space after a cast, spaces around the concatenation operator.
+coding_style:
+  php:
+    spaces:
+      around_operators:
+        bitwise: false
+        concatenation: true
+      other:
+        after_type_cast: false
 
 tools:
   # No php_code_sniffer here, see build.nodes.analysis.
@@ -71,9 +74,11 @@ filter:
   excluded_paths:
     - vendor/*
     - tests/*
+    - bin/*
     - runtime/*
     - web/assets/*
-    - web/js/cronstrue.min.js
+    # Minified third-party bundles (bootstrap, chart.js, ansi_up, cronstrue).
+    - '*.min.js'
     # Vendored third-party JS (CodeMirror, js-yaml, …) — not ours to review,
     # and their size/complexity skews the metrics for our own code.
     - web/js/vendor/*
