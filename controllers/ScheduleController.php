@@ -8,6 +8,7 @@ use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\controllers\traits\TeamScopingTrait;
+use app\services\ScheduleService;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
@@ -70,10 +71,9 @@ class ScheduleController extends BaseController
         $model->enabled = true;
 
         if ($model->load((array)\Yii::$app->request->post())) {
-            $this->requireScheduleOperate($model);
+            // Set in code only: the schedule launches its jobs as this user.
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
-            $model->computeNextRunAt();
-            if ($model->save()) {
+            if ($this->saveSchedule($model)) {
                 \Yii::$app->get('auditService')->log(
                     AuditLog::ACTION_SCHEDULE_CREATED,
                     'schedule',
@@ -86,10 +86,7 @@ class ScheduleController extends BaseController
             }
         }
 
-        return $this->render('form', [
-            'model' => $model,
-            'templates' => $this->getTemplateList(),
-        ]);
+        return $this->renderForm($model);
     }
 
     public function actionUpdate(int $id): Response|string
@@ -97,25 +94,19 @@ class ScheduleController extends BaseController
         $model = $this->findModel($id);
         $this->requireScheduleOperate($model);
 
-        if ($model->load((array)\Yii::$app->request->post())) {
-            $model->computeNextRunAt();
-            if ($model->save()) {
-                \Yii::$app->get('auditService')->log(
-                    AuditLog::ACTION_SCHEDULE_UPDATED,
-                    'schedule',
-                    $model->id,
-                    null,
-                    ['name' => $model->name]
-                );
-                $this->session()->setFlash('success', "Schedule \"{$model->name}\" updated.");
-                return $this->redirect(['view', 'id' => $model->id]);
-            }
+        if ($model->load((array)\Yii::$app->request->post()) && $this->saveSchedule($model)) {
+            \Yii::$app->get('auditService')->log(
+                AuditLog::ACTION_SCHEDULE_UPDATED,
+                'schedule',
+                $model->id,
+                null,
+                ['name' => $model->name]
+            );
+            $this->session()->setFlash('success', "Schedule \"{$model->name}\" updated.");
+            return $this->redirect(['view', 'id' => $model->id]);
         }
 
-        return $this->render('form', [
-            'model' => $model,
-            'templates' => $this->getTemplateList(),
-        ]);
+        return $this->renderForm($model);
     }
 
     public function actionDelete(int $id): Response
@@ -152,6 +143,70 @@ class ScheduleController extends BaseController
         return $this->redirect(['index']);
     }
 
+    /**
+     * Validate and save a submitted schedule. The job template it points at
+     * must be one the user may operate: a template they see but may not
+     * operate is forbidden, one they cannot see gets the same error as an
+     * unknown one, so the form cannot probe for other teams' templates.
+     *
+     * @throws ForbiddenHttpException
+     */
+    private function saveSchedule(Schedule $model): bool
+    {
+        $access = $this->templateAccess($model);
+        if ($access === ScheduleService::TEMPLATE_FORBIDDEN) {
+            throw new ForbiddenHttpException('You do not have permission to schedule the selected job template.');
+        }
+
+        $model->computeNextRunAt();
+        $valid = $model->validate();
+        if ($access === ScheduleService::TEMPLATE_MISSING) {
+            $model->clearErrors('job_template_id');
+            $model->addError('job_template_id', ScheduleService::TEMPLATE_MISSING_MESSAGE);
+            return false;
+        }
+
+        return $valid && $model->save(false);
+    }
+
+    /**
+     * Access to the submitted job template (ScheduleService::TEMPLATE_*),
+     * checked as the int the schedule stores; null when the form holds no
+     * template id the integer rule accepts: the model's rules report that.
+     *
+     * @throws ForbiddenHttpException for guests
+     */
+    private function templateAccess(Schedule $model): ?string
+    {
+        $userId = $this->currentUserId();
+        if ($userId === null) {
+            throw new ForbiddenHttpException('You do not have permission to modify this resource.');
+        }
+        $templateId = $this->normalizeSubmittedId($model, 'job_template_id');
+
+        return $templateId === null ? null : $this->schedules()->templateAccess($userId, $templateId);
+    }
+
+    /**
+     * Show the form, with the errors of a rejected submission. Its fields
+     * render their values as text, so a list that a crafted form posted for
+     * one of them (Schedule[timezone][]=x) is shown as an empty field with
+     * its error: rendering the list failed with "Array to string conversion".
+     */
+    private function renderForm(Schedule $model): string
+    {
+        foreach ($model->getAttributes() as $attribute => $value) {
+            if (is_array($value)) {
+                $model->setAttribute($attribute, null);
+            }
+        }
+
+        return $this->render('form', [
+            'model' => $model,
+            'templates' => $this->getTemplateList(),
+        ]);
+    }
+
     private function findModel(int $id): Schedule
     {
         /** @var Schedule|null $model */
@@ -163,6 +218,9 @@ class ScheduleController extends BaseController
     }
 
     /**
+     * The job templates the user may schedule: those of projects they may
+     * operate.
+     *
      * @return array<int, string>
      */
     private function getTemplateList(): array
@@ -171,7 +229,7 @@ class ScheduleController extends BaseController
             ->select(['id', 'name', 'project_id'])
             ->orderBy('name');
 
-        $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
+        $filter = $this->checker()->buildChildOperateFilter($this->currentUserId(), 'job_template.project_id');
         if ($filter !== null) {
             $query->andWhere($filter);
         }
@@ -204,19 +262,24 @@ class ScheduleController extends BaseController
 
     private function requireScheduleView(Schedule $model): void
     {
-        $projectId = $model->jobTemplate->project_id ?? null;
         $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+        if ($userId === null || !$this->schedules()->canView($userId, $model)) {
             throw new ForbiddenHttpException('You do not have access to this resource.');
         }
     }
 
     private function requireScheduleOperate(Schedule $model): void
     {
-        $projectId = $model->jobTemplate->project_id ?? null;
         $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+        if ($userId === null || !$this->schedules()->canOperate($userId, $model)) {
             throw new ForbiddenHttpException('You do not have permission to modify this resource.');
         }
+    }
+
+    private function schedules(): ScheduleService
+    {
+        /** @var ScheduleService $service */
+        $service = \Yii::$app->get('scheduleService');
+        return $service;
     }
 }

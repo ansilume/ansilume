@@ -77,8 +77,7 @@ class SiteControllerActionTest extends WebControllerTestCase
 
     public function testIndexShowsPendingApprovals(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsOperator();
 
         $project = $this->createProject($user->id);
         $inventory = $this->createInventory($user->id);
@@ -119,8 +118,7 @@ class SiteControllerActionTest extends WebControllerTestCase
 
     public function testIndexShowsRunningWorkflows(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsOperator();
 
         $wt = new WorkflowTemplate();
         $wt->name = 'test-wf-' . uniqid('', true);
@@ -146,8 +144,7 @@ class SiteControllerActionTest extends WebControllerTestCase
 
     public function testIndexShowsUpcomingSchedules(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsOperator();
 
         $project = $this->createProject($user->id);
         $inventory = $this->createInventory($user->id);
@@ -220,8 +217,7 @@ class SiteControllerActionTest extends WebControllerTestCase
 
     public function testIndexShowsWorkflowTemplatesForQuickLaunch(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsOperator();
 
         $wt = new WorkflowTemplate();
         $wt->name = 'ql-wf-' . uniqid('', true);
@@ -274,6 +270,22 @@ class SiteControllerActionTest extends WebControllerTestCase
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * Approvals, workflows, schedules and quick launch need their permission
+     * (approval.view, workflow.view, job.launch, workflow.launch): operator.
+     */
+    private function loginAsOperator(): \app\models\User
+    {
+        $user = $this->createUser('dashboard-operator');
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $role = $auth->getRole('operator');
+        $this->assertNotNull($role);
+        $auth->assign($role, (string)$user->id);
+        $this->loginAs($user);
+        return $user;
+    }
 
     private function makeController(): SiteController
     {

@@ -9,10 +9,17 @@ use app\models\JobTemplate;
 use app\models\Project;
 use app\models\User;
 use app\services\AnalyticsService;
+use app\controllers\traits\TeamScopingTrait;
 use yii\web\Response;
 
+/**
+ * Analytics reports. Team scoping applies: reports and the project and
+ * template filters only cover what the signed-in user may see.
+ */
 class AnalyticsController extends BaseController
 {
+    use TeamScopingTrait;
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -34,9 +41,7 @@ class AnalyticsController extends BaseController
 
     public function actionIndex(): string
     {
-        $query = new AnalyticsQuery();
-        $query->load((array)\Yii::$app->request->get(), '');
-        $query->applyDefaults();
+        $query = $this->scopedQuery();
 
         /** @var AnalyticsService $service */
         $service = \Yii::$app->get('analyticsService');
@@ -68,9 +73,7 @@ class AnalyticsController extends BaseController
 
     public function actionExport(): Response
     {
-        $query = new AnalyticsQuery();
-        $query->load((array)\Yii::$app->request->get(), '');
-        $query->applyDefaults();
+        $query = $this->scopedQuery();
 
         if (!$query->validate()) {
             \Yii::$app->session->setFlash('error', 'Invalid filter parameters.');
@@ -94,6 +97,20 @@ class AnalyticsController extends BaseController
             'filters' => $query->toArray(),
             'data' => $rows,
         ]);
+    }
+
+    /**
+     * The filters from the request, limited to what the signed-in user may
+     * see. load() cannot set scopeUserId: it has no validation rule.
+     */
+    private function scopedQuery(): AnalyticsQuery
+    {
+        $query = new AnalyticsQuery();
+        $query->load((array)\Yii::$app->request->get(), '');
+        $query->applyDefaults();
+        $query->scopeUserId = $this->currentUserId();
+
+        return $query;
     }
 
     /**
@@ -158,12 +175,16 @@ class AnalyticsController extends BaseController
      */
     private function projectList(): array
     {
-        /** @var array<int, string> $list */
-        $list = Project::find()
+        $query = Project::find()
             ->select(['name', 'id'])
             ->orderBy(['name' => SORT_ASC])
-            ->indexBy('id')
-            ->column();
+            ->indexBy('id');
+        $filter = $this->checker()->buildProjectFilter($this->currentUserId());
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+        /** @var array<int, string> $list */
+        $list = $query->column();
         return $list;
     }
 
@@ -172,13 +193,17 @@ class AnalyticsController extends BaseController
      */
     private function templateList(): array
     {
-        /** @var array<int, string> $list */
-        $list = JobTemplate::find()
+        $query = JobTemplate::find()
             ->select(['name', 'id'])
             ->where(['deleted_at' => null])
             ->orderBy(['name' => SORT_ASC])
-            ->indexBy('id')
-            ->column();
+            ->indexBy('id');
+        $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+        /** @var array<int, string> $list */
+        $list = $query->column();
         return $list;
     }
 

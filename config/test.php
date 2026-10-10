@@ -85,6 +85,9 @@ return [
         'projectDeletionService' => [
             'class' => 'app\services\ProjectDeletionService',
         ],
+        'userDeletionService' => [
+            'class' => 'app\services\UserDeletionService',
+        ],
         'jobTemplateCredentialService' => [
             'class' => 'app\services\JobTemplateCredentialService',
         ],
@@ -126,6 +129,9 @@ return [
         ],
         'projectAccessChecker' => [
             'class' => 'app\services\ProjectAccessChecker',
+        ],
+        'workflowAccessChecker' => [
+            'class' => 'app\services\WorkflowAccessChecker',
         ],
         'projectService' => [
             'class' => 'app\services\ProjectService',

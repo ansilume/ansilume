@@ -17,12 +17,19 @@ class AnalyticsServiceTest extends DbTestCase
 {
     private AnalyticsService $service;
 
+    /** An unrestricted user: reports count every job, as before team scoping. */
+    private int $scopeUserId;
+
     protected function setUp(): void
     {
         parent::setUp();
         /** @var AnalyticsService $s */
         $s = \Yii::$app->get('analyticsService');
         $this->service = $s;
+        $admin = $this->createUser('analytics-scope');
+        $admin->is_superadmin = true;
+        $admin->save(false);
+        $this->scopeUserId = (int)$admin->id;
     }
 
     /**
@@ -52,6 +59,7 @@ class AnalyticsServiceTest extends DbTestCase
         $q = new AnalyticsQuery();
         $q->date_from = date('Y-m-d', strtotime('-1 day'));
         $q->date_to = date('Y-m-d', strtotime('+1 day'));
+        $q->scopeUserId = $this->scopeUserId;
         return $q;
     }
 

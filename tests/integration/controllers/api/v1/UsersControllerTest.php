@@ -6,7 +6,9 @@ namespace app\tests\integration\controllers\api\v1;
 
 use app\controllers\api\v1\UsersController;
 use app\models\ApiToken;
+use app\models\AuditLog;
 use app\models\User;
+use app\services\UserDeletionService;
 use app\tests\integration\controllers\WebControllerTestCase;
 
 /**
@@ -182,6 +184,38 @@ class UsersControllerTest extends WebControllerTestCase
         $this->assertNotSame($oldHash, $target->password_hash);
     }
 
+    public function testUpdateRejects403WithoutPermission(): void
+    {
+        $target = $this->createUser('update-forbidden');
+        $email = $target->email;
+        $this->authenticateAs('no-update-perm');
+        $this->setBody(['email' => 'forbidden-' . uniqid('', true) . '@example.com']);
+
+        $result = $this->ctrl->actionUpdate((int)$target->id);
+
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'Forbidden.']], $result);
+        $target->refresh();
+        $this->assertSame($email, $target->email);
+    }
+
+    public function testAnUpdateWithoutARoleKeepsTheRolesAndOneWithARoleReplacesThem(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('role-update');
+        $this->assignRole($target, 'operator');
+
+        $this->setBody(['email' => 'role-update-' . uniqid('', true) . '@example.com']);
+        $this->callSuccess($this->ctrl->actionUpdate((int)$target->id));
+        $this->assertSame(['operator'], $this->roleNames((int)$target->id));
+
+        $this->setBody(['role' => 'viewer']);
+        /** @var array<string, mixed> $user */
+        $user = $this->callSuccess($this->ctrl->actionUpdate((int)$target->id));
+        $this->assertSame('viewer', $user['role']);
+        $this->assertSame(['viewer'], $this->roleNames((int)$target->id));
+    }
+
     // -- Delete ---------------------------------------------------------------
 
     public function testDeleteReturnsSuccess(): void
@@ -199,12 +233,179 @@ class UsersControllerTest extends WebControllerTestCase
         $this->ctrl->actionView((int)$target->id);
     }
 
+    public function testDeleteRejects403WithoutPermission(): void
+    {
+        $target = $this->createUser('delete-forbidden');
+        $this->authenticateAs('no-delete-perm');
+
+        $result = $this->ctrl->actionDelete((int)$target->id);
+
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'Forbidden.']], $result);
+        $this->assertNotNull(User::findOne($target->id));
+    }
+
     public function testDeleteRejectsSelfDeletion(): void
     {
         $admin = $this->authenticateWithAdmin();
 
         $this->ctrl->actionDelete((int)$admin->id);
         $this->assertSame(422, \Yii::$app->response->statusCode);
+    }
+
+    /**
+     * Regression: a user whom other records still refer to (here: a job
+     * they launched) failed on the foreign key with a server error, after
+     * all their roles had been revoked, so their schedules and triggers
+     * stopped launching.
+     */
+    public function testDeletingAUserOtherRecordsReferToIs409AndKeepsTheirRoles(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('referenced');
+        $this->assignRole($target, 'operator');
+        $owner = (int)$this->createUser('owner')->id;
+        $template = $this->createJobTemplate(
+            $this->createProject($owner)->id,
+            $this->createInventory($owner)->id,
+            $this->createRunnerGroup($owner)->id,
+            $owner
+        );
+        $this->createJob($template->id, (int)$target->id);
+
+        $result = $this->ctrl->actionDelete((int)$target->id);
+
+        $this->assertSame(409, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => (new UserDeletionService())->refusalMessage($target)]], $result);
+        $this->assertNotNull(User::findOne($target->id));
+        $this->assertSame(['operator'], $this->roleNames((int)$target->id));
+        $this->assertNull($this->deletionAudit((int)$target->id), 'only deletes are audited');
+    }
+
+    /**
+     * Regression: as above, for a user whose only reference is a trigger
+     * token they generated.
+     */
+    public function testDeletingTheGeneratorOfATriggerTokenIs409(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('token-generator');
+        $this->assignRole($target, 'operator');
+        $workflow = $this->createWorkflowTemplate((int)$this->createUser('owner')->id);
+        $workflow->generateTriggerToken((int)$target->id);
+
+        $this->ctrl->actionDelete((int)$target->id);
+
+        $this->assertSame(409, \Yii::$app->response->statusCode);
+        $this->assertNotNull(User::findOne($target->id));
+        $this->assertSame(['operator'], $this->roleNames((int)$target->id));
+    }
+
+    public function testDeletingAnUnreferencedUserRemovesTheirRolesAndIsAudited(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('free');
+        $this->assignRole($target, 'operator');
+
+        $result = $this->ctrl->actionDelete((int)$target->id);
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertSame(['data' => ['deleted' => true]], $result);
+        $this->assertNull(User::findOne($target->id));
+        $this->assertSame([], $this->roleNames((int)$target->id));
+        $audit = $this->deletionAudit((int)$target->id);
+        $this->assertNotNull($audit);
+        $this->assertSame(['username' => $target->username, 'source' => 'api'], json_decode((string)$audit->metadata, true));
+    }
+
+    // -- The only superadmin --------------------------------------------------
+
+    public function testDeletingTheOnlySuperadminIs422AndChangesNothing(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('only-superadmin');
+        $this->assignRole($target, 'admin');
+        $this->makeTheOnlySuperadmins($target);
+
+        $result = $this->ctrl->actionDelete((int)$target->id);
+
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'Cannot delete the only superadmin.']], $result);
+        $this->assertTrue($this->isSuperadmin((int)$target->id));
+        $this->assertSame(['admin'], $this->roleNames((int)$target->id));
+        $this->assertNull($this->deletionAudit((int)$target->id));
+    }
+
+    public function testASuperadminCanBeDeletedWhileAnotherRemains(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('superadmin');
+        $this->assignRole($target, 'admin');
+        $this->makeTheOnlySuperadmins($target, $this->createUser('other-superadmin'));
+
+        $result = $this->ctrl->actionDelete((int)$target->id);
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertSame(['data' => ['deleted' => true]], $result);
+        $this->assertNull(User::findOne($target->id));
+        $this->assertSame([], $this->roleNames((int)$target->id));
+    }
+
+    /**
+     * Regression: PUT /api/v1/users/{id} with is_superadmin false took the
+     * flag from the only superadmin, which the web UI and DELETE refuse.
+     */
+    public function testDemotingTheOnlySuperadminIs422AndChangesNothing(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('only-superadmin');
+        $this->makeTheOnlySuperadmins($target);
+        $email = $target->email;
+
+        $this->setBody(['is_superadmin' => false, 'email' => 'demoted-' . uniqid('', true) . '@example.com']);
+        $result = $this->ctrl->actionUpdate((int)$target->id);
+
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'Cannot demote the only superadmin.']], $result);
+        $this->assertTrue($this->isSuperadmin((int)$target->id));
+        $target->refresh();
+        $this->assertSame($email, $target->email, 'nothing of the request is saved');
+        $this->assertNull($this->updateAudit((int)$target->id));
+    }
+
+    public function testASuperadminCanBeDemotedWhileAnotherRemains(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('superadmin');
+        $this->makeTheOnlySuperadmins($target, $this->createUser('other-superadmin'));
+
+        $this->setBody(['is_superadmin' => false]);
+        $result = $this->ctrl->actionUpdate((int)$target->id);
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        /** @var array<string, mixed> $user */
+        $user = $this->callSuccess($result);
+        $this->assertFalse($user['is_superadmin']);
+        $this->assertFalse($this->isSuperadmin((int)$target->id));
+        $this->assertNotNull($this->updateAudit((int)$target->id));
+    }
+
+    public function testTheOnlySuperadminCanStillBeUpdatedOtherwise(): void
+    {
+        $this->authenticateWithAdmin();
+        $target = $this->createUser('only-superadmin');
+        $this->makeTheOnlySuperadmins($target);
+        $email = 'kept-' . uniqid('', true) . '@example.com';
+
+        $this->setBody(['is_superadmin' => true, 'email' => $email]);
+        $result = $this->ctrl->actionUpdate((int)$target->id);
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        /** @var array<string, mixed> $user */
+        $user = $this->callSuccess($result);
+        $this->assertTrue($user['is_superadmin']);
+        $this->assertSame($email, $user['email']);
+        $this->assertTrue($this->isSuperadmin((int)$target->id));
     }
 
     // -- Helpers --------------------------------------------------------------
@@ -262,5 +463,54 @@ class UsersControllerTest extends WebControllerTestCase
         /** @var \yii\web\Request $request */
         $request = \Yii::$app->request;
         $request->setBodyParams($body);
+    }
+
+    private function assignRole(User $user, string $roleName): void
+    {
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $role = $auth->getRole($roleName);
+        $this->assertNotNull($role, $roleName);
+        $auth->assign($role, (string)$user->id);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function roleNames(int $userId): array
+    {
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $names = array_keys($auth->getRolesByUser((string)$userId));
+        sort($names);
+        return $names;
+    }
+
+    private function deletionAudit(int $userId): ?AuditLog
+    {
+        return AuditLog::findOne(['action' => AuditLog::ACTION_USER_DELETED, 'object_type' => 'user', 'object_id' => $userId]);
+    }
+
+    private function updateAudit(int $userId): ?AuditLog
+    {
+        return AuditLog::findOne(['action' => AuditLog::ACTION_USER_UPDATED, 'object_type' => 'user', 'object_id' => $userId]);
+    }
+
+    /**
+     * Makes $users the only superadmins, inside the test's transaction.
+     */
+    private function makeTheOnlySuperadmins(User ...$users): void
+    {
+        User::updateAll(['is_superadmin' => 0], ['is_superadmin' => 1]);
+        foreach ($users as $user) {
+            $user->is_superadmin = true;
+            $user->save(false);
+        }
+        $this->assertSame(count($users), (int)User::find()->where(['is_superadmin' => 1])->count());
+    }
+
+    private function isSuperadmin(int $userId): bool
+    {
+        return (bool)User::find()->select('is_superadmin')->where(['id' => $userId])->scalar();
     }
 }

@@ -54,6 +54,45 @@ class WorkflowStepTest extends DbTestCase
         $this->assertArrayHasKey('step_type', $step->errors);
     }
 
+    /**
+     * Regression: the step type rule compared loosely, so true, which a JSON
+     * body can post, matched every type and was stored as "1": a run that
+     * reached such a step hung.
+     *
+     * @return array<string, array{0: mixed, 1: string}>
+     */
+    public static function stepTypeThatIsNoTypeProvider(): array
+    {
+        return [
+            'true' => [true, 'Step Type must be a string.'],
+            'the number 1' => [1, 'Step Type must be a string.'],
+            'a list of a type' => [[WorkflowStep::TYPE_JOB], 'Step Type must be a string.'],
+            'the text "1"' => ['1', 'Step Type is invalid.'],
+        ];
+    }
+
+    /**
+     * @dataProvider stepTypeThatIsNoTypeProvider
+     */
+    public function testAStepTypeThatIsNoTypeIsRefused(mixed $type, string $error): void
+    {
+        $step = new WorkflowStep();
+        $step->step_type = $type;
+
+        $this->assertFalse($step->validate(['step_type']));
+        $this->assertSame([$error], $step->getErrors('step_type'));
+    }
+
+    public function testEveryStepTypeIsAccepted(): void
+    {
+        foreach (array_keys(WorkflowStep::typeLabels()) as $type) {
+            $step = new WorkflowStep();
+            $step->step_type = $type;
+
+            $this->assertTrue($step->validate(['step_type']), $type);
+        }
+    }
+
     public function testValidJsonExtraVarsTemplatePasses(): void
     {
         $user = $this->createUser();
@@ -62,7 +101,7 @@ class WorkflowStepTest extends DbTestCase
         $step = new WorkflowStep();
         $step->workflow_template_id = $wt->id;
         $step->name = 'ok';
-        $step->step_type = WorkflowStep::TYPE_JOB;
+        $step->step_type = WorkflowStep::TYPE_PAUSE;
         $step->extra_vars_template = '{"foo":"bar"}';
         $this->assertTrue($step->validate());
     }
@@ -89,7 +128,7 @@ class WorkflowStepTest extends DbTestCase
         $step = new WorkflowStep();
         $step->workflow_template_id = $wt->id;
         $step->name = 'empty-evt';
-        $step->step_type = WorkflowStep::TYPE_JOB;
+        $step->step_type = WorkflowStep::TYPE_PAUSE;
         $step->extra_vars_template = '';
         $this->assertTrue($step->validate());
     }
@@ -191,5 +230,55 @@ class WorkflowStepTest extends DbTestCase
         $this->assertNotNull($reloaded);
         $this->assertInstanceOf(WorkflowStep::class, $reloaded->onAlwaysStep);
         $this->assertSame($s2->id, $reloaded->onAlwaysStep->id);
+    }
+
+    public function testAJobStepNeedsAnExistingJobTemplate(): void
+    {
+        $user = $this->createUser('step_tpl');
+        $wt = $this->createWorkflowTemplate($user->id);
+        $template = $this->createJobTemplate(
+            $this->createProject($user->id)->id,
+            $this->createInventory($user->id)->id,
+            $this->createRunnerGroup($user->id)->id,
+            $user->id
+        );
+
+        $step = new WorkflowStep();
+        $step->workflow_template_id = $wt->id;
+        $step->name = 'deploy';
+        $step->step_type = WorkflowStep::TYPE_JOB;
+        $this->assertFalse($step->validate());
+        $this->assertSame('A job step needs a job template.', $step->getFirstError('job_template_id'));
+
+        $step->job_template_id = 987654321;
+        $this->assertFalse($step->validate());
+        $this->assertSame('The selected job template does not exist.', $step->getFirstError('job_template_id'));
+
+        $template->softDelete();
+        $step->job_template_id = $template->id;
+        $this->assertFalse($step->validate(), 'a deleted template cannot be used');
+
+        $template->deleted_at = null;
+        $template->save(false);
+        $this->assertTrue($step->validate());
+    }
+
+    /**
+     * Regression: add-step loaded the posted form after setting the step's
+     * workflow, so a form field could plant a step in another workflow.
+     */
+    public function testTheWorkflowCannotBeSetFromAForm(): void
+    {
+        $user = $this->createUser('step_mass');
+        $mine = $this->createWorkflowTemplate($user->id);
+        $other = $this->createWorkflowTemplate($user->id);
+
+        $step = new WorkflowStep();
+        $step->workflow_template_id = $mine->id;
+        $step->load(['WorkflowStep' => ['workflow_template_id' => $other->id, 'name' => 'x', 'step_type' => WorkflowStep::TYPE_PAUSE]]);
+
+        $this->assertSame($mine->id, $step->workflow_template_id);
+        $this->assertSame('x', $step->name);
+        $this->assertNotContains('workflow_template_id', $step->safeAttributes());
     }
 }

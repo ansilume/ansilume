@@ -18,7 +18,9 @@ use app\models\User;
  * Creates two isolated teams (alpha/beta) with separate projects,
  * templates, and inventories for resource isolation testing, plus a project
  * that team-alpha may only view (e2e-alpha-viewed-proj) with a template, for
- * the operator's "may view but not change" checks.
+ * the operator's "may view but not change" checks. That template has a
+ * trigger token that runs as the seeding user, so the operator specs can
+ * check that whom it runs as is not shown to a user who may only view it.
  */
 class E2eTeamScopingSeeder
 {
@@ -64,23 +66,39 @@ class E2eTeamScopingSeeder
 
     /**
      * A project team-alpha may only view, with a static inventory and a
-     * template. Idempotent: skipped when the project exists.
+     * template with a trigger token. Idempotent: the project is skipped when
+     * it exists, the token is kept while it runs as $userId.
      */
     private function seedViewedProject(int $teamAlphaId, int $runnerGroupId, int $userId): void
     {
-        if (Project::find()->where(['name' => self::PREFIX . 'alpha-viewed-proj'])->exists()) {
+        if (!Project::find()->where(['name' => self::PREFIX . 'alpha-viewed-proj'])->exists()) {
+            $project = $this->createProject('alpha-viewed-proj', $userId);
+            $inventory = $this->createInventory('alpha-viewed-inv', "alpha-viewed-host\n", $project->id, $userId);
+            $this->createTemplate('alpha-viewed-tmpl', $project->id, $inventory->id, $runnerGroupId, $userId);
+
+            $tp = new TeamProject();
+            $tp->team_id = $teamAlphaId;
+            $tp->project_id = $project->id;
+            $tp->role = TeamProject::ROLE_VIEWER;
+            $tp->created_at = time();
+            $tp->save(false);
+        }
+        $this->seedViewedTriggerToken($userId);
+    }
+
+    /**
+     * A trigger token on e2e-alpha-viewed-tmpl that runs as $userId. Only
+     * the hash is stored and nobody knows the raw value: the template page
+     * shows whom the trigger runs as, but the trigger cannot be fired.
+     */
+    private function seedViewedTriggerToken(int $userId): void
+    {
+        /** @var JobTemplate|null $template */
+        $template = JobTemplate::find()->andWhere(['name' => self::PREFIX . 'alpha-viewed-tmpl'])->one();
+        if ($template === null || ($template->hasTriggerToken() && (int)$template->trigger_token_created_by === $userId)) {
             return;
         }
-        $project = $this->createProject('alpha-viewed-proj', $userId);
-        $inventory = $this->createInventory('alpha-viewed-inv', "alpha-viewed-host\n", $project->id, $userId);
-        $this->createTemplate('alpha-viewed-tmpl', $project->id, $inventory->id, $runnerGroupId, $userId);
-
-        $tp = new TeamProject();
-        $tp->team_id = $teamAlphaId;
-        $tp->project_id = $project->id;
-        $tp->role = TeamProject::ROLE_VIEWER;
-        $tp->created_at = time();
-        $tp->save(false);
+        $template->generateTriggerToken($userId);
     }
 
     private function createProject(string $suffix, int $userId): Project

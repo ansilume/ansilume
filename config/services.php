@@ -48,6 +48,9 @@ return [
     'projectDeletionService' => [
         'class' => 'app\services\ProjectDeletionService',
     ],
+    'userDeletionService' => [
+        'class' => 'app\services\UserDeletionService',
+    ],
     'jobLaunchService' => [
         'class' => 'app\services\JobLaunchService',
     ],
@@ -59,6 +62,9 @@ return [
     ],
     'projectAccessChecker' => [
         'class' => 'app\services\ProjectAccessChecker',
+    ],
+    'workflowAccessChecker' => [
+        'class' => 'app\services\WorkflowAccessChecker',
     ],
     'webhookService' => [
         'class' => 'app\services\WebhookService',

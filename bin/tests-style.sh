@@ -88,11 +88,15 @@ if dc php vendor/bin/phpcpd --version >/dev/null 2>&1; then
     # Judge by the exit code (phpcpd exits 1 when it finds clones). The old
     # text match never matched phpcpd 7's "Found N code clones" wording, so
     # duplicated code passed silently.
+    # runtime/ is git-ignored scratch space and never shipped (phpcs and
+    # php-cs-fixer skip it too); throwaway copies of classes there, such as
+    # runtime/verify-*/Old*.php, were reported as clones.
     PHPCPD_RC=0
     PHPCPD_OUT=$(dc php vendor/bin/phpcpd \
         --min-lines=15 \
         --min-tokens=70 \
         --exclude=vendor --exclude=tests --exclude=migrations --exclude=views \
+        --exclude=runtime --exclude=@runtime \
         . 2>&1) || PHPCPD_RC=$?
     if [ "$PHPCPD_RC" -eq 0 ]; then
         ok "PHPCPD passed (no duplications)"

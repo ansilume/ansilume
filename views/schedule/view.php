@@ -73,7 +73,10 @@ $this->title = Html::encode($model->name);
                     </dd>
 
                     <dt class="col-sm-4">Created by</dt>
-                    <dd class="col-sm-8"><?= Html::encode($model->creator->username ?? '—') ?></dd>
+                    <dd class="col-sm-8">
+                        <?= Html::encode($model->creator->username ?? '—') ?>
+                        <div class="small text-muted" data-testid="schedule-runs-as">Scheduled jobs run as this user, and only while they may launch the job template.</div>
+                    </dd>
 
                     <dt class="col-sm-4">Created</dt>
                     <dd class="col-sm-8"><?= date('Y-m-d H:i:s', $model->created_at) ?></dd>

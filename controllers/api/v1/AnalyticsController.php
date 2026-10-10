@@ -23,6 +23,9 @@ use app\services\AnalyticsService;
  *
  * All endpoints accept: date_from, date_to, project_id, template_id,
  * user_id, runner_group_id, granularity, format (json|csv).
+ *
+ * Team scoping applies: every report counts only the jobs, workflows and
+ * approval requests the caller may see.
  */
 class AnalyticsController extends BaseApiController
 {
@@ -130,6 +133,8 @@ class AnalyticsController extends BaseApiController
         $query = new AnalyticsQuery();
         $query->load((array)\Yii::$app->request->get(), '');
         $query->applyDefaults();
+        // Never from the request: load() skips it, as it has no rule.
+        $query->scopeUserId = \Yii::$app->user->isGuest ? null : (int)\Yii::$app->user->id;
 
         if (!$query->validate()) {
             return $this->error($this->firstQueryError($query), 422);

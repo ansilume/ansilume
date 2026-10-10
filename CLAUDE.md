@@ -590,7 +590,7 @@ composer install               # Install PHP dependencies
 3. ~~**First-run reliability**~~ — quickstart pre-flight checks, diagnostics, health checks (v2.0.25)
 4. ~~**API CRUD endpoints**~~ — all resources (Projects, Job Templates, Schedules, Runner Groups, Teams, Users, Webhooks, Audit Logs) have full REST API with tests and OpenAPI spec
 5. ~~**Runner group assignment**~~ — runners can be moved between groups via web UI and REST API, with active-job guards and audit logging (v2.0.26)
-6. ~~**Team scoping**~~ — multi-tenant resource isolation: projects assigned to teams with viewer/operator roles; all child resources (templates, inventories, jobs, schedules) inherit access transitively; enforced across web UI and REST API
+6. ~~**Team scoping**~~ — multi-tenant resource isolation: projects assigned to teams with viewer/operator roles; all child resources (templates, inventories, jobs, schedules, approval requests) inherit access transitively; workflows belong to the projects of their job steps (seeing needs view, changing/launching/resuming/canceling operator access to every one; steps with a missing job template fail closed) via `WorkflowAccessChecker`; analytics and the dashboard are scoped; schedules (run as their creator), triggers (run as the user who generated the token) and workflow job steps re-check that user at launch time; enforced across web UI and REST API
 7. ~~**LDAP/AD integration**~~ — optional Active Directory / OpenLDAP authentication as addon (local users remain alongside; password ops disabled for LDAP users; group-to-role mapping; auto-provisioning; `ldap/sync` console command for lifecycle reconciliation; admin diagnose endpoint). See `docs/ldap.md`.
 
 ### Next

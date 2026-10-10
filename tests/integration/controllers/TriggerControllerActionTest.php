@@ -7,15 +7,15 @@ namespace app\tests\integration\controllers;
 use app\controllers\TriggerController;
 use app\models\WorkflowJob;
 use app\models\WorkflowTemplate;
+use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 /**
- * Inbound-trigger endpoint coverage. The job-side {@see TriggerController::actionFire()}
- * is exercised end-to-end by the e2e suite (tests/e2e/tests/trigger/fire.spec.ts);
- * this PHPUnit class focuses on the workflow-side {@see actionFireWorkflow()} since
- * the e2e suite can't easily stub WorkflowExecutionService.
+ * Wiring of the workflow trigger {@see TriggerController::actionFireWorkflow()}
+ * against a stubbed WorkflowExecutionService. Team scoping of both triggers,
+ * with the real services, is covered by {@see TriggerControllerTeamScopeTest}.
  */
 class TriggerControllerActionTest extends WebControllerTestCase
 {
@@ -33,11 +33,19 @@ class TriggerControllerActionTest extends WebControllerTestCase
             public int $launchCalls = 0;
             /** @var array<string, mixed>|null */
             public ?array $lastOverrides = null;
+            public ?int $lastLaunchedBy = null;
+            public ?string $lastSource = null;
             public bool $throwOnLaunch = false;
-            public function launch(WorkflowTemplate $template, int $launchedBy, array $overrides = []): WorkflowJob
+            public bool $denyLaunch = false;
+            public function launch(WorkflowTemplate $template, int $launchedBy, array $overrides = [], string $source = 'web'): WorkflowJob
             {
                 $this->launchCalls++;
                 $this->lastOverrides = $overrides;
+                $this->lastLaunchedBy = $launchedBy;
+                $this->lastSource = $source;
+                if ($this->denyLaunch) {
+                    throw new WorkflowAccessDeniedException('You may not launch job template(s) #1 of this workflow.', [1]);
+                }
                 if ($this->throwOnLaunch) {
                     throw new \RuntimeException('Workflow has no steps.');
                 }
@@ -67,7 +75,7 @@ class TriggerControllerActionTest extends WebControllerTestCase
     {
         $owner = $this->createUser();
         $template = $this->createWorkflowTemplate($owner->id);
-        $raw = $template->generateTriggerToken();
+        $raw = $template->generateTriggerToken((int)$template->created_by);
 
         $this->setQueryParams(['token' => $raw]);
         $this->setPost([]);
@@ -93,7 +101,7 @@ class TriggerControllerActionTest extends WebControllerTestCase
         // launchOverrides so callers don't accidentally rely on them.
         $owner = $this->createUser();
         $template = $this->createWorkflowTemplate($owner->id);
-        $raw = $template->generateTriggerToken();
+        $raw = $template->generateTriggerToken((int)$template->created_by);
 
         $body = json_encode([
             'extra_vars' => ['env' => 'staging'],
@@ -127,7 +135,7 @@ class TriggerControllerActionTest extends WebControllerTestCase
     {
         $owner = $this->createUser();
         $template = $this->createWorkflowTemplate($owner->id);
-        $raw = $template->generateTriggerToken();
+        $raw = $template->generateTriggerToken((int)$template->created_by);
 
         /** @var object{throwOnLaunch: bool} $svc */
         $svc = \Yii::$app->get('workflowExecutionService');
@@ -143,6 +151,51 @@ class TriggerControllerActionTest extends WebControllerTestCase
         $this->assertSame(500, $result->statusCode);
         $body = $this->decodeJson($result);
         $this->assertArrayHasKey('error', $body);
+    }
+
+    public function testFireWorkflowRunsAsTheUserWhoGeneratedTheToken(): void
+    {
+        $owner = $this->createUser('wf_owner');
+        $generator = $this->createUser('wf_generator');
+        $template = $this->createWorkflowTemplate($owner->id);
+        $raw = $template->generateTriggerToken((int)$generator->id);
+
+        $this->makeController()->actionFireWorkflow($raw);
+
+        /** @var object{lastLaunchedBy: int|null, lastSource: string|null} $svc */
+        $svc = \Yii::$app->get('workflowExecutionService');
+        $this->assertSame((int)$generator->id, $svc->lastLaunchedBy);
+        $this->assertSame('trigger', $svc->lastSource);
+    }
+
+    public function testFireWorkflowWithALegacyTokenRunsAsTheWorkflowCreator(): void
+    {
+        $owner = $this->createUser('wf_owner');
+        $template = $this->createWorkflowTemplate($owner->id);
+        $raw = $template->generateTriggerToken((int)$this->createUser('wf_generator')->id);
+        WorkflowTemplate::updateAll(['trigger_token_created_by' => null], ['id' => $template->id]);
+
+        $this->makeController()->actionFireWorkflow($raw);
+
+        /** @var object{lastLaunchedBy: int|null} $svc */
+        $svc = \Yii::$app->get('workflowExecutionService');
+        $this->assertSame((int)$owner->id, $svc->lastLaunchedBy);
+    }
+
+    public function testFireWorkflowAnswers403WithoutDetailsWhenTheLaunchIsDenied(): void
+    {
+        $owner = $this->createUser();
+        $template = $this->createWorkflowTemplate($owner->id);
+        $raw = $template->generateTriggerToken((int)$template->created_by);
+
+        /** @var object{denyLaunch: bool} $svc */
+        $svc = \Yii::$app->get('workflowExecutionService');
+        $svc->denyLaunch = true;
+
+        $result = $this->makeController()->actionFireWorkflow($raw);
+
+        $this->assertSame(403, $result->statusCode);
+        $this->assertSame(['error' => 'Launch refused.'], $this->decodeJson($result));
     }
 
     private function makeController(): TriggerController

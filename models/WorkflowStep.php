@@ -58,11 +58,38 @@ class WorkflowStep extends ActiveRecord
     public function rules(): array
     {
         return [
-            [['workflow_template_id', 'name', 'step_type'], 'required'],
+            // The workflow is set in code: a form must not move a step into
+            // another workflow.
+            [['!workflow_template_id'], 'required'],
+            [['!workflow_template_id'], 'integer'],
+            [['name', 'step_type'], 'required'],
             [['name'], 'string', 'max' => 128],
-            [['step_type'], 'in', 'range' => [self::TYPE_JOB, self::TYPE_APPROVAL, self::TYPE_PAUSE]],
+            // Text and compared strictly: a JSON body can post true, which a
+            // loose comparison takes for every type. Such a step was stored
+            // as "1", and a run that reached it waited there until canceled.
+            [['step_type'], 'string'],
+            [
+                ['step_type'],
+                'in',
+                'range' => [self::TYPE_JOB, self::TYPE_APPROVAL, self::TYPE_PAUSE],
+                'strict' => true,
+            ],
             [['step_order'], 'integer', 'min' => 0],
-            [['workflow_template_id', 'job_template_id', 'approval_rule_id'], 'integer'],
+            [['job_template_id', 'approval_rule_id'], 'integer'],
+            [
+                ['job_template_id'],
+                'required',
+                'when' => static fn (self $step): bool => $step->step_type === self::TYPE_JOB,
+                'message' => 'A job step needs a job template.',
+            ],
+            [
+                ['job_template_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => JobTemplate::class,
+                'targetAttribute' => ['job_template_id' => 'id'],
+                'message' => 'The selected job template does not exist.',
+            ],
             [['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'], 'integer', 'min' => 0],
             [['extra_vars_template'], 'string', 'max' => 65535],
             [['extra_vars_template'], 'validateJson'],

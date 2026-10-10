@@ -881,6 +881,32 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertNull($clone->lint_exit_code);
     }
 
+    /**
+     * Regression: the clone copied trigger_token_created_by although it has
+     * no token. The column's foreign key then kept the token's generator
+     * from being deleted, also after the source token was revoked, and the
+     * clone's page offers no token to revoke.
+     */
+    public function testCloneDoesNotKeepTheGeneratorOfTheSourceToken(): void
+    {
+        $admin = $this->createUser('clone_admin');
+        $generator = $this->createUser('clone_token_generator');
+        $this->loginAs($admin);
+        $source = $this->makeTemplate($admin->id);
+        $source->generateTriggerToken($generator->id);
+
+        $this->makeController()->actionClone((int)$source->id);
+
+        $clone = JobTemplate::findOne(['name' => $source->name . ' (copy)']);
+        $this->assertNotNull($clone);
+        $this->assertNull($clone->trigger_token);
+        $this->assertNull($clone->trigger_token_created_by);
+
+        $source->revokeTriggerToken();
+        $this->assertSame(1, $generator->delete());
+        $this->assertNull(User::findOne($generator->id));
+    }
+
     public function testClonePicksNonCollidingNameAcrossRepeatedClones(): void
     {
         $user = $this->createUser();
@@ -1308,7 +1334,7 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $user = $this->createUser();
         $this->loginAs($user);
         $tpl = $this->makeTemplate($user->id);
-        $tpl->generateTriggerToken();
+        $tpl->generateTriggerToken((int)$tpl->created_by);
 
         $ctrl = $this->makeController();
         $result = $ctrl->actionRevokeTriggerToken((int)$tpl->id);

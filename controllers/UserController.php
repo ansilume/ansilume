@@ -7,6 +7,7 @@ namespace app\controllers;
 use app\models\AuditLog;
 use app\models\User;
 use app\models\UserForm;
+use app\services\UserDeletionService;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
@@ -85,6 +86,10 @@ class UserController extends BaseController
         return $this->render('form', ['form' => $form, 'user' => $user]);
     }
 
+    /**
+     * Deletes the user and their roles. A user whom other records still
+     * refer to stays, roles included; the flash says to deactivate them.
+     */
     public function actionDelete(int $id): Response
     {
         $user = $this->findModel($id);
@@ -92,7 +97,12 @@ class UserController extends BaseController
         $this->guardLastSuperadmin($user);
 
         $username = $user->username;
-        $user->delete();
+        /** @var UserDeletionService $deletion */
+        $deletion = \Yii::$app->get('userDeletionService');
+        if (!$deletion->delete($user)) {
+            $this->session()->setFlash('danger', $deletion->refusalMessage($user));
+            return $this->redirect(['view', 'id' => $id]);
+        }
 
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_USER_DELETED, 'user', $id, null, ['username' => $username]);
         $this->session()->setFlash('success', "User \"{$username}\" deleted.");

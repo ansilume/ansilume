@@ -30,6 +30,13 @@ class AnalyticsQuery extends Model
     /** @var int|null */
     public mixed $runner_group_id = null;
     public string $granularity = self::GRANULARITY_DAILY;
+    /**
+     * The user whose team access limits every report: only jobs, workflows
+     * and approval requests this user may see are counted. Controllers set it
+     * to the signed-in user. It has no rule, so load() never sets it from a
+     * request; null (no user) counts nothing.
+     */
+    public ?int $scopeUserId = null;
 
     public function rules(): array
     {

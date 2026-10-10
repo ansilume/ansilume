@@ -32,10 +32,63 @@ info:
     Superadmins pass every permission check. Tokens of disabled users are
     rejected with `401`.
 
+    ## Team scope
+
+    Projects can be assigned to teams, with viewer or operator access. For a
+    caller who is not an admin, everything that belongs to a team-assigned
+    project is limited to that project's teams: viewer access to read,
+    operator access to change, launch, resume and cancel. Projects without a
+    team stay open to everyone with the permission. Admins, superadmins and
+    installations without team-assigned projects are not restricted.
+
+    - Lists leave out what the caller may not see, and `meta.total` counts
+      only the visible rows.
+    - A single resource the caller may not see, or may not change, answers
+      `403`; an unknown one `404`.
+    - A `project_id` in a request body needs operator access to that project
+      (`403` otherwise). Other references in a request body that the caller
+      cannot see (the job template of a workflow step or a schedule, the
+      inventory of a job template, the job templates of a vault assignment)
+      are reported as not existing (`422`), like unknown or deleted ones.
+      Visible job templates the caller may not operate answer `403`. Where a
+      request lists job templates (workflow steps, vault assignments),
+      `error.job_template_ids` names the offending IDs.
+    - Workflow templates and their runs belong to the projects of their job
+      steps: seeing them needs view access to the project of every job step,
+      changing, launching, resuming or canceling them operator access to
+      every one. Only job steps count: approval and pause steps do not
+      restrict, so a workflow without job steps is open to everyone with the
+      permission. A deleted job template keeps counting with its project; a
+      step whose job template was purged with its project restricts the
+      workflow to unrestricted callers. A refused launch, resume or cancel
+      names job templates in `error.job_template_ids` only to callers who may
+      see the workflow; others get a `403` without them.
+    - An approval request follows its job's project; the request of a
+      workflow approval step, like the placeholder job behind it, follows its
+      workflow.
+    - Analytics count only what the caller may see.
+    - Triggers (`/trigger/...`) run as the user who generated the token and
+      are refused once that user may no longer launch; see the Triggers
+      endpoints.
+
     ## Errors
 
     Error responses have the shape `{ "error": { "message": "..." } }` and
-    use conventional HTTP status codes (401, 403, 404, 422).
+    use conventional HTTP status codes (401, 403, 404, 409, 422). Some errors
+    add fields next to `message`, such as `error.job_template_ids` or
+    `error.used_by`. Others come from the framework instead, with the shape
+    `{ "name": "Not Found", "message": "...", "code": 0, "status": 404 }`:
+    `400` for a request body that is not valid JSON, `401` for a missing or
+    invalid token, `404` for an unknown resource `{id}` in the path (a
+    role's `{name}`), and `500` for an unexpected error. An unknown nested
+    ID in the path (`artifact_id`, `userId`, `projectId`) answers `404` in
+    the usual shape. The trigger endpoints, outside `/api/v1/`, answer
+    `403` and `500` as `{ "error": "Launch refused." }` and
+    `{ "error": "Launch failed." }`. Their `400` (missing token), `404`
+    (unknown or revoked token, or another method than POST on
+    `/trigger/{token}`) and `405` (another method than POST on
+    `/trigger/fire` and `/trigger/fire-workflow`) are the web UI's HTML
+    error page, without a JSON body.
 
 servers:
   - url: http://localhost:8080
@@ -62,10 +115,38 @@ tags:
   - name: Notification Templates
   - name: Approval Rules
   - name: Approvals
+    description: |
+      Approval requests of jobs whose template has an approval rule, and of
+      workflow approval steps. Seeing a request needs view access to the
+      job's project or, for a workflow approval step, to the workflow.
+      Deciding also needs a place on the rule's approver list.
   - name: Workflow Templates
+    description: |
+      A workflow template has no project of its own: it belongs to the
+      projects of its job steps. Seeing it needs view access to the project
+      of every job step; changing, deleting and launching it need operator
+      access to every one.
   - name: Workflow Jobs
+    description: |
+      Runs of workflow templates. They follow their workflow template, also
+      after it was deleted. A run's job steps run as the user who launched
+      the run; each is checked when it starts.
   - name: Analytics
+    description: |
+      Reports over jobs, workflows, approval requests and runners. They count
+      only what the caller may see: jobs of job templates the caller may
+      view, runs of workflows the caller may view, approval requests the
+      caller may view. runner-activity lists every runner but counts only
+      those jobs. A filter on a project or template the caller cannot see
+      counts nothing. Each filter takes a single value. An ID that is not a
+      whole number, a date not in `YYYY-MM-DD` form, a granularity other
+      than `daily` or `weekly`, or a `date_to` before `date_from` or more
+      than 365 days after it answers 422.
   - name: Triggers
+    description: |
+      Inbound triggers. The token is the only authentication. A trigger runs
+      as the user who generated its token and is refused while that user may
+      not launch the template.
   - name: Roles
   - name: Profile
   - name: LDAP
@@ -75,14 +156,14 @@ tags:
 # Defined once via a YAML anchor and referenced with `*` so we don't
 # repeat eight parameters ten times.
 x-analytics-filters: &analyticsFilters
-  - { in: query, name: date_from, required: false, schema: { type: string, format: date }, description: Inclusive start date (YYYY-MM-DD) }
-  - { in: query, name: date_to, required: false, schema: { type: string, format: date }, description: Inclusive end date (YYYY-MM-DD) }
+  - { in: query, name: date_from, required: false, schema: { type: string, format: date }, description: "Inclusive start date (YYYY-MM-DD). Defaults to 30 days ago." }
+  - { in: query, name: date_to, required: false, schema: { type: string, format: date }, description: "Inclusive end date (YYYY-MM-DD). Defaults to today. Not before date_from and at most 365 days after it (422 otherwise)." }
   - { in: query, name: project_id, required: false, schema: { type: integer, minimum: 1 } }
   - { in: query, name: template_id, required: false, schema: { type: integer, minimum: 1 } }
   - { in: query, name: user_id, required: false, schema: { type: integer, minimum: 1 } }
   - { in: query, name: runner_group_id, required: false, schema: { type: integer, minimum: 1 } }
   - { in: query, name: granularity, required: false, schema: { type: string, enum: [daily, weekly], default: daily } }
-  - { in: query, name: format, required: false, schema: { type: string, enum: [json, csv], default: json } }
+  - { in: query, name: format, required: false, schema: { type: string, enum: [json, csv], default: json }, description: "csv also needs analytics.export (403 otherwise)." }
 
 paths:
   # ─────────────────────────────── Projects ───────────────────────────────
@@ -539,7 +620,7 @@ paths:
       description: |
         Requires `job-template.delete`. A soft delete, like in the web UI: the
         template disappears from lists and can no longer be launched, while
-        its jobs keep their link to it.
+        its jobs keep their link to it. Its trigger token is revoked.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -550,6 +631,11 @@ paths:
     get:
       tags: [Jobs]
       summary: List jobs
+      description: |
+        Requires `job.view`. Lists only the jobs of job templates the caller
+        may see (deleted templates count with their project). Jobs without a
+        job template, such as the placeholder job of a workflow approval
+        step, are listed only for unrestricted callers; fetch them by ID.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
@@ -579,6 +665,13 @@ paths:
     get:
       tags: [Jobs]
       summary: Get a single job
+      description: |
+        Requires `job.view` and view access to the job (403 otherwise). A job
+        follows the project of its job template. A job without a job template
+        is not open to everyone: the placeholder job of a workflow approval
+        step follows its workflow (view access to the project of every job
+        step), and a job whose template was purged is visible only to
+        unrestricted callers.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/JobDetailResponse' }
@@ -588,7 +681,12 @@ paths:
     post:
       tags: [Jobs]
       summary: Cancel a running job
-      description: Requires `job.cancel`.
+      description: |
+        Requires `job.cancel` and operator access to the job, by the same rule
+        as viewing it: the job template's project, or the workflow of a
+        workflow approval placeholder. Access is checked before the job's
+        state, so a caller without it gets 403 whatever the status; 409 only
+        tells a caller with access that the job is already finished.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/JobDetailResponse' }
@@ -602,7 +700,7 @@ paths:
     get:
       tags: [Jobs]
       summary: List artifacts for a job
-      description: Requires `job.view`.
+      description: Requires `job.view` and view access to the job.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200':
@@ -620,7 +718,7 @@ paths:
     get:
       tags: [Jobs]
       summary: Download all artifacts as a zip archive
-      description: Requires `job.view`.
+      description: Requires `job.view` and view access to the job.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200':
@@ -636,8 +734,9 @@ paths:
       tags: [Jobs]
       summary: Download a single artifact
       description: |
-        Requires `job.view`. By default the response uses
-        `Content-Disposition: attachment` so the browser saves the file.
+        Requires `job.view` and view access to the job. By default the
+        response uses `Content-Disposition: attachment` so the browser saves
+        the file.
 
         Pass `?inline=1` to receive `Content-Disposition: inline`. This is
         honoured for two MIME categories:
@@ -673,7 +772,7 @@ paths:
     get:
       tags: [Jobs]
       summary: Get artifact content inline (text-based files only)
-      description: Requires `job.view`. Returns 415 for non-previewable MIME types.
+      description: Requires `job.view` and view access to the job. Returns 415 for non-previewable MIME types.
       parameters:
         - { $ref: '#/components/parameters/IdPath' }
         - name: artifact_id
@@ -705,6 +804,9 @@ paths:
     get:
       tags: [Schedules]
       summary: List schedules
+      description: |
+        Requires `job.launch`. Lists only the schedules of job templates the
+        caller may see.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
@@ -714,7 +816,20 @@ paths:
     post:
       tags: [Schedules]
       summary: Create a schedule
-      description: Requires `job.launch`.
+      description: |
+        Requires `job.launch`. `job_template_id` must be a job template the
+        caller may operate: one the caller sees but may not operate answers
+        403, one that is unknown, deleted or in a project the caller cannot
+        see answers 422 `The selected job template does not exist.` A body
+        without `name`, `job_template_id` or `cron_expression` answers 422.
+
+        The caller becomes the schedule's creator, returned as `created_by`;
+        `created_by` in the body is ignored. Scheduled jobs run as the
+        creator, and only while the creator is active, holds `job.launch` and
+        may operate the job template's project. Otherwise the schedule does
+        not launch when it is due: the refusal is audited as
+        `schedule.launch.denied` and the `schedule.failed_to_launch`
+        notification is sent. This holds on installations without teams too.
       requestBody:
         required: true
         content:
@@ -735,6 +850,7 @@ paths:
     get:
       tags: [Schedules]
       summary: Get a single schedule
+      description: Requires `job.launch` and view access to the project of the schedule's job template.
       responses:
         '200': { $ref: '#/components/responses/ScheduleResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -742,7 +858,15 @@ paths:
     put:
       tags: [Schedules]
       summary: Update a schedule
-      description: Requires `job.launch`.
+      description: |
+        Requires `job.launch` and operator access to the project of the
+        schedule's job template (403 otherwise). A new `job_template_id`
+        follows the rules of create: 403 for a template the caller sees but
+        may not operate, 422 `The selected job template does not exist.` for
+        an unknown, deleted or invisible one. The schedule keeps its creator
+        (`created_by`), whom its jobs run as; `created_by` in the body is
+        ignored. Every update stores a fresh `next_run_at`, the next time the
+        cron expression matches.
       requestBody:
         required: true
         content:
@@ -756,7 +880,7 @@ paths:
     delete:
       tags: [Schedules]
       summary: Delete a schedule
-      description: Requires `job.launch`.
+      description: Requires `job.launch` and operator access to the project of the schedule's job template.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -765,6 +889,7 @@ paths:
     post:
       tags: [Schedules]
       summary: Toggle a schedule between enabled and disabled
+      description: Requires `job.launch` and operator access to the project of the schedule's job template.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/ScheduleResponse' }
@@ -1093,7 +1218,9 @@ paths:
       summary: Update a user
       description: |
         Requires `user.update`. Password is optional on update — if provided
-        it must be at least 5 characters.
+        it must be at least 5 characters. Taking the superadmin flag from the
+        only superadmin (`is_superadmin: false`) answers 422
+        `Cannot demote the only superadmin.` and changes nothing.
       requestBody:
         required: true
         content:
@@ -1109,11 +1236,19 @@ paths:
       summary: Delete a user
       description: |
         Requires `user.delete`. Cannot delete your own account or the last
-        superadmin.
+        superadmin (422). A user whom other records still refer to cannot be
+        deleted either (409): jobs they launched, rows they created (projects,
+        templates, schedules and so on) or a trigger token they generated.
+        Disable such a user instead (`PUT` with `status: 0`).
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: |
+            Other records still refer to the user. Nothing was changed: the
+            user and their roles are kept.
+          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   # ───────────────────────────── LDAP ─────────────────────────────
@@ -1424,86 +1559,206 @@ paths:
   /api/v1/approvals:
     get:
       tags: [Approvals]
-      summary: List pending approvals
+      summary: List approval requests
+      description: |
+        Requires `approval.view`. Lists approval requests of every status
+        (pending, approved, rejected, timed out), newest first, 25 per page.
+        Only the requests the caller may see: those of jobs whose project the
+        caller may view and those of workflow approval steps whose workflow
+        the caller may view.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
           description: Paginated list
-          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalRequestList' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/approvals/{id}:
     get:
       tags: [Approvals]
       summary: Get an approval request
+      description: Requires `approval.view` and view access to the request (403 otherwise), as for the list.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/ApprovalRequestResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/approvals/{id}/approve:
     post:
       tags: [Approvals]
       summary: Approve a pending request
-      description: Requires `approval.decide`.
+      description: |
+        Requires `approval.decide`. A request the caller may not see answers
+        403 `Forbidden.` Deciding also needs a place on the rule's approver
+        list and a pending request; otherwise 403 `You are not eligible to
+        decide on this request.` A second vote of the same caller answers
+        422. Only approvers who may see the request count toward the rule's
+        threshold: once the approvals still possible cannot reach it, the
+        request is rejected. The decision changes only a job that still
+        waits for approval: a job or workflow run canceled in the meantime
+        stays canceled, although its request stays pending until decided.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalDecisionInput' }
+            example:
+              comment: Change window confirmed
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/ApprovalRequestResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/approvals/{id}/reject:
     post:
       tags: [Approvals]
       summary: Reject a pending request
-      description: Requires `approval.decide`.
+      description: |
+        Requires `approval.decide`; the same checks as approve (403 for a
+        request the caller may not see or may not decide on, 422 for a second
+        vote). As with approve, a job or workflow run canceled in the
+        meantime stays canceled.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalDecisionInput' }
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/ApprovalRequestResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ─────────────────────── Workflow Templates ───────────────────────
   /api/v1/workflow-templates:
     get:
       tags: [Workflow Templates]
       summary: List workflow templates
+      description: |
+        Requires `workflow-template.view`. Lists only the workflow templates
+        the caller may see: view access to the project of every job step.
+        Workflows without job steps are listed for everyone with the
+        permission. Newest first, 25 per page, without the steps.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
           description: Paginated list
-          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/WorkflowTemplateList' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [Workflow Templates]
       summary: Create a workflow template
+      description: |
+        Requires `workflow-template.create`. The caller becomes `created_by`;
+        `created_by` and trigger token fields in the body are ignored.
+
+        `steps` lists the steps in run order, see `WorkflowStepInput`. The
+        job template of every job step must be one the caller may operate:
+        job templates that do not exist, are deleted or belong to a project
+        the caller cannot see answer 422, visible ones the caller may not
+        operate answer 403, and both name the offending templates in
+        `error.job_template_ids`. An invalid step answers 422 with a message
+        that names it (`steps[1]: Name cannot be blank.`), unknown approval
+        rules answer 422 as well. Nothing is written unless the template and
+        every step are valid; the template and its steps are then written in
+        one transaction.
+
+        Branches (`on_success_step_id`, `on_failure_step_id`,
+        `on_always_step_id`) cannot be set through the API. Steps written
+        here have none: each continues with the next step in order, whatever
+        its outcome. Set branches in the web UI.
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object } } }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkflowTemplateInput' }
+            example:
+              name: Release web
+              description: Build, approve, deploy
+              steps:
+                - name: Build
+                  step_type: job
+                  job_template_id: 12
+                - name: Release approval
+                  step_type: approval
+                  approval_rule_id: 3
+                - name: Deploy
+                  step_type: job
+                  job_template_id: 15
+                  extra_vars_template: { app_version: build_version }
       responses:
-        '201': { $ref: '#/components/responses/GenericResponse' }
-        '422': { $ref: '#/components/responses/ValidationError' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '201': { $ref: '#/components/responses/WorkflowTemplateResponse' }
+        '403':
+          description: |
+            Missing `workflow-template.create`, or a job step uses a job
+            template the caller can see but may not operate (named in
+            `error.job_template_ids`). Nothing was written.
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
+        '422':
+          description: |
+            Invalid template or step, an unknown approval rule, or job
+            templates that do not exist for the caller (named in
+            `error.job_template_ids`). Nothing was written.
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
   /api/v1/workflow-templates/{id}:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
     get:
       tags: [Workflow Templates]
       summary: Get a workflow template
+      description: |
+        Requires `workflow-template.view` and view access to the project of
+        every job step (403 otherwise). Includes the steps.
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/WorkflowTemplateResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
     put:
       tags: [Workflow Templates]
       summary: Update a workflow template
+      description: |
+        Requires `workflow-template.update` and operator access to the project
+        of every current job step (403 `Forbidden.` otherwise). Omitted
+        fields keep their value. Without `steps`, or with `steps: null`, the
+        steps stay as they are; a `steps` list replaces all of them, branches
+        included, and `[]` removes them all. New steps are checked as on
+        create (422 or 403 with `error.job_template_ids`). A rejected update
+        changes nothing, neither the template nor its steps.
+
+        Replacing the steps also deletes the step records of every earlier
+        and running run of this workflow: earlier runs lose their `steps`,
+        and a running run stops advancing and stays `running` until it is
+        canceled. Let runs finish, or cancel them, before replacing the
+        steps.
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object } } }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkflowTemplateInput' }
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/WorkflowTemplateResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: |
+            Missing `workflow-template.update`, no operator access to the
+            project of every current job step, or a new step uses a job
+            template the caller can see but may not operate (named in
+            `error.job_template_ids`). Nothing was written.
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
+        '422':
+          description: |
+            Invalid template or step, an unknown approval rule, or job
+            templates that do not exist for the caller (named in
+            `error.job_template_ids`). Nothing was written.
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
     delete:
       tags: [Workflow Templates]
       summary: Delete a workflow template
+      description: |
+        Requires `workflow-template.delete` and operator access to the project
+        of every job step. A soft delete: the template disappears from lists
+        and can no longer be launched; its runs stay. Its trigger token is
+        revoked.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1512,55 +1767,126 @@ paths:
     post:
       tags: [Workflow Templates]
       summary: Launch a workflow from this template
+      description: |
+        Requires `workflow.launch` and operator access to the project of every
+        job step. A refusal answers 403 and is audited as
+        `workflow.launch.denied` (source `api`), with the job templates the
+        caller may not operate. A caller who may see the workflow gets them in
+        `error.job_template_ids`; a caller who may not see it gets `You may
+        not launch this workflow.` without them. The run belongs to the
+        caller: each job step runs as the caller and is checked again when it
+        starts. A step the caller may no longer launch then fails without a
+        job (see `steps[].error` of the run) and the workflow fails. 422 when
+        the template has no steps.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
-        '201': { $ref: '#/components/responses/GenericResponse' }
+        '201': { $ref: '#/components/responses/WorkflowLaunchResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: |
+            Missing `workflow.launch`, or job steps whose job template the
+            caller may not operate. Only a caller who may see the workflow
+            gets these job templates in `error.job_template_ids`. Nothing was
+            launched.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                visible:
+                  summary: The caller may see the workflow
+                  value:
+                    error:
+                      message: 'You may not launch job template(s) #15 of this workflow.'
+                      job_template_ids: [15]
+                hidden:
+                  summary: The caller may not see the workflow
+                  value:
+                    error:
+                      message: You may not launch this workflow.
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ────────────────────────── Workflow Jobs ──────────────────────────
   /api/v1/workflow-jobs:
     get:
       tags: [Workflow Jobs]
       summary: List workflow job executions
+      description: |
+        Requires `workflow.view`. Lists only the runs of workflow templates the
+        caller may see (view access to the project of every job step),
+        deleted templates included. Newest first, 25 per page, without the
+        steps.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
           description: Paginated list
-          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/WorkflowJobList' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/workflow-jobs/{id}:
     get:
       tags: [Workflow Jobs]
       summary: Get a single workflow job execution
+      description: |
+        Requires `workflow.view` and view access to the project of every job
+        step of the run's workflow (403 otherwise). `steps` lists the steps
+        that ran; `steps[].error` says why a step failed without a job, for
+        example because the user the workflow runs as may not launch the
+        step's job template. Replacing the workflow's steps
+        (`PUT /api/v1/workflow-templates/{id}` with `steps`) or removing a
+        step in the web UI deletes these records for every run.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/WorkflowJobDetailResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/workflow-jobs/{id}/cancel:
     post:
       tags: [Workflow Jobs]
       summary: Cancel a running workflow job
+      description: |
+        Requires `workflow.cancel` and operator access to the project of every
+        job step of the run's workflow (403 otherwise). Fails the running
+        steps and cancels their jobs. Access is checked before the run's
+        state, so a caller without it gets 403 whatever the status; 422 only
+        tells a caller with access that the run is already finished.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/WorkflowJobResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: |
+            Missing `workflow.cancel` or operator access to the project of
+            every job step, usually answered as `Forbidden.`.
+            `error.job_template_ids`, when present, names the job templates
+            the caller may not operate; it is never present for a caller who
+            may not see the workflow.
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/workflow-jobs/{id}/resume:
     post:
       tags: [Workflow Jobs]
       summary: Resume a paused workflow step
-      description: >
-        Advances the workflow past the currently paused step. The pause step
-        is marked as succeeded and the engine proceeds to the next step.
-        Returns 422 if the workflow is already finished or has no paused step.
+      description: |
+        Requires `workflow.launch` and operator access to the project of every
+        job step of the run's workflow (403 otherwise). Advances the workflow
+        past the currently paused step: the pause step is marked as succeeded
+        and the engine proceeds to the next step. The following job steps
+        still run as the user who launched the run. Access is checked before
+        the run's state, so a caller without it gets 403 whatever the status;
+        422 only tells a caller with access that the workflow is already
+        finished or has no paused step.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/WorkflowJobResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: |
+            Missing `workflow.launch` or operator access to the project of
+            every job step, usually answered as `Forbidden.`.
+            `error.job_template_ids`, when present, names the job templates
+            the caller may not operate; it is never present for a caller who
+            may not see the workflow.
+          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
 
   # ─────────────────────────── Analytics ─────────────────────────
   /api/v1/analytics/summary:
@@ -1571,6 +1897,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/template-reliability:
     get:
       tags: [Analytics]
@@ -1579,6 +1906,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/project-activity:
     get:
       tags: [Analytics]
@@ -1587,6 +1915,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/user-activity:
     get:
       tags: [Analytics]
@@ -1595,6 +1924,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/host-health:
     get:
       tags: [Analytics]
@@ -1603,6 +1933,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/job-trend:
     get:
       tags: [Analytics]
@@ -1611,6 +1942,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/workflow-summary:
     get:
       tags: [Analytics]
@@ -1619,6 +1951,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/workflow-activity:
     get:
       tags: [Analytics]
@@ -1627,6 +1960,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/approval-summary:
     get:
       tags: [Analytics]
@@ -1635,6 +1969,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/runner-activity:
     get:
       tags: [Analytics]
@@ -1643,6 +1978,7 @@ paths:
       responses:
         '200': { $ref: '#/components/responses/AnalyticsResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
 
   # ─────────────────────────── Triggers ───────────────────────────
   /trigger/fire:
@@ -1651,8 +1987,23 @@ paths:
       summary: Public webhook endpoint to launch a job by trigger token
       description: |
         Authentication is the token itself (query parameter). This endpoint is
-        **not** under `/api/v1/` and does not use the Bearer scheme. Optional
-        JSON body forwards launch overrides to the underlying JobTemplate.
+        **not** under `/api/v1/` and does not use the Bearer scheme. Generate
+        or revoke the token on the job template's page, which needs
+        `job-template.update` and operator access to the template's project;
+        the raw token is shown once, the server keeps only its SHA-256 hash.
+
+        The job runs as the user who generated the token. Tokens generated
+        before Ansilume recorded that run as the template's creator; the
+        template page says which applies, and `trigger_user_id` of
+        `GET /api/v1/job-templates/{id}` names the user, both for callers who
+        may change the template. Every call checks that this user is active,
+        holds `job.launch` and may operate the template's project. Otherwise
+        the call answers 403 `{"error": "Launch refused."}` and is audited as
+        `trigger.denied` with the reason (`not_permitted` or
+        `no_project_access`); the caller learns nothing else.
+
+        The optional JSON body overrides `extra_vars`, `limit` and
+        `verbosity` of the job template.
       security: []
       parameters:
         - in: query
@@ -1663,39 +2014,69 @@ paths:
         required: false
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                extra_vars: { type: object, additionalProperties: true }
-                limit: { type: string }
-                verbosity: { type: integer, minimum: 0, maximum: 4 }
+            schema: { $ref: '#/components/schemas/TriggerJobInput' }
             example:
               extra_vars: { env: prod }
               limit: webservers
       responses:
-        '201':
-          description: Job launched
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  job_id: { type: integer }
-              example:
-                job_id: 42
-        '404':
-          description: Unknown token
+        '201': { $ref: '#/components/responses/TriggerJobLaunched' }
+        '400': { $ref: '#/components/responses/TriggerTokenMissing' }
+        '403': { $ref: '#/components/responses/TriggerLaunchRefused' }
+        '404': { $ref: '#/components/responses/TriggerNotFound' }
+        '500': { $ref: '#/components/responses/TriggerLaunchFailed' }
+
+  /trigger/{token}:
+    post:
+      tags: [Triggers]
+      summary: Launch a job by trigger token, with the token in the path
+      description: |
+        Same as `/trigger/fire?token=...`, with the token (64 hexadecimal
+        characters) in the path; the job template page shows this form. Runs
+        as the user who generated the token, with the same checks and
+        answers.
+      security: []
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema: { type: string, pattern: '^[a-f0-9]{64}$' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TriggerJobInput' }
+      responses:
+        '201': { $ref: '#/components/responses/TriggerJobLaunched' }
+        '403': { $ref: '#/components/responses/TriggerLaunchRefused' }
+        '404': { $ref: '#/components/responses/TriggerNotFound' }
+        '500': { $ref: '#/components/responses/TriggerLaunchFailed' }
 
   /trigger/fire-workflow:
     post:
       tags: [Triggers]
       summary: Public webhook endpoint to launch a workflow by trigger token
       description: |
-        Mirror of `/trigger/fire` but for workflow templates — launches a
-        WorkflowJob by the workflow template's inbound-trigger token. The
-        token is hashed (SHA-256) on the server, generated tokens are shown
-        to the operator exactly once. Optional JSON body forwards
-        `extra_vars` to every job step the workflow runs.
+        Mirror of `/trigger/fire` for workflow templates: launches a run of
+        the workflow template whose inbound-trigger token is given. The token
+        is hashed (SHA-256) on the server; generated tokens are shown to the
+        operator exactly once. Generating or revoking it needs
+        `workflow-template.update` and operator access to the project of every
+        job step.
+
+        The run is launched as the user who generated the token, or as the
+        workflow's creator for tokens generated before Ansilume recorded that;
+        `trigger_user_id` of `GET /api/v1/workflow-templates/{id}` names the
+        user for callers who may change the workflow. Every call checks that
+        this user is active, holds `workflow.launch` and may operate the
+        project of every job step. Otherwise the call answers 403
+        `{"error": "Launch refused."}` and is audited as
+        `workflow.launch.denied` with source `trigger`. Each job step is
+        checked again, as the same user, when it starts.
+
+        The optional JSON body's `extra_vars` reach the start step only, when
+        it is a job step. Later steps get their extra vars from the previous
+        step's output, as each step's `extra_vars_template` maps them. Other
+        keys are ignored.
       security: []
       parameters:
         - in: query
@@ -1706,10 +2087,7 @@ paths:
         required: false
         content:
           application/json:
-            schema:
-              type: object
-              properties:
-                extra_vars: { type: object, additionalProperties: true }
+            schema: { $ref: '#/components/schemas/TriggerWorkflowInput' }
             example:
               extra_vars: { release: '2026.04' }
       responses:
@@ -1717,16 +2095,13 @@ paths:
           description: Workflow launched
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  workflow_job_id: { type: integer }
+              schema: { $ref: '#/components/schemas/TriggerWorkflowResult' }
               example:
                 workflow_job_id: 17
-        '404':
-          description: Unknown token
-        '500':
-          description: Workflow execution refused (e.g., template has no steps)
+        '400': { $ref: '#/components/responses/TriggerTokenMissing' }
+        '403': { $ref: '#/components/responses/TriggerLaunchRefused' }
+        '404': { $ref: '#/components/responses/TriggerNotFound' }
+        '500': { $ref: '#/components/responses/TriggerLaunchFailed' }
 
   # ────────────────────────────── Roles ──────────────────────────────
   /api/v1/roles:
@@ -1904,13 +2279,24 @@ components:
 
   responses:
     NotFound:
-      description: Resource not found
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+      description: |
+        Resource not found. An unknown resource `{id}` in the path (a role's
+        `{name}`) answers in the framework's shape (`FrameworkError`). Unknown
+        nested IDs in the path (`artifact_id`, `userId`, `projectId`) and
+        other lookups answer as `ErrorResponse`.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/FrameworkError'
+              - $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
       description: Authentication required (missing or invalid token)
-      content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+      content: { application/json: { schema: { $ref: '#/components/schemas/FrameworkError' } } }
     Forbidden:
-      description: Caller lacks the required permission
+      description: |
+        The caller lacks the required permission, or access to the resource:
+        view or operator access to the project it belongs to (team scope).
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
     ValidationError:
       description: Invalid input
@@ -1934,9 +2320,10 @@ components:
       content: { application/json: { schema: { type: object, properties: { data: { type: object } } } } }
     AnalyticsResult:
       description: |
-        Analytics report result. When `format=json` the body wraps the report
-        under `data.result` with the echoed filter set under `data.filters`.
-        When `format=csv` the body is raw CSV and `data` is null.
+        Analytics report result, counting only what the caller may see (team
+        scope). When `format=json` the body wraps the report under
+        `data.result` with the echoed filter set under `data.filters`. When
+        `format=csv` the body is raw CSV.
       content:
         application/json:
           schema:
@@ -2121,6 +2508,92 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/NotificationTemplate' }
+    ApprovalRequestResponse:
+      description: Approval request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/ApprovalRequest' }
+    WorkflowTemplateResponse:
+      description: Workflow template with its steps
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/WorkflowTemplateDetail' }
+    WorkflowLaunchResponse:
+      description: The launched run
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  workflow_job_id: { type: integer }
+          example:
+            data: { workflow_job_id: 17 }
+    WorkflowJobResponse:
+      description: Workflow run, without its steps
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/WorkflowJob' }
+    WorkflowJobDetailResponse:
+      description: Workflow run with its steps
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/WorkflowJobDetail' }
+    TriggerJobLaunched:
+      description: Job launched
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TriggerJobResult' }
+          example:
+            job_id: 42
+    TriggerLaunchRefused:
+      description: |
+        The user the trigger runs as may not launch it: disabled, without the
+        launch permission, or without operator access to the project (of
+        every job step, for a workflow). Audited; no details for the caller.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TriggerError' }
+          example:
+            error: Launch refused.
+    TriggerNotFound:
+      description: |
+        Unknown or revoked token. Also sends the `webhook.invalid_token`
+        notification, so operators notice leaked or stale tokens. The body is
+        the web UI's HTML error page, not JSON.
+      content:
+        text/html:
+          schema: { type: string }
+    TriggerTokenMissing:
+      description: |
+        The `token` query parameter is missing. The body is the web UI's HTML
+        error page, not JSON.
+      content:
+        text/html:
+          schema: { type: string }
+    TriggerLaunchFailed:
+      description: |
+        The launch failed for another reason, for example a workflow without
+        steps. The reason is in the application log.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TriggerError' }
+          example:
+            error: Launch failed.
 
   schemas:
     ChangePasswordInput:
@@ -2137,6 +2610,17 @@ components:
           type: object
           properties:
             message: { type: string }
+    FrameworkError:
+      type: object
+      description: |
+        How the framework renders a request body that is not valid JSON
+        (400), a missing or invalid token (401), an unknown resource `{id}`
+        in the path or a role's `{name}` (404), and an unexpected error (500).
+      properties:
+        name: { type: string, example: Not Found }
+        message: { type: string, example: 'Workflow template #5 not found.' }
+        code: { type: integer, example: 0 }
+        status: { type: integer, example: 404 }
     PaginationMeta:
       type: object
       properties:
@@ -2480,6 +2964,29 @@ components:
                 The job template IDs the error is about: not found (422) or
                 not changeable (403). Absent for errors about the credential
                 or the shape of the list.
+    JobTemplateRefError:
+      type: object
+      description: |
+        An error that can name the job templates it is about, as for workflow
+        steps. Job templates that do not exist, are deleted or belong to a
+        project the caller cannot see are reported as not found (422);
+        visible ones the caller may not operate as forbidden (403).
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: string
+              example: 'Job template(s) not found: #12.'
+            job_template_ids:
+              type: array
+              items: { type: integer }
+              example: [12]
+              description: >-
+                The job template IDs the error is about. Absent when the error
+                is about something else, such as a missing permission or an
+                invalid step.
 
     JobTemplate:
       type: object
@@ -2511,10 +3018,34 @@ components:
         tags:            { type: string, nullable: true }
         skip_tags:       { type: string, nullable: true }
         has_survey:      { type: boolean }
+        has_trigger_token:
+          type: boolean
+          description: |
+            Whether the template has an inbound trigger token. Only callers
+            who may change the template (`job-template.update` and operator
+            access to its project) get this field, as only they see the
+            trigger on the template's page; it is absent for everyone else.
+            The token itself is never returned; it is generated and revoked
+            on the template's page.
+        trigger_user_id:
+          type: integer
+          nullable: true
+          description: |
+            The user a trigger launch runs as: whoever generated the current
+            token, or the template's creator for tokens generated before
+            Ansilume recorded that. null without a token. Like
+            `has_trigger_token`, only callers who may change the template get
+            this field.
+          example: 7
         warnings:
           type: array
           description: Problems jobs of this template may run into. They never block a launch.
           items: { $ref: '#/components/schemas/JobTemplateWarning' }
+        created_by:
+          type: integer
+          description: |
+            User ID of the creator. A trigger token generated before Ansilume
+            recorded who generated it runs as this user.
         created_at:      { type: integer }
         updated_at:      { type: integer }
     JobTemplateWarning:
@@ -2666,6 +3197,12 @@ components:
         enabled:         { type: boolean }
         last_run_at:     { type: integer, nullable: true }
         next_run_at:     { type: integer, nullable: true }
+        created_by:
+          type: integer
+          description: |
+            User ID of the creator. Scheduled jobs run as this user, and only
+            while the user is active, holds `job.launch` and may operate the
+            job template's project. It cannot be changed.
         created_at:      { type: integer }
         updated_at:      { type: integer }
     ScheduleList:
@@ -2771,10 +3308,13 @@ components:
 
     ScheduleInput:
       type: object
+      description: |
+        `created_by` is not accepted: a schedule's creator is the user who
+        created it, and its jobs run as that user.
       required: [name, job_template_id, cron_expression]
       properties:
         name: { type: string, maxLength: 128 }
-        job_template_id: { type: integer }
+        job_template_id: { type: integer, description: "A job template the caller may operate." }
         cron_expression: { type: string, description: "Standard 5-field cron expression" }
         timezone: { type: string, default: UTC }
         extra_vars: { type: string, nullable: true }
@@ -3053,6 +3593,219 @@ components:
       properties:
         data: { type: array, items: { type: object } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    ApprovalRequest:
+      type: object
+      properties:
+        id: { type: integer }
+        job_id: { type: integer, description: "The job waiting for the decision; for a workflow approval step, its placeholder job without a job template." }
+        approval_rule_id: { type: integer }
+        status: { type: string, enum: [pending, approved, rejected, timed_out] }
+        requested_at: { type: integer }
+        resolved_at: { type: integer, nullable: true }
+        expires_at:
+          type: integer
+          nullable: true
+          description: |
+            When the rule's timeout runs out; null without a timeout. The
+            timeout is applied only by the console command
+            `approval/check-timeouts`, which the stock deployments do not run,
+            so a request stays pending past this time until it is decided.
+        approval_count: { type: integer }
+        rejection_count: { type: integer }
+    ApprovalRequestList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ApprovalRequest' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+    ApprovalDecisionInput:
+      type: object
+      properties:
+        comment: { type: string, description: "Optional comment stored with the vote." }
+
+    WorkflowTemplate:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        created_by:
+          type: integer
+          description: |
+            User ID of the creator. A trigger token generated before Ansilume
+            recorded who generated it runs as this user.
+        has_trigger_token:
+          type: boolean
+          description: |
+            Whether the workflow has an inbound trigger token. Only callers
+            who may change the workflow (`workflow-template.update` and
+            operator access to the project of every job step) get this field,
+            as only they see the trigger on the workflow's page; it is absent
+            for everyone else. The token itself is never returned; it is
+            generated and revoked on the workflow's page.
+        trigger_user_id:
+          type: integer
+          nullable: true
+          description: |
+            The user a trigger launch runs as: whoever generated the current
+            token, or the workflow's creator for tokens generated before
+            Ansilume recorded that. null without a token. Like
+            `has_trigger_token`, only callers who may change the workflow get
+            this field.
+          example: 7
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    WorkflowTemplateDetail:
+      allOf:
+        - $ref: '#/components/schemas/WorkflowTemplate'
+        - type: object
+          properties:
+            steps:
+              type: array
+              description: The steps in run order.
+              items: { $ref: '#/components/schemas/WorkflowStep' }
+    WorkflowStep:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        step_order: { type: integer, description: "Steps run in ascending order unless a branch says otherwise." }
+        step_type:
+          type: string
+          description: |
+            `job`, `approval` or `pause`. A step stored by an older version
+            can carry another type, such as `1` or `JOB`, until it is
+            removed; runs fail at such a step (see docs/updating.md).
+        job_template_id: { type: integer, nullable: true, description: "Job steps only; null on approval and pause steps." }
+        approval_rule_id: { type: integer, nullable: true, description: "Approval steps only; null on job and pause steps." }
+        on_success_step_id: { type: integer, nullable: true, description: "Step after success. null: the next step in order; 0: end the workflow." }
+        on_failure_step_id: { type: integer, nullable: true, description: "Step after failure. null: the next step in order; 0: end the workflow." }
+        on_always_step_id: { type: integer, nullable: true, description: "Step after either outcome; wins over the other two. null: not set; 0: end the workflow." }
+        extra_vars_template:
+          description: |
+            Extra vars this step takes from the output of the previous step:
+            extra var name to output variable name. `[]` when there are none.
+          oneOf:
+            - { type: object, additionalProperties: { type: string } }
+            - { type: array, maxItems: 0 }
+    WorkflowTemplateList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/WorkflowTemplate' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+    WorkflowTemplateInput:
+      type: object
+      description: |
+        `name` is required on create and kept when omitted on update.
+        `created_by`, `trigger_token` and `trigger_token_created_by` are not
+        accepted; trigger tokens are generated on the workflow's page.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128 }
+        description: { type: string, nullable: true, maxLength: 1000 }
+        steps:
+          type: array
+          nullable: true
+          description: |
+            All steps in run order; replaces the current ones, branches
+            included. Omit it or send null to keep the current steps on
+            update; `[]` removes them all.
+          items: { $ref: '#/components/schemas/WorkflowStepInput' }
+    WorkflowStepInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 128, description: "Required; a missing or empty name answers 422." }
+        step_type: { type: string, enum: [job, approval, pause], default: job }
+        job_template_id: { type: integer, minimum: 1, description: "Required for a job step: a job template the caller may operate. Ignored for other step types." }
+        approval_rule_id: { type: integer, minimum: 1, description: "Required for an approval step: an existing approval rule. Ignored for other step types." }
+        extra_vars_template:
+          description: |
+            Extra vars this step takes from the output of the previous step:
+            a JSON object mapping an extra var name to the name of an output
+            variable, or the same object as JSON text. Unused on the start
+            step, which has no previous step.
+          oneOf:
+            - { type: object, additionalProperties: { type: string } }
+            - { type: string }
+
+    WorkflowJob:
+      type: object
+      properties:
+        id: { type: integer }
+        workflow_template_id: { type: integer }
+        status: { type: string, enum: [running, succeeded, failed, canceled] }
+        launched_by:
+          type: integer
+          description: |
+            User ID the run belongs to: whoever launched it or, for a trigger,
+            the user the trigger runs as. Its job steps run as this user.
+        started_at: { type: integer, nullable: true }
+        finished_at: { type: integer, nullable: true }
+        created_at: { type: integer }
+    WorkflowJobDetail:
+      allOf:
+        - $ref: '#/components/schemas/WorkflowJob'
+        - type: object
+          properties:
+            steps:
+              type: array
+              description: |
+                The steps that ran or run now. Removing or replacing steps of
+                the workflow deletes their records here, for every run.
+              items: { $ref: '#/components/schemas/WorkflowJobStep' }
+    WorkflowJobStep:
+      type: object
+      properties:
+        id: { type: integer }
+        workflow_step_id: { type: integer }
+        job_id: { type: integer, nullable: true, description: "The job of a job step, or the placeholder job of an approval step." }
+        status: { type: string, enum: [pending, running, succeeded, failed, skipped] }
+        started_at: { type: integer, nullable: true }
+        finished_at: { type: integer, nullable: true }
+        error:
+          type: string
+          nullable: true
+          description: |
+            Why the step failed without a job: the user the workflow runs as
+            may not launch the step's job template (inactive, without
+            `workflow.launch`, or without operator access to its project), the
+            job template or approval rule no longer exists, the job could not
+            be launched, or the step's type is none of job, approval and pause
+            (`Not run: unknown step type "1".`), which older versions could
+            store. null otherwise.
+          example: 'Not launched: user #7, whom this workflow runs as, may not launch job template "Deploy web" (#15).'
+    WorkflowJobList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/WorkflowJob' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+
+    TriggerJobInput:
+      type: object
+      description: Optional launch overrides for the job template.
+      properties:
+        extra_vars: { type: object, additionalProperties: true, description: "Merged over the template's extra vars." }
+        limit: { type: string }
+        verbosity: { type: integer, minimum: 0, maximum: 5 }
+    TriggerWorkflowInput:
+      type: object
+      properties:
+        extra_vars: { type: object, additionalProperties: true, description: "Extra vars for the start step, when it is a job step." }
+    TriggerJobResult:
+      type: object
+      properties:
+        job_id: { type: integer }
+    TriggerWorkflowResult:
+      type: object
+      properties:
+        workflow_job_id: { type: integer }
+    TriggerError:
+      type: object
+      description: |
+        The trigger endpoints answer 403 and 500 with a plain message. Their
+        other errors (400, 404, 405) are the web UI's HTML error page.
+      properties:
+        error: { type: string, enum: ['Launch refused.', 'Launch failed.'] }
 
     RoleSummary:
       type: object

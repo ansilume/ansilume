@@ -4,13 +4,26 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\controllers\traits\TeamScopingTrait;
 use app\models\WorkflowJob;
+use app\services\WorkflowAccessDeniedException;
 use yii\data\ActiveDataProvider;
+use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
+/**
+ * Workflow runs.
+ *
+ * Team scoping follows the run's workflow template, by its
+ * workflow_template_id (deleted templates included): seeing a run needs view
+ * access to the project of every job step, canceling or resuming it operator
+ * access to every one.
+ */
 class WorkflowJobController extends BaseController
 {
+    use TeamScopingTrait;
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -33,10 +46,18 @@ class WorkflowJobController extends BaseController
 
     public function actionIndex(): string
     {
+        $query = WorkflowJob::find()
+            ->with(['workflowTemplate', 'launcher'])
+            ->orderBy(['workflow_job.id' => SORT_DESC]);
+        $filter = $this->workflowChecker()->buildWorkflowTemplateFilter(
+            $this->currentUserId(),
+            'workflow_job.workflow_template_id'
+        );
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
         $dataProvider = new ActiveDataProvider([
-            'query' => WorkflowJob::find()
-                ->with(['workflowTemplate', 'launcher'])
-                ->orderBy(['id' => SORT_DESC]),
+            'query' => $query,
             'pagination' => ['pageSize' => 20],
         ]);
         return $this->render('index', ['dataProvider' => $dataProvider]);
@@ -45,7 +66,14 @@ class WorkflowJobController extends BaseController
     public function actionView(int $id): string
     {
         $model = $this->findModel($id);
-        return $this->render('view', ['model' => $model]);
+        $this->requireWorkflowView((int)$model->workflow_template_id);
+        return $this->render('view', [
+            'model' => $model,
+            'canOperate' => $this->workflowChecker()->canOperateWorkflowTemplate(
+                (int)$this->currentUserId(),
+                (int)$model->workflow_template_id
+            ),
+        ]);
     }
 
     /**
@@ -61,6 +89,7 @@ class WorkflowJobController extends BaseController
     public function actionStatus(int $id): array
     {
         $model = $this->findModel($id);
+        $this->requireWorkflowView((int)$model->workflow_template_id);
         \Yii::$app->response->format = Response::FORMAT_JSON;
 
         return [
@@ -108,6 +137,8 @@ class WorkflowJobController extends BaseController
                 'finished_label' => $this->tsLabel($wjs->finished_at, 'H:i:s'),
                 'duration_seconds' => $duration,
                 'duration_label' => $this->durationLabel($duration, $wjs->finished_at !== null),
+                // Why a step failed without a job, e.g. no access to its job template.
+                'error_message' => $wjs->error_message,
             ];
         }
         return $out;
@@ -151,10 +182,18 @@ class WorkflowJobController extends BaseController
     public function actionCancel(int $id): Response
     {
         $model = $this->findModel($id);
+        $this->requireWorkflowOperate((int)$model->workflow_template_id);
 
         /** @var \app\services\WorkflowExecutionService $service */
         $service = \Yii::$app->get('workflowExecutionService');
-        $service->cancel($model, (int)\Yii::$app->user->id);
+        try {
+            $service->cancel($model, (int)\Yii::$app->user->id);
+        } catch (\RuntimeException $e) {
+            $this->rethrowDenied($e);
+            // e.g. the run finished meanwhile: a message, not a server error.
+            $this->session()->setFlash('danger', $e->getMessage());
+            return $this->redirect(['view', 'id' => $id]);
+        }
 
         $this->session()->setFlash('success', 'Workflow canceled.');
         return $this->redirect(['view', 'id' => $id]);
@@ -163,6 +202,7 @@ class WorkflowJobController extends BaseController
     public function actionResume(int $id): Response
     {
         $model = $this->findModel($id);
+        $this->requireWorkflowOperate((int)$model->workflow_template_id);
 
         /** @var \app\services\WorkflowExecutionService $service */
         $service = \Yii::$app->get('workflowExecutionService');
@@ -170,10 +210,23 @@ class WorkflowJobController extends BaseController
             $service->resume($model, (int)\Yii::$app->user->id);
             $this->session()->setFlash('success', 'Paused step resumed.');
         } catch (\RuntimeException $e) {
+            $this->rethrowDenied($e);
             $this->session()->setFlash('danger', $e->getMessage());
         }
 
         return $this->redirect(['view', 'id' => $id]);
+    }
+
+    /**
+     * A refusal by team scoping (a RuntimeException too) answers 403.
+     *
+     * @throws ForbiddenHttpException
+     */
+    private function rethrowDenied(\RuntimeException $e): void
+    {
+        if ($e instanceof WorkflowAccessDeniedException) {
+            throw new ForbiddenHttpException($e->getMessage(), 0, $e);
+        }
     }
 
     private function findModel(int $id): WorkflowJob

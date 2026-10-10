@@ -173,4 +173,26 @@ class AnalyticsQueryTest extends TestCase
         $this->assertSame('weekly', $arr['granularity']);
         $this->assertCount(7, $arr);
     }
+
+    /**
+     * Team scoping: the scope user comes from the session, never from the
+     * request, and is not echoed as a filter.
+     */
+    public function testLoadNeverSetsTheScopeUser(): void
+    {
+        $q = new AnalyticsQuery();
+        $q->scopeUserId = 5;
+
+        $q->load(['scopeUserId' => '1', 'project_id' => '2'], '');
+
+        $this->assertSame(5, $q->scopeUserId);
+        $this->assertSame('2', $q->project_id);
+        $this->assertNotContains('scopeUserId', $q->safeAttributes());
+        $this->assertArrayNotHasKey('scopeUserId', $q->toArray());
+    }
+
+    public function testTheScopeUserDefaultsToNobody(): void
+    {
+        $this->assertNull((new AnalyticsQuery())->scopeUserId);
+    }
 }

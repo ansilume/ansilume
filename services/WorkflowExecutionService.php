@@ -20,19 +20,31 @@ use yii\base\Component;
 class WorkflowExecutionService extends Component
 {
     /**
+     * Why a job step was not launched, a sprintf() format: the user the
+     * workflow runs as (#id) may not launch the step's job template (name,
+     * #id). E2eWorkflowScopingSeeder seeds a run refused with it.
+     */
+    public const JOB_STEP_REFUSAL = 'Not launched: user #%d, whom this workflow runs as, may not launch job template "%s" (#%d).';
+
+    /**
      * Launch a workflow from a template.
      *
      * @param array<string, mixed> $overrides
+     * @param string $source web, api or trigger
+     * @throws WorkflowAccessDeniedException when $launchedBy may not run every job step
+     * @throws \RuntimeException when the template has no steps or the run cannot be saved
      */
     public function launch(
         WorkflowTemplate $template,
         int $launchedBy,
-        array $overrides = []
+        array $overrides = [],
+        string $source = 'web'
     ): WorkflowJob {
         $startStep = $template->getStartStep();
         if ($startStep === null) {
             throw new \RuntimeException('Workflow template has no steps.');
         }
+        $this->access()->assertMayLaunch($launchedBy, $template, $source);
 
         $wfJob = new WorkflowJob();
         $wfJob->workflow_template_id = $template->id;
@@ -53,7 +65,7 @@ class WorkflowExecutionService extends Component
             'workflow_job',
             $wfJob->id,
             $launchedBy,
-            ['template_id' => $template->id, 'template_name' => $template->name]
+            ['template_id' => $template->id, 'template_name' => $template->name, 'source' => $source]
         );
 
         $this->dispatchNotification(NotificationTemplate::EVENT_WORKFLOW_LAUNCHED, $wfJob, $template);
@@ -189,9 +201,16 @@ class WorkflowExecutionService extends Component
     /**
      * Resume a paused workflow step. The pause step is marked as succeeded
      * and the workflow advances to the next step.
+     *
+     * Access is checked first, so a user who may not operate the workflow
+     * learns nothing about the run's state.
+     *
+     * @throws WorkflowAccessDeniedException when $userId may not operate every job step
+     * @throws \RuntimeException when the run is finished or has no paused step
      */
     public function resume(WorkflowJob $wfJob, int $userId): void
     {
+        $this->access()->assertMayOperate($userId, (int)$wfJob->workflow_template_id);
         if ($wfJob->isFinished()) {
             throw new \RuntimeException('Workflow is already finished.');
         }
@@ -240,10 +259,14 @@ class WorkflowExecutionService extends Component
     }
 
     /**
-     * Cancel a running workflow.
+     * Cancel a running workflow. Access is checked first, as for {@see resume()}.
+     *
+     * @throws WorkflowAccessDeniedException when $userId may not operate every job step
+     * @throws \RuntimeException when the run is already finished
      */
     public function cancel(WorkflowJob $wfJob, int $userId): void
     {
+        $this->access()->assertMayOperate($userId, (int)$wfJob->workflow_template_id);
         if ($wfJob->isFinished()) {
             throw new \RuntimeException('Workflow is already finished.');
         }
@@ -398,6 +421,10 @@ class WorkflowExecutionService extends Component
             case WorkflowStep::TYPE_PAUSE:
                 // Pause steps stay in "running" until externally resumed
                 break;
+            default:
+                // A type the model refuses, which older versions saved from
+                // a JSON body (true as "1"): nothing would ever end the step.
+                $this->failStep($wfJob, $wjs, sprintf('Not run: unknown step type "%s".', $step->step_type));
         }
     }
 
@@ -412,19 +439,65 @@ class WorkflowExecutionService extends Component
     ): void {
         $template = $step->jobTemplate;
         if ($template === null) {
-            $wjs->status = WorkflowJobStep::STATUS_FAILED;
-            $wjs->finished_at = time();
-            $wjs->save(false);
-            $this->completeWorkflow($wfJob, WorkflowJob::STATUS_FAILED);
+            $this->failStep($wfJob, $wjs, 'The job template of this step no longer exists.');
+            return;
+        }
+        $launchedBy = (int)$wfJob->launched_by;
+        if (!$this->access()->canDispatch($launchedBy, $template)) {
+            $this->failStep($wfJob, $wjs, sprintf(
+                self::JOB_STEP_REFUSAL,
+                $launchedBy,
+                $template->name,
+                $template->id
+            ), ['job_template_id' => (int)$template->id, 'project_id' => (int)$template->project_id]);
             return;
         }
 
         /** @var JobLaunchService $launcher */
         $launcher = \Yii::$app->get('jobLaunchService');
-        $job = $launcher->launch($template, $wfJob->launched_by, $overrides);
+        try {
+            $job = $launcher->launch($template, $launchedBy, $overrides);
+        } catch (\RuntimeException $e) {
+            \Yii::error("Workflow job #{$wfJob->id}: launching job template #{$template->id} failed: {$e->getMessage()}", __CLASS__);
+            $this->failStep($wfJob, $wjs, 'The job could not be launched; see the application log.');
+            return;
+        }
 
         $wjs->job_id = $job->id;
         $wjs->save(false);
+    }
+
+    /**
+     * End a step that could not start, and with it the workflow, without
+     * following its branches. A denial ($denied context) is audited.
+     *
+     * @param array<string, int>|null $denied
+     */
+    private function failStep(WorkflowJob $wfJob, WorkflowJobStep $wjs, string $reason, ?array $denied = null): void
+    {
+        $wjs->status = WorkflowJobStep::STATUS_FAILED;
+        $wjs->finished_at = time();
+        $wjs->error_message = mb_substr($reason, 0, 500);
+        $wjs->save(false);
+        \Yii::warning("Workflow job #{$wfJob->id} step #{$wjs->id}: {$reason}", __CLASS__);
+
+        if ($denied !== null) {
+            \Yii::$app->get('auditService')->log(
+                AuditLog::ACTION_WORKFLOW_STEP_DENIED,
+                'workflow_job_step',
+                $wjs->id,
+                (int)$wfJob->launched_by,
+                array_merge(['workflow_job_id' => (int)$wfJob->id, 'workflow_step_id' => (int)$wjs->workflow_step_id], $denied)
+            );
+        }
+        $this->completeWorkflow($wfJob, WorkflowJob::STATUS_FAILED);
+    }
+
+    private function access(): WorkflowAccessChecker
+    {
+        /** @var WorkflowAccessChecker $checker */
+        $checker = \Yii::$app->get('workflowAccessChecker');
+        return $checker;
     }
 
     private function dispatchApprovalStep(
@@ -434,9 +507,7 @@ class WorkflowExecutionService extends Component
     ): void {
         $rule = $step->approvalRule;
         if ($rule === null) {
-            $wjs->status = WorkflowJobStep::STATUS_FAILED;
-            $wjs->finished_at = time();
-            $wjs->save(false);
+            $this->failStep($wfJob, $wjs, 'The approval rule of this step no longer exists.');
             return;
         }
 
@@ -467,8 +538,10 @@ class WorkflowExecutionService extends Component
      */
     public function onApprovalResolved(Job $job, bool $approved): void
     {
+        // Only a step still waiting for the decision: one that already ended
+        // (its run was canceled) must not take a route again.
         /** @var WorkflowJobStep|null $wjs */
-        $wjs = WorkflowJobStep::findOne(['job_id' => $job->id]);
+        $wjs = WorkflowJobStep::findOne(['job_id' => $job->id, 'status' => WorkflowJobStep::STATUS_RUNNING]);
         if ($wjs === null) {
             return;
         }

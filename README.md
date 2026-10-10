@@ -69,7 +69,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 
 ### Automation & integrations
 - **Scheduled jobs** — cron-based scheduling with next/last-run tracking and catch-up protection
-- **Inbound webhooks** — trigger templates from external systems with per-webhook tokens
+- **Inbound webhooks** — launch job templates and workflows from external systems with a per-template trigger token; a trigger runs as the user who generated its token and is refused once that user may no longer launch
 - **Notifications v2** — email, Slack, Webhook, Telegram, and PagerDuty channels with a shared event catalog
 - **REST API (v1)** — every feature exposed as an API; the UI is just one client
 - **OpenAPI 3.1 spec** — canonical `web/openapi.yaml` + bundled Swagger UI at `:8088` for interactive exploration
@@ -77,7 +77,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 
 ### Access control & auditability
 - **Custom role management** — built-in `viewer` / `operator` / `admin` plus user-defined roles with domain-grouped permission editor
-- **Multi-tenant team scoping** — assign projects to teams with viewer or operator roles; all child resources (templates, inventories, jobs, schedules) inherit access from their parent project. Users only see resources belonging to their teams. Admins bypass all restrictions. Unscoped projects remain visible to everyone for backward compatibility
+- **Multi-tenant team scoping** — assign projects to teams with viewer or operator roles; all child resources (templates, inventories, jobs, schedules, approval requests) inherit access from their parent project, workflows from the projects of their job steps, and analytics and the dashboard count only what the user may see. Users only see resources belonging to their teams. Admins bypass all restrictions. Unscoped projects remain visible to everyone for backward compatibility
 - **Two-factor authentication** — optional TOTP 2FA per user (Google Authenticator, Authy, 1Password, …) with bcrypt-hashed recovery codes and rate-limited verification
 - **Password reset** — self-service reset via signed email link
 - **Full audit trail** — every launch, configuration change, credential access, and permission edit recorded against an actor
@@ -145,7 +145,8 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 - Credentials are AES-256-CBC encrypted at rest — raw secrets never appear in logs or HTML
 - TOTP secrets are AES-256-CBC encrypted at rest — the same key used for credentials
 - RBAC roles: `viewer` (read-only) · `operator` (launch + manage) · `admin` (full access) — plus custom roles
-- Team-based resource isolation: projects and all child resources (templates, inventories, jobs, schedules) restricted to team members; viewer role grants read-only access, operator role grants full CRUD + launch
+- Team-based resource isolation: projects and all child resources (templates, inventories, jobs, schedules, approval requests, analytics) restricted to team members, workflows to members who may access the project of every job step; viewer role grants read-only access, operator role grants full CRUD + launch
+- Schedules, triggers and workflow steps launch as a recorded user (the schedule's creator, the user who generated the trigger token, the workflow's launcher) and are refused once that user is disabled or may no longer launch the template
 - Superadmin flag (`is_superadmin`) bypasses all team-scoped restrictions
 - All state-changing actions require explicit authorization
 - Optional TOTP 2FA per user — disabling requires a current authenticator code or recovery code

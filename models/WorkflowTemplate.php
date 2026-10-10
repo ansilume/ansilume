@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\models\traits\TriggerTokenTrait;
 use yii\db\ActiveQuery;
 use yii\db\ActiveRecord;
 
@@ -13,6 +14,7 @@ use yii\db\ActiveRecord;
  * @property string|null $description
  * @property string|null $trigger_token  SHA-256 hex of the raw inbound-trigger token; null = trigger disabled
  * @property int         $created_by
+ * @property int|null    $trigger_token_created_by  user who generated the current trigger token; null = created before tokens recorded it
  * @property int         $created_at
  * @property int         $updated_at
  * @property int|null    $deleted_at
@@ -23,6 +25,8 @@ use yii\db\ActiveRecord;
  */
 class WorkflowTemplate extends ActiveRecord
 {
+    use TriggerTokenTrait;
+
     public static function tableName(): string
     {
         return '{{%workflow_template}}';
@@ -44,10 +48,16 @@ class WorkflowTemplate extends ActiveRecord
         return parent::find();
     }
 
+    /**
+     * Soft-delete this template by setting deleted_at. The trigger token goes
+     * with it: the template's page answers 404 from now on, so nobody could
+     * revoke the token, and the user who generated it could not be deleted.
+     */
     public function softDelete(): bool
     {
         $this->deleted_at = time();
-        return $this->save(false, ['deleted_at']);
+        $this->clearTriggerToken();
+        return $this->save(false, ['deleted_at', 'trigger_token', 'trigger_token_created_by']);
     }
 
     public function isDeleted(): bool
@@ -66,51 +76,13 @@ class WorkflowTemplate extends ActiveRecord
             [['name'], 'required'],
             [['name'], 'string', 'max' => 128],
             [['description'], 'string', 'max' => 1000],
-            [['trigger_token'], 'string', 'max' => 64],
-            [['created_by'], 'integer'],
+            // Set in code only: a form must not choose the token or whom the
+            // workflow and its trigger run as.
+            [['!trigger_token'], 'string', 'max' => 64],
+            [['!created_by', '!trigger_token_created_by'], 'integer'],
         ];
     }
 
-    /**
-     * Generate a new random inbound-trigger token. The raw value is
-     * returned once and must be shown to the operator immediately —
-     * only its SHA-256 hash is persisted, so the raw value cannot be
-     * recovered afterwards.
-     *
-     * Mirror of {@see JobTemplate::generateTriggerToken()}.
-     */
-    public function generateTriggerToken(): string
-    {
-        $raw = bin2hex(random_bytes(32));
-        $this->trigger_token = hash('sha256', $raw);
-        $this->save(false, ['trigger_token']);
-        return $raw;
-    }
-
-    /**
-     * Remove the trigger token, effectively disabling the inbound trigger.
-     */
-    public function revokeTriggerToken(): void
-    {
-        $this->trigger_token = null;
-        $this->save(false, ['trigger_token']);
-    }
-
-    /**
-     * Look up a workflow template by its raw trigger token. The raw value
-     * is hashed and compared against the stored SHA-256 hex. Returns null
-     * for empty input or unknown tokens — TriggerController turns either
-     * into a 404 + invalid-token notification.
-     */
-    public static function findByTriggerToken(string $token): ?self
-    {
-        if ($token === '') {
-            return null;
-        }
-        /** @var static|null $result */
-        $result = static::findOne(['trigger_token' => hash('sha256', $token)]);
-        return $result;
-    }
 
     /**
      * Get the first step (lowest step_order).

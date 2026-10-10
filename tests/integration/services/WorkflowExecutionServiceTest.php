@@ -12,9 +12,12 @@ use app\models\WorkflowStep;
 use app\services\ApprovalService;
 use app\services\WorkflowExecutionService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\TeamScopeFixtures;
 
 class WorkflowExecutionServiceTest extends DbTestCase
 {
+    use TeamScopeFixtures;
+
     private function service(): WorkflowExecutionService
     {
         /** @var WorkflowExecutionService $s */
@@ -27,7 +30,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
      */
     private function scaffoldTemplate(): array
     {
-        $user = $this->createUser('wf');
+        $user = $this->createUserWithRole('wf', 'operator');
         $group = $this->createRunnerGroup($user->id);
         $project = $this->createProject($user->id);
         $inventory = $this->createInventory($user->id);
@@ -51,7 +54,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
 
     public function testLaunchThrowsForEmptyWorkflow(): void
     {
-        $user = $this->createUser('wf_empty');
+        $user = $this->createUserWithRole('wf_empty', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
 
         $this->expectException(\RuntimeException::class);
@@ -213,7 +216,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
 
     public function testPauseStepStaysRunning(): void
     {
-        $user = $this->createUser('wf_pause');
+        $user = $this->createUserWithRole('wf_pause', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
         $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_PAUSE);
 
@@ -229,7 +232,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
 
     public function testMissingJobTemplateFailsStep(): void
     {
-        $user = $this->createUser('wf_missing');
+        $user = $this->createUserWithRole('wf_missing', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
         // Step references a non-existent job template
         $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_JOB, 999999);
@@ -405,7 +408,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
 
     public function testApprovalStepWithMissingRuleFailsStep(): void
     {
-        $user = $this->createUser('wf_approval');
+        $user = $this->createUserWithRole('wf_approval', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
         // Approval step with no approval_rule_id
         $step = $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_APPROVAL);
@@ -451,7 +454,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
 
     public function testResumeThrowsForFinishedWorkflow(): void
     {
-        $user = $this->createUser('wf_resume_fin');
+        $user = $this->createUserWithRole('wf_resume_fin', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
         $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_PAUSE);
 
@@ -586,7 +589,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
      */
     public function testApprovalStepCreatesApprovalRequest(): void
     {
-        $user = $this->createUser('wf_approval_req');
+        $user = $this->createUserWithRole('wf_approval_req', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
         $rule = $this->createApprovalRule($user->id);
         $step = $this->createWorkflowStep(
@@ -692,7 +695,7 @@ class WorkflowExecutionServiceTest extends DbTestCase
      */
     public function testApprovalRejectionFailsWorkflowStep(): void
     {
-        $user = $this->createUser('wf_reject');
+        $user = $this->createUserWithRole('wf_reject', 'operator');
         $approver = $this->createUser('wf_rejector');
         $wt = $this->createWorkflowTemplate($user->id);
         $rule = $this->createApprovalRule(

@@ -225,7 +225,7 @@ class WorkflowTemplateTest extends DbTestCase
         $wt = $this->createWorkflowTemplate($user->id);
         $this->assertNull($wt->trigger_token);
 
-        $raw = $wt->generateTriggerToken();
+        $raw = $wt->generateTriggerToken((int)$wt->created_by);
         $wt->refresh();
 
         $this->assertNotSame('', $raw);
@@ -239,7 +239,7 @@ class WorkflowTemplateTest extends DbTestCase
     {
         $user = $this->createUser();
         $wt = $this->createWorkflowTemplate($user->id);
-        $wt->generateTriggerToken();
+        $wt->generateTriggerToken((int)$wt->created_by);
         $this->assertNotNull($wt->trigger_token);
 
         $wt->revokeTriggerToken();
@@ -251,7 +251,7 @@ class WorkflowTemplateTest extends DbTestCase
     {
         $user = $this->createUser();
         $wt = $this->createWorkflowTemplate($user->id);
-        $raw = $wt->generateTriggerToken();
+        $raw = $wt->generateTriggerToken((int)$wt->created_by);
 
         $found = WorkflowTemplate::findByTriggerToken($raw);
         $this->assertNotNull($found);
@@ -262,5 +262,96 @@ class WorkflowTemplateTest extends DbTestCase
     {
         $this->assertNull(WorkflowTemplate::findByTriggerToken(''));
         $this->assertNull(WorkflowTemplate::findByTriggerToken('does-not-exist'));
+    }
+
+    /**
+     * Regression: the edit form could set created_by and trigger_token, so an
+     * operator could make a workflow and its trigger run as an admin.
+     */
+    public function testCreatorAndTriggerTokenCannotBeSetFromAForm(): void
+    {
+        $owner = $this->createUser('wt_owner');
+        $wt = $this->createWorkflowTemplate($owner->id);
+
+        $wt->load(['WorkflowTemplate' => [
+            'name' => 'renamed',
+            'created_by' => 1,
+            'trigger_token' => hash('sha256', 'chosen'),
+            'trigger_token_created_by' => 1,
+        ]]);
+
+        $this->assertSame('renamed', $wt->name);
+        $this->assertSame($owner->id, (int)$wt->created_by);
+        $this->assertNull($wt->trigger_token);
+        $this->assertNull($wt->trigger_token_created_by);
+        $this->assertSame(['name', 'description'], $wt->safeAttributes());
+    }
+
+    public function testTheTriggerRunsAsWhoeverGeneratedTheToken(): void
+    {
+        $owner = $this->createUser('wt_trigger_owner');
+        $operator = $this->createUser('wt_trigger_operator');
+        $wt = $this->createWorkflowTemplate($owner->id);
+        $this->assertSame($owner->id, $wt->getTriggerUserId(), 'no token: the creator');
+
+        $wt->generateTriggerToken($operator->id);
+        $wt->refresh();
+        $this->assertSame($operator->id, (int)$wt->trigger_token_created_by);
+        $this->assertSame($operator->id, $wt->getTriggerUserId());
+
+        $wt->revokeTriggerToken();
+        $wt->refresh();
+        $this->assertNull($wt->trigger_token);
+        $this->assertNull($wt->trigger_token_created_by);
+    }
+
+    public function testTokensFromBeforeTheCreatorWasRecordedRunAsTheWorkflowCreator(): void
+    {
+        $owner = $this->createUser('wt_legacy');
+        $wt = $this->createWorkflowTemplate($owner->id);
+        $wt->trigger_token = hash('sha256', 'legacy');
+        $wt->save(false);
+
+        $this->assertSame($owner->id, $wt->getTriggerUserId());
+    }
+
+    public function testHasTriggerTokenFollowsGenerationAndRevocation(): void
+    {
+        $owner = $this->createUser('wt_has_token');
+        $wt = $this->createWorkflowTemplate($owner->id);
+        $this->assertFalse($wt->hasTriggerToken());
+
+        $wt->generateTriggerToken($owner->id);
+        $this->assertTrue($wt->hasTriggerToken());
+
+        $wt->revokeTriggerToken();
+        $this->assertFalse($wt->hasTriggerToken());
+
+        $wt->trigger_token = '';
+        $this->assertFalse($wt->hasTriggerToken(), 'an empty value is no token');
+    }
+
+    /**
+     * Regression: a soft-deleted workflow template kept its trigger token and
+     * whom it runs as. Its page answers 404, so nobody could revoke the
+     * token, and the foreign key on trigger_token_created_by kept the user
+     * who generated it from being deleted.
+     */
+    public function testSoftDeleteRemovesTheTriggerTokenSoItsGeneratorCanBeDeleted(): void
+    {
+        $owner = $this->createUser('wt_soft_owner');
+        $generator = $this->createUser('wt_soft_generator');
+        $wt = $this->createWorkflowTemplate($owner->id);
+        $raw = $wt->generateTriggerToken($generator->id);
+
+        $this->assertTrue($wt->softDelete());
+
+        $stored = WorkflowTemplate::findWithDeleted()->where(['id' => $wt->id])->one();
+        $this->assertInstanceOf(WorkflowTemplate::class, $stored);
+        $this->assertNotNull($stored->deleted_at);
+        $this->assertNull($stored->trigger_token);
+        $this->assertNull($stored->trigger_token_created_by);
+        $this->assertNull(WorkflowTemplate::findByTriggerToken($raw));
+        $this->assertSame(1, $generator->delete(), 'nothing else refers to the generator');
     }
 }

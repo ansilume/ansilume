@@ -108,7 +108,8 @@ class ApprovalService extends Component
     }
 
     /**
-     * Check whether a user is eligible to approve a given request.
+     * Check whether a user may decide on a request: it is still pending and
+     * the user is one of its {@see eligibleApproverIds()}.
      */
     public function canUserApprove(ApprovalRequest $request, int $userId): bool
     {
@@ -118,12 +119,47 @@ class ApprovalService extends Component
 
         /** @var ApprovalRule|null $rule */
         $rule = $request->approvalRule;
-        if ($rule === null) {
+        if ($rule === null || !in_array($userId, $rule->getApproverUserIds(), true)) {
             return false;
         }
 
-        $eligible = $rule->getApproverUserIds();
-        return in_array($userId, $eligible, true);
+        // Equal to in_array($userId, eligibleApproverIds()) without checking every approver.
+        return $this->access()->canViewApprovalRequest($userId, $request);
+    }
+
+    /**
+     * The users who may decide on a request: the rule's approvers who may also
+     * see it (view access to the job's project or, for a workflow approval
+     * step, to the workflow). Team scoping applies to deciding as to viewing.
+     *
+     * Without team-restricted projects every approver may see every request,
+     * so the approvers are returned as they are: checking each one would cost
+     * queries per approver on every vote that does not settle the request.
+     *
+     * @return list<int>
+     */
+    public function eligibleApproverIds(ApprovalRequest $request): array
+    {
+        /** @var ApprovalRule|null $rule */
+        $rule = $request->approvalRule;
+        if ($rule === null) {
+            return [];
+        }
+
+        $approverIds = array_values(array_unique($rule->getApproverUserIds()));
+        if (!$this->projects()->hasRestrictedProjects()) {
+            return $approverIds;
+        }
+
+        $access = $this->access();
+        $eligible = [];
+        foreach ($approverIds as $userId) {
+            if ($access->canViewApprovalRequest($userId, $request)) {
+                $eligible[] = $userId;
+            }
+        }
+
+        return $eligible;
     }
 
     /**
@@ -190,9 +226,7 @@ class ApprovalService extends Component
         }
 
         $approvals = $request->approvalCount();
-        $rejections = $request->rejectionCount();
         $required = $rule->required_approvals;
-        $eligible = count($rule->getApproverUserIds());
 
         if ($approvals >= $required) {
             $request->status = ApprovalRequest::STATUS_APPROVED;
@@ -213,9 +247,10 @@ class ApprovalService extends Component
             return;
         }
 
-        // If remaining possible approvals can't meet threshold, auto-reject
-        $remaining = $eligible - $approvals - $rejections;
-        if ($approvals + $remaining < $required) {
+        // Auto-reject once the approvals still possible can't meet the
+        // threshold. Only eligible approvers can still vote: one without
+        // access to the request never will.
+        if ($approvals + $this->openVoteCount($request) < $required) {
             $request->status = ApprovalRequest::STATUS_REJECTED;
             $request->resolved_at = time();
             $request->save(false);
@@ -263,27 +298,46 @@ class ApprovalService extends Component
 
         if ($wjs !== null) {
             // Placeholder job — mark succeeded, never queued for execution
-            $job->status = Job::STATUS_SUCCEEDED;
-            $job->finished_at = time();
-            $job->save(false);
-            $this->notifyWorkflow($job, true);
-        } else {
-            $job->status = Job::STATUS_QUEUED;
-            $job->queued_at = time();
-            $job->save(false);
+            if ($this->leavePendingApproval($job, ['status' => Job::STATUS_SUCCEEDED, 'finished_at' => time()])) {
+                $this->notifyWorkflow($job, true);
+            }
+            return;
         }
+        $this->leavePendingApproval($job, ['status' => Job::STATUS_QUEUED, 'queued_at' => time()]);
     }
 
     private function rejectJob(Job $job): void
     {
-        $job->status = Job::STATUS_REJECTED;
-        $job->finished_at = time();
-        $job->save(false);
+        if (!$this->leavePendingApproval($job, ['status' => Job::STATUS_REJECTED, 'finished_at' => time()])) {
+            return;
+        }
 
         $wjs = \app\models\WorkflowJobStep::findOne(['job_id' => $job->id]);
         if ($wjs !== null) {
             $this->notifyWorkflow($job, false);
         }
+    }
+
+    /**
+     * Apply a decision to the job only while it still waits for approval.
+     * A job canceled in the meantime stays canceled: the decision must not
+     * queue it again, nor take its workflow down a route a second time.
+     * One conditional UPDATE, so a cancel between reading and writing the
+     * job cannot be overwritten either.
+     *
+     * @param array<string, int|string> $attributes
+     * @return bool whether the job changed
+     */
+    private function leavePendingApproval(Job $job, array $attributes): bool
+    {
+        $attributes['updated_at'] = time();
+        $changed = Job::updateAll(
+            $attributes,
+            ['id' => $job->id, 'status' => Job::STATUS_PENDING_APPROVAL]
+        ) === 1;
+        $job->refresh();
+
+        return $changed;
     }
 
     /**
@@ -294,5 +348,34 @@ class ApprovalService extends Component
         /** @var WorkflowExecutionService $wfService */
         $wfService = \Yii::$app->get('workflowExecutionService');
         $wfService->onApprovalResolved($job, $approved);
+    }
+
+    /**
+     * Number of eligible approvers who have not voted on the request yet.
+     */
+    private function openVoteCount(ApprovalRequest $request): int
+    {
+        $voted = array_map('intval', ApprovalDecision::find()
+            ->select('user_id')
+            ->where(['approval_request_id' => $request->id])
+            ->column());
+
+        return count(array_diff($this->eligibleApproverIds($request), $voted));
+    }
+
+    private function access(): WorkflowAccessChecker
+    {
+        /** @var WorkflowAccessChecker $checker */
+        $checker = \Yii::$app->get('workflowAccessChecker');
+
+        return $checker;
+    }
+
+    private function projects(): ProjectAccessChecker
+    {
+        /** @var ProjectAccessChecker $checker */
+        $checker = \Yii::$app->get('projectAccessChecker');
+
+        return $checker;
     }
 }

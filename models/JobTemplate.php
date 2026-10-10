@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\models;
 
 use app\components\SurveyField;
+use app\models\traits\TriggerTokenTrait;
 use yii\db\ActiveRecord;
 use yii\validators\Validator;
 
@@ -30,6 +31,7 @@ use yii\validators\Validator;
  * @property int|null    $approval_rule_id
  * @property string|null $survey_fields     JSON array of SurveyField definitions
  * @property string|null $trigger_token     SHA-256 hex of the raw trigger token; null = disabled
+ * @property int|null    $trigger_token_created_by user who generated the current trigger token; null = created before tokens recorded it
  * @property string|null $lint_output       Last ansible-lint output
  * @property int|null    $lint_at           Unix timestamp of last lint run
  * @property int|null    $lint_exit_code    Exit code of last ansible-lint run (0 = clean)
@@ -50,6 +52,8 @@ use yii\validators\Validator;
  */
 class JobTemplate extends ActiveRecord
 {
+    use TriggerTokenTrait;
+
     public static function tableName(): string
     {
         return '{{%job_template}}';
@@ -73,12 +77,15 @@ class JobTemplate extends ActiveRecord
     }
 
     /**
-     * Soft-delete this template by setting deleted_at.
+     * Soft-delete this template by setting deleted_at. The trigger token goes
+     * with it: the template's page answers 404 from now on, so nobody could
+     * revoke the token, and the user who generated it could not be deleted.
      */
     public function softDelete(): bool
     {
         $this->deleted_at = time();
-        return $this->save(false, ['deleted_at']);
+        $this->clearTriggerToken();
+        return $this->save(false, ['deleted_at', 'trigger_token', 'trigger_token_created_by']);
     }
 
     public function isDeleted(): bool
@@ -110,8 +117,11 @@ class JobTemplate extends ActiveRecord
             [['tags', 'skip_tags'], 'string', 'max' => 512],
             [['survey_fields'], 'string', 'max' => 65535],
             [['survey_fields'], 'validateJson'],
-            [['trigger_token'], 'string', 'max' => 64],
-            [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'approval_rule_id', 'created_by'], 'integer'],
+            // Set in code only: a form must not choose the token or whom the
+            // template's trigger runs as.
+            [['!trigger_token'], 'string', 'max' => 64],
+            [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'approval_rule_id'], 'integer'],
+            [['!created_by', '!trigger_token_created_by'], 'integer'],
             // Unknown ids would otherwise fail on the foreign keys with a server error.
             [
                 ['project_id'],
@@ -346,41 +356,5 @@ class JobTemplate extends ActiveRecord
     public function hasSurvey(): bool
     {
         return !empty($this->survey_fields) && $this->getSurveyFields() !== [];
-    }
-
-    /**
-     * Generate a new random trigger token. The raw value is returned once and
-     * must be shown to the operator immediately — only its SHA-256 hash is
-     * persisted, so the raw value cannot be recovered afterwards.
-     */
-    public function generateTriggerToken(): string
-    {
-        $raw = bin2hex(random_bytes(32));
-        $this->trigger_token = hash('sha256', $raw);
-        $this->save(false, ['trigger_token']);
-        return $raw;
-    }
-
-    /**
-     * Remove the trigger token, effectively disabling the inbound trigger.
-     */
-    public function revokeTriggerToken(): void
-    {
-        $this->trigger_token = null;
-        $this->save(false, ['trigger_token']);
-    }
-
-    /**
-     * Look up a template by its raw trigger token. The raw value is hashed
-     * and compared against the stored SHA-256 hex.
-     */
-    public static function findByTriggerToken(string $token): ?self
-    {
-        if ($token === '') {
-            return null;
-        }
-        /** @var static|null $result */
-        $result = static::findOne(['trigger_token' => hash('sha256', $token)]);
-        return $result;
     }
 }

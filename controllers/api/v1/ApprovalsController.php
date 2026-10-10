@@ -7,12 +7,16 @@ namespace app\controllers\api\v1;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\services\ApprovalService;
+use app\services\WorkflowAccessChecker;
 use yii\data\ActiveDataProvider;
-use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
 
 /**
  * API v1: Approvals — list, view, approve, reject.
+ *
+ * Team scoping applies: the list holds only the requests the caller may see
+ * (view access to the job's project or, for a workflow approval step, the
+ * workflow); other requests answer 403.
  */
 class ApprovalsController extends BaseApiController
 {
@@ -31,8 +35,13 @@ class ApprovalsController extends BaseApiController
      */
     public function actionIndex(): array
     {
+        $query = ApprovalRequest::find()->orderBy(['id' => SORT_DESC]);
+        $filter = $this->access()->buildApprovalRequestFilter($this->currentUserId());
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
         $dp = new ActiveDataProvider([
-            'query' => ApprovalRequest::find()->orderBy(['id' => SORT_DESC]),
+            'query' => $query,
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
@@ -46,11 +55,15 @@ class ApprovalsController extends BaseApiController
     }
 
     /**
-     * @return array{data: mixed}
+     * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionView(int $id): array
     {
-        return $this->success($this->serialize($this->findModel($id)));
+        $model = $this->findModel($id);
+        if (!$this->mayView($model)) {
+            return $this->error('Forbidden.', 403);
+        }
+        return $this->success($this->serialize($model));
     }
 
     /**
@@ -70,18 +83,22 @@ class ApprovalsController extends BaseApiController
     }
 
     /**
+     * Visibility first, then eligibility: both answer 403.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     private function decide(int $id, string $decision): array
     {
         $model = $this->findModel($id);
-        $userId = (int)\Yii::$app->user->id;
+        if (!$this->mayView($model)) {
+            return $this->error('Forbidden.', 403);
+        }
 
+        $userId = (int)\Yii::$app->user->id;
         /** @var ApprovalService $service */
         $service = \Yii::$app->get('approvalService');
-
         if (!$service->canUserApprove($model, $userId)) {
-            throw new ForbiddenHttpException('You are not eligible to decide on this request.');
+            return $this->error('You are not eligible to decide on this request.', 403);
         }
 
         $body = (array)\Yii::$app->request->bodyParams;
@@ -95,6 +112,24 @@ class ApprovalsController extends BaseApiController
 
         $model->refresh();
         return $this->success($this->serialize($model));
+    }
+
+    private function mayView(ApprovalRequest $model): bool
+    {
+        $userId = $this->currentUserId();
+        return $userId !== null && $this->access()->canViewApprovalRequest($userId, $model);
+    }
+
+    private function currentUserId(): ?int
+    {
+        return \Yii::$app->user->isGuest ? null : (int)\Yii::$app->user->id;
+    }
+
+    private function access(): WorkflowAccessChecker
+    {
+        /** @var WorkflowAccessChecker $checker */
+        $checker = \Yii::$app->get('workflowAccessChecker');
+        return $checker;
     }
 
     /**

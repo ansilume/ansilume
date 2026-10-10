@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
+/** @var list<int>|null $operableIds listed workflows the user may launch; null = all of them */
 
 use app\helpers\TimeHelper;
 use app\models\WorkflowTemplate;
@@ -41,7 +42,7 @@ $this->title = 'Workflow Templates';
                     <td><?= Html::encode($model->creator?->username ?? '—') ?></td>
                     <td><?= TimeHelper::relative((int)$model->created_at) ?></td>
                     <td class="text-end">
-                        <?php if (Yii::$app->user->can('workflow.launch')) : ?>
+                        <?php if (Yii::$app->user->can('workflow.launch') && ($operableIds === null || in_array((int)$model->id, $operableIds, true))) : ?>
                             <form action="<?= \yii\helpers\Url::to(['launch', 'id' => $model->id]) ?>" method="post" style="display:inline"
                                   onsubmit="return confirm('Launch this workflow?')">
                                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">

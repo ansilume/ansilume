@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\WorkflowJob $model */
+/** @var bool $canOperate operator access to the project of every job step of the workflow */
 
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
@@ -32,14 +33,14 @@ $steps = $model->stepExecutions;
             }
         }
         ?>
-        <?php if ($hasPausedStep && Yii::$app->user->can('workflow.launch')) : ?>
+        <?php if ($hasPausedStep && $canOperate && Yii::$app->user->can('workflow.launch')) : ?>
             <form action="<?= \yii\helpers\Url::to(['resume', 'id' => $model->id]) ?>" method="post" style="display:inline"
                   onsubmit="return confirm('Resume this workflow?')">
                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
                 <button type="submit" class="btn btn-success btn-sm">Resume</button>
             </form>
         <?php endif; ?>
-        <?php if (!$model->isFinished() && Yii::$app->user->can('workflow.cancel')) : ?>
+        <?php if (!$model->isFinished() && $canOperate && Yii::$app->user->can('workflow.cancel')) : ?>
             <form action="<?= \yii\helpers\Url::to(['cancel', 'id' => $model->id]) ?>" method="post" style="display:inline"
                   onsubmit="return confirm('Cancel this workflow?')">
                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
@@ -126,6 +127,9 @@ $steps = $model->stepExecutions;
                                 <span class="badge text-bg-<?= Html::encode($cssClass) ?>">
                         <?= Html::encode($label) ?>
                                 </span>
+                        <?php if ((string)$wjs->error_message !== '') : ?>
+                                <div class="small text-danger mt-1" data-wjs-error><?= Html::encode((string)$wjs->error_message) ?></div>
+                        <?php endif; ?>
                             </td>
                             <td data-wjs-job-cell>
                         <?php if ($wjs->job_id) : ?>
@@ -223,6 +227,20 @@ $steps = $model->stepExecutions;
         if (badge) {
             badge.textContent = step.status_label;
             badge.className = 'badge text-bg-' + step.status_css;
+        }
+
+        // Why a step failed without a job (e.g. no access to its job
+        // template). textContent only: the message is not HTML.
+        var statusCell = row.querySelector('[data-wjs-status-cell]');
+        if (statusCell && step.error_message) {
+            var errorEl = statusCell.querySelector('[data-wjs-error]');
+            if (!errorEl) {
+                errorEl = document.createElement('div');
+                errorEl.className = 'small text-danger mt-1';
+                errorEl.setAttribute('data-wjs-error', '');
+                statusCell.appendChild(errorEl);
+            }
+            errorEl.textContent = step.error_message;
         }
 
         var jobCell = row.querySelector('[data-wjs-job-cell]');

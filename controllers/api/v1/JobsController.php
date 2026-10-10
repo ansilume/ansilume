@@ -12,6 +12,7 @@ use app\models\JobSearchForm;
 use app\models\JobTemplate;
 use app\services\ArtifactService;
 use app\services\JobLaunchService;
+use app\services\WorkflowAccessChecker;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use yii\web\NotFoundHttpException;
 
@@ -75,10 +76,9 @@ class JobsController extends BaseApiController
     public function actionView(int $id): array
     {
         $job = $this->findJob($id);
-        $projectId = $job->jobTemplate->project_id ?? null;
-        $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
-            return $this->error('Forbidden.', 403);
+        $denied = $this->denyJobAccess($job, false);
+        if ($denied !== null) {
+            return $denied;
         }
         return $this->success($this->serializeJob($job, true));
     }
@@ -135,18 +135,19 @@ class JobsController extends BaseApiController
         $user = \Yii::$app->user;
         $job = $this->findJob($id);
 
-        if (!$job->isCancelable()) {
-            return $this->error("Job #{$id} cannot be canceled in status '{$job->status}'.", 409);
-        }
-
         if (!$user->can('job.cancel')) {
             return $this->error('Forbidden.', 403);
         }
 
-        $projectId = $job->jobTemplate->project_id ?? null;
-        $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
-            return $this->error('Forbidden.', 403);
+        // Access before state, so a caller without access learns nothing
+        // about the job's status.
+        $denied = $this->denyJobAccess($job, true);
+        if ($denied !== null) {
+            return $denied;
+        }
+
+        if (!$job->isCancelable()) {
+            return $this->error("Job #{$id} cannot be canceled in status '{$job->status}'.", 409);
         }
 
         // Single source of truth in JobCompletionService::cancel — flips
@@ -157,7 +158,7 @@ class JobsController extends BaseApiController
         // job was canceled via the API.
         /** @var \app\services\JobCompletionService $completion */
         $completion = \Yii::$app->get('jobCompletionService');
-        $completion->cancel($job, $userId);
+        $completion->cancel($job, $this->currentUserId());
 
         return $this->success($this->serializeJob($job, true));
     }
@@ -168,10 +169,9 @@ class JobsController extends BaseApiController
     public function actionArtifacts(int $id): array
     {
         $job = $this->findJob($id);
-        $projectId = $job->jobTemplate->project_id ?? null;
-        $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
-            return $this->error('Forbidden.', 403);
+        $denied = $this->denyJobAccess($job, false);
+        if ($denied !== null) {
+            return $denied;
         }
 
         /** @var ArtifactService $svc */
@@ -190,10 +190,9 @@ class JobsController extends BaseApiController
     public function actionDownloadArtifact(int $id, int $artifact_id): \yii\web\Response|array
     {
         $job = $this->findJob($id);
-        $projectId = $job->jobTemplate->project_id ?? null;
-        $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
-            return $this->error('Forbidden.', 403);
+        $denied = $this->denyJobAccess($job, false);
+        if ($denied !== null) {
+            return $denied;
         }
 
         /** @var JobArtifact|null $artifact */
@@ -245,10 +244,9 @@ class JobsController extends BaseApiController
     public function actionArtifactContent(int $id, int $artifact_id): array
     {
         $job = $this->findJob($id);
-        $projectId = $job->jobTemplate->project_id ?? null;
-        $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
-            return $this->error('Forbidden.', 403);
+        $denied = $this->denyJobAccess($job, false);
+        if ($denied !== null) {
+            return $denied;
         }
 
         /** @var JobArtifact|null $artifact */
@@ -282,10 +280,9 @@ class JobsController extends BaseApiController
     public function actionDownloadAllArtifacts(int $id): \yii\web\Response|array
     {
         $job = $this->findJob($id);
-        $projectId = $job->jobTemplate->project_id ?? null;
-        $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
-            return $this->error('Forbidden.', 403);
+        $denied = $this->denyJobAccess($job, false);
+        if ($denied !== null) {
+            return $denied;
         }
 
         /** @var ArtifactService $svc */
@@ -347,6 +344,26 @@ class JobsController extends BaseApiController
         }
 
         return (int)$raw;
+    }
+
+    /**
+     * 403 unless the caller may view (or operate) the job. A job follows its
+     * template's project; a job without a template (the placeholder of a
+     * workflow approval step, or the history of a purged template) is not
+     * global: see WorkflowAccessChecker::canAccessJob().
+     *
+     * @return array{error: array{message: string}}|null
+     */
+    private function denyJobAccess(Job $job, bool $operate): ?array
+    {
+        $userId = $this->currentUserId();
+        /** @var WorkflowAccessChecker $access */
+        $access = \Yii::$app->get('workflowAccessChecker');
+        if ($userId !== null && $access->canAccessJob($userId, $job, $operate)) {
+            return null;
+        }
+
+        return $this->error('Forbidden.', 403);
     }
 
     private function findJob(int $id): Job

@@ -20,8 +20,8 @@ class ApprovalControllerActionTest extends WebControllerTestCase
     /** @var list<array{string, \yii\base\Component}> */
     private array $swappedServices = [];
 
-    /** @var array{canApprove: bool, recordCalls: int, lastDecision: string|null} */
-    public array $stubState = ['canApprove' => true, 'recordCalls' => 0, 'lastDecision' => null];
+    /** @var array{canApprove: bool, recordCalls: int, lastDecision: string|null, throw: string|null} */
+    public array $stubState = ['canApprove' => true, 'recordCalls' => 0, 'lastDecision' => null, 'throw' => null];
 
     protected function setUp(): void
     {
@@ -29,7 +29,7 @@ class ApprovalControllerActionTest extends WebControllerTestCase
 
         $state = &$this->stubState;
         $this->swapService('approvalService', new class ($state) extends ApprovalService {
-            /** @var array{canApprove: bool, recordCalls: int, lastDecision: string|null} */
+            /** @var array{canApprove: bool, recordCalls: int, lastDecision: string|null, throw: string|null} */
             private array $state;
             public function __construct(array &$state)
             {
@@ -48,6 +48,9 @@ class ApprovalControllerActionTest extends WebControllerTestCase
             ): ApprovalDecision {
                 $this->state['recordCalls']++;
                 $this->state['lastDecision'] = $decision;
+                if ($this->state['throw'] !== null) {
+                    throw new \RuntimeException($this->state['throw']);
+                }
                 $d = new ApprovalDecision();
                 $d->approval_request_id = $req->id;
                 $d->user_id = $userId;
@@ -125,6 +128,42 @@ class ApprovalControllerActionTest extends WebControllerTestCase
         $this->assertInstanceOf(Response::class, $result);
         $this->assertSame(1, $this->stubState['recordCalls']);
         $this->assertSame(ApprovalDecision::DECISION_APPROVED, $this->stubState['lastDecision']);
+    }
+
+    /**
+     * Regression: another approver resolved the request after this one passed
+     * the checks; the service's refusal surfaced as a server error.
+     */
+    public function testApproveRefusedByTheServiceIsFlashedNotAServerError(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $req = $this->createRequest($user);
+        $this->stubState['throw'] = 'Approval request is already resolved.';
+
+        $result = $this->makeController()->actionApprove((int)$req->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertSame(
+            'Your decision was not recorded: Approval request is already resolved.',
+            \Yii::$app->session->getFlash('danger')
+        );
+    }
+
+    public function testRejectRefusedByTheServiceIsFlashedNotAServerError(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $req = $this->createRequest($user);
+        $this->stubState['throw'] = 'User has already voted on this request.';
+
+        $result = $this->makeController()->actionReject((int)$req->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertSame(
+            'Your decision was not recorded: User has already voted on this request.',
+            \Yii::$app->session->getFlash('danger')
+        );
     }
 
     public function testApproveForbiddenWhenIneligible(): void

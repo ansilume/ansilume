@@ -33,10 +33,11 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
         <?= $form->field($model, 'name')->textInput(['maxlength' => 128, 'placeholder' => 'e.g. Nightly playbook run']) ?>
     </div>
     <div class="col-md-6">
+        <?php $runsAs = $isNew ? 'you' : ($model->creator->username ?? 'the schedule\'s creator'); ?>
         <?= $form->field($model, 'job_template_id')->dropDownList(
             $templates,
             ['prompt' => '— Select template —']
-        ) ?>
+        )->hint(Html::encode('Lists the job templates you may launch. Scheduled jobs run as ' . $runsAs . '.')) ?>
     </div>
     <div class="col-md-6">
         <?= $form->field($model, 'cron_expression')

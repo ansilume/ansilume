@@ -64,21 +64,34 @@ elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
     if echo "$SEED_OUT" | grep -q "complete\|already exists"; then
         # Build and run Playwright container
         E2E_OUT=$(docker compose --profile e2e run --build --rm playwright 2>&1 || true)
-        E2E_PASSED=$(echo "$E2E_OUT" | grep -oP '\d+(?= passed)' || echo "0")
-        E2E_FAILED=$(echo "$E2E_OUT" | grep -oP '\d+(?= failed)' || echo "0")
+        # The summary's last "N passed" / "N failed" / "N skipped" lines.
+        E2E_PASSED=$(echo "$E2E_OUT" | grep -oP '\d+(?= passed)' | tail -1 || true)
+        E2E_FAILED=$(echo "$E2E_OUT" | grep -oP '\d+(?= failed)' | tail -1 || true)
+        E2E_SKIPPED=$(echo "$E2E_OUT" | grep -oP '\d+(?= skipped)' | tail -1 || true)
+        E2E_PASSED=${E2E_PASSED:-0}
+        E2E_FAILED=${E2E_FAILED:-0}
+        E2E_SKIPPED=${E2E_SKIPPED:-0}
 
         if [[ "$E2E_FAILED" -eq 0 ]] && [[ "$E2E_PASSED" -gt 0 ]]; then
-            ok "Playwright E2E passed (${E2E_PASSED} tests)"
+            ok "Playwright E2E passed (${E2E_PASSED} tests, ${E2E_SKIPPED} skipped)"
         elif [[ "$E2E_PASSED" -gt 0 ]]; then
-            fail "Playwright E2E: ${E2E_PASSED} passed, ${E2E_FAILED} failed"
+            fail "Playwright E2E: ${E2E_PASSED} passed, ${E2E_FAILED} failed, ${E2E_SKIPPED} skipped"
             echo "$E2E_OUT" | tail -30 | sed 's/^/     /'
         else
             fail "Playwright E2E tests did not run"
             echo "$E2E_OUT" | tail -30 | sed 's/^/     /'
         fi
 
-        # Teardown E2E data (silent)
-        dc php yii e2e/teardown >/dev/null 2>&1 || true
+        # Teardown E2E data. It exits non-zero when e2e users or fixtures are
+        # left behind, which the next seed would silently build on.
+        TEARDOWN_RC=0
+        TEARDOWN_OUT=$(dc php yii e2e/teardown 2>&1) || TEARDOWN_RC=$?
+        if [[ $TEARDOWN_RC -eq 0 ]]; then
+            ok "E2E teardown complete"
+        else
+            fail "E2E teardown failed (exit ${TEARDOWN_RC})"
+            echo "$TEARDOWN_OUT" | tail -15 | sed 's/^/     /'
+        fi
     else
         fail "E2E seed failed"
         echo "$SEED_OUT" | tail -10 | sed 's/^/     /'

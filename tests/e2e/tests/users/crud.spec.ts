@@ -67,4 +67,25 @@ test.describe('Users CRUD', () => {
     await deleteByRowText(page, '/user/index', 'e2e-newuser');
     await expectFlash(page, 'success');
   });
+
+  test('delete keeps a user other records still refer to and says why', async ({ page }) => {
+    // Regression: the delete failed on the foreign key with a server error.
+    // e2e-referenced-user created e2e-referenced-user-team
+    // (commands/E2eReferencedUserSeeder.php).
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.goto('/user/index');
+    const row = page.locator('table.table tbody tr', { hasText: 'e2e-referenced-user' });
+    await expect(row).toHaveCount(1);
+    await row.locator('a').first().click();
+    await expect(page.locator('h2').first()).toHaveText('e2e-referenced-user');
+
+    await page.locator('#page-content form[action*="/user/delete"] button[type="submit"]').click();
+
+    await expectFlash(page, 'danger', 'cannot be deleted: other records still refer to them');
+    await expectFlash(page, 'danger', 'Deactivate the account instead.');
+    await expect(page).toHaveURL(/\/user\/view\?id=\d+/);
+    await expect(page.locator('h2').first()).toHaveText('e2e-referenced-user');
+    await page.goto('/user/index');
+    await expect(page.locator('table.table tbody tr', { hasText: 'e2e-referenced-user' })).toHaveCount(1);
+  });
 });

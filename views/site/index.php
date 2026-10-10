@@ -15,6 +15,7 @@ declare(strict_types=1);
 /** @var int $outdatedRunners */
 /** @var app\models\ApprovalRequest[] $pendingApprovals */
 /** @var app\models\WorkflowJob[] $runningWorkflows */
+/** @var list<int> $resumableWorkflowTemplateIds workflow templates whose paused runs the user may resume */
 /** @var app\models\Schedule[] $upcomingSchedules */
 /** @var app\models\Project[] $syncErrors */
 /** @var bool $hasSchedules */
@@ -146,11 +147,11 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
 </div>
 <?php endforeach; ?>
 
-<!-- Pending Approvals -->
-<?php if (!empty($pendingApprovals) && \Yii::$app->user->can('approval.view')) : ?>
+<!-- Pending Approvals (empty without approval.view) -->
+<?php if (!empty($pendingApprovals)) : ?>
 <div class="card mb-3 border-warning">
     <div class="card-header text-bg-warning d-flex justify-content-between align-items-center">
-        <strong>Pending Approvals (<?= count($pendingApprovals) ?>)</strong>
+        <strong>Pending Approvals (<?= Html::encode((string)$stats['pending_approvals']) ?>)</strong>
         <?= Html::a('All Approvals', Url::to(['/approval/index']), ['class' => 'btn btn-sm btn-outline-dark']) ?>
     </div>
     <div class="card-body p-0">
@@ -223,7 +224,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
             <div class="card-header">Quick Launch</div>
             <div class="card-body">
                 <?php if (empty($templates) && empty($workflowTemplates)) : ?>
-                    <p class="text-muted mb-0 small">No templates yet.</p>
+                    <p class="text-muted mb-0 small">No templates you can launch.</p>
                 <?php else : ?>
                     <div class="row g-2">
                         <?php if (!empty($templates)) : ?>
@@ -348,7 +349,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                     <td class="text-nowrap"><?= $wf->started_at ? date('H:i:s', $wf->started_at) : '—' ?></td>
                     <td><?= $wf->started_at ? gmdate('H:i:s', time() - $wf->started_at) : '—' ?></td>
                     <td>
-                        <?php if ($isPaused && \Yii::$app->user->can('workflow.launch')) : ?>
+                        <?php if ($isPaused && in_array((int)$wf->workflow_template_id, $resumableWorkflowTemplateIds, true)) : ?>
                             <form action="<?= Url::to(['/workflow-job/resume', 'id' => $wf->id]) ?>" method="post" class="d-inline">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-success">Resume</button>

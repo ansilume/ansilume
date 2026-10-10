@@ -15,6 +15,7 @@ use app\models\RunnerGroup;
 use app\models\User;
 use app\services\ArtifactService;
 use app\services\JobLaunchService;
+use app\services\WorkflowAccessChecker;
 use app\controllers\traits\TeamScopingTrait;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
@@ -277,20 +278,23 @@ class JobController extends BaseController
         );
     }
 
+    /**
+     * A job follows its template's project. A job without a template (the
+     * placeholder of a workflow approval step, or the history of a purged
+     * template) is not global: see WorkflowAccessChecker::canAccessJob().
+     */
     private function requireJobView(Job $job): void
     {
-        $projectId = $job->jobTemplate->project_id ?? null;
         $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $projectId)) {
+        if ($userId === null || !$this->workflowChecker()->canAccessJob($userId, $job, false)) {
             throw new ForbiddenHttpException('You do not have access to this resource.');
         }
     }
 
     private function requireJobOperate(Job $job): void
     {
-        $projectId = $job->jobTemplate->project_id ?? null;
         $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $projectId)) {
+        if ($userId === null || !$this->workflowChecker()->canAccessJob($userId, $job, true)) {
             throw new ForbiddenHttpException('You do not have permission to modify this resource.');
         }
     }

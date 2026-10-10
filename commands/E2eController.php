@@ -51,13 +51,21 @@ class E2eController extends Controller
     }
 
     /**
-     * Remove all E2E test data (entities prefixed with "e2e-").
+     * Remove all E2E test data: entities prefixed with "e2e-", the e2e users
+     * and everything they created. Exits non-zero when anything is left behind.
      */
     public function actionTeardown(): int
     {
         $this->stdout("Tearing down E2E test data...\n");
 
-        $this->createTeardownHelper()->teardownAll();
+        $problems = $this->createTeardownHelper()->teardownAll();
+        if ($problems !== []) {
+            foreach ($problems as $problem) {
+                $this->stderr("  {$problem}\n");
+            }
+            $this->stderr('E2E teardown incomplete: ' . count($problems) . " problem(s), see above.\n");
+            return ExitCode::UNSPECIFIED_ERROR;
+        }
 
         $this->stdout("E2E teardown complete.\n");
         return ExitCode::OK;
@@ -188,9 +196,11 @@ class E2eController extends Controller
         (new E2eWorkflowPausedSeeder($logger))->seed($userId, $templateId);
         (new E2eSurveyTemplateSeeder($logger))->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
         (new E2eTeamScopingSeeder($logger))->seed($userId, $runnerGroupId);
+        (new E2eWorkflowScopingSeeder($logger))->seed($userId);
         (new E2eCustomRoleSeeder($logger))->seed(self::PREFIX);
         (new E2eLdapUserSeeder($logger))->seed(self::PREFIX);
         (new E2eTotpUserSeeder($logger))->seed(self::PREFIX);
+        (new E2eReferencedUserSeeder($logger))->seed();
         (new E2ePaginationSeeder($logger))->seed($userId);
         (new E2eSoftDeletedTemplateSeeder($logger))->seed($userId, $inventoryId, $runnerGroupId);
         (new E2eRunnerRegistrationSeeder($logger))->seed($userId);
@@ -583,7 +593,11 @@ class E2eController extends Controller
         $seeder->seed($userId, $templateId);
     }
 
-    private function createTeardownHelper(): E2eTeardownHelper
+    /**
+     * The helper actionTeardown() runs. Protected so a test can run the
+     * action without deleting anything.
+     */
+    protected function createTeardownHelper(): E2eTeardownHelper
     {
         return new E2eTeardownHelper(self::PREFIX, function (string $msg): void {
             $this->stdout($msg);

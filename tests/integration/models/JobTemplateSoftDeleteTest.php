@@ -72,4 +72,33 @@ class JobTemplateSoftDeleteTest extends DbTestCase
         $this->assertSame($tpl->id, $job->jobTemplate->id);
         $this->assertTrue($job->jobTemplate->isDeleted());
     }
+
+    /**
+     * Regression: a soft-deleted template kept its trigger token and whom it
+     * runs as. Its page answers 404, so nobody could revoke the token, and
+     * the foreign key on trigger_token_created_by kept the user who
+     * generated it from being deleted.
+     */
+    public function testSoftDeleteRemovesTheTriggerTokenSoItsGeneratorCanBeDeleted(): void
+    {
+        $owner = $this->createUser('jt_soft_owner');
+        $generator = $this->createUser('jt_soft_generator');
+        $tpl = $this->createJobTemplate(
+            $this->createProject($owner->id)->id,
+            $this->createInventory($owner->id)->id,
+            $this->createRunnerGroup($owner->id)->id,
+            $owner->id
+        );
+        $raw = $tpl->generateTriggerToken($generator->id);
+
+        $this->assertTrue($tpl->softDelete());
+
+        $stored = JobTemplate::findWithDeleted()->where(['id' => $tpl->id])->one();
+        $this->assertInstanceOf(JobTemplate::class, $stored);
+        $this->assertNotNull($stored->deleted_at);
+        $this->assertNull($stored->trigger_token);
+        $this->assertNull($stored->trigger_token_created_by);
+        $this->assertNull(JobTemplate::findByTriggerToken($raw));
+        $this->assertSame(1, $generator->delete(), 'nothing else refers to the generator');
+    }
 }

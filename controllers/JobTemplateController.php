@@ -11,6 +11,7 @@ use app\models\Inventory;
 use app\models\JobTemplate;
 use app\models\Project;
 use app\models\RunnerGroup;
+use app\models\User;
 use app\services\JobLaunchService;
 use app\services\LintService;
 use app\controllers\traits\TeamScopingTrait;
@@ -118,7 +119,24 @@ class JobTemplateController extends BaseController
             'model' => $model,
             'attachedCredentials' => $this->credentialService()->describe($model),
             'warnings' => JobTemplateWarnings::forTemplate($model),
+            // Only users who may change the template see its trigger card
+            // and whom the trigger runs as.
+            'canChange' => $this->mayChange($model),
         ]);
+    }
+
+    /**
+     * Whether the user may change the template, as generating or revoking
+     * its trigger token needs: job-template.update (superadmins hold every
+     * permission, as in the access rules) and operator access to its project.
+     */
+    private function mayChange(JobTemplate $model): bool
+    {
+        $identity = \Yii::$app->user->identity;
+        $superadmin = $identity instanceof User && (bool)$identity->is_superadmin;
+
+        return ($superadmin || \Yii::$app->user->can('job-template.update'))
+            && $this->checker()->canOperateChildResource((int)$this->currentUserId(), $model->project_id);
     }
 
     public function actionCreate(?int $project_id = null, ?string $playbook = null): Response|string
@@ -229,7 +247,8 @@ class JobTemplateController extends BaseController
      * Duplicates a template 1:1 — all config fields, the full credential
      * attachment list (primary + pivot), and survey_fields — under a new
      * name "<source> (copy)". Stale and security-sensitive fields are
-     * stripped (trigger_token, lint_output/lint_at/lint_exit_code).
+     * stripped (trigger_token and its trigger_token_created_by,
+     * lint_output/lint_at/lint_exit_code).
      *
      * Redirects straight to /job-template/update so the operator can
      * adjust the name and any other fields before committing.
@@ -252,6 +271,9 @@ class JobTemplateController extends BaseController
                 'created_at',
                 'updated_at',
                 'trigger_token',
+                // The clone has no token; a copied generator would also
+                // keep that user from being deleted (foreign key).
+                'trigger_token_created_by',
                 'lint_output',
                 'lint_at',
                 'lint_exit_code',
@@ -344,7 +366,7 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        $rawToken = $model->generateTriggerToken();
+        $rawToken = $model->generateTriggerToken((int)\Yii::$app->user->id);
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED,
             'job_template',

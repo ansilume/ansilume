@@ -14,6 +14,11 @@ use yii\db\Connection;
  * All methods accept an AnalyticsQuery that has already been validated
  * and had defaults applied. Results are returned as plain arrays suitable
  * for JSON serialization or CSV export.
+ *
+ * Team scoping: every report counts only what AnalyticsQuery::$scopeUserId
+ * may see — jobs of visible job templates, workflows whose every job step is
+ * visible, approval requests of visible jobs and workflows. Admins and
+ * installations without team-restricted projects get unfiltered reports.
  */
 class AnalyticsService extends Component
 {
@@ -336,15 +341,8 @@ class AnalyticsService extends Component
     {
         $db = $this->getDb();
         $params = [];
-        $conditions = ['1=1'];
-        if ($query->date_from !== null) {
-            $conditions[] = 'created_at >= :date_from';
-            $params[':date_from'] = $query->dateFromTimestamp;
-        }
-        if ($query->date_to !== null) {
-            $conditions[] = 'created_at <= :date_to';
-            $params[':date_to'] = $query->dateToTimestamp;
-        }
+        $scope = $this->workflowAccess()->buildWorkflowTemplateFilter($query->scopeUserId, 'workflow_template_id');
+        $conditions = $this->rangeConditions($query, 'created_at', $scope, $params);
         if ($query->user_id !== null) {
             $conditions[] = 'launched_by = :user_id';
             $params[':user_id'] = $query->user_id;
@@ -392,15 +390,8 @@ class AnalyticsService extends Component
     {
         $db = $this->getDb();
         $params = [];
-        $conditions = ['1=1'];
-        if ($query->date_from !== null) {
-            $conditions[] = 'wj.created_at >= :date_from';
-            $params[':date_from'] = $query->dateFromTimestamp;
-        }
-        if ($query->date_to !== null) {
-            $conditions[] = 'wj.created_at <= :date_to';
-            $params[':date_to'] = $query->dateToTimestamp;
-        }
+        $scope = $this->workflowAccess()->buildWorkflowTemplateFilter($query->scopeUserId, 'wj.workflow_template_id');
+        $conditions = $this->rangeConditions($query, 'wj.created_at', $scope, $params);
 
         $rows = $db->createCommand(
             'SELECT wj.workflow_template_id AS template_id,'
@@ -447,15 +438,8 @@ class AnalyticsService extends Component
     {
         $db = $this->getDb();
         $params = [];
-        $conditions = ['1=1'];
-        if ($query->date_from !== null) {
-            $conditions[] = 'requested_at >= :date_from';
-            $params[':date_from'] = $query->dateFromTimestamp;
-        }
-        if ($query->date_to !== null) {
-            $conditions[] = 'requested_at <= :date_to';
-            $params[':date_to'] = $query->dateToTimestamp;
-        }
+        $scope = $this->workflowAccess()->buildApprovalRequestFilter($query->scopeUserId, 'job_id');
+        $conditions = $this->rangeConditions($query, 'requested_at', $scope, $params);
 
         $row = $db->createCommand(
             'SELECT COUNT(*) AS total,'
@@ -548,17 +532,10 @@ class AnalyticsService extends Component
     private function buildWhere(AnalyticsQuery $query, string $jobAlias = ''): array
     {
         $prefix = $jobAlias !== '' ? $jobAlias . '.' : '';
-        $conditions = ['1=1'];
         $params = [];
+        $scope = $this->projectAccess()->buildJobFilter($query->scopeUserId, $prefix . 'job_template_id');
+        $conditions = $this->rangeConditions($query, $prefix . 'created_at', $scope, $params);
 
-        if ($query->date_from !== null) {
-            $conditions[] = $prefix . 'created_at >= :date_from';
-            $params[':date_from'] = $query->dateFromTimestamp;
-        }
-        if ($query->date_to !== null) {
-            $conditions[] = $prefix . 'created_at <= :date_to';
-            $params[':date_to'] = $query->dateToTimestamp;
-        }
         if ($query->project_id !== null) {
             $conditions[] = $prefix . 'job_template_id IN ('
                 . 'SELECT id FROM {{%job_template}} WHERE project_id = :project_id)';
@@ -585,6 +562,47 @@ class AnalyticsService extends Component
             'sql' => implode(' AND ', $conditions),
             'params' => $params,
         ];
+    }
+
+    /**
+     * The date range on $timeColumn, then the team scope ($scope as an access
+     * checker builds it; null: unrestricted). The scope's placeholders are
+     * bound into $params, numbered after those already there.
+     *
+     * @param array<int|string, mixed>|null $scope
+     * @param array<string, mixed> $params
+     * @return list<string>
+     */
+    private function rangeConditions(AnalyticsQuery $query, string $timeColumn, ?array $scope, array &$params): array
+    {
+        $conditions = ['1=1'];
+        if ($query->date_from !== null) {
+            $conditions[] = $timeColumn . ' >= :date_from';
+            $params[':date_from'] = $query->dateFromTimestamp;
+        }
+        if ($query->date_to !== null) {
+            $conditions[] = $timeColumn . ' <= :date_to';
+            $params[':date_to'] = $query->dateToTimestamp;
+        }
+        if ($scope !== null) {
+            $conditions[] = $this->getDb()->getQueryBuilder()->buildCondition($scope, $params);
+        }
+
+        return $conditions;
+    }
+
+    private function projectAccess(): ProjectAccessChecker
+    {
+        /** @var ProjectAccessChecker $checker */
+        $checker = \Yii::$app->get('projectAccessChecker');
+        return $checker;
+    }
+
+    private function workflowAccess(): WorkflowAccessChecker
+    {
+        /** @var WorkflowAccessChecker $checker */
+        $checker = \Yii::$app->get('workflowAccessChecker');
+        return $checker;
     }
 
     private function getDb(): Connection

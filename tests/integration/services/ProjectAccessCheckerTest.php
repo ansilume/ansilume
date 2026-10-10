@@ -8,16 +8,20 @@ use app\models\Inventory;
 use app\models\Project;
 use app\models\TeamProject;
 use app\services\ProjectAccessChecker;
+use app\tests\integration\CountsQueries;
 use app\tests\integration\DbTestCase;
 
 /**
  * Integration tests for ProjectAccessChecker using real DB records.
  * Exercises resolveRole(), canView(), canOperate(), the query filters
  * (buildProjectFilter(), buildChildResourceFilter(), buildChildOperateFilter(),
- * buildJobFilter()) against actual team_project, team_member, and user rows.
+ * buildJobFilter(), templateIdSubquery()) and hasRestrictedProjects() against
+ * actual team_project, team_member, and user rows.
  */
 class ProjectAccessCheckerTest extends DbTestCase
 {
+    use CountsQueries;
+
     private ProjectAccessChecker $checker;
 
     protected function setUp(): void
@@ -113,6 +117,41 @@ class ProjectAccessCheckerTest extends DbTestCase
         // 'other' is NOT in the team
 
         $this->assertNull($this->checker->resolveRole($other->id, $project->id));
+    }
+
+    public function testSuperadminsAndRbacAdminsGetOperatorRoleOnARestrictedProjectWithoutTeamMembership(): void
+    {
+        $owner = $this->createUser('owner');
+        $projectId = $this->teamProjectId((int)$owner->id, (int)$this->createTeam($owner->id)->id, TeamProject::ROLE_VIEWER);
+        $superadmin = $this->createUser('superadmin');
+        $superadmin->is_superadmin = true;
+        $superadmin->save(false);
+        $admin = $this->createUser('admin');
+        $this->assignRole((int)$admin->id, 'admin');
+        $operator = $this->createUser('operator');
+        $this->assignRole((int)$operator->id, 'operator');
+
+        $this->assertSame(TeamProject::ROLE_OPERATOR, $this->checker->resolveRole((int)$superadmin->id, $projectId));
+        $this->assertSame(TeamProject::ROLE_OPERATOR, $this->checker->resolveRole((int)$admin->id, $projectId));
+        $this->assertNull($this->checker->resolveRole((int)$operator->id, $projectId), 'control: the project is restricted');
+    }
+
+    /**
+     * Regression: the RBAC admin lookup (several queries) came before the
+     * check whether the project is restricted at all, although every user
+     * gets the operator role on an open project.
+     */
+    public function testResolveRoleOnAnOpenProjectSkipsTheRbacLookup(): void
+    {
+        $owner = $this->createUser('owner');
+        $operator = $this->createUser('operator');
+        $this->assignRole((int)$operator->id, 'operator');
+        $projectId = (int)$this->createProject($owner->id)->id;
+        $this->assertSame(TeamProject::ROLE_OPERATOR, $this->checker->resolveRole((int)$operator->id, $projectId));
+
+        $queries = $this->queriesOf(fn () => $this->checker->resolveRole((int)$operator->id, $projectId));
+
+        $this->assertLessThanOrEqual(2, $queries, 'the user and the project restriction only');
     }
 
     // -------------------------------------------------------------------------
@@ -470,6 +509,98 @@ class ProjectAccessCheckerTest extends DbTestCase
         $this->assertNotContains($rows['foreign'], $view);
     }
 
+    // -------------------------------------------------------------------------
+    // hasRestrictedProjects() and the cost of the filters
+    // -------------------------------------------------------------------------
+
+    public function testHasRestrictedProjectsOnceATeamIsGivenAProject(): void
+    {
+        $owner = $this->createUser('owner');
+        $projectId = (int)$this->createProject($owner->id)->id;
+        $teamId = (int)$this->createTeam($owner->id)->id;
+        $this->assertFalse($this->checker->hasRestrictedProjects(), 'projects and teams alone restrict nothing');
+
+        $this->createTeamProject($teamId, $projectId, TeamProject::ROLE_VIEWER);
+
+        $this->assertTrue($this->checker->hasRestrictedProjects());
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function filterProvider(): array
+    {
+        return [
+            'project filter' => ['project'],
+            'child resource filter' => ['child'],
+            'child operate filter' => ['operate'],
+            'job filter' => ['job'],
+            'job template subquery' => ['templates'],
+        ];
+    }
+
+    /**
+     * Regression: the filters looked the user and their RBAC roles up before
+     * the team restriction, several queries per call that changed nothing on
+     * an installation without teams. Every approval vote paid them once per
+     * approver.
+     *
+     * @dataProvider filterProvider
+     */
+    public function testWithoutRestrictedProjectsAFilterCostsOnlyTheRestrictionLookup(string $filter): void
+    {
+        $this->assertFalse($this->checker->hasRestrictedProjects(), 'precondition');
+        $operator = $this->createUser('operator');
+        $this->assignRole((int)$operator->id, 'operator');
+        $operatorId = (int)$operator->id;
+        $this->assertNull($this->filterFor($filter, $operatorId));
+
+        $queries = $this->queriesOf(fn () => $this->filterFor($filter, $operatorId));
+
+        $this->assertLessThanOrEqual(1, $queries, 'the restricted-project lookup only');
+    }
+
+    /**
+     * @dataProvider filterProvider
+     */
+    public function testWithRestrictedProjectsAFilterIsNullForAnRbacAdminAndASuperadmin(string $filter): void
+    {
+        $owner = $this->createUser('owner');
+        $this->teamProjectId((int)$owner->id, (int)$this->createTeam($owner->id)->id, TeamProject::ROLE_VIEWER);
+        $admin = $this->createUser('admin');
+        $this->assignRole((int)$admin->id, 'admin');
+        $superadmin = $this->createUser('superadmin');
+        $superadmin->is_superadmin = true;
+        $superadmin->save(false);
+
+        $this->assertNull($this->filterFor($filter, (int)$admin->id));
+        $this->assertNull($this->filterFor($filter, (int)$superadmin->id));
+        $this->assertNotNull(
+            $this->filterFor($filter, (int)$this->createUser('regular')->id),
+            'control: a user without roles is restricted'
+        );
+    }
+
+    /**
+     * The ID of a user who no longer exists gets the restriction of a user
+     * without teams.
+     *
+     * @dataProvider filterProvider
+     */
+    public function testWithRestrictedProjectsAFilterRestrictsAnUnknownUserLikeAUserWithoutTeams(string $filter): void
+    {
+        $owner = $this->createUser('owner');
+        $this->teamProjectId((int)$owner->id, (int)$this->createTeam($owner->id)->id, TeamProject::ROLE_VIEWER);
+        $gone = $this->createUser('gone');
+        $goneId = (int)$gone->id;
+        $gone->delete();
+
+        $filterOfUnknown = $this->filterFor($filter, $goneId);
+
+        $this->assertNotNull($filterOfUnknown);
+        $this->assertEquals($this->filterFor($filter, (int)$this->createUser('regular')->id), $filterOfUnknown);
+    }
+
     /**
      * Inventories (nullable project_id) in every access situation, and an
      * operator-role user who is member of two teams.
@@ -527,6 +658,21 @@ class ProjectAccessCheckerTest extends DbTestCase
         $inventory->save(false);
 
         return (int)$inventory->id;
+    }
+
+    /**
+     * The filter or subquery named in filterProvider() for the user.
+     */
+    private function filterFor(string $filter, int $userId): mixed
+    {
+        return match ($filter) {
+            'project' => $this->checker->buildProjectFilter($userId),
+            'child' => $this->checker->buildChildResourceFilter($userId, 'project_id'),
+            'operate' => $this->checker->buildChildOperateFilter($userId, 'project_id'),
+            'job' => $this->checker->buildJobFilter($userId),
+            'templates' => $this->checker->templateIdSubquery($userId),
+            default => $this->fail("Unknown filter '{$filter}'."),
+        };
     }
 
     /**

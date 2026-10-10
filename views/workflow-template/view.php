@@ -4,30 +4,20 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\WorkflowTemplate $model */
+/** @var bool $canOperate operator access to the project of every job step */
+/** @var array<int, string> $jobTemplateOptions job templates the user may operate */
+/** @var array<int, string> $approvalRuleOptions */
+/** @var app\models\User|null $triggerUser whom the inbound trigger runs as; null without a token */
 
-use app\models\ApprovalRule;
-use app\models\JobTemplate;
 use app\models\WorkflowStep;
-use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->name;
 $steps = $model->steps;
-
-/** @var array<int, string> $jobTemplateOptions */
-$jobTemplateOptions = ArrayHelper::map(
-    JobTemplate::find()->orderBy('name')->all(),
-    'id',
-    'name'
-);
-
-/** @var array<int, string> $approvalRuleOptions */
-$approvalRuleOptions = ArrayHelper::map(
-    ApprovalRule::find()->orderBy('name')->all(),
-    'id',
-    'name'
-);
+// Changing the workflow needs the RBAC permission and operator access to
+// every job step's project; the controller refuses everything else.
+$canChange = $canOperate && Yii::$app->user->can('workflow-template.update');
 
 // Map of step_id => "#order name" so operators see a human-readable label
 // when picking on_success / on_failure / on_always targets.
@@ -40,17 +30,17 @@ foreach ($steps as $s) {
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2><?= Html::encode($this->title) ?></h2>
     <div>
-        <?php if (Yii::$app->user->can('workflow.launch')) : ?>
+        <?php if ($canOperate && Yii::$app->user->can('workflow.launch')) : ?>
             <form action="<?= \yii\helpers\Url::to(['launch', 'id' => $model->id]) ?>" method="post" style="display:inline"
                   onsubmit="return confirm('Launch this workflow?')">
                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
                 <button type="submit" class="btn btn-success btn-sm">Launch</button>
             </form>
         <?php endif; ?>
-        <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
+        <?php if ($canChange) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm']) ?>
         <?php endif; ?>
-        <?php if (Yii::$app->user->can('workflow-template.delete')) : ?>
+        <?php if ($canOperate && Yii::$app->user->can('workflow-template.delete')) : ?>
             <form action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" method="post" style="display:inline"
                   onsubmit="return confirm('Delete this workflow template?')">
                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
@@ -75,6 +65,12 @@ foreach ($steps as $s) {
             </tr>
         </table>
 
+        <?php if (!$canOperate) : ?>
+            <div class="alert alert-secondary small" id="wf-view-only-notice">
+                You may view this workflow. Changing or launching it needs operator access to the project of every job step.
+            </div>
+        <?php endif; ?>
+
         <h4>Steps</h4>
         <?php if (empty($steps)) : ?>
             <div class="text-muted mb-3">No steps defined yet.</div>
@@ -88,7 +84,7 @@ foreach ($steps as $s) {
                         <th>Target</th>
                         <th>On Success</th>
                         <th>On Failure</th>
-                        <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
+                        <?php if ($canChange) : ?>
                         <th class="text-nowrap">Actions</th>
                         <?php endif; ?>
                     </tr>
@@ -105,9 +101,14 @@ foreach ($steps as $s) {
                         <td><?= Html::encode($step->name) ?></td>
                         <td><span class="badge text-bg-secondary"><?= Html::encode(WorkflowStep::typeLabels()[$step->step_type] ?? $step->step_type) ?></span></td>
                         <td>
-                            <?php if ($step->job_template_id) : ?>
+                            <?php
+                            // Only the target of the step's type: steps saved by older
+                            // versions can carry another one, e.g. a job template on a
+                            // pause step, possibly of a project the user may not see.
+                            ?>
+                            <?php if ($step->step_type === WorkflowStep::TYPE_JOB && $step->job_template_id) : ?>
                                 <?= Html::a(Html::encode($step->jobTemplate?->name ?? '#' . $step->job_template_id), ['/job-template/view', 'id' => $step->job_template_id]) ?>
-                            <?php elseif ($step->approval_rule_id) : ?>
+                            <?php elseif ($step->step_type === WorkflowStep::TYPE_APPROVAL && $step->approval_rule_id) : ?>
                                 <?= Html::a(Html::encode($step->approvalRule?->name ?? '#' . $step->approval_rule_id), ['/approval-rule/view', 'id' => $step->approval_rule_id]) ?>
                             <?php else : ?>
                                 —
@@ -131,7 +132,7 @@ foreach ($steps as $s) {
                             echo '<span class="text-muted">→ next step</span>';
                         }
                         ?></td>
-                        <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
+                        <?php if ($canChange) : ?>
                         <td class="text-nowrap">
                             <?= Html::beginForm(['move-step', 'id' => $model->id], 'post', ['class' => 'd-inline']) ?>
                                 <?= Html::hiddenInput('step_id', (string)$step->id) ?>
@@ -170,7 +171,7 @@ foreach ($steps as $s) {
             </p>
         <?php endif; ?>
 
-        <?php if (Yii::$app->user->can('workflow-template.update')) : ?>
+        <?php if ($canChange) : ?>
             <h5 class="mt-4">Add Step</h5>
             <?php $step = new WorkflowStep(); ?>
             <?php $form = ActiveForm::begin([
@@ -296,7 +297,7 @@ foreach ($steps as $s) {
             </script>
         <?php endif; ?>
 
-        <?php if (\Yii::$app->user?->can('workflow-template.update')) : ?>
+        <?php if ($canChange) : ?>
         <div class="card mt-4">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <span>Inbound Trigger</span>
@@ -313,6 +314,22 @@ foreach ($steps as $s) {
                 <?php endif; ?>
             </div>
             <div class="card-body">
+                <?php if ($model->trigger_token) : ?>
+                    <?php
+                    $runsAs = $triggerUser?->username ?? ('#' . $model->getTriggerUserId());
+                    $runsAsReason = $model->trigger_token_created_by === null
+                        ? 'the workflow\'s creator, because this token was generated before Ansilume recorded who generated a token'
+                        : 'who generated this token';
+                    ?>
+                    <p class="small mb-3" id="wf-trigger-runs-as">
+                        Launches run as <strong><?= Html::encode($runsAs) ?></strong>
+                        <?php if ($triggerUser !== null && !$triggerUser->isActive()) : ?>
+                            <span class="badge text-bg-warning">disabled</span>
+                        <?php endif; ?>
+                        (<?= Html::encode($runsAsReason) ?>).
+                        A launch is refused unless this user is active and may launch the job template of every step.
+                    </p>
+                <?php endif; ?>
                 <?php $rawToken = \Yii::$app->session?->getFlash('trigger_token_raw'); ?>
                 <?php if ($rawToken) : ?>
                     <?php

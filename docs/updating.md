@@ -129,6 +129,408 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.8.0 or older: team scoping for workflows, approvals and triggers
+
+Team scoping now covers workflows, approval requests, analytics and the
+dashboard, and schedules, triggers and workflow steps check the user they run
+as. Admins, superadmins and installations whose projects are not assigned to
+any team see the same workflows, approvals and reports as before. Two changes
+apply to every installation: the checks of the user that schedules, triggers
+and workflow steps run as (see **Schedules and triggers of users who may not
+launch stop**), and dashboard panels that stay empty for users without the
+matching permission. Every installation should also review its trigger
+tokens, schedules and workflow steps (see **Review trigger tokens, schedules
+and workflow steps**).
+
+**Workflows belong to the projects of their job steps.** A workflow template
+has no project of its own. Seeing a workflow and its runs now needs view
+access to the project of every job step; changing, deleting, launching,
+resuming and canceling it, and generating or revoking its trigger token, need
+operator access to every one. Only job steps count: workflows with only
+approval and pause steps stay visible to everyone with the permission. Older
+versions could store a job template on approval and pause steps too; it
+counts for nothing, and the update removes it, as well as approval rules
+stored on job and pause steps; steps of another type keep both (see **Review
+trigger tokens, schedules and workflow steps**). A deleted job template keeps
+counting with its
+project, but a job step whose job template was purged, as happens when its
+project is deleted, fails closed: only admins see that workflow until one of
+them removes the step. A workflow that combines projects of different teams
+is therefore hidden from members who cannot see all of them; split it, or
+give the team access to every project it uses, after checking that each of
+its steps belongs there (see **Review trigger tokens, schedules and workflow
+steps**). Users who may see but not
+change a workflow get a notice on its page instead of the edit and launch
+buttons, and new job steps offer only the job templates the user may operate.
+
+**Workflow runs check every job step when it starts.** A run's job steps run
+as the user who launched it; for a trigger, the user the trigger runs as.
+When a job step is about to start, that user must still be active, hold
+`workflow.launch` and have operator access to the step's project. Otherwise
+the step fails without a job, the run's page says why (`steps[].error` in the
+API), the refusal is audited as `workflow.step.denied`, and the workflow fails
+without following its branches. This also applies to runs that were in flight
+during the update: a run launched by someone who may not operate every step's
+project fails at the next such step. Launches are refused up front for the
+same reasons (`403`, audited as `workflow.launch.denied` with the job
+templates concerned); the refusal names those job templates only to users who
+may see the workflow. A step whose job template or approval rule no longer
+exists fails the workflow as well; a missing approval rule used to leave the
+run running for good.
+
+**Approvals follow the job.** An approval request is visible to users who may
+view the job's project; the request of a workflow approval step follows its
+workflow. Deciding needs `approval.decide`, a place on the rule's approver
+list, and that view access. Approvers without it no longer count toward the
+rule's threshold, so check the approver lists of your approval rules: a
+request whose rule has fewer approvers with access than it requires is
+rejected at the first vote, and one with none stays pending until an approver
+with access is added to the rule and decides it. A rule timeout does not end
+it either, because the stock deployments do not run the timeout check
+(`php yii approval/check-timeouts`). In the web UI, deciding on a request
+that is already resolved, or voting twice, shows a message instead of an
+error page.
+
+**Analytics and the dashboard are scoped.** Analytics reports, their CSV
+export and the analytics API count only the jobs, workflow runs and approval
+requests the user may see; the project and template filters of the analytics
+page offer only visible ones. Every list and counter of the dashboard is
+scoped the same way, quick launch offers only templates and workflows the
+user may launch, and panels for a permission the user lacks stay empty, for
+example upcoming schedules without `job.launch`. Runner counts stay global.
+
+**Triggers run as the user who generated the token.** Until now a trigger
+launched as the template's creator, whoever had generated the token. A token
+generated now runs as the user who generates it, and every call checks that
+this user is active, holds `job.launch` (`workflow.launch` for workflows) and
+may operate the template's project (the project of every job step for
+workflows). Otherwise the call answers `403 {"error": "Launch refused."}` and
+is audited as `trigger.denied` (job templates) or `workflow.launch.denied`
+with source `trigger` (workflows). Tokens generated before the update keep
+running as the template's creator; review them as described below. The
+trigger card on the template page names the user a trigger runs as and says
+when the token predates the update; the API returns that user as
+`trigger_user_id` of the job or workflow template, next to
+`has_trigger_token`. Only users who may change the template see the card and
+get these two fields: `job-template.update` (`workflow-template.update` for
+workflows) and operator access to the template's project (the project of
+every job step), as generating a token needs. Team members whose team only
+views the project no longer see the card.
+
+**Schedules and triggers of users who may not launch stop.** These checks
+apply to installations without teams as well. A schedule launches only while
+its creator is active, holds `job.launch` and may operate the project of its
+job template. Otherwise it does not launch when it is due: every time,
+`schedule.launch.denied` is audited and the `schedule.failed_to_launch`
+notification is sent. Triggers check the same for the user they run as, and
+workflow runs for the user who launched them (with `workflow.launch`).
+Schedules and trigger tokens of disabled users, or of users moved to a role
+without `job.launch`, therefore stop launching after the update. A schedule's
+creator cannot be changed, not even by editing the schedule: re-enable the
+user, restore the permission, or recreate the schedule as a user who may
+launch the template. For a trigger, generate a new token as such a user. After
+the update, look in the audit log for `schedule.launch.denied`,
+`trigger.denied`, `workflow.launch.denied` with source `trigger` (refused
+workflow triggers) and `workflow.step.denied` (workflow runs that stopped at
+a job step).
+
+**Schedules use templates the user may operate.** Creating or editing a
+schedule needs operator access to the project of its job template, and the
+template dropdown lists only those templates. A template the user sees but
+may not operate is refused (`403`); an unknown, deleted or invisible one is
+reported as "The selected job template does not exist." (`422` in the API).
+The schedule page names the creator its jobs run as; the API returns it as
+`created_by`.
+
+**Review trigger tokens, schedules and workflow steps.** A token generated
+before the update by someone other than the template's creator still runs
+with the creator's rights, for example a team operator's token on a template
+an admin created. Until this release, web forms could also set a template's
+trigger token and creator and a schedule's creator (see **Fixes that change
+behaviour**). Such tokens and schedules can keep launching after the update,
+and neither the trigger card nor the schedule page can show how they got
+there; the audit log can. After the update, run the following read-only
+queries with the database client of the `db` container, or with your own
+client for an external database:
+
+```bash
+docker compose exec db sh -c 'mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"'
+```
+
+The first two list every job template and workflow template whose trigger
+token predates the update:
+
+```sql
+-- Trigger tokens generated before the update, job templates
+SELECT t.id, t.name, t.created_by AS runs_as,
+  (SELECT c.user_id FROM audit_log c
+    WHERE c.action = 'job-template.created' AND c.object_type = 'job_template'
+      AND c.object_id = t.id
+    ORDER BY c.id LIMIT 1) AS created_entry_by,
+  (SELECT IF(g.action = 'job-template.trigger-token.generated', g.user_id, NULL)
+     FROM audit_log g
+    WHERE g.action IN ('job-template.trigger-token.generated',
+                       'job-template.trigger-token.revoked')
+      AND g.object_type = 'job_template' AND g.object_id = t.id
+    ORDER BY g.id DESC LIMIT 1) AS token_generated_by,
+  (SELECT COUNT(*) FROM audit_log u
+    WHERE u.action = 'job-template.updated' AND u.object_type = 'job_template'
+      AND u.object_id = t.id AND u.user_id <> t.created_by) AS edits_by_others
+FROM job_template t
+WHERE t.trigger_token IS NOT NULL AND t.trigger_token_created_by IS NULL
+  AND t.deleted_at IS NULL
+ORDER BY t.id;
+
+-- The same for workflow templates
+SELECT t.id, t.name, t.created_by AS runs_as,
+  (SELECT c.user_id FROM audit_log c
+    WHERE c.action = 'workflow-template.created'
+      AND c.object_type = 'workflow_template' AND c.object_id = t.id
+    ORDER BY c.id LIMIT 1) AS created_entry_by,
+  (SELECT IF(g.action = 'workflow-template.trigger-token.generated', g.user_id, NULL)
+     FROM audit_log g
+    WHERE g.action IN ('workflow-template.trigger-token.generated',
+                       'workflow-template.trigger-token.revoked')
+      AND g.object_type = 'workflow_template' AND g.object_id = t.id
+    ORDER BY g.id DESC LIMIT 1) AS token_generated_by,
+  (SELECT COUNT(*) FROM audit_log u
+    WHERE u.action = 'workflow-template.updated'
+      AND u.object_type = 'workflow_template'
+      AND u.object_id = t.id AND u.user_id <> t.created_by) AS edits_by_others
+FROM workflow_template t
+WHERE t.trigger_token IS NOT NULL AND t.trigger_token_created_by IS NULL
+  AND t.deleted_at IS NULL
+ORDER BY t.id;
+```
+
+- `runs_as`: the template's creator, whom the trigger runs as.
+- `created_entry_by`: who created the template, from its
+  `job-template.created` or `workflow-template.created` entry. Empty for
+  templates without one, such as the selftest and demo templates that
+  Ansilume seeds itself.
+- `token_generated_by`: who generated the current token, from the newest
+  `job-template.trigger-token.generated` or
+  `workflow-template.trigger-token.generated` entry, unless a
+  `*.trigger-token.revoked` entry follows it. Empty when there is no such
+  entry: the token was not generated on the template page.
+- `edits_by_others`: the number of `job-template.updated` or
+  `workflow-template.updated` entries by users other than `runs_as`.
+
+Revoke every token in these lists on the template page, generate a new one as
+the user the trigger should run as, and give the new URL to the system that
+calls the trigger; the old URL stops working. A new token runs as the user who
+generated it and is checked on every call. If you keep a token, keep only one
+whose `created_entry_by` and `token_generated_by` both equal `runs_as` and
+whose `edits_by_others` is 0: only then does the audit log show that the
+template's creator generated it and nobody else changed the template.
+
+Schedules run as their creator. The third query lists the schedules whose
+creator is not the user of their `schedule.created` entry (or that have
+none), and those that other users edited (`schedule.updated` entries by users
+other than `runs_as`):
+
+```sql
+-- Schedules whose creator differs from their created entry, or that
+-- someone other than their creator edited
+SELECT * FROM (
+  SELECT s.id, s.name, s.enabled, s.created_by AS runs_as,
+    (SELECT c.user_id FROM audit_log c
+      WHERE c.action = 'schedule.created' AND c.object_type = 'schedule'
+        AND c.object_id = s.id
+      ORDER BY c.id LIMIT 1) AS created_entry_by,
+    (SELECT COUNT(*) FROM audit_log u
+      WHERE u.action = 'schedule.updated' AND u.object_type = 'schedule'
+        AND u.object_id = s.id AND u.user_id <> s.created_by) AS edits_by_others
+  FROM schedule s
+) r
+WHERE r.created_entry_by IS NULL OR r.created_entry_by <> r.runs_as
+   OR r.edits_by_others > 0
+ORDER BY r.id;
+```
+
+Recreate the schedules in this list as a user who may launch their job
+template, and delete the old ones; a schedule's creator cannot be changed.
+The audit entries do not say what an edit changed, so a schedule that only
+other users edited (`created_entry_by` equals `runs_as`) may stay if its job
+template and extra vars on the schedule page are what its creator would run.
+
+Until this release, the add-step form could also add a step to another
+workflow (see **Fixes that change behaviour**), and steps added on a
+workflow's page before the update have no audit entry (this release adds
+`workflow-template.step.added`). The fourth query lists the steps of every
+workflow with their job template, the template's project and when the step
+was created. Look closely at workflows that have a trigger token
+(`has_trigger` is 1) or that admins launch, and remove the steps nobody
+expects from their workflow:
+
+```sql
+-- Steps of every workflow, with their job template and its project
+SELECT w.id AS workflow_id, w.name AS workflow,
+  w.trigger_token IS NOT NULL AS has_trigger,
+  s.id AS step_id, s.step_order, s.name AS step, s.step_type,
+  s.job_template_id, j.name AS job_template,
+  j.project_id, p.name AS project,
+  s.approval_rule_id,
+  FROM_UNIXTIME(s.created_at) AS step_created
+FROM workflow_template w
+JOIN workflow_step s ON s.workflow_template_id = w.id
+LEFT JOIN job_template j ON j.id = s.job_template_id
+LEFT JOIN project p ON p.id = j.project_id
+WHERE w.deleted_at IS NULL
+ORDER BY w.id, s.step_order, s.id;
+```
+
+A `step_type` other than `job`, `approval` and `pause`, such as `1`, was
+stored by an older version, and runs now fail at that step (see **Fixes that
+change behaviour**). The type must match exactly: `JOB` or `job ` with a
+trailing space count as unknown too, although the database compares them as
+equal to `job`, so a plain `NOT IN` misses them. Such a step keeps its job
+template and approval rule, which tell what it was meant to be: remove it and
+add it again with that type and target. To list only such steps, add this
+condition to the query's `WHERE`; the cast compares the type exactly, as runs
+do:
+
+```sql
+  AND CAST(s.step_type AS BINARY) NOT IN ('job', 'approval', 'pause')
+```
+
+Without database access, revoke and regenerate every trigger token
+(`has_trigger_token` of the job and workflow templates in the API, which
+only callers who may change the template get, such as admins), compare the
+schedules' `created_by` with their `schedule.created` and `schedule.updated`
+entries on the Audit Log page or at
+`GET /api/v1/audit-logs?action=schedule.created` (needs `user.view`; 25
+entries a page, add `&page=2` and so on), where `user_id` is who acted and
+`object_id` the schedule, and check the steps of every workflow in `steps` of
+`GET /api/v1/workflow-templates/{id}`, where `step_type` must be exactly
+`job`, `approval` or `pause` (the workflow page shows a stored `Job` like
+`job`).
+
+**Fixes that change behaviour:**
+
+- Web forms no longer accept `created_by`, `trigger_token` or
+  `trigger_token_created_by` for job and workflow templates,
+  `workflow_template_id` for workflow steps, or `created_by` for schedules;
+  the API ignores them too. A crafted form could set them before, choosing
+  whom a template's trigger or a schedule ran as, or adding a step to another
+  workflow.
+- Jobs without a job template were visible to everyone. The placeholder job of
+  a workflow approval step now follows its workflow, and a job whose template
+  was purged with its project is visible only to admins.
+- `POST` and `PUT /api/v1/workflow-templates` stored steps without
+  validating them, with any job template ID, and a failure while writing
+  could leave a workflow without its steps. Steps are now validated first,
+  and the template and its steps are written in one transaction.
+- Older versions could store a workflow step whose type is none of job,
+  approval and pause: the API did not validate steps, and the add-step form
+  stored `true` from a JSON request as `1`. A run that reached such a step
+  stayed running until it was canceled. The add-step form now refuses such
+  types, and a run that reaches a step stored that way fails there with
+  `Not run: unknown step type "1".` (with the stored type). The steps query
+  above finds these steps; runs that reached one before the update stay
+  running until they are canceled.
+- `PUT /api/v1/schedules/{id}` stores the next run of a changed cron
+  expression; before, the schedule ran once more at the old time.
+- A cron expression with a negative step, such as `*/-5 * * * *`, is refused.
+  Older versions accepted it from the API, and evaluating it stopped the
+  scheduler at that schedule on every run, so the schedules after it did not
+  launch. The scheduler now skips such a schedule, and any schedule whose
+  values it cannot evaluate, and runs the others. To find them:
+  `SELECT id, name, cron_expression FROM schedule WHERE cron_expression LIKE '%/-%';`
+  and correct their expression on the schedule page.
+- Canceling a job that waits for approval, or a workflow run at an approval
+  step, leaves the approval request pending. Deciding it later changed the
+  canceled job: approving queued the job again, so it ran, and a workflow
+  took the approval step's success route after its failure route. A decision
+  now changes only a job that still waits for approval; the request itself
+  stays pending until someone decides it.
+- Deleting a user whom other records still refer to (jobs they launched, rows
+  they created, a trigger token they generated) ended in a server error, and
+  `DELETE /api/v1/users/{id}` removed the user's roles before it failed. The
+  web UI now shows a message instead, and the API answers `409`; the user and
+  their roles are kept. Disable such users instead of deleting them. Users
+  whose deletion through the API failed this way before the update lost their
+  roles, so their schedules and triggers stop launching after the update; give
+  them their role back, or replace their schedules and tokens. Deleting a user
+  in the web UI now also removes their role assignments, which used to stay
+  behind in the database; the update removes those left behind by earlier
+  deletions.
+
+**API contract change:**
+
+- `POST` and `PUT /api/v1/workflow-templates`: every step needs a `name`
+  (`422` instead of a generated "Step N"). A job step needs `job_template_id`,
+  an approval step `approval_rule_id`; `job_template_id` is ignored on approval
+  and pause steps. Job templates that do not exist for the caller answer
+  `422`, visible ones the caller may not operate `403`, both naming them in
+  `error.job_template_ids`. `steps` must be a list; `steps: []` removes all
+  steps, a missing or null `steps` keeps them. As before, replacing the steps
+  also deletes the step records of every earlier and running run of the
+  workflow, and a running run then stops advancing until it is canceled;
+  removing a step on the workflow page does the same for that step. Let runs
+  finish, or cancel them, before changing the steps.
+- Workflow templates, workflow jobs and approvals are team-scoped: lists and
+  `meta.total` leave out what the caller may not see, single resources answer
+  `403`. `POST /api/v1/workflow-templates/{id}/launch`,
+  `POST /api/v1/workflow-jobs/{id}/cancel` and `/resume` answer `403` without
+  operator access to the project of every job step, checked before the run's
+  state. A refused launch names the job templates in
+  `error.job_template_ids` only to callers who may see the workflow; others
+  get `You may not launch this workflow.` without them.
+- `GET /api/v1/workflow-jobs/{id}` adds `steps[].error`.
+- `POST /api/v1/approvals/{id}/approve` and `/reject` answer `403` for a
+  request the caller may not see, before checking the approver list. A
+  caller who is not an eligible approver, or who decides on a request that is
+  already resolved, now gets the usual error shape,
+  `403 {"error": {"message": "You are not eligible to decide on this request."}}`,
+  instead of `{"name": "Forbidden", "message": "...", "code": 0, "status": 403}`.
+  Clients that read the top-level `message` must read `error.message`.
+- The analytics endpoints count only what the caller may see.
+- `POST /api/v1/jobs/{id}/cancel` checks access before the job's state: a
+  caller without operator access gets `403`, not `409`, for a finished job.
+- `POST` and `PUT /api/v1/schedules`: `403` for a job template the caller sees
+  but may not operate, `422` "The selected job template does not exist." for
+  an unknown, deleted or invisible one; `PUT` also checks a new
+  `job_template_id`. `created_by` is ignored.
+- Schedules return `created_by`, the user they run as, and job templates
+  `created_by`. Job and workflow templates return `has_trigger_token` and
+  `trigger_user_id`, the user a trigger runs as (`null` without a token), only
+  to callers who may change the template: `job-template.update`
+  (`workflow-template.update`) and operator access to its project (the
+  project of every job step). For everyone else both keys are absent. The
+  token itself is never returned.
+- `DELETE /api/v1/users/{id}` answers `409` instead of `500` when other
+  records still refer to the user, and keeps the user's roles.
+- `PUT /api/v1/users/{id}` with `is_superadmin: false` on the only superadmin
+  answers `422` "Cannot demote the only superadmin." and changes nothing. The
+  web UI already refused this, and `DELETE` refuses to delete the only
+  superadmin.
+- `/trigger/fire`, `/trigger/{token}` and `/trigger/fire-workflow` answer
+  `403 {"error": "Launch refused."}` when the user the trigger runs as may not
+  launch. `extra_vars` of `/trigger/fire-workflow` reach the start step only,
+  as before; the documentation used to say every job step.
+- The OpenAPI spec now describes workflow templates, workflow jobs, approvals
+  and triggers with named schemas, and documents `POST /trigger/{token}`.
+
+**Database and runners.** Three migrations run when the app container starts.
+`m000077_000000_add_workflow_team_scoping` adds
+`workflow_job_step.error_message` and `trigger_token_created_by` to
+`job_template` and `workflow_template`.
+`m000078_000000_clear_step_targets_of_other_types` removes the job template
+of approval and pause steps and the approval rule of job and pause steps,
+comparing the type exactly; steps of another type keep both.
+`m000079_000000_remove_orphaned_role_assignments` removes the role
+assignments of users who no longer exist, which the web UI left behind when
+it deleted a user; they counted as users of the role and as approvers of
+role-based approval rules. It prints how many it removed, and nothing else
+needs to be done. Like `created_by`, `trigger_token_created_by` keeps a user
+from being deleted while a template's current trigger token is theirs;
+disable the user instead, or revoke the token first. Deleting a job or
+workflow template revokes its token. No runner update is needed. Dev
+checkout: after `git pull`, run `docker compose up -d --force-recreate` (or
+`docker compose restart app queue-worker`) so that `app` runs the migrations
+and the long-lived queue worker loads the new code.
+
 ## After updating from 2.7.x or older: vault scan, vault passwords on runners
 
 **Vault files are scanned.** Every sync now scans the project checkout for

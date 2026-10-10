@@ -14,7 +14,8 @@ use app\tests\integration\DbTestCase;
  * the web-specific components (`request`, `response`, `session`, `user`,
  * `urlManager`) that controller actions rely on. This class installs them
  * in setUp() and tears them down afterwards so each test starts with a
- * known, minimal web context.
+ * known, minimal web context, including an empty session: $_SESSION outlives
+ * a test in the PHPUnit process, so flashes would otherwise reach later tests.
  *
  * Subclasses typically:
  *  - call `loginAs($user)` to populate `Yii::$app->user->id`
@@ -41,6 +42,11 @@ abstract class WebControllerTestCase extends DbTestCase
         // Reset request method — previous tests in the same process may have
         // left $_SERVER['REQUEST_METHOD'] = 'POST' behind via setPost().
         $_SERVER['REQUEST_METHOD'] = 'GET';
+
+        // $_SESSION outlives a test in the PHPUnit process, and with it every
+        // flash an action set and nobody read: start without the session data
+        // of earlier tests.
+        $_SESSION = [];
 
         $this->installComponent('request', new \yii\web\Request([
             'enableCsrfValidation' => false,
@@ -69,6 +75,8 @@ abstract class WebControllerTestCase extends DbTestCase
 
     protected function tearDown(): void
     {
+        // Leave no session data, such as unread flashes, to later tests.
+        $_SESSION = [];
         foreach ($this->originalComponents as $id => $original) {
             // set(id, null) removes the component entirely; otherwise restore
             // the original definition/instance so later tests inherit the

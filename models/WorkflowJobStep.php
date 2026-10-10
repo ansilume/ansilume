@@ -16,6 +16,7 @@ use yii\db\ActiveRecord;
  * @property int|null    $started_at
  * @property int|null    $finished_at
  * @property string|null $output_vars      JSON
+ * @property string|null $error_message    why the step failed without a job, e.g. no access to its job template
  * @property int         $created_at
  * @property int         $updated_at
  *

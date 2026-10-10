@@ -6,6 +6,7 @@ declare(strict_types=1);
 /** @var app\models\JobTemplate $model */
 /** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
 /** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings from JobTemplateWarnings */
+/** @var bool $canChange job-template.update and operator access to the template's project */
 
 use app\components\LintVerdict;
 use app\helpers\TimeHelper;
@@ -102,7 +103,8 @@ $this->title = $model->name;
     </div>
     <?php endif; ?>
 
-    <?php if (\Yii::$app->user?->can('job-template.update')) : ?>
+    <?php // Whether a trigger exists and whom it runs as: only for users who may change the template.?>
+    <?php if ($canChange) : ?>
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -120,6 +122,20 @@ $this->title = $model->name;
                 <?php endif; ?>
             </div>
             <div class="card-body">
+                <?php if ($model->trigger_token) : ?>
+                    <?php
+                    $triggerUserId = $model->getTriggerUserId();
+                    $triggerUserName = \app\models\User::findOne($triggerUserId)->username ?? ('user #' . $triggerUserId);
+                    $triggerUserNote = $model->trigger_token_created_by === null
+                        ? 'the template\'s creator, because this token was generated before Ansilume recorded who generated '
+                            . 'tokens. Revoke it and generate a new one to run the trigger as yourself.'
+                        : 'who generated the token.';
+                    ?>
+                    <p class="mb-3" data-testid="trigger-runs-as">
+                        Runs as <strong><?= Html::encode($triggerUserName) ?></strong>, <?= Html::encode($triggerUserNote) ?>
+                        <br><small class="text-muted">Calls are refused while this user is disabled or may not launch this template.</small>
+                    </p>
+                <?php endif; ?>
                 <?php $rawToken = \Yii::$app->session?->getFlash('trigger_token_raw'); ?>
                 <?php if ($rawToken) : ?>
                     <?php
@@ -168,7 +184,7 @@ $this->title = $model->name;
                         <code>{"extra_vars": {}, "limit": "host1"}</code>
                     </p>
                 <?php else : ?>
-                    <p class="mb-0 text-muted">No trigger token configured. Generate one to allow external systems to launch this template via HTTP POST.</p>
+                    <p class="mb-0 text-muted" data-testid="trigger-not-configured">No trigger token configured. Generate one to allow external systems to launch this template via HTTP POST. The trigger will run as you.</p>
                 <?php endif; ?>
             </div>
         </div>

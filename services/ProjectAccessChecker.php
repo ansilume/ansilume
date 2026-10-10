@@ -8,6 +8,7 @@ use app\models\JobTemplate;
 use app\models\TeamProject;
 use app\models\User;
 use yii\base\Component;
+use yii\db\Query;
 
 /**
  * Evaluates whether a user has access to a project and with what level.
@@ -26,6 +27,9 @@ use yii\base\Component;
  *
  * Child resources (job templates, inventories, jobs, schedules) inherit
  * access from their parent project via project_id foreign keys.
+ *
+ * The team restriction is looked up before the user's RBAC roles, which
+ * cost several queries: on installations without teams it decides alone.
  */
 class ProjectAccessChecker extends Component
 {
@@ -90,11 +94,8 @@ class ProjectAccessChecker extends Component
             return null;
         }
 
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-
-        // Superadmins and RBAC admins get unrestricted operator access.
-        if ($user->is_superadmin || $auth->checkAccess($userId, 'admin')) {
+        // Superadmins get unrestricted operator access.
+        if ($user->is_superadmin) {
             return TeamProject::ROLE_OPERATOR;
         }
 
@@ -107,6 +108,14 @@ class ProjectAccessChecker extends Component
         // with an active account have full access. Controller-level RBAC rules
         // (accessRules) already gate which actions a user can invoke.
         if (!$hasAnyTeamAccess) {
+            return TeamProject::ROLE_OPERATOR;
+        }
+
+        /** @var \yii\rbac\ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+
+        // RBAC admins get unrestricted operator access.
+        if ($auth->checkAccess($userId, 'admin')) {
             return TeamProject::ROLE_OPERATOR;
         }
 
@@ -149,12 +158,12 @@ class ProjectAccessChecker extends Component
             return self::DENY_ALL;
         }
 
-        if ($this->isUnrestricted($userId)) {
+        $allRestrictedIds = $this->getRestrictedProjectIds();
+        if (empty($allRestrictedIds)) {
             return null;
         }
 
-        $allRestrictedIds = $this->getRestrictedProjectIds();
-        if (empty($allRestrictedIds)) {
+        if ($this->isUnrestricted($userId)) {
             return null;
         }
 
@@ -181,12 +190,12 @@ class ProjectAccessChecker extends Component
             return self::DENY_ALL;
         }
 
-        if ($this->isUnrestricted($userId)) {
+        $allRestrictedIds = $this->getRestrictedProjectIds();
+        if (empty($allRestrictedIds)) {
             return null;
         }
 
-        $allRestrictedIds = $this->getRestrictedProjectIds();
-        if (empty($allRestrictedIds)) {
+        if ($this->isUnrestricted($userId)) {
             return null;
         }
 
@@ -212,11 +221,11 @@ class ProjectAccessChecker extends Component
         if ($userId === null) {
             return self::DENY_ALL;
         }
-        if ($this->isUnrestricted($userId)) {
-            return null;
-        }
         $allRestrictedIds = $this->getRestrictedProjectIds();
         if (empty($allRestrictedIds)) {
+            return null;
+        }
+        if ($this->isUnrestricted($userId)) {
             return null;
         }
 
@@ -233,34 +242,60 @@ class ProjectAccessChecker extends Component
      * Uses a subquery to find accessible job_template IDs rather than
      * materializing all IDs in memory.
      *
+     * @param string $column the job_template_id column to filter, e.g. 'j.job_template_id'
      * @return array<int|string, mixed>|null
      */
-    public function buildJobFilter(?int $userId): ?array
+    public function buildJobFilter(?int $userId, string $column = 'job_template_id'): ?array
     {
         if ($userId === null) {
             return self::DENY_ALL;
+        }
+
+        $accessibleTemplateIds = $this->templateIdSubquery($userId);
+        if ($accessibleTemplateIds === null) {
+            return null;
+        }
+
+        return ['in', $column, $accessibleTemplateIds];
+    }
+
+    /**
+     * Subquery selecting the IDs of the job templates whose project the user
+     * may view, or operate when $operate is true. Soft-deleted templates count
+     * with their project, so their job history keeps its visibility.
+     *
+     * Returns null when no restriction applies: admins, superadmins, and
+     * installations without team-restricted projects.
+     */
+    public function templateIdSubquery(int $userId, bool $operate = false): ?Query
+    {
+        $allRestrictedIds = $this->getRestrictedProjectIds();
+        if (empty($allRestrictedIds)) {
+            return null;
         }
 
         if ($this->isUnrestricted($userId)) {
             return null;
         }
 
-        $allRestrictedIds = $this->getRestrictedProjectIds();
-        if (empty($allRestrictedIds)) {
-            return null;
-        }
+        $role = $operate ? TeamProject::ROLE_OPERATOR : null;
 
-        $teamProjectIds = $this->getAccessibleProjectIds($userId);
-
-        // Subquery: job_template IDs whose project is accessible
-        $accessibleTemplateIds = JobTemplate::find()
-            ->select('id')
+        return (new Query())
+            ->select('jt.id')
+            ->from(['jt' => JobTemplate::tableName()])
             ->where(['or',
-                ['not in', 'project_id', $allRestrictedIds],
-                ['in', 'project_id', $teamProjectIds],
+                ['not in', 'jt.project_id', $allRestrictedIds],
+                ['in', 'jt.project_id', $this->getAccessibleProjectIds($userId, $role)],
             ]);
+    }
 
-        return ['in', 'job_template_id', $accessibleTemplateIds];
+    /**
+     * Whether any project is restricted to a team. Without one, team scoping
+     * restricts no user.
+     */
+    public function hasRestrictedProjects(): bool
+    {
+        return $this->getRestrictedProjectIds() !== [];
     }
 
     /**

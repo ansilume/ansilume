@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\ApprovalRequest $model */
+/** @var bool $canDecide the user is an eligible approver of this pending request */
 
 use app\models\ApprovalRequest;
 use yii\helpers\Html;
@@ -46,7 +47,7 @@ $this->title = 'Approval Request #' . $model->id;
             </tr>
         </table>
 
-        <?php if (!$model->isResolved() && Yii::$app->user->can('approval.decide')) : ?>
+        <?php if ($canDecide) : ?>
         <div class="d-flex gap-2 mb-4">
             <?= Html::beginForm(['approve', 'id' => $model->id], 'post') ?>
                 <input type="text" name="comment" class="form-control form-control-sm d-inline-block" style="width:300px" placeholder="Comment (optional)">

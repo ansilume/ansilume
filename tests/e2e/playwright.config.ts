@@ -26,6 +26,7 @@ export default defineConfig({
 
     // Admin tests — full access to CRUD/feature specs.
     // Excludes auth setup, unauthenticated specs, and all rbac specs (those run under viewer/operator).
+    // The team scoping specs run here too; their beforeEach guard keeps the "admin …" tests.
     {
       name: 'admin',
       use: {
@@ -36,7 +37,13 @@ export default defineConfig({
       testIgnore: /auth\.setup\.ts|rbac\.spec\.ts|login\.spec\.ts|site\/forgot-password\.spec\.ts|site\/totp-login\.spec\.ts|trigger\/fire\.spec\.ts/,
     },
 
-    // Operator tests — only runs rbac specs whose title starts with "operator".
+    // Operator and viewer tests: the rbac specs and the team scoping specs
+    // (team-scoping/*.spec.ts), signed in as e2e-operator or e2e-viewer.
+    // Each of those files skips the tests that are not for the project's role
+    // in a beforeEach guard on the test title ("operator …", "viewer …").
+    // That guard is the only role filter: no `grep` here, because grep
+    // matches the whole title path, which starts with the project name, so a
+    // project named "operator" would match every test anyway.
     {
       name: 'operator',
       use: {
@@ -44,11 +51,8 @@ export default defineConfig({
         storageState: '.auth/operator.json',
       },
       dependencies: ['setup'],
-      testMatch: /rbac\.spec\.ts/,
-      grep: /\boperator\b/i,
+      testMatch: /rbac\.spec\.ts|team-scoping\/[^/]+\.spec\.ts/,
     },
-
-    // Viewer tests — only runs rbac specs whose title starts with "viewer" or "secrets".
     {
       name: 'viewer',
       use: {
@@ -56,8 +60,7 @@ export default defineConfig({
         storageState: '.auth/viewer.json',
       },
       dependencies: ['setup'],
-      testMatch: /rbac\.spec\.ts/,
-      grep: /\b(viewer|secrets)\b/i,
+      testMatch: /rbac\.spec\.ts|team-scoping\/[^/]+\.spec\.ts/,
     },
 
     // Unauthenticated tests — login, forgot password, public endpoints

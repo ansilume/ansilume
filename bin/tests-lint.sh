@@ -141,11 +141,16 @@ fi
 # =============================================================================
 section "Security checks"
 
+# The repository-wide scans below skip dependencies and runtime/, which is
+# git-ignored scratch space and never shipped: throwaway copies of classes
+# there (runtime/verify-*) are not part of the sources.
+SOURCE_SCAN_EXCLUDES=(--exclude-dir=vendor --exclude-dir=.composer --exclude-dir=runtime --exclude-dir=@runtime)
+
 check_pattern() {
     local label="$1"; shift
     local matches
     matches=$(grep -rn --include="*.php" \
-        --exclude-dir=vendor --exclude-dir=.composer \
+        "${SOURCE_SCAN_EXCLUDES[@]}" \
         "$@" . 2>/dev/null || true)
     if [[ -n "$matches" ]]; then
         fail "$label"
@@ -170,7 +175,7 @@ check_pattern "No die()/exit() with debug data"  -P '\b(die|exit)\s*\([^)]{10,}\
 
 # @ error suppression: only @stream_select is allowed (known PHP quirk)
 AT_SUPPRESS=$(grep -rn --include="*.php" \
-    --exclude-dir=vendor --exclude-dir=.composer \
+    "${SOURCE_SCAN_EXCLUDES[@]}" \
     -P '@[a-z_]+\(' . 2>/dev/null \
     | grep -v '@stream_select' \
     || true)
@@ -360,7 +365,7 @@ else
 fi
 
 MODEL_ISSUES=$(grep -rL "extends ActiveRecord\|extends Model\|extends \\\yii\|extends FormModel" models/ 2>/dev/null \
-    | grep -v "^Binary" || true)
+    | grep -v "^Binary" | grep -v '/traits/' || true)
 if [[ -z "$MODEL_ISSUES" ]]; then
     ok "All models extend an ActiveRecord/Model base"
 else
@@ -369,7 +374,7 @@ else
 fi
 
 TODOS=$(grep -rn --include="*.php" \
-    --exclude-dir=vendor --exclude-dir=.composer \
+    "${SOURCE_SCAN_EXCLUDES[@]}" \
     -P '\b(TODO|FIXME|HACK|XXX)\b' . 2>/dev/null || true)
 if [[ -z "$TODOS" ]]; then
     ok "No TODO/FIXME/HACK markers in source"

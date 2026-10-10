@@ -63,8 +63,12 @@ class JobTemplatesController extends BaseApiController
         ]);
         $page = $this->requestedPage();
 
+        /** @var JobTemplate[] $templates */
+        $templates = $dp->getModels();
+        $changeable = $this->changeableIds(array_map(static fn (JobTemplate $t): int => (int)$t->id, $templates));
+
         return $this->paginated(
-            array_map(fn ($t) => $this->serialize($t), $dp->getModels()),
+            array_map(fn (JobTemplate $t) => $this->serialize($t, isset($changeable[(int)$t->id])), $templates),
             (int)$dp->totalCount,
             $page,
             25
@@ -84,7 +88,7 @@ class JobTemplatesController extends BaseApiController
         if ($userId === null || !$this->checker()->canViewChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
         }
-        return $this->success($this->serialize($model));
+        return $this->success($this->serialize($model, $this->mayChange($model)));
     }
 
     /**
@@ -117,7 +121,7 @@ class JobTemplatesController extends BaseApiController
             return $this->error($this->firstError($model), 422);
         }
 
-        return $this->success($this->serialize($model), 201);
+        return $this->success($this->serialize($model, $this->mayChange($model)), 201);
     }
 
     /**
@@ -152,7 +156,7 @@ class JobTemplatesController extends BaseApiController
             return $this->error($this->firstError($model), 422);
         }
 
-        return $this->success($this->serialize($model));
+        return $this->success($this->serialize($model, $this->mayChange($model)));
     }
 
     /**
@@ -251,14 +255,20 @@ class JobTemplatesController extends BaseApiController
     }
 
     /**
-     * @return array<string, mixed>
+     * $withTrigger adds has_trigger_token and trigger_user_id, the user an
+     * inbound trigger launches as (who generated the token, or created_by
+     * for older tokens; null without a token). Only callers who may change
+     * the template get them, as only they see the trigger card on its page.
+     * The token and its hash are never returned.
+     *
+     * @return array{id: int, name: string, description: string|null, project_id: int, project_name: string|null, inventory_id: int, inventory_name: string|null, runner_group_id: int|null, credential_id: int|null, credential_ids: list<int>, credentials: list<array{id: int, name: string, credential_type: string, role: string}>, playbook: string, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, warnings: list<array{code: string, message: string, credential_ids: list<int>}>, created_by: int, created_at: int, updated_at: int, has_trigger_token?: bool, trigger_user_id?: int|null}
      */
-    private function serialize(JobTemplate $t): array
+    private function serialize(JobTemplate $t, bool $withTrigger): array
     {
         $credentials = $this->credentialService()->describe($t);
         $additional = array_filter($credentials, static fn (array $c): bool => $c['role'] === Credential::ROLE_ADDITIONAL);
 
-        return [
+        $data = [
             'id' => $t->id,
             'name' => $t->name,
             'description' => $t->description,
@@ -281,9 +291,50 @@ class JobTemplatesController extends BaseApiController
             'skip_tags' => $t->skip_tags,
             'has_survey' => $t->hasSurvey(),
             'warnings' => JobTemplateWarnings::forTemplate($t),
+            'created_by' => (int)$t->created_by,
             'created_at' => $t->created_at,
             'updated_at' => $t->updated_at,
         ];
+        if ($withTrigger) {
+            $data['has_trigger_token'] = $t->hasTriggerToken();
+            $data['trigger_user_id'] = $t->hasTriggerToken() ? $t->getTriggerUserId() : null;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Whether the caller may change the template.
+     */
+    private function mayChange(JobTemplate $t): bool
+    {
+        return isset($this->changeableIds([(int)$t->id])[(int)$t->id]);
+    }
+
+    /**
+     * The IDs of the given job templates the caller may change:
+     * job-template.update and operator access to the template's project, as
+     * an update or the template's trigger token needs. Decided for all of
+     * them at once, so a list costs no query per template.
+     *
+     * @param list<int> $templateIds
+     * @return array<int, true>
+     */
+    private function changeableIds(array $templateIds): array
+    {
+        if (!$this->userCan('job-template.update')) {
+            return [];
+        }
+        $filter = $this->checker()->buildChildOperateFilter($this->currentUserId(), 'job_template.project_id');
+        if ($filter !== null) {
+            $templateIds = array_map('intval', JobTemplate::find()
+                ->select('job_template.id')
+                ->andWhere(['job_template.id' => $templateIds])
+                ->andWhere($filter)
+                ->column());
+        }
+
+        return array_fill_keys($templateIds, true);
     }
 
     /**

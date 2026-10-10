@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
 use app\models\User;
+use app\services\UserDeletionService;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
 
@@ -168,6 +169,22 @@ class UsersController extends BaseApiController
     }
 
     /**
+     * Reject any attempt to switch auth_source after creation. Allowing a
+     * flip would either orphan the bcrypt hash (local→ldap) or expose a
+     * directory-managed account to local password login (ldap→local).
+     *
+     * @param array<string, mixed> $body
+     * @return array{error: array{message: string}}|null
+     */
+    private function rejectAuthSourceChange(User $model, array $body): ?array
+    {
+        if (array_key_exists('auth_source', $body) && (string)$body['auth_source'] !== $model->auth_source) {
+            return $this->error('auth_source is immutable once the user exists.', 422);
+        }
+        return null;
+    }
+
+    /**
      * Validate and apply a password change on an existing user. No-op when
      * the body has no password. Returns an error response array on rejection.
      *
@@ -191,6 +208,9 @@ class UsersController extends BaseApiController
     }
 
     /**
+     * Updates the user. Taking the superadmin flag from the only superadmin
+     * answers 422 and changes nothing.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionUpdate(int $id): array
@@ -204,17 +224,15 @@ class UsersController extends BaseApiController
         $model = $this->findModel($id);
         $body = (array)\Yii::$app->request->bodyParams;
 
-        // Reject any attempt to switch auth_source after creation. Allowing
-        // a flip would either orphan the bcrypt hash (local→ldap) or expose
-        // a directory-managed account to local password login (ldap→local).
-        if (array_key_exists('auth_source', $body)) {
-            $requested = (string)$body['auth_source'];
-            if ($requested !== $model->auth_source) {
-                return $this->error('auth_source is immutable once the user exists.', 422);
-            }
+        $err = $this->rejectAuthSourceChange($model, $body);
+        if ($err !== null) {
+            return $err;
         }
 
         $this->applyBody($model, $body);
+        if ($this->demotesTheOnlySuperadmin($model)) {
+            return $this->error('Cannot demote the only superadmin.', 422);
+        }
 
         $err = $this->applyPasswordOnUpdate($model, $body);
         if ($err !== null) {
@@ -234,9 +252,8 @@ class UsersController extends BaseApiController
             return $this->error('Failed to save user.', 422);
         }
 
-        if (array_key_exists('role', $body)) {
-            $this->assignRole($model, $body);
-        }
+        // Leaves the roles alone when the body names no role.
+        $this->assignRole($model, $body);
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_USER_UPDATED,
@@ -250,6 +267,9 @@ class UsersController extends BaseApiController
     }
 
     /**
+     * Deletes the user and their roles. A user whom other records still
+     * refer to answers 409 and stays, roles included.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionDelete(int $id): array
@@ -266,22 +286,16 @@ class UsersController extends BaseApiController
 
         $model = $this->findModel($id);
 
-        if ($model->is_superadmin) {
-            $otherSuperadmins = User::find()
-                ->where(['is_superadmin' => true])
-                ->andWhere(['!=', 'id', $id])
-                ->count();
-            if ((int)$otherSuperadmins === 0) {
-                return $this->error('Cannot delete the only superadmin.', 422);
-            }
+        if ($model->is_superadmin && !$this->hasOtherSuperadmin($model)) {
+            return $this->error('Cannot delete the only superadmin.', 422);
         }
 
         $username = $model->username;
-
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-        $auth->revokeAll((string)$model->id);
-        $model->delete();
+        /** @var UserDeletionService $deletion */
+        $deletion = \Yii::$app->get('userDeletionService');
+        if (!$deletion->delete($model)) {
+            return $this->error($deletion->refusalMessage($model), 409);
+        }
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_USER_DELETED,
@@ -292,6 +306,25 @@ class UsersController extends BaseApiController
         );
 
         return $this->success(['deleted' => true]);
+    }
+
+    /**
+     * Whether saving $model would take the superadmin flag from the only
+     * user who has it.
+     */
+    private function demotesTheOnlySuperadmin(User $model): bool
+    {
+        return (bool)$model->getOldAttribute('is_superadmin')
+            && !$model->is_superadmin
+            && !$this->hasOtherSuperadmin($model);
+    }
+
+    private function hasOtherSuperadmin(User $model): bool
+    {
+        return User::find()
+            ->where(['is_superadmin' => true])
+            ->andWhere(['!=', 'id', $model->id])
+            ->exists();
     }
 
     /**
