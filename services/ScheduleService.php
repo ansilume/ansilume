@@ -166,11 +166,14 @@ class ScheduleService extends Component
     }
 
     /**
-     * Launch the schedule's job template as the schedule's creator. Returns
-     * false when the creator may no longer launch it; the refusal is audited
-     * and reported like a failed launch.
+     * Launch the schedule's job template as the schedule's creator, with its
+     * extra vars and stored password answers (see ScheduleLaunchSecrets).
+     * Returns false when the creator may no longer launch it; the refusal is
+     * audited and reported like a failed launch.
      *
-     * @throws \RuntimeException when the template is gone or the launch fails
+     * @throws \RuntimeException when the template is gone, the stored answers
+     *     cannot be decrypted, the schedule moved to another template or was
+     *     deleted while its plain answers were sealed, or the launch fails
      */
     private function launchSchedule(Schedule $schedule): bool
     {
@@ -186,10 +189,7 @@ class ScheduleService extends Component
             return false;
         }
 
-        $overrides = [];
-        if (!empty($schedule->extra_vars)) {
-            $overrides['extra_vars'] = $schedule->extra_vars;
-        }
+        $overrides = (new ScheduleLaunchSecrets())->launchOverrides($schedule, $template);
 
         /** @var JobLaunchService $launcher */
         $launcher = \Yii::$app->get('jobLaunchService');

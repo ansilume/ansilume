@@ -8,6 +8,7 @@ use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\controllers\traits\TeamScopingTrait;
+use app\services\ScheduleSecrets;
 use app\services\ScheduleService;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
@@ -73,13 +74,14 @@ class ScheduleController extends BaseController
         if ($model->load((array)\Yii::$app->request->post())) {
             // Set in code only: the schedule launches its jobs as this user.
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
-            if ($this->saveSchedule($model)) {
+            $secrets = new ScheduleSecrets();
+            if ($this->saveSchedule($model, $secrets)) {
                 \Yii::$app->get('auditService')->log(
                     AuditLog::ACTION_SCHEDULE_CREATED,
                     'schedule',
                     $model->id,
                     null,
-                    ['name' => $model->name, 'cron' => $model->cron_expression]
+                    ['name' => $model->name, 'cron' => $model->cron_expression] + $secrets->auditContext()
                 );
                 $this->session()->setFlash('success', "Schedule \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
@@ -94,18 +96,26 @@ class ScheduleController extends BaseController
         $model = $this->findModel($id);
         $this->requireScheduleOperate($model);
 
-        if ($model->load((array)\Yii::$app->request->post()) && $this->saveSchedule($model)) {
+        if (!$model->load((array)\Yii::$app->request->post())) {
+            // The stored extra vars, with the placeholder for every password answer:
+            // submitted unchanged, they keep the stored answers.
+            $model->extra_vars = ScheduleSecrets::maskedExtraVars($model);
+            return $this->renderForm($model);
+        }
+        $secrets = new ScheduleSecrets();
+        if ($this->saveSchedule($model, $secrets)) {
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_SCHEDULE_UPDATED,
                 'schedule',
                 $model->id,
                 null,
-                ['name' => $model->name]
+                ['name' => $model->name] + $secrets->auditContext()
             );
             $this->session()->setFlash('success', "Schedule \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
 
+        // A rejected submission shows what was submitted: never a stored answer.
         return $this->renderForm($model);
     }
 
@@ -149,9 +159,13 @@ class ScheduleController extends BaseController
      * operate is forbidden, one they cannot see gets the same error as an
      * unknown one, so the form cannot probe for other teams' templates.
      *
+     * Password answers in the extra vars are sealed last (ScheduleSecrets),
+     * once the template is known to be one the user may use: their errors
+     * name the template's password fields.
+     *
      * @throws ForbiddenHttpException
      */
-    private function saveSchedule(Schedule $model): bool
+    private function saveSchedule(Schedule $model, ScheduleSecrets $secrets): bool
     {
         $access = $this->templateAccess($model);
         if ($access === ScheduleService::TEMPLATE_FORBIDDEN) {
@@ -165,8 +179,18 @@ class ScheduleController extends BaseController
             $model->addError('job_template_id', ScheduleService::TEMPLATE_MISSING_MESSAGE);
             return false;
         }
+        if (!$valid || $access !== ScheduleService::TEMPLATE_USABLE) {
+            return false;
+        }
 
-        return $valid && $model->save(false);
+        // The form always submits the extra vars.
+        $error = $secrets->prepare($model, true);
+        if ($error !== null) {
+            $model->addError('extra_vars', $error);
+            return false;
+        }
+
+        return $model->save(false);
     }
 
     /**

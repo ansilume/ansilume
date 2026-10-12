@@ -77,6 +77,56 @@ class SurveyFieldTest extends TestCase
         $this->assertFalse(SurveyField::fromArray(['name' => 'x'])->required);
     }
 
+    /**
+     * Regression: the API stored any JSON as survey_fields, and a list or an
+     * object as a value made fromArray() fail with "Array to string
+     * conversion" (a yii\base\ErrorException), so the edit and launch pages
+     * of such a template failed with a 500.
+     */
+    public function testFromArrayReadsListsAndObjectsAsMissingValues(): void
+    {
+        $f = SurveyField::fromArray([
+            'name' => ['a' => 1],
+            'label' => ['x'],
+            'type' => ['password'],
+            'default' => ['secret'],
+            'hint' => (object)[],
+            'options' => ['one', ['nested'], 2, true, null],
+        ]);
+
+        $this->assertSame('', $f->name);
+        $this->assertSame('', $f->label);
+        $this->assertSame(SurveyField::TYPE_TEXT, $f->type);
+        $this->assertSame('', $f->default);
+        $this->assertSame('', $f->hint);
+        $this->assertSame(['one', '2', '1'], $f->options, 'single values as text, in order');
+    }
+
+    public function testFromArrayCastsSingleValuesAsBefore(): void
+    {
+        $f = SurveyField::fromArray(['name' => 42, 'label' => 1.5, 'type' => 'integer', 'default' => 7, 'hint' => false]);
+
+        $this->assertSame('42', $f->name);
+        $this->assertSame('1.5', $f->label);
+        $this->assertSame('7', $f->default);
+        $this->assertSame('', $f->hint);
+    }
+
+    public function testFromArrayListsOptionsGivenAsAMap(): void
+    {
+        $this->assertSame(['a', 'b'], SurveyField::fromArray(['name' => 'x', 'options' => ['k1' => 'a', 'k2' => 'b']])->options);
+        $this->assertSame([], SurveyField::fromArray(['name' => 'x', 'options' => 'a,b'])->options);
+    }
+
+    public function testParseJsonOfMalformedFieldsDoesNotFail(): void
+    {
+        $fields = SurveyField::parseJson('[{"name":{"a":1},"type":"password","default":[1]}]');
+
+        $this->assertCount(1, $fields);
+        $this->assertSame('', $fields[0]->name);
+        $this->assertSame(SurveyField::TYPE_PASSWORD, $fields[0]->type);
+    }
+
     // ── toArray ───────────────────────────────────────────────────────────────
 
     public function testToArrayContainsAllKeys(): void

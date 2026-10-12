@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\tests\integration;
 
+use app\components\SurveyField;
+use app\components\SurveySecrets;
 use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Webhook;
@@ -20,6 +22,7 @@ use app\models\TeamProject;
 use app\models\User;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\JobLaunchService;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -31,6 +34,15 @@ use PHPUnit\Framework\TestCase;
  */
 abstract class DbTestCase extends TestCase
 {
+    /** The text field of the survey of createPasswordSurveyTemplate(). */
+    protected const SURVEY_TEXT_FIELD = 'app_env';
+
+    /** The password field of the survey of createPasswordSurveyTemplate(). */
+    protected const SURVEY_PASSWORD_FIELD = 'db_password';
+
+    /** The default password answer of createJobWithSealedSecrets(); a test value, not a secret. */
+    protected const SURVEY_PASSWORD_ANSWER = 'example-db-answer-4711';
+
     private \yii\db\Transaction $tx;
 
     protected function setUp(): void
@@ -279,6 +291,71 @@ abstract class DbTestCase extends TestCase
         $wt->updated_at = time();
         $wt->save(false);
         return $wt;
+    }
+
+    /**
+     * A job template, with a project, inventory and runner group of its own,
+     * whose survey has a required text field (SURVEY_TEXT_FIELD, default
+     * "staging") and a required password field (SURVEY_PASSWORD_FIELD, no
+     * default). A launch keeps the password answer secret.
+     */
+    protected function createPasswordSurveyTemplate(int $createdBy): JobTemplate
+    {
+        $template = $this->createJobTemplate(
+            (int)$this->createProject($createdBy)->id,
+            (int)$this->createInventory($createdBy)->id,
+            (int)$this->createRunnerGroup($createdBy)->id,
+            $createdBy
+        );
+        $template->survey_fields = (string)json_encode([
+            [
+                'name' => self::SURVEY_TEXT_FIELD,
+                'label' => 'Environment',
+                'type' => SurveyField::TYPE_TEXT,
+                'required' => true,
+                'default' => 'staging',
+                'options' => [],
+                'hint' => '',
+            ],
+            [
+                'name' => self::SURVEY_PASSWORD_FIELD,
+                'label' => 'Database password',
+                'type' => SurveyField::TYPE_PASSWORD,
+                'required' => true,
+                'default' => '',
+                'options' => [],
+                'hint' => '',
+            ],
+        ]);
+        $template->save(false);
+        return $template;
+    }
+
+    /**
+     * A job of $template as a launch with password answers stores it:
+     * extra_vars, and the extra_vars of the runner payload (built by the real
+     * JobLaunchService), hold $public plus SurveySecrets::PLACEHOLDER for each
+     * key of $secrets, and secret_extra_vars holds $secrets sealed. There is
+     * no execution command yet; the claim writes it.
+     *
+     * @param array<string, mixed> $secrets password answers by field name, any JSON type
+     * @param array<string, mixed> $public the other extra vars
+     */
+    protected function createJobWithSealedSecrets(
+        JobTemplate $template,
+        int $launchedBy,
+        array $secrets = [self::SURVEY_PASSWORD_FIELD => self::SURVEY_PASSWORD_ANSWER],
+        array $public = [self::SURVEY_TEXT_FIELD => 'staging'],
+        string $status = Job::STATUS_QUEUED
+    ): Job {
+        $split = SurveySecrets::split(array_merge($public, $secrets), array_map('strval', array_keys($secrets)));
+        $job = $this->createJob((int)$template->id, $launchedBy, $status);
+        $job->extra_vars = $split['public'] === [] ? null : (string)json_encode($split['public'], JSON_UNESCAPED_UNICODE);
+        $job->setSealedSecretExtraVars(SurveySecrets::seal($split['secret']));
+        $payload = (new \ReflectionMethod(JobLaunchService::class, 'buildRunnerPayload'))->invoke(new JobLaunchService(), $template, $job);
+        $job->runner_payload = is_string($payload) ? $payload : null;
+        $job->save(false);
+        return $job;
     }
 
     protected function createWorkflowStep(

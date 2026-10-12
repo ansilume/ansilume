@@ -22,7 +22,7 @@ The core platform is functional. The following capabilities are implemented and 
 - Runner groups with token-based runner registration
 - Cron-based schedules for automated job execution
 - Email notifications on job success/failure
-- Webhooks for external triggering
+- Inbound triggers (a template's trigger token, sent in a header) and outbound webhooks
 - REST API (v1) for projects, inventories, credentials, templates, jobs, schedules
 - Audit logging for security-relevant actions
 - Job artifacts and host summaries via Ansible callback plugin
@@ -110,7 +110,8 @@ Use consistent naming in code and UI.
 - **Runner**: background process that claims and executes jobs
 - **Runner Group**: logical grouping of runners with shared token authentication
 - **Schedule**: cron-based automatic execution of a job template
-- **Webhook**: external trigger endpoint for launching jobs
+- **Trigger**: inbound endpoint (`/trigger/...`) that launches a job or workflow template with the template's trigger token, sent in the `X-Trigger-Token` header
+- **Webhook**: outbound HTTP delivery of job events to an external URL
 - **Artifact**: output produced by a job (host summaries, structured data)
 - **Audit Log**: immutable record of meaningful user/system actions
 - **Notification**: email alert triggered by job completion (success/failure)
@@ -205,7 +206,7 @@ These are mandatory.
 
 1. Never commit secrets.
 2. Never log raw credentials, private keys, vault secrets, tokens, or decrypted secret material.
-3. Redact secrets in logs and UI via `CredentialService`.
+3. Redact secrets in logs and UI: never echo stored secrets back, and show password survey answers only as `$encrypted$` (`SurveySecrets::PLACEHOLDER`).
 4. Protect all state-changing actions with authorization checks.
 5. Use CSRF protection for browser forms.
 6. Validate and sanitize all user-controlled input.
@@ -213,6 +214,7 @@ These are mandatory.
 8. Avoid shell interpolation where possible.
 9. When shell execution is required, escape arguments safely and keep commands auditable.
 10. Runner processes must execute with the least privilege practical.
+11. Mark every parameter that carries a plaintext secret, a token, credentials, survey answers, the runner's claim payload or job output with `#[\SensitiveParameter]`, so stack traces in logs and error pages leave its value out. `tests/unit/SensitiveParametersTest.php` lists every mark (`MARKED`) and requires them per class (`MUST_BE_MARKED`): extend both when you add such a parameter.
 
 If a proposed implementation is convenient but weakens security, reject it and choose the safer path.
 
@@ -245,7 +247,7 @@ Core entities (all backed by ActiveRecord models and migrations):
 - `job_artifact`, `job_host_summary`, `job_task` — structured execution results
 - `runner_group`, `runner` — execution infrastructure
 - `schedule` — cron-based automation
-- `webhook` — external trigger endpoints
+- `webhook` — outbound event deliveries (inbound triggers use `trigger_token` on `job_template` and `workflow_template`)
 - `audit_log` — immutable action trail
 - `api_token` — API authentication
 
@@ -468,7 +470,7 @@ Business logic lives in services, not controllers, so workflows are reusable by:
 - Runner API endpoints (`controllers/api/runner/`)
 - CLI commands (`commands/`)
 - Cron schedules (`ScheduleService`)
-- Webhooks (`WebhookService`)
+- Inbound triggers (`TriggerController`)
 
 ### OpenAPI spec is mandatory
 

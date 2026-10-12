@@ -1,4 +1,4 @@
-import { expect, Page } from '@playwright/test';
+import { APIResponse, expect, Page } from '@playwright/test';
 import { FLASH_SUCCESS, FLASH_DANGER, FORM_SUBMIT } from './selectors';
 
 /**
@@ -46,6 +46,43 @@ export async function fillForm(page: Page, model: string, fields: Record<string,
       await el.fill(value);
     }
   }
+}
+
+/**
+ * POSTs `fields` to `path` with the session and CSRF token of the open page,
+ * as its forms do, and returns the response without following a redirect:
+ * for asserting the status code of a refused action.
+ */
+export async function postWithPageCsrf(page: Page, path: string, fields: Record<string, string> = {}): Promise<APIResponse> {
+  const csrf = await page.evaluate(() => ({
+    // The layout names only the token; the parameter is Yii's default.
+    param: document.querySelector('meta[name="csrf-param"]')?.getAttribute('content') || '_csrf',
+    token: document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '',
+  }));
+  expect(csrf.token, 'the page has a CSRF token').not.toBe('');
+  return page.request.post(path, { form: { [csrf.param]: csrf.token, ...fields }, maxRedirects: 0 });
+}
+
+/** The id of a job template, from the template filter of the job list. */
+export async function templateId(page: Page, name: string): Promise<string> {
+  await page.goto('/job/index');
+  const ids = await page.locator('select[name="template_id"] option').evaluateAll(
+    (options, wanted) => options
+      .filter((option) => (option.textContent ?? '').trim() === wanted)
+      .map((option) => (option as HTMLOptionElement).value),
+    name,
+  );
+  expect(ids, `exactly one job template named ${name}`).toHaveLength(1);
+  return ids[0];
+}
+
+/** The newest job of the template in `status`, from the job list. */
+export async function newestJobId(page: Page, template: string, status: string): Promise<string> {
+  await page.goto(`/job/index?template_id=${template}&status=${status}`);
+  const href = await page.locator('#page-content table.table tbody tr a').first().getAttribute('href');
+  const id = href?.match(/[?&]id=(\d+)/)?.[1];
+  expect(id, `a ${status} job of job template #${template}`).toBeTruthy();
+  return id ?? '';
 }
 
 /**

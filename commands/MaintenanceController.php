@@ -17,6 +17,9 @@ use yii\console\ExitCode;
  * frequently — it will be a no-op until at least one task is due.
  *
  *   * * * * * /path/to/php /app/yii maintenance/run
+ *
+ * `maintenance/reset-survey-secret-scrub` is for operators: it makes the
+ * encryption of stored survey password answers start over.
  */
 class MaintenanceController extends Controller
 {
@@ -41,6 +44,28 @@ class MaintenanceController extends Controller
             $detailLine = $details === [] ? '' : ' (' . implode(', ', $details) . ')';
             $this->stdout("[maintenance] ran: {$task}{$detailLine}\n");
         }
+
+        return ExitCode::OK;
+    }
+
+    /**
+     * Make the survey password scrub start over at the next maintenance run.
+     *
+     * The scrub encrypts the survey password answers that finished jobs
+     * stored in plaintext before the update. Its done mark and position are
+     * kept in the cache, so a database restore does not reset them. Run this
+     * after restoring a database backup taken after the update started: the
+     * restored migration table already lists m000081, so the migration does
+     * not reset the scrub either, and the restored jobs would keep their
+     * plaintext answers. Safe to run at any time: rows that are done are
+     * skipped.
+     */
+    public function actionResetSurveySecretScrub(): int
+    {
+        /** @var MaintenanceService $service */
+        $service = \Yii::$app->get('maintenanceService');
+        $service->resetSurveySecretScrub();
+        $this->stdout("The survey password scrub starts over at the next maintenance run.\n");
 
         return ExitCode::OK;
     }

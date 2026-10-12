@@ -54,7 +54,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Async, isolated execution** — jobs run on pull-based runner agents on their own network, never in the web request thread
 - **Live job output** — streaming stdout/stderr with ANSI colors, per-task progress, and full play recap per host
 - **Host summaries & task results** — structured results captured via a custom Ansible callback plugin
-- **Job templates** — reusable launch configs with extra vars, verbosity, become, forks, limits, tags, and survey fields for launch-time input
+- **Job templates** — reusable launch configs with extra vars, verbosity, become, forks, limits, tags, and survey fields for launch-time input; answers to password fields are stored encrypted and shown as `$encrypted$`
 - **Workflows** — chain multiple templates with on-success / on-failure / always branches and manual approval gates
 - **Pull-based runners** — lightweight agents self-register via bootstrap token; isolate execution from the control plane
 - **Runner groups** — logical grouping with per-group tokens, health tracking, and a selftest playbook
@@ -69,7 +69,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 
 ### Automation & integrations
 - **Scheduled jobs** — cron-based scheduling with next/last-run tracking and catch-up protection
-- **Inbound webhooks** — launch job templates and workflows from external systems with a per-template trigger token; a trigger runs as the user who generated its token and is refused once that user may no longer launch
+- **Inbound webhooks** — launch job templates and workflows from external systems with a per-template trigger token, sent in the `X-Trigger-Token` header and managed in the UI or the API; a trigger runs as the user who generated its token and is refused once that user may no longer launch
 - **Notifications v2** — email, Slack, Webhook, Telegram, and PagerDuty channels with a shared event catalog
 - **REST API (v1)** — every feature exposed as an API; the UI is just one client
 - **OpenAPI 3.1 spec** — canonical `web/openapi.yaml` + bundled Swagger UI at `:8088` for interactive exploration
@@ -143,6 +143,8 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 ## Security
 
 - Credentials are AES-256-CBC encrypted at rest — raw secrets never appear in logs or HTML
+- Answers to password survey fields are encrypted with the same key — pages, the API and the stored command line show `$encrypted$`; re-launches and schedules reuse them without showing them
+- Runners get password answers in a `0600` file instead of on the command line and mask them in job output (best effort); older runners get them inline with the verbosity capped so that Ansible does not print them. Each job's answers file, task records and static inventory live in a directory of the job that only the runner's user can open, removed when the job ends
 - TOTP secrets are AES-256-CBC encrypted at rest — the same key used for credentials
 - RBAC roles: `viewer` (read-only) · `operator` (launch + manage) · `admin` (full access) — plus custom roles
 - Team-based resource isolation: projects and all child resources (templates, inventories, jobs, schedules, approval requests, analytics) restricted to team members, workflows to members who may access the project of every job step; viewer role grants read-only access, operator role grants full CRUD + launch
@@ -152,7 +154,9 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 - Optional TOTP 2FA per user — disabling requires a current authenticator code or recovery code
 - Recovery codes are bcrypt-hashed; rate limiting (5 attempts, 5 min lockout) on TOTP verification
 - Ansible execution runs in isolated worker processes with auditable command construction
-- Runner tokens are stored as SHA-256 hashes — raw tokens are shown exactly once
+- Runner and trigger tokens are stored as SHA-256 hashes — raw tokens are shown exactly once
+- Trigger tokens travel in a request header; tokens in URLs, still accepted but deprecated, are masked in the nginx access log
+- The console log no longer records every SQL statement with its values, and log lines carry no session ID; the stack traces of errors leave out the arguments of calls (`#[\SensitiveParameter]`, and `zend.exception_ignore_args = On` in the images); `bin/diagnose` redacts secrets before printing
 - Artifact collection skips symlinks to prevent path traversal and file exfiltration
 - Fully offline capable — no CDN dependencies, no external asset loading; safe to deploy in air-gapped, classified, or compliance-restricted environments
 

@@ -38,7 +38,7 @@ class JobClaimService extends Component
                 return null;
             }
             try {
-                return $this->buildExecutionPayload($job);
+                return $this->buildExecutionPayload($job, $runner);
             } catch (CredentialResolutionException $e) {
                 /** @var JobCompletionService $completion */
                 $completion = \Yii::$app->get('jobCompletionService');
@@ -109,7 +109,7 @@ class JobClaimService extends Component
                     // vault settings whatever the project says.
                     'vault_password_source' => $this->resolveVaultPasswordSource($raw),
                     'runner_supports_vault_password_source' => $runner->supports(Runner::CAPABILITY_VAULT_PASSWORD_SOURCE),
-                ]
+                ] + JobClaimSecrets::auditContext($job, $raw, $runner)
             );
 
             return $job;
@@ -124,15 +124,29 @@ class JobClaimService extends Component
      * Resolves IDs to actual paths/content so the runner needs no DB access.
      * Also builds and stores the canonical execution command on the job record.
      *
+     * Password survey answers reach the runner as {@see JobClaimSecrets}
+     * describes: in `secret_extra_vars` for a runner that reports
+     * Runner::CAPABILITY_SECRET_EXTRA_VARS, inline in `command` (verbosity
+     * pinned) for any other runner or when $runner is null. The stored
+     * command shows the placeholder instead.
+     *
+     * @param Runner|null $runner the claiming runner
      * @throws CredentialResolutionException when a credential of the job was
-     *     deleted or cannot be decrypted; nothing is stored in that case
-     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, credentials: list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>, vault_password_source: 'ansilume'|'repository', command: array<int, string>}
+     *     deleted or cannot be decrypted, or its password answers cannot be
+     *     decrypted; nothing is stored in that case
+     * @return array{job_id: int, project_path: string, playbook_path: string, scm_type: string, scm_url: string|null, scm_branch: string|null, scm_credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, inventory_type: string, inventory_content: string|null, inventory_path: string|null, extra_vars: string|null, limit: string|null, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, tags: string|null, skip_tags: string|null, check_mode: bool, timeout_minutes: int, credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, credentials: list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>, vault_password_source: 'ansilume'|'repository', command: array<int, string>, secret_extra_vars?: array<string, mixed>}
      */
-    public function buildExecutionPayload(Job $job): array
+    public function buildExecutionPayload(Job $job, ?Runner $runner = null): array
     {
         $raw = $job->decodedRunnerPayload();
         // First, so a job with an unusable credential fails before anything else.
         $credentials = $this->resolveTemplateCredentials($raw);
+        $secrets = JobClaimSecrets::resolve(
+            $job,
+            isset($raw['extra_vars']) ? (string)$raw['extra_vars'] : null,
+            (int)($raw['verbosity'] ?? 0),
+            $runner
+        );
 
         $projectPath = $this->resolveProjectPath($raw);
         $playbookPath = rtrim($projectPath, '/') . '/' . ltrim((string)($raw['playbook'] ?? 'site.yml'), '/');
@@ -151,9 +165,9 @@ class JobClaimService extends Component
             'inventory_type' => $inventory['type'],
             'inventory_content' => $inventory['content'], // for static
             'inventory_path' => $inventory['path'], // for file-based
-            'extra_vars' => isset($raw['extra_vars']) ? (string)$raw['extra_vars'] : null,
+            'extra_vars' => $secrets['extra_vars'],
             'limit' => isset($raw['limit']) ? (string)$raw['limit'] : null,
-            'verbosity' => (int)($raw['verbosity'] ?? 0),
+            'verbosity' => $secrets['verbosity'],
             'forks' => (int)($raw['forks'] ?? 5),
             'become' => !empty($raw['become']),
             'become_method' => (string)($raw['become_method'] ?? 'sudo'),
@@ -170,9 +184,16 @@ class JobClaimService extends Component
         ];
 
         $builder = new RunnerCommandBuilder();
-        $payload['command'] = $builder->build($payload);
+        $payload['command'] = [...$secrets['prefix'], ...$builder->build($payload)];
 
-        $this->storeExecutionCommand($job, $payload['command']);
+        $this->storeExecutionCommand(
+            $job,
+            [...$secrets['prefix'], ...$builder->build(['extra_vars' => $secrets['stored_extra_vars']] + $payload)]
+        );
+
+        if ($secrets['secret_extra_vars'] !== null) {
+            $payload['secret_extra_vars'] = $secrets['secret_extra_vars'];
+        }
 
         return $payload;
     }

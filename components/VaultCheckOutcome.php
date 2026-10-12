@@ -37,8 +37,14 @@ final class VaultCheckOutcome
      * @param string|null $password the credential's usable password; null when there is none
      * @return Outcome
      */
-    public static function decide(VaultCheckRun $run, Project $project, array $relevant, ?Credential $credential, ?string $password, string $root): array
-    {
+    public static function decide(
+        VaultCheckRun $run,
+        Project $project,
+        array $relevant,
+        ?Credential $credential,
+        #[\SensitiveParameter] ?string $password,
+        string $root
+    ): array {
         if ($relevant === []) {
             return $project->vaultScanTruncated()
                 ? self::incomplete(JobTemplateVaultCheck::REASON_SCAN_LIMIT, [])
@@ -63,8 +69,14 @@ final class VaultCheckOutcome
      * @return Outcome
      * @throws VaultCheckTimeout
      */
-    private static function verify(VaultCheckRun $run, Project $project, array $relevant, string $secretKey, string $password, string $root): array
-    {
+    private static function verify(
+        VaultCheckRun $run,
+        Project $project,
+        array $relevant,
+        string $secretKey,
+        #[\SensitiveParameter] string $password,
+        string $root
+    ): array {
         $parts = self::partition($relevant, self::vaultIdMatchApplies($project));
         $unopened = $run->unopened($root, $parts['verify'], $secretKey, $password);
         if ($unopened === null) {

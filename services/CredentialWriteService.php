@@ -29,8 +29,11 @@ class CredentialWriteService extends Component
      * @param array<array-key, mixed> $secretInput submitted secrets
      * @param array<string, mixed> $auditContext
      */
-    public function create(Credential $credential, array $secretInput, array $auditContext = []): bool
-    {
+    public function create(
+        Credential $credential,
+        #[\SensitiveParameter] array $secretInput,
+        array $auditContext = []
+    ): bool {
         if (!$credential->validate()) {
             return false;
         }
@@ -53,8 +56,11 @@ class CredentialWriteService extends Component
      * @param array<array-key, mixed> $secretInput submitted secrets; blank keeps the stored ones
      * @param array<string, mixed> $auditContext
      */
-    public function update(Credential $credential, array $secretInput, array $auditContext = []): bool
-    {
+    public function update(
+        Credential $credential,
+        #[\SensitiveParameter] array $secretInput,
+        array $auditContext = []
+    ): bool {
         $previousType = (string)$credential->getOldAttribute('credential_type');
         if (!$credential->validate()) {
             return false;
@@ -157,7 +163,7 @@ class CredentialWriteService extends Component
      * @param array<string, string> $provided
      * @return array<string, mixed>
      */
-    private function buildSecrets(string $type, array $provided): array
+    private function buildSecrets(string $type, #[\SensitiveParameter] array $provided): array
     {
         if ($type !== Credential::TYPE_SSH_KEY) {
             return $provided;

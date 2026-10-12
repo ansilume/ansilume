@@ -85,8 +85,10 @@ docker compose exec app php yii setup/admin admin admin@example.com yourpassword
 ```
 
 > This uses the development compose file. Its runners mount the source tree,
-> so playbooks can read `.env` and change the code. In production, use the
-> prebuilt images or the [Ansible deploy role](deployment.md).
+> so playbooks can read `.env` and change the code, and `.env.example` sets
+> `YII_ENV=dev` and `YII_DEBUG=1`, which turn on the debug toolbar and verbose
+> error pages. In production, use the prebuilt images or the
+> [Ansible deploy role](deployment.md).
 
 ---
 
@@ -114,12 +116,13 @@ All configuration is via `.env`. Variables with no default are required; everyth
 
 | Variable | Description |
 |---|---|
-| `APP_ENV` / `YII_ENV` | Environment selector — `prod` or `dev` (default: `prod` in `.env.prod.example`) |
-| `YII_DEBUG` | Set to `1` to enable the Yii debug toolbar and verbose error pages; leave at `0` in production |
+| `YII_ENV` | Environment selector — `prod` or `dev` (`prod` when unset, and in `.env.prod.example`). `dev` turns on the Yii debug toolbar and gii and lets the `e2e/*` test commands run; production must use `prod` |
+| `APP_ENV` | Informational only: the compose files pass it to the containers and `bin/diagnose` shows it, but Ansilume does not read it. `YII_ENV` and `YII_DEBUG` decide how Ansilume runs |
+| `YII_DEBUG` | `1` (also `true`, `on` or `yes`) turns on verbose error pages with stack traces and the test-only web endpoints under `/e2e/`; anything else, `0` included, turns them off. Leave at `0` in production |
 | `APP_URL` | Externally reachable base URL (e.g. `https://ansilume.example.com` or `http://10.1.42.102:9911`). Drives absolute links in job notifications, password-reset mails, webhook payloads, and the OpenAPI spec. Without this, background-triggered notifications fall back to the internal docker hostname (`http://nginx/…`). |
 | `NGINX_PORT` | Host port for the web UI (default: `8080`) |
 | `COOKIE_VALIDATION_KEY` | Yii2 cookie signing key — at least 32 characters |
-| `APP_SECRET_KEY` | AES-256 key for credential encryption — at least 32 characters |
+| `APP_SECRET_KEY` | AES-256 key that encrypts credentials, TOTP secrets and password survey answers — at least 16 characters, 32 random characters recommended (`openssl rand -hex 32`); never change it once credentials, TOTP secrets or survey answers are stored, as that makes them unreadable |
 | `SESSION_COOKIE_SECURE` | Only send the session cookie over HTTPS (default: `true` in prod). Set to `false` if you deliberately terminate TLS outside Ansilume and cannot forward `X-Forwarded-Proto`. |
 | `SESSION_TIMEOUT` | Session lifetime in seconds (default: `43200` = 12h) |
 
@@ -209,7 +212,7 @@ docker compose exec app php yii migrate
 docker compose exec app php yii setup/admin admin admin@example.com yourpassword
 
 # Full test suite
-./tests.sh
+bin/tests.sh
 ```
 
 ### Linux UID alignment

@@ -70,7 +70,7 @@ final class PlaybookEnvironment
      * @param array<string, string> $parentEnv Usually getenv().
      * @return array<string, string>
      */
-    public static function build(array $parentEnv, string $callbackFile): array
+    public static function build(#[\SensitiveParameter] array $parentEnv, string $callbackFile): array
     {
         $overrides = [
             'ANSIBLE_CALLBACK_PLUGINS' => dirname(__DIR__) . '/ansible/callback_plugins',
@@ -91,7 +91,7 @@ final class PlaybookEnvironment
      * @param array<string, string> $parentEnv
      * @return list<string>
      */
-    public static function extraNames(array $parentEnv): array
+    public static function extraNames(#[\SensitiveParameter] array $parentEnv): array
     {
         return SubprocessEnvironment::parseNameList((string)($parentEnv[self::PASSTHROUGH_VAR] ?? ''));
     }
@@ -104,7 +104,7 @@ final class PlaybookEnvironment
      * @param array<string, string> $parentEnv
      * @return list<string>
      */
-    public static function droppedNames(array $parentEnv): array
+    public static function droppedNames(#[\SensitiveParameter] array $parentEnv): array
     {
         $extra = self::extraNames($parentEnv);
         $dropped = [];
@@ -125,7 +125,7 @@ final class PlaybookEnvironment
      * @param array<string, string> $parentEnv
      * @return list<string>
      */
-    public static function startupNotices(array $parentEnv, ProcessHardening $hardening): array
+    public static function startupNotices(#[\SensitiveParameter] array $parentEnv, ProcessHardening $hardening): array
     {
         $notices = [];
         $dropped = self::droppedNames($parentEnv);

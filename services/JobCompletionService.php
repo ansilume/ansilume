@@ -61,6 +61,7 @@ class JobCompletionService extends Component
                     . "Check that the inventory contains the hosts/groups the playbook targets."
             );
         }
+        $this->appendVerbosityNote($job);
         $job->save(false);
 
         \Yii::$app->get('auditService')->log(
@@ -110,6 +111,28 @@ class JobCompletionService extends Component
         $this->appendLog($job, 'stderr', $message, $nextSequence);
     }
 
+    /**
+     * When the claim lowered the job's verbosity for a runner that cannot
+     * take encrypted survey answers ({@see JobClaimSecrets}), say so at the
+     * end of the log. Never at claim time: a line written then would sort
+     * among the runner's first chunks. A failure is logged and ignored, so
+     * the job still finishes.
+     */
+    private function appendVerbosityNote(Job $job): void
+    {
+        try {
+            $note = JobClaimSecrets::verbosityNote($job);
+            if ($note !== null) {
+                $this->appendSystemLog($job, $note);
+            }
+        } catch (\Throwable $e) {
+            \Yii::warning(
+                'JobCompletionService: the verbosity note for job #' . $job->id . ' could not be written (' . get_class($e) . ').',
+                __CLASS__
+            );
+        }
+    }
+
     public function completeTimedOut(Job $job): void
     {
         if ($job->isFinished()) {
@@ -124,6 +147,7 @@ class JobCompletionService extends Component
             return;
         }
 
+        $this->appendVerbosityNote($job);
         $this->finishUnsuccessfully($job, Job::STATUS_TIMED_OUT, []);
     }
 
@@ -253,7 +277,7 @@ class JobCompletionService extends Component
     /** Maximum log chunk size in bytes (1 MB). */
     private const MAX_LOG_CHUNK_SIZE = 1048576;
 
-    public function appendLog(Job $job, string $stream, string $content, int $sequence): void
+    public function appendLog(Job $job, string $stream, #[\SensitiveParameter] string $content, int $sequence): void
     {
         if (strlen($content) > self::MAX_LOG_CHUNK_SIZE) {
             $content = substr($content, 0, self::MAX_LOG_CHUNK_SIZE)
@@ -274,7 +298,7 @@ class JobCompletionService extends Component
     /**
      * @param array<int, array<string, mixed>> $tasks
      */
-    public function saveTasks(Job $job, array $tasks): void
+    public function saveTasks(Job $job, #[\SensitiveParameter] array $tasks): void
     {
         $hasChanges = false;
         $hostBuckets = [];
@@ -300,7 +324,7 @@ class JobCompletionService extends Component
     /**
      * @param array<string, mixed> $data
      */
-    private function persistTask(Job $job, array $data): JobTask
+    private function persistTask(Job $job, #[\SensitiveParameter] array $data): JobTask
     {
         $task = new JobTask();
         $task->job_id = $job->id;

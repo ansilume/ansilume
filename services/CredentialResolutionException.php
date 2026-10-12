@@ -7,7 +7,8 @@ namespace app\services;
 /**
  * A job's credential could not be used: it was deleted after the job was
  * launched, or it cannot be decrypted. The job must fail before it runs,
- * not run without the credential.
+ * not run without the credential. The same holds for the job's encrypted
+ * password survey answers ({@see surveyAnswersUndecryptable()}).
  *
  * The message is meant for operators and lands in the job log. It never
  * contains secret material or decryption internals.
@@ -44,5 +45,19 @@ final class CredentialResolutionException extends \RuntimeException
         $lines[] = 'The job did not start; no credentials were used.';
 
         return new self(implode("\n", $lines), $failures);
+    }
+
+    /**
+     * The job's sealed password survey answers cannot be opened, usually
+     * because APP_SECRET_KEY changed since the launch. A relaunch would read
+     * the same answers, so the operator launches the template again.
+     */
+    public static function surveyAnswersUndecryptable(): self
+    {
+        return new self(
+            "The job's encrypted survey answers cannot be decrypted (was APP_SECRET_KEY changed?). "
+                . 'Launch the job template again and enter the password answers.',
+            []
+        );
     }
 }

@@ -7,6 +7,7 @@ namespace app\controllers\api\v1;
 use app\models\AuditLog;
 use app\models\Schedule;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
+use app\services\ScheduleSecrets;
 use app\services\ScheduleService;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
@@ -43,7 +44,8 @@ class SchedulesController extends BaseApiController
      */
     public function actionIndex(): array
     {
-        $query = Schedule::find()->orderBy(['id' => SORT_DESC]);
+        // The job templates come with the page: their password fields mask the extra vars.
+        $query = Schedule::find()->with('jobTemplate')->orderBy(['id' => SORT_DESC]);
         $filter = $this->checker()->buildJobFilter($this->currentUserId());
         if ($filter !== null) {
             $query->andWhere($filter);
@@ -93,7 +95,7 @@ class SchedulesController extends BaseApiController
         // Set in code only: the schedule launches its jobs as this user.
         $model->created_by = (int)$user->id;
 
-        return $this->saveSchedule($model, (int)$user->id, AuditLog::ACTION_SCHEDULE_CREATED, 201);
+        return $this->saveSchedule($model, (int)$user->id, AuditLog::ACTION_SCHEDULE_CREATED, 201, array_key_exists('extra_vars', $body));
     }
 
     /**
@@ -115,7 +117,7 @@ class SchedulesController extends BaseApiController
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
 
-        return $this->saveSchedule($model, $userId, AuditLog::ACTION_SCHEDULE_UPDATED, 200);
+        return $this->saveSchedule($model, $userId, AuditLog::ACTION_SCHEDULE_UPDATED, 200, array_key_exists('extra_vars', $body));
     }
 
     /**
@@ -181,9 +183,14 @@ class SchedulesController extends BaseApiController
      * they cannot see is reported like an unknown one (422), one they see
      * but may not operate is forbidden (403).
      *
+     * Password answers in the extra vars are sealed last (ScheduleSecrets),
+     * once the template is known to be one the caller may use: their errors
+     * (422) name the template's password fields. A body without extra_vars
+     * keeps the stored extra vars and answers, unless the template changes.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
-    private function saveSchedule(Schedule $model, int $userId, string $auditAction, int $status): array
+    private function saveSchedule(Schedule $model, int $userId, string $auditAction, int $status, bool $extraVarsSubmitted): array
     {
         $refused = $this->checkTemplate($model, $userId);
         if ($refused !== null) {
@@ -194,6 +201,11 @@ class SchedulesController extends BaseApiController
         if (!$model->validate()) {
             return $this->error($this->firstError($model), 422);
         }
+        $secrets = new ScheduleSecrets();
+        $secretsError = $secrets->prepare($model, $extraVarsSubmitted);
+        if ($secretsError !== null) {
+            return $this->error($secretsError, 422);
+        }
         if (!$model->save(false)) {
             return $this->error('Failed to save schedule.', 422);
         }
@@ -203,7 +215,7 @@ class SchedulesController extends BaseApiController
             'schedule',
             $model->id,
             null,
-            ['name' => $model->name, 'source' => 'api']
+            ['name' => $model->name, 'source' => 'api'] + $secrets->auditContext()
         );
 
         return $this->success($this->serialize($model), $status);
@@ -231,7 +243,7 @@ class SchedulesController extends BaseApiController
     /**
      * @param array<string, mixed> $body
      */
-    private function applyBody(Schedule $model, array $body): void
+    private function applyBody(Schedule $model, #[\SensitiveParameter] array $body): void
     {
         foreach (['name', 'cron_expression', 'timezone', 'extra_vars'] as $field) {
             if (!array_key_exists($field, $body)) {
@@ -255,7 +267,7 @@ class SchedulesController extends BaseApiController
     /**
      * created_by is the user the schedule launches its jobs as.
      *
-     * @return array{id: int, name: string, job_template_id: int, cron_expression: string, timezone: string, enabled: bool, last_run_at: int|null, next_run_at: int|null, created_by: int, created_at: int, updated_at: int}
+     * @return array{id: int, name: string, job_template_id: int, cron_expression: string, timezone: string, extra_vars: string|null, enabled: bool, last_run_at: int|null, next_run_at: int|null, created_by: int, created_at: int, updated_at: int}
      */
     private function serialize(Schedule $s): array
     {
@@ -265,6 +277,7 @@ class SchedulesController extends BaseApiController
             'job_template_id' => $s->job_template_id,
             'cron_expression' => $s->cron_expression,
             'timezone' => $s->timezone,
+            'extra_vars' => self::extraVarsOf($s),
             'enabled' => (bool)$s->enabled,
             'last_run_at' => $s->last_run_at,
             'next_run_at' => $s->next_run_at,
@@ -272,6 +285,19 @@ class SchedulesController extends BaseApiController
             'created_at' => $s->created_at,
             'updated_at' => $s->updated_at,
         ];
+    }
+
+    /**
+     * The extra vars as the schedule's edit form shows them, with
+     * `$encrypted$` for every password answer, also for one the stored
+     * column still holds in plain text: never the column as such. Null when
+     * there are none.
+     */
+    private static function extraVarsOf(Schedule $s): ?string
+    {
+        $masked = ScheduleSecrets::maskedExtraVars($s);
+
+        return $masked === null || $masked === '' ? null : $masked;
     }
 
     private function findModel(int $id): Schedule

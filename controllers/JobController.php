@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\JobTemplateWarnings;
 use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobArtifact;
@@ -14,7 +15,8 @@ use app\models\JobTemplate;
 use app\models\RunnerGroup;
 use app\models\User;
 use app\services\ArtifactService;
-use app\services\JobLaunchService;
+use app\services\RelaunchRefusedException;
+use app\services\RelaunchService;
 use app\services\WorkflowAccessChecker;
 use app\controllers\traits\TeamScopingTrait;
 use yii\web\ForbiddenHttpException;
@@ -32,7 +34,9 @@ class JobController extends BaseController
     {
         return [
             ['actions' => ['index', 'view', 'log-poll', 'download-artifact', 'artifact-content', 'download-all-artifacts'], 'allow' => true, 'roles' => ['job.view']],
-            ['actions' => ['cancel', 'relaunch'], 'allow' => true, 'roles' => ['job.cancel']],
+            ['actions' => ['cancel'], 'allow' => true, 'roles' => ['job.cancel']],
+            // A re-launch starts a job: it needs what launching needs, as the job page's button does.
+            ['actions' => ['relaunch'], 'allow' => true, 'roles' => ['job.launch']],
         ];
     }
 
@@ -128,48 +132,38 @@ class JobController extends BaseController
     }
 
     /**
-     * Re-launch: create a new job from the same template with the same overrides
-     * as the original job.
+     * Re-launch: a new job of the same template with the same launch
+     * parameters as the original job, password answers included (see
+     * RelaunchService). Only a finished job whose template still exists can
+     * be re-launched, as the job page's button shows.
      */
     public function actionRelaunch(int $id): Response
     {
         $original = $this->findModel($id);
         $this->requireJobOperate($original);
-        $template = $original->jobTemplate;
-
-        if ($template === null) {
-            $this->session()->setFlash('danger', 'Original template no longer exists.');
-            return $this->redirect(['view', 'id' => $id]);
-        }
-
-        $overrides = [];
-        if ($original->extra_vars) {
-            $overrides['extra_vars'] = $original->extra_vars;
-        }
-        if ($original->limit) {
-            $overrides['limit'] = $original->limit;
-        }
-        if ($original->verbosity !== null) {
-            $overrides['verbosity'] = $original->verbosity;
-        }
-        if ($original->check_mode) {
-            $overrides['check_mode'] = 1;
-        }
 
         try {
-            /** @var JobLaunchService $svc */
-            $svc = \Yii::$app->get('jobLaunchService');
-            $job = $svc->launch($template, (int)\Yii::$app->user->id, $overrides);
-            $this->session()->setFlash('success', "Re-launched as Job #{$job->id}.");
-            // A relaunch skips the launch page: its warnings show afterwards.
-            $warnings = \app\components\JobTemplateWarnings::forTemplate($template);
-            if ($warnings !== []) {
-                $this->session()->setFlash('warning', implode(' ', array_column($warnings, 'message')));
-            }
-            return $this->redirect(['view', 'id' => $job->id]);
+            $job = (new RelaunchService())->relaunch($original, (int)\Yii::$app->user->id);
+        } catch (RelaunchRefusedException $e) {
+            $this->session()->setFlash('danger', $e->getMessage());
+            return $this->redirect(['view', 'id' => $id]);
         } catch (\RuntimeException $e) {
             $this->session()->setFlash('danger', 'Re-launch failed: ' . $e->getMessage());
             return $this->redirect(['view', 'id' => $id]);
+        }
+
+        $this->session()->setFlash('success', "Re-launched as Job #{$job->id}.");
+        // A relaunch skips the launch page: its warnings show afterwards.
+        $this->flashTemplateWarnings($original->jobTemplate);
+
+        return $this->redirect(['view', 'id' => $job->id]);
+    }
+
+    private function flashTemplateWarnings(?JobTemplate $template): void
+    {
+        $warnings = $template === null ? [] : JobTemplateWarnings::forTemplate($template);
+        if ($warnings !== []) {
+            $this->session()->setFlash('warning', implode(' ', array_column($warnings, 'message')));
         }
     }
 

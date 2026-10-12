@@ -47,7 +47,7 @@ class ApiToken extends ActiveRecord
     /**
      * Find an active (non-expired) token by raw token string.
      */
-    public static function findByRawToken(string $raw): ?self
+    public static function findByRawToken(#[\SensitiveParameter] string $raw): ?self
     {
         $hash = hash('sha256', $raw);
         /** @var static|null $token */

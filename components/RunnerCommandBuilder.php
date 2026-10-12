@@ -6,6 +6,11 @@ namespace app\components;
 
 /**
  * Builds the ansible-playbook command array from a job payload.
+ *
+ * For a runner without the secret_extra_vars capability the payload's
+ * extra vars, and so the command, carry the password answers inline
+ * (JobClaimSecrets): every payload and command parameter is
+ * #[\SensitiveParameter].
  */
 class RunnerCommandBuilder
 {
@@ -13,7 +18,7 @@ class RunnerCommandBuilder
      * @param array<string, mixed> $payload
      * @return string[]
      */
-    public function build(array $payload): array
+    public function build(#[\SensitiveParameter] array $payload): array
     {
         $cmd = ['ansible-playbook'];
 
@@ -31,7 +36,7 @@ class RunnerCommandBuilder
      * @param string[] $cmd
      * @param array<string, mixed> $payload
      */
-    private function addInventoryArgs(array &$cmd, array $payload): void
+    private function addInventoryArgs(#[\SensitiveParameter] array &$cmd, #[\SensitiveParameter] array $payload): void
     {
         if (($payload['inventory_type'] ?? '') === 'static') {
             $cmd[] = '-i';
@@ -46,7 +51,7 @@ class RunnerCommandBuilder
      * @param string[] $cmd
      * @param array<string, mixed> $payload
      */
-    private function addPlaybookOptions(array &$cmd, array $payload): void
+    private function addPlaybookOptions(#[\SensitiveParameter] array &$cmd, #[\SensitiveParameter] array $payload): void
     {
         $this->addVerbosityFlag($cmd, (int)($payload['verbosity'] ?? 0));
         $this->addBecomeFlags($cmd, $payload);
@@ -70,7 +75,7 @@ class RunnerCommandBuilder
     /**
      * @param string[] $cmd
      */
-    private function addVerbosityFlag(array &$cmd, int $verbosity): void
+    private function addVerbosityFlag(#[\SensitiveParameter] array &$cmd, int $verbosity): void
     {
         if ($verbosity > 0) {
             $cmd[] = '-' . str_repeat('v', min($verbosity, 5));
@@ -81,7 +86,7 @@ class RunnerCommandBuilder
      * @param string[] $cmd
      * @param array<string, mixed> $payload
      */
-    private function addCheckModeFlags(array &$cmd, array $payload): void
+    private function addCheckModeFlags(#[\SensitiveParameter] array &$cmd, #[\SensitiveParameter] array $payload): void
     {
         if (!empty($payload['check_mode'])) {
             $cmd[] = '--check';
@@ -93,7 +98,7 @@ class RunnerCommandBuilder
      * @param string[] $cmd
      * @param array<string, mixed> $payload
      */
-    private function addBecomeFlags(array &$cmd, array $payload): void
+    private function addBecomeFlags(#[\SensitiveParameter] array &$cmd, #[\SensitiveParameter] array $payload): void
     {
         if (empty($payload['become'])) {
             return;

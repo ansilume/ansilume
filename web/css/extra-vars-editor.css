@@ -27,6 +27,12 @@
     border-radius: 0.375rem;
 }
 
+/* extra-vars-editor.js blocked a submit: the text does not parse, or YAML
+ * mode cannot convert one of its numbers exactly. Cleared once it is valid. */
+.extra-vars-editor.extra-vars-editor--blocked .CodeMirror {
+    border-color: var(--bs-danger, #dc3545);
+}
+
 .extra-vars-editor .CodeMirror-gutters,
 .yaml-editor .CodeMirror-gutters,
 .template-editor .CodeMirror-gutters {

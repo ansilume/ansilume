@@ -5,7 +5,9 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\Schedule $model */
 
+use app\components\SurveySecrets;
 use app\helpers\ConfirmHelper;
+use app\services\ScheduleSecrets;
 use yii\helpers\Html;
 use yii\helpers\Url;
 
@@ -97,13 +99,14 @@ $this->title = Html::encode($model->name);
     })();
     </script>
 
-    <?php if (!empty($model->extra_vars)) : ?>
+    <?php $extraVars = ScheduleSecrets::displayExtraVars($model); ?>
+    <?php if ($extraVars !== null) : ?>
     <div class="col-md-6">
         <div class="card">
             <div class="card-header">Extra vars override</div>
             <div class="card-body">
-                <?php $formatted = json_encode(json_decode($model->extra_vars), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE); ?>
-                <pre class="mb-0"><code><?= Html::encode($formatted) ?></code></pre>
+                <pre class="mb-0" data-testid="schedule-extra-vars"><code><?= Html::encode($extraVars) ?></code></pre>
+                <div class="form-text">Password answers are stored encrypted and show as <code><?= Html::encode(SurveySecrets::PLACEHOLDER) ?></code>.</div>
             </div>
         </div>
     </div>

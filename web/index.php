@@ -8,7 +8,8 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 $dotenv = \Dotenv\Dotenv::createUnsafeImmutable(dirname(__DIR__));
 $dotenv->safeLoad();
 
-defined('YII_DEBUG') or define('YII_DEBUG', (bool)($_ENV['YII_DEBUG'] ?? false));
+// EnvFlag, not (bool): (bool)'false' is true, so YII_DEBUG=false turned debug mode on.
+defined('YII_DEBUG') or define('YII_DEBUG', \app\components\EnvFlag::isOn($_ENV['YII_DEBUG'] ?? null));
 defined('YII_ENV') or define('YII_ENV', $_ENV['YII_ENV'] ?? 'prod');
 require dirname(__DIR__) . '/vendor/yiisoft/yii2/Yii.php';
 

@@ -45,7 +45,7 @@ final class CredentialSecretPolicy
      * @param array<array-key, mixed> $input
      * @return array<string, string>
      */
-    public static function provided(string $type, array $input): array
+    public static function provided(string $type, #[\SensitiveParameter] array $input): array
     {
         $provided = [];
         foreach (self::requiredKeys($type) as $key) {
@@ -69,7 +69,7 @@ final class CredentialSecretPolicy
      * @param array<string, string> $provided
      * @return list<string>
      */
-    public static function missing(string $type, array $provided): array
+    public static function missing(string $type, #[\SensitiveParameter] array $provided): array
     {
         return array_values(array_diff(self::requiredKeys($type), array_keys($provided)));
     }

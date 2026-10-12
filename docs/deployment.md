@@ -179,13 +179,26 @@ The nginx container listens on HTTP only. For HTTPS, place a reverse proxy in fr
 - **nginx on host**: Proxy pass with SSL termination
 - **Cloud LB**: Terminate TLS at the load balancer
 
+A proxy logs the URLs it forwards. Ansilume's nginx masks trigger tokens and
+password-reset tokens in URLs in its own access log, but not in the logs of
+a proxy in front of it, and not in its error log, which cannot be masked.
+Have the systems that call triggers send the token in the `X-Trigger-Token`
+header, which access logs do not record by default. While some still send
+it in the URL (`?token=` or `/trigger/<token>`, deprecated), keep the query
+strings and the `/trigger/` paths out of the proxy's logs. See
+[updating.md](updating.md#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets).
+
 ## Backup
 
 Critical data to back up:
 
 1. **Database** — `mysqldump` or volume snapshot of `db_data`
-2. **`.env` file** — contains encryption keys; losing `APP_SECRET_KEY` makes stored credentials unreadable
+2. **`.env` file** — contains encryption keys; losing `APP_SECRET_KEY` makes stored credentials, TOTP secrets and password survey answers unreadable
 3. **`runtime/projects/`** — cloned git repositories (can be re-synced, but saves time)
+
+To restore a database backup, see [Rollback](updating.md#rollback); a
+backup taken after the update to encrypted survey password answers needs
+one more command there.
 
 ## Updating
 

@@ -98,6 +98,161 @@ The job never started, so no credential was used and nothing ran on the
 target hosts. The project's SCM credential is checked the same way, shown
 as `(scm)` in the message.
 
+## Job aborted before execution: survey answers cannot be decrypted
+
+**Symptom:** A job fails right after it was claimed, and its log says
+`The job's encrypted survey answers cannot be decrypted (was APP_SECRET_KEY changed?). Launch the job template again and enter the password answers.`
+
+**Cause:** The job's password survey answers are stored encrypted with
+`APP_SECRET_KEY`, and the key changed between the launch and the claim, for
+example while the job waited for approval.
+
+**Fix:** Restore the old key if that is possible. Otherwise launch the job
+template again and enter the password answers; a re-launch cannot help,
+because it reuses the same answers. Nothing ran on the target hosts.
+
+## Job log: verbosity lowered
+
+**Symptom:** The job log ends with
+`[ansilume] Verbosity was lowered from 4 to 3: this runner does not support encrypted survey answers and would print them at higher verbosity. Update the runner image.`
+
+**Cause:** The job has password survey answers and ran on a runner older
+than this release, which gets them inline in the command. `ansible-playbook`
+prints its whole command line from verbosity 4 on, so the server lowered the
+verbosity to 3 for this job.
+
+**Fix:** Update the runner image, see
+[runners.md](runners.md#password-survey-answers). Runners that report
+`secret_extra_vars` run the job at the verbosity it asked for.
+
+## Job fails at once: the runner could not write a file
+
+**Symptom:** A job fails before it runs, and its log says
+`The runner could not create the job's private directory or files in its temp directory.`
+or `The runner could not write the survey answers file.`
+
+**Cause:** Before Ansible starts, the runner creates a new directory for
+the job in its temp directory (`TMPDIR`, otherwise `/tmp`) that only its
+own user can open, and writes the task records of its callback plugin, a
+static inventory and the job's password answers there. The temp directory
+is missing, not writable by the runner's user, read-only or full; the
+second message means that only the answers file could not be written.
+Nothing ran on the target hosts.
+
+**Fix:** Fix the runner's temp directory or free space, then launch again.
+
+## Launch refused: password answer is the placeholder
+
+**Symptom:** A launch fails with
+`The value of "db_password" is the placeholder $encrypted$; send the real value.`
+The launch form shows it, `POST /api/v1/jobs` and job triggers answer `422`
+with it, a workflow step fails with it as the step's error (a workflow
+trigger still answers `201`), and a scheduled run fails to launch with it.
+
+**Cause:** `$encrypted$` stands for a stored password answer in job pages,
+the jobs API and schedules. It was sent back as the answer, usually because
+the extra vars of an earlier job were copied into a new launch.
+
+**Fix:** Send the real value under that key, or leave the key out when the
+survey field is optional. To repeat a job with its answers, use **Re-launch**
+on the job page, which reuses them encrypted.
+
+## Launch refused: a password field needs another name
+
+**Symptom:** Every launch of a job template fails with
+`Survey field "db[pw]" has a name that cannot be used for a password answer; rename it in the survey before launching.`
+The update listed the template as one with "a password field whose name
+cannot carry an answer".
+
+**Cause:** The name of a password field is empty, a number, contains `[`
+or `]`, has a space at its start or end, or has a character anywhere in it
+that is not printable ASCII: a control character, such as a line break or a
+tab, or a character outside ASCII, such as a non-breaking space, a byte
+order mark (for example from a CSV file), a zero-width space or a letter
+like `ä`. An answer to such a field does not arrive under the field's
+exact name (the launch form turns `db[pw]` into `db[pw`, numbers get
+renumbered, a browser sends a line break as two characters, a letter
+outside ASCII can be encoded in more than one way, and API callers send the
+name the playbook reads, without the invisible characters), so Ansilume
+could not find it to keep it secret. Answers that releases up to 2.8.1
+stored under the field's exact name are encrypted by the update and show as
+`$encrypted$`. The message shows the characters that
+are not printable ASCII escaped as in JSON, for example `"db_password\n"`
+for a line break or `"db_password\u00a0"` for a non-breaking space.
+
+**Fix:** Rename the field in the survey editor to a variable name (letters,
+digits and underscores, not starting with a digit), and use the new name in
+the playbook and in the schedules of the template: in each schedule, enter
+the password under the new name and remove the old key, whose stored answer
+shows only as `$encrypted$`. Saving in the survey
+editor removes spaces, line breaks, tabs, non-breaking spaces and byte
+order marks around a name; retype a name that holds any other such
+character, even when the editor shows none: the message shows where it
+is. Through the API, send the name without them.
+
+## Launch or save refused: a number too large for JSON
+
+**Symptom:** A launch fails with
+`The extra vars cannot be stored: they contain a number too large for JSON.`
+or `The password answers cannot be stored: they contain a number too large for JSON.`,
+shown and answered like the other launch refusals (`422` for
+`POST /api/v1/jobs` and job triggers). Or saving a job template or a
+schedule, in the web UI or with the API, fails with the first message, as
+does `POST` or `PUT /api/v1/workflow-templates` for a step's
+`extra_vars_template`, given as JSON text or as an object
+(`steps[<n>]: ...`).
+
+**Cause:** The extra vars of the launch, the template or the schedule, a
+workflow step's `extra_vars_template`, or a survey answer, hold a number
+JSON cannot store, such as `1e999`, which PHP reads as infinity. The second
+message means the number is a password answer of a launch; saving a
+schedule shows the first message for its password answers too. A job
+template or schedule saved before this release can already hold such a
+number: its launches are refused, its next save shows the error, whatever
+else changes, and cloning such a template fails. Text that is not valid
+UTF-8 in a form field, such as a survey answer, gives
+`... they contain characters that are not valid UTF-8.` instead; extra
+vars sent as JSON text that is not valid JSON are ignored. Before this
+release, such a launch ran the job with the template's extra vars only.
+
+**Fix:** Write the value as a string (`"1e999"`) or as a smaller number.
+
+## Extra Vars editor: the form is not submitted, or YAML is not converted
+
+**Symptom:** On the job template form, the schedule form or the launch
+page, the form is not submitted: the Extra Vars editor gets a red border
+and the focus (on the launch page, the Advanced Overrides open), and the
+line under it says why. Or switching between JSON and YAML does nothing but
+show a message. The messages are:
+
+- `✗ JSON: <message of the parser>` or `✗ YAML: <message of the parser>`
+- `✗ Not converted to YAML: the JSON holds a number the editor cannot convert exactly (an integer beyond ±9007199254740991, or a number too large for JSON). Edit it as JSON.`
+- `✗ The YAML holds a number the editor cannot convert exactly (an integer beyond ±9007199254740991, or a number too large for JSON). Remove it, switch to JSON and enter it there.`
+
+**Cause:** The editor submits the Extra Vars only when they parse, so that
+a typo is neither saved nor launched with, and an older version is never
+sent in its place. It keeps JSON as typed, but YAML mode and the switch
+between JSON and YAML go through JavaScript numbers, which hold whole
+numbers exactly only up to 9007199254740991 and cannot hold a number too
+large for JSON (`1e999`, or YAML's `.inf` and `.nan`). Rather than change
+such a number, the editor refuses it: JSON that it could not convert stays
+as it is and can be saved, YAML that holds such a number cannot.
+
+**Fix:** Correct the text the message names. For such a number, stay in
+JSON mode, or remove the number from the YAML, switch to JSON and enter it
+there. A number too large for JSON is refused when the form is saved or
+launched, see
+[Launch or save refused: a number too large for JSON](#launch-or-save-refused-a-number-too-large-for-json).
+An empty editor clears the Extra Vars.
+
+YAML mode reads YAML 1.2, while Ansible reads its own YAML files as
+YAML 1.1. Plain values that the two read differently are sent with the
+YAML 1.2 meaning, without a message: `0644` as the number `644` (Ansible:
+octal, `420`), `yes`, `no`, `on` and `off` as text (Ansible: booleans), and
+`1:30` as text (Ansible: `90`). A date such as `2026-10-11` is sent as the
+text `2026-10-11T00:00:00.000Z`. Quote such values, write booleans as
+`true` and `false`, or use JSON mode.
+
 ## Workflow step failed without a job
 
 **Symptom:** A workflow run fails at a step that has no job. The run page
@@ -122,9 +277,17 @@ step's project. The other messages:
   template was deleted.
 - **"The approval rule of this step no longer exists."**: the step's approval
   rule was deleted.
+- **"The value of ... is the placeholder $encrypted$; send the real value."**,
+  **"Survey field ... has a name that cannot be used for a password
+  answer; ..."** or **"The extra vars cannot be stored: ..."** (or **"The
+  password answers cannot be stored: ..."**): the job template refused the
+  launch, see
+  [Launch refused: password answer is the placeholder](#launch-refused-password-answer-is-the-placeholder),
+  [Launch refused: a password field needs another name](#launch-refused-a-password-field-needs-another-name)
+  and [Launch or save refused: a number too large for JSON](#launch-or-save-refused-a-number-too-large-for-json).
 - **"The job could not be launched; see the application log."**: launching
-  the job failed. The reason is in `runtime/logs/app.log` of the app
-  container.
+  the job failed for another reason. The reason is in `runtime/logs/app.log`
+  of the app container.
 - **"Not run: unknown step type "…"."**: the step's type is none of job,
   approval and pause, compared exactly (`JOB` or `job ` with a trailing space
   are unknown too). Older versions stored such steps: the API did not
@@ -167,7 +330,42 @@ refused on every call. The caller learns no details; the audit log has them:
 
 **Fix:** Restore the user's access, or revoke the token and generate a new one
 as a user who may launch the template; the trigger then runs as that user.
-Give the new URL to the system that calls the trigger.
+Give the new token to the system that calls the trigger, to send in the
+`X-Trigger-Token` header.
+
+## Trigger answers 400, 404, 405 or 422
+
+**Symptom and cause:**
+
+- **`400` `Missing trigger token.`**: the request carries no usable token.
+  Send it in the `X-Trigger-Token` header, or as
+  `Authorization: Bearer <token>`. An empty `?token=`, or `token[]=…`,
+  counts as none, and only the Bearer scheme of `Authorization` counts.
+- **`404`**: the token is unknown or was revoked; the `webhook.invalid_token`
+  notification names its first six characters. Every other path under
+  `/trigger/` answers `404 Page not found.` too, for example
+  `/trigger/fire/<token>`.
+- **`405`**: the request used another method than `POST`, for example a
+  monitor that probes `GET /trigger/<token>`, which answered `404` in older
+  versions.
+- **`422`** with `{"error": "..."}`: the job template refused the launch, see
+  [Launch refused: password answer is the placeholder](#launch-refused-password-answer-is-the-placeholder),
+  [Launch refused: a password field needs another name](#launch-refused-a-password-field-needs-another-name)
+  and [Launch or save refused: a number too large for JSON](#launch-or-save-refused-a-number-too-large-for-json).
+  A workflow trigger answers `201` instead, and its run fails at the start
+  step with the reason (see [Workflow step failed without a job](#workflow-step-failed-without-a-job)).
+
+**Fix:** Call `POST /trigger/fire` (or `/trigger/fire-workflow`) with the
+token in the header:
+
+```bash
+curl -X POST -H "X-Trigger-Token: <token>" -H "Content-Type: application/json" \
+  -d "{}" https://ansilume.example.com/trigger/fire
+```
+
+The URL forms `?token=<token>` and, for job templates only,
+`POST /trigger/<token>` still work but are deprecated: URLs end up in access
+logs and proxies. A workflow token sent to `/trigger/<token>` answers `404`.
 
 ## Schedule did not launch (schedule.launch.denied)
 
@@ -189,6 +387,183 @@ template and delete the old one: the creator of a schedule cannot be changed,
 and editing the schedule keeps it. The schedule page shows the creator under
 **Created by**, and the API returns it as `created_by` of
 `GET /api/v1/schedules/{id}`.
+
+## Schedule fails: stored password answers cannot be decrypted
+
+**Symptom:** A schedule starts no job when it is due. The log and the
+`schedule.failed_to_launch` notification say
+`Schedule #12 (Nightly deploy) failed to launch: Its stored password answers cannot be decrypted (was APP_SECRET_KEY changed?); edit the schedule and enter them again.`
+
+**Cause:** The schedule stores its password answers encrypted with
+`APP_SECRET_KEY`, and the key changed since they were saved. Every run fails
+the same way; the other schedules keep running.
+
+**Fix:** Edit the schedule and replace each `$encrypted$` in its extra vars
+with the real answer, or restore the old key.
+
+## Schedule fails: the schedule changed while its run was being launched
+
+**Symptom:** The log and the `schedule.failed_to_launch` notification say
+`Schedule #12 (Nightly deploy) failed to launch: The schedule changed while its run was being launched; it runs again at its next time.`
+
+**Cause:** The schedule's extra vars held a value whose key had become a
+password field of its job template, which the run stores encrypted before
+it launches. Meanwhile someone moved the schedule to another job template,
+or deleted it. The run launched nothing, as that value belongs to the old
+template.
+
+**Fix:** None needed. The schedule runs at its next due time as it was
+saved, if it still exists.
+
+## Saving a schedule fails: a password answer has no stored value
+
+**Symptom:** Saving a schedule fails with one of these errors on its extra
+vars (in the API: `422`):
+
+- `"db_password" has no stored value; enter the real value.`
+- `"db_password": the job template changed; enter the real value.`
+- `The job template changed: send extra_vars with the password answers again.`
+- `The stored password answers cannot be decrypted; enter the real values.`
+
+**Cause:** In schedule extra vars, `$encrypted$` keeps the password answer
+the schedule has stored under that key. There is none to keep when the
+schedule never stored one, when the schedule moves to another job template
+(stored answers never follow it), or when the stored answers cannot be
+decrypted because `APP_SECRET_KEY` changed. A `PUT` to the API that changes
+`job_template_id` without `extra_vars` cannot keep them either.
+
+**Fix:** Replace the placeholder with the real answer, or remove the key.
+
+## Re-launch is refused
+
+**Symptom:** **Re-launch** on a job page shows one of these messages and
+launches nothing:
+
+- `Job #42 cannot be re-launched in status "running".`: only finished jobs
+  can be re-launched. Wait for the job, or cancel it first.
+- `Original template no longer exists.`: the job template was deleted.
+- `The template's project or inventory changed since this job ran; launch the template and enter the password answers.`:
+  the job has password answers, which are reused only while the template
+  runs on the project and inventory the job ran with.
+- `The original job's encrypted survey answers cannot be decrypted; launch the template and enter the password answers.`:
+  `APP_SECRET_KEY` changed since the job ran.
+- `Re-launch failed: ...`: the launch itself failed, with the reason.
+
+A user who gets `403` lacks `job.launch`, which re-launch needs since this
+release; `job.cancel` was enough before.
+
+**Fix:** Launch the job template from its launch page and enter the password
+answers, or give the user `job.launch`.
+
+## Saving a job template fails: survey rules
+
+**Symptom:** Saving a job template, in the survey editor or with
+`POST`/`PUT /api/v1/job-templates`, fails with an error about its survey or
+extra vars, for example:
+
+- `Survey field name "db-host" is not a valid variable name: use letters, digits and underscores, and start with a letter or an underscore.`
+- `Survey field name "env" is used more than once.`
+- `Survey field "env" has an unknown type "dropdown"; use one of: text, textarea, integer, boolean, select, password.`
+- `A password field cannot have a default value.`
+- `Remove "db_password" from Extra Vars: a password survey field cannot have a default; enter it at launch.`
+
+**Cause:** The survey is checked when it changes. New and renamed fields
+need a variable name, names must be unique, types must be known, and
+password fields get their value only at launch, never from a default. Names
+are compared exactly as stored, so whitespace added to a name makes it a new
+name, and a password field whose name is not printable ASCII without a
+space at its start or end is refused whenever the survey changes (see
+[Launch refused: a password field needs another name](#launch-refused-a-password-field-needs-another-name)).
+Messages show the characters of a name that are not printable ASCII
+escaped as in JSON, such as `\u00a0` for a non-breaking space. The Extra
+Vars may not hold a password field's name as a key; this is checked when
+the Extra Vars change or the names of the password fields do (one added,
+renamed, removed, or retyped to or from password). The Extra Vars change
+when their JSON value does: a key, or a value with its type (`"1"` and `1`
+differ, and so do a list and an object, and a whole number beyond the
+64-bit range and the same digits as text), but not spacing, key order or a
+number written another way that PHP reads as the same number within the
+64-bit range, such as `1.0` for `1` or `9007199254740994.0` for
+`9007199254740994`. Beyond that range, a whole number written without a
+fraction or an exponent is the same only as the same digits: `1e20` for
+`100000000000000000000` is a change. A key written twice counts with its
+last value. See
+[updating.md](updating.md#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets)
+for every case. A template saved before these rules keeps saving as long as
+what a rule checks stays as it is, so the error appears with the first such
+change.
+
+**Fix:** Correct the field the message names, or remove the key from the
+Extra Vars and enter its value at launch. For a legacy name like `db-host`
+that the playbook needs, keep the field as it is: only new and renamed
+fields need a variable name. A legacy name with whitespace around it, such
+as `db-host` with a space in front, cannot be kept in the survey editor,
+which removes the whitespace when it saves and so makes it a new name:
+rename the field, or save the template through the API with the survey
+unchanged.
+
+## App container does not start after the update: APP_SECRET_KEY
+
+**Symptom:** After an update, the app container stops right after the
+migrations, and `docker compose logs app` shows
+`APP_SECRET_KEY is not set or shorter than 16 characters, so the stored survey password answers cannot be encrypted. ... Nothing was changed.`
+
+**Cause:** Job templates have password survey fields, and the update must
+encrypt their stored answers, but `APP_SECRET_KEY` cannot encrypt.
+
+**Fix:** Set `APP_SECRET_KEY` in `.env`, see
+[updating.md](updating.md#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets),
+then `docker compose up -d` (git checkout:
+`docker compose up -d --build --force-recreate`).
+
+## Launch fails: "The database update has not finished; run the migrations."
+
+**Symptom:** Right after an update, a launch with password answers fails
+with `The database update has not finished; run the migrations.`, and the
+schedule-runner logs
+`Schedules not run: 1 database migration(s) pending; they run once the update has finished.`
+
+**Cause:** The new code runs, but the app container has not run the
+migrations yet. Launches without password answers work meanwhile; scheduled
+runs wait and launch once afterwards.
+
+**Fix:** Let the app container finish (`docker compose logs -f app`). In a
+git checkout the migrations run only when `app` starts, and the other
+containers keep old code or old configuration files until they restart:
+run `docker compose up -d --build --force-recreate` (see
+[updating.md](updating.md#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets),
+**Database and deployment**).
+
+## Finished jobs show password answers again after a database restore
+
+**Symptom:** After restoring a database backup, finished jobs show survey
+password answers in plaintext on the job page and in the jobs API, and stay
+so.
+
+**Cause:** The backup was taken after the update to encrypted answers, but
+before the background encryption of finished jobs had reached them. The
+restored database already lists migration `m000081`, so it does not run
+again, and the background encryption keeps its position and done mark in
+Redis, which the restore did not touch.
+
+**Fix:** Make it start over:
+`docker compose exec app php yii maintenance/reset-survey-secret-scrub`. Its
+next pass checks every finished job again, see
+[updating.md](updating.md#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets).
+Do not flush the cache instead: that also logs every user out and drops
+queued work.
+
+## e2e commands answer "Refused"
+
+**Symptom:** `php yii e2e/seed` or `php yii e2e/teardown` exits with code 78
+and `Refused: the e2e commands run only with YII_ENV dev or test, and YII_ENV is "prod" here.`
+
+**Cause:** The end-to-end test commands create users with public passwords
+and delete every record named `e2e-*`, so they refuse to run outside
+development and test installations.
+
+**Fix:** None for a real installation: never run them there. For the
+Playwright suite, run them in a development stack with `YII_ENV=dev`.
 
 ## Saving a job template fails: only one vault password
 

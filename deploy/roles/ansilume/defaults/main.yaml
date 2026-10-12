@@ -24,6 +24,9 @@ ansilume_release_archive: ""
 
 # -- Application environment -------------------------------------------------
 
+# ansilume_app_env becomes APP_ENV, which is informational only: Ansilume does
+# not read it. ansilume_yii_env (YII_ENV) selects the environment and must be
+# prod in production; ansilume_yii_debug (YII_DEBUG) must stay false there.
 ansilume_app_env: prod
 ansilume_yii_env: prod
 ansilume_yii_debug: false
@@ -34,9 +37,11 @@ ansilume_yii_debug: false
 # Generate with: openssl rand -hex 32
 ansilume_cookie_validation_key: "CHANGE-ME-INSECURE-DEFAULT"
 
-# AES-256-CBC key for encrypting credentials at rest. Minimum 32 characters.
+# APP_SECRET_KEY: the key that encrypts stored credentials, TOTP secrets and
+# password survey answers (AES-256-CBC). At least 16 characters; 32 random
+# characters recommended. Never change it once credentials, TOTP secrets or
+# survey answers are stored: that permanently breaks their decryption.
 # Generate with: openssl rand -hex 32
-# WARNING: Changing after deployment makes all stored credentials unreadable.
 ansilume_app_secret_key: "CHANGE-ME-INSECURE-DEFAULT"
 
 # Shared secret for runner self-registration. Set to "" to disable.

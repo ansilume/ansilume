@@ -16,6 +16,7 @@ class CredentialInjectionResult
      */
     public function __construct(
         public readonly array $args,
+        #[\SensitiveParameter]
         public readonly array $env,
         public readonly array $tempFiles,
     ) {

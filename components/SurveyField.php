@@ -50,19 +50,47 @@ class SurveyField
     }
 
     /**
-     * @param array<string, mixed> $data
+     * A field from a stored definition. Values that are lists or objects,
+     * which the API stored before survey definitions were checked, are read
+     * as missing instead of failing with "Array to string conversion".
+     *
+     * @param array<mixed> $data
      */
     public static function fromArray(array $data): self
     {
         return new self(
-            (string)($data['name'] ?? ''),
-            (string)($data['label'] ?? ''),
-            (string)($data['type'] ?? self::TYPE_TEXT),
+            self::text($data['name'] ?? null),
+            self::text($data['label'] ?? null),
+            self::text($data['type'] ?? null, self::TYPE_TEXT),
             (bool)($data['required'] ?? false),
-            (string)($data['default'] ?? ''),
-            is_array($data['options'] ?? null) ? $data['options'] : [],
-            (string)($data['hint'] ?? '')
+            self::text($data['default'] ?? null),
+            self::options($data['options'] ?? null),
+            self::text($data['hint'] ?? null)
         );
+    }
+
+    /**
+     * $value as the (string) cast reads it; null, lists and objects give
+     * $fallback.
+     */
+    private static function text(mixed $value, string $fallback = ''): string
+    {
+        return is_scalar($value) ? (string)$value : $fallback;
+    }
+
+    /**
+     * The options as a list of text; entries that are lists or objects are
+     * left out.
+     *
+     * @return string[]
+     */
+    private static function options(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        return array_values(array_map(static fn (mixed $option): string => self::text($option), array_filter($value, 'is_scalar')));
     }
 
     /**

@@ -33,6 +33,7 @@ final class LdapConfig
         public readonly int $timeout,
         public readonly string $baseDn,
         public readonly string $bindDn,
+        #[\SensitiveParameter]
         public readonly string $bindPassword,
         public readonly string $userFilter,
         public readonly string $attrUsername,
@@ -54,7 +55,7 @@ final class LdapConfig
      *
      * @param array<string, mixed> $params
      */
-    public static function fromArray(array $params): self
+    public static function fromArray(#[\SensitiveParameter] array $params): self
     {
         /** @var array<string, string> $roleMapping */
         $roleMapping = is_array($params['roleMapping'] ?? null) ? $params['roleMapping'] : [];

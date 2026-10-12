@@ -8,6 +8,7 @@ declare(strict_types=1);
 /** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings from JobTemplateWarnings */
 
 use app\components\SurveyField;
+use app\components\VersionedAssetUrl;
 use yii\helpers\Html;
 
 $this->title = 'Launch: ' . $template->name;
@@ -165,7 +166,7 @@ $hasSurvey = !empty($surveyFields);
 </div>
 
 <link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
-<link rel="stylesheet" href="/css/extra-vars-editor.css">
+<?= Html::cssFile(VersionedAssetUrl::of('/css/extra-vars-editor.css')) ?>
 <script src="/js/vendor/codemirror/codemirror.js"></script>
 <script src="/js/vendor/codemirror/mode/javascript/javascript.js"></script>
 <script src="/js/vendor/codemirror/mode/yaml/yaml.js"></script>
@@ -173,4 +174,4 @@ $hasSurvey = !empty($surveyFields);
 <script src="/js/vendor/codemirror/addon/edit/closebrackets.js"></script>
 <script src="/js/vendor/codemirror/addon/selection/active-line.js"></script>
 <script src="/js/vendor/js-yaml/js-yaml.min.js"></script>
-<script src="/js/extra-vars-editor.js"></script>
+<?= Html::jsFile(VersionedAssetUrl::of('/js/extra-vars-editor.js')) ?>

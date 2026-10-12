@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace app\tests\integration\api;
 
+use app\controllers\api\v1\SchedulesController;
 use app\models\Schedule;
-use app\tests\integration\DbTestCase;
+use app\tests\integration\controllers\WebControllerTestCase;
 
-class SchedulesApiTest extends DbTestCase
+class SchedulesApiTest extends WebControllerTestCase
 {
     private function scaffold(): array
     {
@@ -36,28 +37,33 @@ class SchedulesApiTest extends DbTestCase
         return $s;
     }
 
+    /**
+     * The fields of a schedule in API responses, as GET
+     * /api/v1/schedules/{id} returns them: whom it runs as, and its extra
+     * vars as the edit form shows them, included.
+     */
     public function testScheduleSerializationShape(): void
     {
         [$user, $tpl] = $this->scaffold();
         $sched = $this->createSchedule($tpl->id, $user->id);
+        $sched->extra_vars = '{"env":"prod"}';
+        $sched->save(false);
+        $this->loginAs($user);
 
-        $serialized = [
-            'id' => $sched->id,
-            'name' => $sched->name,
-            'job_template_id' => $sched->job_template_id,
-            'cron_expression' => $sched->cron_expression,
-            'timezone' => $sched->timezone,
-            'enabled' => (bool)$sched->enabled,
-            'last_run_at' => $sched->last_run_at,
-            'next_run_at' => $sched->next_run_at,
-            'created_at' => $sched->created_at,
-            'updated_at' => $sched->updated_at,
-        ];
+        $result = (new SchedulesController('api/v1/schedules', \Yii::$app))->actionView((int)$sched->id);
 
-        $this->assertCount(10, $serialized);
+        $this->assertArrayHasKey('data', $result);
+        $serialized = $result['data'];
+        $this->assertIsArray($serialized);
+        $this->assertSame(
+            ['id', 'name', 'job_template_id', 'cron_expression', 'timezone', 'extra_vars', 'enabled', 'last_run_at', 'next_run_at', 'created_by', 'created_at', 'updated_at'],
+            array_keys($serialized)
+        );
         $this->assertTrue($serialized['enabled']);
         $this->assertSame('UTC', $serialized['timezone']);
         $this->assertSame('0 * * * *', $serialized['cron_expression']);
+        $this->assertSame('{"env":"prod"}', $serialized['extra_vars']);
+        $this->assertSame((int)$user->id, $serialized['created_by']);
     }
 
     public function testScheduleFindOneReturnsCorrectRecord(): void

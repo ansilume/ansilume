@@ -196,7 +196,7 @@ class ProjectService extends Component
     /**
      * @param array<string, string> $env
      */
-    private function cloneOrPull(Project $project, string $dest, array $env): void
+    private function cloneOrPull(Project $project, string $dest, #[\SensitiveParameter] array $env): void
     {
         if (is_dir($dest . '/.git')) {
             $this->gitPull($project, $dest, $project->scm_branch, $env);
@@ -287,7 +287,7 @@ class ProjectService extends Component
      *
      * @param array<string, string> $env
      */
-    private function applyHttpsCredentialEnv(Project $project, array &$env): void
+    private function applyHttpsCredentialEnv(Project $project, #[\SensitiveParameter] array &$env): void
     {
         if ($project->scm_credential_id === null) {
             return;
@@ -329,7 +329,7 @@ class ProjectService extends Component
      * Constructed dynamically so static analysis does not flag the
      * concatenated secret as a hardcoded credential literal.
      */
-    private function buildCredentialHelperScript(string $user, string $secret): string
+    private function buildCredentialHelperScript(string $user, #[\SensitiveParameter] string $secret): string
     {
         // credential helper protocol: each field on its own line.
         // printf %s avoids shell metacharacter interpretation in user/password.
@@ -373,8 +373,13 @@ class ProjectService extends Component
     /**
      * @param array<string, string> $env
      */
-    protected function gitClone(Project $project, string $url, string $dest, string $branch, array $env): void
-    {
+    protected function gitClone(
+        Project $project,
+        string $url,
+        string $dest,
+        string $branch,
+        #[\SensitiveParameter] array $env
+    ): void {
         // --progress forces git to emit per-percent progress lines on stderr
         // even when it detects a non-tty — that's what makes the streamed
         // sync log feel alive in the UI.
@@ -388,7 +393,7 @@ class ProjectService extends Component
     /**
      * @param array<string, string> $env
      */
-    protected function gitPull(Project $project, string $dest, string $branch, array $env): void
+    protected function gitPull(Project $project, string $dest, string $branch, #[\SensitiveParameter] array $env): void
     {
         $this->runGit($project, ['git', '-C', $dest, 'fetch', '--progress', '--depth', '1', 'origin', $branch], $env);
         $this->runGit($project, ['git', '-C', $dest, 'reset', '--hard', 'FETCH_HEAD'], $env);
@@ -407,7 +412,7 @@ class ProjectService extends Component
      * @param array<string, string> $env
      * @throws \RuntimeException on non-zero exit code or timeout.
      */
-    private function runGit(Project $project, array $cmd, array $env = []): void
+    private function runGit(Project $project, array $cmd, #[\SensitiveParameter] array $env = []): void
     {
         \Yii::info('ProjectService: ' . implode(' ', $cmd), __CLASS__);
 

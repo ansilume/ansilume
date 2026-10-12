@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\EnvFlag;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\Project;
@@ -74,9 +75,12 @@ class E2eController extends BaseController
         return parent::beforeAction($action);
     }
 
+    /**
+     * Parsed like web/index.php does (EnvFlag): YII_DEBUG=false is off.
+     */
     private function isDebugEnabled(): bool
     {
-        return (bool)($_ENV['YII_DEBUG'] ?? (defined('YII_DEBUG') ? YII_DEBUG : false));
+        return EnvFlag::isOn($_ENV['YII_DEBUG'] ?? (defined('YII_DEBUG') ? YII_DEBUG : false));
     }
 
     /**

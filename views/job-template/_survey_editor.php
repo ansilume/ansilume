@@ -7,6 +7,9 @@ declare(strict_types=1);
  * Renders a dynamic list of survey field rows driven by Alpine.js-style vanilla JS.
  * The final value is serialized to JSON and written into the hidden survey_fields input.
  *
+ * Password fields have no default: the page never carries a stored one, and
+ * the editor saves none.
+ *
  * @var yii\web\View $this
  * @var app\models\JobTemplate $model
  */
@@ -15,7 +18,13 @@ use app\components\SurveyField;
 use yii\helpers\Html;
 use yii\helpers\Json;
 
-$existing = $model->getSurveyFields();
+$existing = array_map(static function (SurveyField $field): array {
+    $data = $field->toArray();
+    if ($field->type === SurveyField::TYPE_PASSWORD) {
+        $data['default'] = '';
+    }
+    return $data;
+}, $model->getSurveyFields());
 $types = SurveyField::types();
 ?>
 <div id="survey-editor">
@@ -25,8 +34,12 @@ $types = SurveyField::types();
     <button type="button" class="btn btn-sm btn-outline-secondary mt-2" onclick="surveyAddRow()">
         + Add Field
     </button>
-    <!-- Hidden field that carries the serialized JSON to the form -->
-    <?= Html::hiddenInput('JobTemplate[survey_fields]', $model->survey_fields ?? '', ['id' => 'survey-fields-json']) ?>
+    <!-- Hidden field that carries the serialized JSON to the form; it starts as the
+         fields the editor shows, so the page source never holds a password default. -->
+    <?= Html::hiddenInput('JobTemplate[survey_fields]', Json::htmlEncode($existing), ['id' => 'survey-fields-json']) ?>
+    <?php foreach ($model->getErrors('survey_fields') as $error) : ?>
+        <div class="invalid-feedback d-block" data-testid="survey-fields-error"><?= Html::encode($error) ?></div>
+    <?php endforeach; ?>
 </div>
 
 <template id="survey-row-tpl">
@@ -51,6 +64,7 @@ $types = SurveyField::types();
             <div class="col-md-2">
                 <label class="form-label small">Default</label>
                 <input type="text" class="form-control form-control-sm sf-default" placeholder="">
+                <div class="form-text sf-default-none" style="display:none">None: entered at launch</div>
             </div>
             <div class="col-md-1 text-center">
                 <label class="form-label small">Required</label><br>
@@ -77,7 +91,8 @@ $types = SurveyField::types();
 
 <script>
 (function () {
-    var existing = <?= Json::encode(array_map(fn ($f) => $f->toArray(), $existing)) ?>;
+    // htmlEncode: no survey text may end this script element or open a comment in it.
+    var existing = <?= Json::htmlEncode($existing) ?>;
     var container = document.getElementById('survey-rows');
     var tpl       = document.getElementById('survey-row-tpl');
     var hidden    = document.getElementById('survey-fields-json');
@@ -96,7 +111,8 @@ $types = SurveyField::types();
                 label:    row.querySelector('.sf-label').value.trim() || name,
                 type:     type,
                 required: row.querySelector('.sf-required').checked,
-                default:  row.querySelector('.sf-default').value,
+                // A password field has no default: its answer is entered at launch.
+                default:  type === 'password' ? '' : row.querySelector('.sf-default').value,
                 options:  opts,
                 hint:     row.querySelector('.sf-hint').value.trim(),
             });
@@ -115,12 +131,16 @@ $types = SurveyField::types();
             row.querySelector('.sf-required').checked = !!data.required;
             var typeEl = row.querySelector('.sf-type');
             if (data.type) typeEl.value = data.type;
+            // An unknown stored type shows as text, as the launch form renders it.
+            if (!typeEl.value) typeEl.value = 'text';
             row.querySelector('.sf-options').value = (data.options || []).join(', ');
             toggleOptionsRow(row, typeEl.value);
+            toggleDefault(row, typeEl.value);
         }
         // Bind type change
         row.querySelector('.sf-type').addEventListener('change', function () {
             toggleOptionsRow(row, this.value);
+            toggleDefault(row, this.value);
             serialize();
         });
         row.querySelectorAll('input, select, textarea').forEach(function (el) {
@@ -132,6 +152,15 @@ $types = SurveyField::types();
 
     function toggleOptionsRow(row, type) {
         row.querySelector('.sf-options-row').style.display = type === 'select' ? '' : 'none';
+    }
+
+    // Password fields get no default input; switching to password clears it.
+    function toggleDefault(row, type) {
+        var input = row.querySelector('.sf-default');
+        var isPassword = type === 'password';
+        if (isPassword) input.value = '';
+        input.style.display = isPassword ? 'none' : '';
+        row.querySelector('.sf-default-none').style.display = isPassword ? '' : 'none';
     }
 
     window.surveyAddRow = function () {

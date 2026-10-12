@@ -2,9 +2,13 @@
 
 Ansilume manages four kinds of credentials — SSH keys, username/password
 pairs, Ansible Vault passwords, and generic tokens. They are stored
-AES-256-CBC encrypted in the database, decrypted only in-memory by the
-runner process for the duration of a single job, and redacted from
-every log path (`CredentialService::redact()`).
+AES-256-CBC encrypted in the database and decrypted only where they are
+used, for example when a runner claims a job (see
+[Security model](#security-model)). Ansilume writes them to no log and shows
+them on no page; a playbook that prints one puts it into the job output,
+which Ansilume does not mask for credentials. Answers to password fields of
+a job template's survey are stored with the same encryption, see
+[Password survey answers](#password-survey-answers).
 
 A job template may attach **multiple credentials** at once. The primary
 credential claims the Ansible connection slots (`--user`,
@@ -395,9 +399,11 @@ added to a custom runner image.
 
 - **At rest:** `credential.secret_data` stores an AES-256-CBC
   encryption of `{"private_key": "...", "password": "...", ...}`.
-  The key is derived from `APP_SECRET_KEY`. Changing that key makes the
-  stored credentials unreadable; there is no re-encryption command yet,
-  so credentials have to be entered again after a key change.
+  The key is derived from `APP_SECRET_KEY`, which needs at least 16
+  characters (32 random characters recommended). Changing that key makes
+  the stored credentials unreadable, and the stored password survey
+  answers and TOTP secrets as well; there is no re-encryption command yet,
+  so they have to be entered again after a key change.
 - **In transit:** when a runner claims a job, the server decrypts the
   job's credentials and sends them to that runner in the claim response.
   Use HTTPS for runners that are not on the server host. The runner group
@@ -440,6 +446,54 @@ added to a custom runner image.
 - **In API responses:** `controllers/api/v1/CredentialsController`
   never exposes `secret_data`; the injector is the only code path
   that touches decrypted material.
+- **In logs:** Ansilume writes decrypted secrets to no log. The console
+  log of the app, queue-worker and schedule-runner containers no longer
+  records every SQL statement, which carried the values of every write,
+  and web log lines carry no session ID.
+
+## Password survey answers
+
+A job template's survey can have password fields. The value of an extra
+var whose top-level key is the name of such a field is a password answer,
+whether it comes from the survey, the launch form's advanced overrides,
+the API, a trigger, a schedule, a re-launch or the template's own extra
+vars. Password answers are handled like credentials:
+
+- **At rest:** stored only encrypted, with the same key, in
+  `job.secret_extra_vars` and `schedule.secret_extra_vars`. Everywhere
+  else, in the job's extra vars, its runner payload and its stored
+  command, the value is `$encrypted$`. A launch with password answers
+  therefore needs a usable `APP_SECRET_KEY`.
+- **In the UI and the API:** the job page, its live log view, the jobs
+  API, the schedule page, form and API, and the template page show
+  `$encrypted$`. No page and no API response shows an encrypted answer,
+  to admins neither. A launch that sends `$encrypted$` as an answer is
+  refused; a schedule keeps its stored answer when its form or
+  `extra_vars` sends it back. A password field has no default value, its
+  name must be one that callers can send exactly (printable ASCII without
+  a space at its start or end, not empty, not a number, without `[` or
+  `]`), or every launch of its template is refused, and a template's extra
+  vars may not hold a password field's name; a save that changes what
+  these rules check must follow them (see
+  [troubleshooting.md](troubleshooting.md#saving-a-job-template-fails-survey-rules)).
+  A value stored under the exact name of a password field whose name breaks
+  that rule is handled as a password answer all the same.
+- **In transit:** the server decrypts the answers when a runner claims
+  the job and sends them in the claim response, like credentials. A
+  runner of this release writes them to a `0600` file in a directory of
+  the job that only its own user can open, passes the file as
+  `--extra-vars @<file>`, removes it after the job, and masks the
+  answers in the job output as far as it can. Older runners get them
+  inline in the command, with the verbosity capped so that
+  `ansible-playbook` does not print them; see
+  [runners.md](runners.md#password-survey-answers).
+- **Re-launch and schedules** reuse the encrypted answers without showing
+  them. A re-launch does so only while the template runs on the project
+  and inventory the job ran with, and a schedule only while it keeps its
+  job template.
+- **Who can reach them:** anyone who may change a job template, or push to
+  the repository of its project, can make the answers of its jobs and
+  schedules reach a playbook of their choosing, as with credentials.
 
 ## RBAC
 

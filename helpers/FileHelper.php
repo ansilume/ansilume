@@ -81,7 +81,7 @@ class FileHelper
     /**
      * Write contents to a file. Returns true on success.
      */
-    public static function safeFilePutContents(string $path, string $content): bool
+    public static function safeFilePutContents(string $path, #[\SensitiveParameter] string $content): bool
     {
         $result = file_put_contents($path, $content);
         if ($result === false) {

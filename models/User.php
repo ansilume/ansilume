@@ -86,7 +86,7 @@ class User extends ActiveRecord implements IdentityInterface
         return $result;
     }
 
-    public static function findIdentityByAccessToken($token, $type = null): ?self
+    public static function findIdentityByAccessToken(#[\SensitiveParameter] $token, $type = null): ?self
     {
         $apiToken = \app\models\ApiToken::findByRawToken((string)$token);
         if ($apiToken === null) {
@@ -116,14 +116,14 @@ class User extends ActiveRecord implements IdentityInterface
         return $this->auth_key;
     }
 
-    public function validateAuthKey($authKey): bool
+    public function validateAuthKey(#[\SensitiveParameter] $authKey): bool
     {
         return $this->auth_key === $authKey;
     }
 
     // --- Password helpers ---
 
-    public function validatePassword(string $password): bool
+    public function validatePassword(#[\SensitiveParameter] string $password): bool
     {
         // LDAP-backed users never authenticate through the local bcrypt path.
         // The stored password_hash is the LDAP_PASSWORD_SENTINEL, against
@@ -137,7 +137,7 @@ class User extends ActiveRecord implements IdentityInterface
         return $security->validatePassword($password, $this->password_hash);
     }
 
-    public function setPassword(string $password): void
+    public function setPassword(#[\SensitiveParameter] string $password): void
     {
         // Local-account-only operation. LDAP users have their password
         // managed in the directory; setting one here would either be
@@ -229,7 +229,7 @@ class User extends ActiveRecord implements IdentityInterface
     /**
      * Find a user by a valid (non-expired) password reset token.
      */
-    public static function findByPasswordResetToken(string $token): ?self
+    public static function findByPasswordResetToken(#[\SensitiveParameter] string $token): ?self
     {
         if (empty($token)) {
             return null;

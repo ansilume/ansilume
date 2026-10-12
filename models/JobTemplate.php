@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\SurveyDefinition;
 use app\components\SurveyField;
+use app\components\SurveySecrets;
+use app\components\TemplateSurveyValidator;
 use app\models\traits\TriggerTokenTrait;
+use app\services\JobLaunchSecrets;
 use yii\db\ActiveRecord;
 use yii\validators\Validator;
 
@@ -53,6 +57,13 @@ use yii\validators\Validator;
 class JobTemplate extends ActiveRecord
 {
     use TriggerTokenTrait;
+
+    /**
+     * The template a new record copies (set by the clone action): the survey
+     * rules compare with its survey and extra vars instead of an empty
+     * template, so a template saved before the rules can still be cloned.
+     */
+    private ?JobTemplate $copiedFrom = null;
 
     public static function tableName(): string
     {
@@ -107,6 +118,8 @@ class JobTemplate extends ActiveRecord
             [['playbook'], 'string', 'max' => 512],
             [['extra_vars'], 'string', 'max' => 65535],
             [['extra_vars'], 'validateJson'],
+            // Both survey rules run only when the survey or the extra vars change.
+            [['extra_vars'], TemplateSurveyValidator::class],
             [['verbosity'], 'integer', 'min' => 0, 'max' => 5],
             [['forks'], 'integer', 'min' => 1, 'max' => 200],
             [['become'], 'boolean'],
@@ -117,6 +130,7 @@ class JobTemplate extends ActiveRecord
             [['tags', 'skip_tags'], 'string', 'max' => 512],
             [['survey_fields'], 'string', 'max' => 65535],
             [['survey_fields'], 'validateJson'],
+            [['survey_fields'], TemplateSurveyValidator::class],
             // Set in code only: a form must not choose the token or whom the
             // template's trigger runs as.
             [['!trigger_token'], 'string', 'max' => 64],
@@ -242,13 +256,22 @@ class JobTemplate extends ActiveRecord
         ];
     }
 
+    /**
+     * survey_fields and extra_vars must be JSON. The extra vars must also be
+     * JSON a launch can store: JSON allows a number too large for it (1e999,
+     * -1e999), which PHP reads as infinity and cannot write back, so every
+     * launch would be refused. They get the message of that refusal.
+     */
     public function validateJson(string $attribute): void
     {
-        if (!empty($this->$attribute)) {
-            json_decode((string)$this->$attribute);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                $this->addError($attribute, ucfirst($attribute) . ' must be valid JSON.');
-            }
+        if (empty($this->$attribute)) {
+            return;
+        }
+        $decoded = json_decode((string)$this->$attribute);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->addError($attribute, ucfirst($attribute) . ' must be valid JSON.');
+        } elseif ($attribute === 'extra_vars' && json_encode($decoded) === false) {
+            $this->addError($attribute, SurveySecrets::unencodable(JobLaunchSecrets::EXTRA_VARS, json_last_error()));
         }
     }
 
@@ -356,5 +379,82 @@ class JobTemplate extends ActiveRecord
     public function hasSurvey(): bool
     {
         return !empty($this->survey_fields) && $this->getSurveyFields() !== [];
+    }
+
+    /**
+     * The password fields (type exactly 'password') of a survey definition,
+     * usable and unusable names apart ({@see SurveyDefinition::passwordFields()}).
+     * Reads the raw JSON, so a malformed definition never throws.
+     *
+     * @return array{usable: list<string>, unusable: list<string>}
+     */
+    public static function passwordFieldsFromJson(?string $json): array
+    {
+        return SurveyDefinition::passwordFields($json);
+    }
+
+    /**
+     * Every password field name of this template, usable or not
+     * ({@see SurveyDefinition::secretNames()}): values stored under these
+     * exact top-level keys are password answers, stored only sealed and
+     * shown as the placeholder. A name that cannot carry an answer only
+     * keeps the template from being launched (JobLaunchSecrets).
+     *
+     * @return list<string>
+     */
+    public function passwordFieldNames(): array
+    {
+        return SurveyDefinition::secretNames($this->survey_fields);
+    }
+
+    /**
+     * The extra vars for display, with SurveySecrets::PLACEHOLDER as the
+     * value of every key that is a password field's name. Only templates
+     * saved before such keys were refused have them; their extra vars are
+     * shown re-encoded, a JSON object still as an object.
+     */
+    public function getMaskedExtraVars(): ?string
+    {
+        $vars = json_decode((string)$this->extra_vars, true);
+        if (!is_array($vars)) {
+            return $this->extra_vars;
+        }
+        $split = SurveySecrets::split($vars, $this->passwordFieldNames());
+        if ($split['secret'] === []) {
+            return $this->extra_vars;
+        }
+
+        $flags = JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+
+        return (string)SurveySecrets::reencode($this->extra_vars, $split['public'], $flags);
+    }
+
+    /**
+     * Compare the survey rules with $source, the template this new record
+     * copies (clone), instead of an empty template.
+     */
+    public function setCopiedFrom(?self $source): void
+    {
+        $this->copiedFrom = $source;
+    }
+
+    /**
+     * survey_fields and extra_vars as the survey rules compare with them:
+     * the stored values of a saved template, the copied template's for a
+     * clone, none for other new templates.
+     *
+     * @return array{survey_fields: string|null, extra_vars: string|null}
+     */
+    public function getValidationBaseline(): array
+    {
+        if (!$this->isNewRecord) {
+            $survey = $this->getOldAttribute('survey_fields');
+            $extraVars = $this->getOldAttribute('extra_vars');
+
+            return ['survey_fields' => is_string($survey) ? $survey : null, 'extra_vars' => is_string($extraVars) ? $extraVars : null];
+        }
+        $source = $this->copiedFrom;
+
+        return ['survey_fields' => $source?->survey_fields, 'extra_vars' => $source?->extra_vars];
     }
 }

@@ -297,6 +297,14 @@ foreach ($steps as $s) {
             </script>
         <?php endif; ?>
 
+        <?php
+        // The raw token right after it was generated, shown once. Read and
+        // deleted here, card or not: the layout prints every flash that is
+        // left. Shown only while it is still the workflow's token.
+        $flashedToken = Yii::$app->session?->getFlash('trigger_token_raw', null, true);
+        $freshToken = is_string($flashedToken) && is_string($model->trigger_token)
+            && hash_equals($model->trigger_token, hash('sha256', $flashedToken)) ? $flashedToken : null;
+        ?>
         <?php if ($canChange) : ?>
         <div class="card mt-4">
             <div class="card-header d-flex justify-content-between align-items-center">
@@ -329,52 +337,15 @@ foreach ($steps as $s) {
                         (<?= Html::encode($runsAsReason) ?>).
                         A launch is refused unless this user is active and may launch the job template of every step.
                     </p>
-                <?php endif; ?>
-                <?php $rawToken = \Yii::$app->session?->getFlash('trigger_token_raw'); ?>
-                <?php if ($rawToken) : ?>
-                    <?php
-                    $appBase = rtrim(\Yii::$app->params['appBaseUrl'] ?? \yii\helpers\Url::to('/', true), '/');
-                    $triggerUrl = $appBase . '/trigger/fire-workflow?token=' . urlencode($rawToken);
-                    ?>
-                    <div class="alert alert-warning mb-3">
-                        <strong>Copy this token now — it will not be shown again.</strong>
-                        <div class="mt-2">
-                            <code id="wf-trigger-token-display"><?= Html::encode($rawToken) ?></code>
-                            <button class="btn btn-sm btn-outline-secondary ms-2" id="btn-copy-wf-trigger-token"
-                                    onclick="copyToClipboard('<?= Html::encode($rawToken) ?>').then(function(){
-                                        var btn = document.getElementById('btn-copy-wf-trigger-token');
-                                        btn.textContent = 'Copied!';
-                                        btn.classList.replace('btn-outline-secondary','btn-success');
-                                        setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
-                                    }).catch(function(){ alert('Copy failed — please copy manually.'); })">Copy</button>
-                        </div>
-                        <div class="mt-2 text-muted small">
-                            Trigger URL: <code><?= Html::encode($triggerUrl) ?></code>
-                        </div>
-                    </div>
-                    <p class="mb-1 small fw-semibold">cURL example</p>
-                    <?php $curlExample = 'curl -X POST ' . $triggerUrl; ?>
-                    <div class="input-group">
-                        <code id="wf-trigger-curl-example" class="form-control bg-body-secondary font-monospace small text-break" style="white-space:pre-wrap;"><?= Html::encode($curlExample) ?></code>
-                        <button class="btn btn-outline-secondary btn-sm" id="btn-copy-wf-curl"
-                                onclick="copyToClipboard('<?= Html::encode($curlExample) ?>').then(function(){
-                                    var btn = document.getElementById('btn-copy-wf-curl');
-                                    btn.textContent = 'Copied!';
-                                    btn.classList.replace('btn-outline-secondary','btn-success');
-                                    setTimeout(function(){ btn.textContent = 'Copy'; btn.classList.replace('btn-success','btn-outline-secondary'); }, 2000);
-                                }).catch(function(){ alert('Copy failed — please copy manually.'); })">Copy</button>
-                    </div>
-                    <p class="mt-2 mb-0 small text-muted">
-                        Pass optional overrides via JSON body:
-                        <code class="bg-body-secondary px-1 rounded">curl -X POST -H 'Content-Type: application/json' -d '{"extra_vars":{"env":"prod"}}' <?= Html::encode($triggerUrl) ?></code>
-                    </p>
-                <?php elseif ($model->trigger_token) : ?>
-                    <p class="mb-1 text-muted">A trigger token is active. The trigger URL is:</p>
-                    <code><?= \yii\helpers\Url::to('/trigger/fire-workflow?token=' . str_repeat('*', 16), true) ?></code>
-                    <p class="mt-2 mb-0 small text-muted">
-                        POST to <code>/trigger/fire-workflow?token={token}</code> with optional JSON body:
-                        <code>{"extra_vars": {}}</code>
-                    </p>
+                    <?= $this->render('/trigger/_usage', [
+                        'rawToken' => $freshToken,
+                        'endpoint' => '/trigger/fire-workflow',
+                        'idPrefix' => 'wf-',
+                        'bodyExample' => '{"extra_vars":{"env":"prod"}}',
+                        // Deprecated: the token in the query only. The path /trigger/<token>
+                        // reaches job templates, so a workflow token there is a 404.
+                        'deprecatedUrlForms' => ['?token=…'],
+                    ]) ?>
                 <?php else : ?>
                     <p class="mb-0 text-muted">No trigger token configured. Generate one to allow external systems to launch this workflow via HTTP POST.</p>
                 <?php endif; ?>

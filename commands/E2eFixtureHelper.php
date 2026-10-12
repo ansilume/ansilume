@@ -74,6 +74,34 @@ final class E2eFixtureHelper
     }
 
     /**
+     * A template with the survey $fields, restored by name, soft-deleted
+     * ones too: no extra vars, approval rule or trigger token.
+     *
+     * @param array{0: int, 1: int, 2: int} $parents project, inventory and runner group ids
+     * @param list<array<string, mixed>> $fields
+     */
+    public static function surveyTemplate(string $name, array $parents, int $userId, array $fields, int $verbosity): JobTemplate
+    {
+        if (JobTemplate::findOne(['name' => $name]) === null) {
+            /** @var JobTemplate|null $deleted */
+            $deleted = JobTemplate::findWithDeleted()->where(['name' => $name])->orderBy(['id' => SORT_DESC])->one();
+            $deleted?->updateAttributes(['deleted_at' => null]);
+        }
+        $template = self::template($name, $parents, $userId, null, []);
+        $template->description = 'E2E fixture: a survey with a password field';
+        $template->survey_fields = (string)json_encode($fields, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $template->extra_vars = null;
+        $template->limit = null;
+        $template->verbosity = $verbosity;
+        $template->approval_rule_id = null;
+        $template->trigger_token = null;
+        $template->trigger_token_created_by = null;
+        $template->save(false);
+
+        return $template;
+    }
+
+    /**
      * A manual project without team: every role can see it.
      */
     public static function project(string $name, int $userId): Project

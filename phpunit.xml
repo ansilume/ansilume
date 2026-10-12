@@ -28,6 +28,9 @@
         </exclude>
     </source>
     <php>
+        <!-- Tests see trace arguments as a host without the setting does, so that the
+             #[\SensitiveParameter] checks prove the marks; the images keep the setting On. -->
+        <ini name="zend.exception_ignore_args" value="0"/>
         <env name="YII_ENV"   value="test"/>
         <env name="YII_DEBUG" value="0"/>
     </php>

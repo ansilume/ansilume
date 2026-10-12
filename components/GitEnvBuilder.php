@@ -36,7 +36,7 @@ final class GitEnvBuilder
      * @param string|null $sshKeyFile Filled in with the temp path when an SSH key was materialised.
      * @return array<string, string>
      */
-    public function build(string $scmUrl, ?array $scmCredential, ?string &$sshKeyFile): array
+    public function build(string $scmUrl, #[\SensitiveParameter] ?array $scmCredential, ?string &$sshKeyFile): array
     {
         $env = $this->baseEnv();
 
@@ -92,7 +92,7 @@ final class GitEnvBuilder
     /**
      * @param array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>} $scmCredential
      */
-    private function writeSshKeyFile(array $scmCredential): ?string
+    private function writeSshKeyFile(#[\SensitiveParameter] array $scmCredential): ?string
     {
         if ($scmCredential['credential_type'] !== 'ssh_key') {
             return null;
@@ -113,8 +113,10 @@ final class GitEnvBuilder
      * @param array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>} $scmCredential
      * @param array<string, string> $env
      */
-    private function applyHttpsCredentialEnv(array $scmCredential, array &$env): void
-    {
+    private function applyHttpsCredentialEnv(
+        #[\SensitiveParameter] array $scmCredential,
+        #[\SensitiveParameter] array &$env
+    ): void {
         $username = '';
         $password = '';
         if ($scmCredential['credential_type'] === 'token') {
@@ -133,7 +135,7 @@ final class GitEnvBuilder
         $env['GIT_CONFIG_COUNT'] = (string)($count + 1);
     }
 
-    private function buildCredentialHelperScript(string $user, string $secret): string
+    private function buildCredentialHelperScript(string $user, #[\SensitiveParameter] string $secret): string
     {
         $safeUser = escapeshellarg('username=' . $user);
         $safePass = escapeshellarg('password=' . $secret); // noqa: not a hardcoded secret

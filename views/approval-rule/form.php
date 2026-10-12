@@ -10,6 +10,7 @@ declare(strict_types=1);
 
 use app\models\ApprovalRule;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->isNewRecord ? 'New Approval Rule' : 'Edit: ' . $model->name;
@@ -126,8 +127,8 @@ foreach (array_keys($teams) as $tid) {
     var requiredInput = document.getElementById('required-approvals');
     var warningDiv = document.getElementById('approver-count-warning');
 
-    var roleCounts = <?= json_encode($roleCounts) ?>;
-    var teamCounts = <?= json_encode($teamCounts) ?>;
+    var roleCounts = <?= Json::htmlEncode($roleCounts) ?>;
+    var teamCounts = <?= Json::htmlEncode($teamCounts) ?>;
 
     function checkApproverCount() {
         var type = typeSelect.value;

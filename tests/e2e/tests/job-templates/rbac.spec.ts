@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
+import { PLACEHOLDER, expectNotInPage } from '../../lib/survey-secrets';
 
 /** Opens a template's page, paging through the list sorted by name. */
 async function openTemplate(page: Page, name: string) {
@@ -99,5 +100,14 @@ test.describe('Job Templates RBAC', () => {
         .locator('a', { hasText: new RegExp(`^${name}$`) }).click();
       await expect(page.locator(`[data-testid="template-warning"][data-code="${code}"]`)).toBeVisible();
     }
+  });
+
+  // commands/E2eSurveyEditorSeeder.php: Extra Vars with a value for the
+  // template's password field, saved before such keys were refused.
+  test('viewer sees a password field\'s key in a template\'s Extra Vars only as $encrypted$', async ({ page }) => {
+    await openTemplate(page, 'e2e-survey-extra-vars-template');
+    await expectNotInPage(page, 'e2e-legacy-extra-var-Pq90');
+    const shown = (await page.getByTestId('template-extra-vars').textContent()) ?? '';
+    expect(JSON.parse(shown)).toEqual({ region: 'eu-central', db_password: PLACEHOLDER });
   });
 });

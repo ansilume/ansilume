@@ -201,7 +201,7 @@ class RegisterController extends Controller
      *
      * @param array<string, mixed> $body
      */
-    private function extractReportedVersion(array $body): ?string
+    private function extractReportedVersion(#[\SensitiveParameter] array $body): ?string
     {
         $value = $body['software_version'] ?? null;
         if (!is_string($value)) {

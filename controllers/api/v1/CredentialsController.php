@@ -130,7 +130,7 @@ class CredentialsController extends BaseApiController
     /**
      * @param array<string, mixed> $body
      */
-    private function applyBody(Credential $model, array $body): void
+    private function applyBody(Credential $model, #[\SensitiveParameter] array $body): void
     {
         foreach (['name', 'credential_type'] as $field) {
             if (array_key_exists($field, $body)) {
@@ -149,7 +149,7 @@ class CredentialsController extends BaseApiController
      * @param array<string, mixed> $body
      * @return array<array-key, mixed>
      */
-    private function secretsFrom(array $body): array
+    private function secretsFrom(#[\SensitiveParameter] array $body): array
     {
         return isset($body['secrets']) && is_array($body['secrets']) ? $body['secrets'] : [];
     }

@@ -33,7 +33,7 @@ final class RunnerProjectSync
      *
      * @param array<string, mixed> $payload
      */
-    public function sync(array $payload): ?string
+    public function sync(#[\SensitiveParameter] array $payload): ?string
     {
         $scmType = (string)($payload['scm_type'] ?? '');
         $scmUrl = (string)($payload['scm_url'] ?? '');
@@ -79,7 +79,7 @@ final class RunnerProjectSync
         string $projectPath,
         bool $isClone,
         string $scmUrl = '',
-        ?array $scmCredential = null,
+        #[\SensitiveParameter] ?array $scmCredential = null,
         ?string &$sshKeyFile = null,
     ): ?string {
         $env = $this->buildGitEnv($scmUrl, $scmCredential, $sshKeyFile);
@@ -139,8 +139,11 @@ final class RunnerProjectSync
      * @param string|null $sshKeyFile Written if an SSH key was materialised — caller must unlink.
      * @return array<string, string>
      */
-    private function buildGitEnv(string $scmUrl, ?array $scmCredential, ?string &$sshKeyFile): array
-    {
+    private function buildGitEnv(
+        string $scmUrl,
+        #[\SensitiveParameter] ?array $scmCredential,
+        ?string &$sshKeyFile
+    ): array {
         return $this->gitEnv->build($scmUrl, $scmCredential, $sshKeyFile);
     }
 

@@ -166,7 +166,7 @@ class WebhooksController extends BaseApiController
     /**
      * @param array<string, mixed> $body
      */
-    private function applyBody(Webhook $model, array $body): void
+    private function applyBody(Webhook $model, #[\SensitiveParameter] array $body): void
     {
         foreach (['name', 'url', 'secret', 'events'] as $field) {
             if (!array_key_exists($field, $body)) {

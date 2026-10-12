@@ -18,19 +18,19 @@ class RunnerHttpClient
      * the server knows which runners honour them. Older servers ignore the
      * field.
      */
-    public const CAPABILITIES = [Runner::CAPABILITY_VAULT_PASSWORD_SOURCE];
+    public const CAPABILITIES = [Runner::CAPABILITY_VAULT_PASSWORD_SOURCE, Runner::CAPABILITY_SECRET_EXTRA_VARS];
 
     private string $apiUrl;
     private string $token;
     private int $lastHttpStatus = 0;
 
-    public function __construct(string $apiUrl, string $token)
+    public function __construct(string $apiUrl, #[\SensitiveParameter] string $token)
     {
         $this->apiUrl = $apiUrl;
         $this->token = $token;
     }
 
-    public function setToken(string $token): void
+    public function setToken(#[\SensitiveParameter] string $token): void
     {
         $this->token = $token;
     }
@@ -53,7 +53,7 @@ class RunnerHttpClient
      * @param array<string, mixed> $body
      * @return array<string, mixed>|null
      */
-    public function post(string $path, array $body): ?array
+    public function post(string $path, #[\SensitiveParameter] array $body): ?array
     {
         $body = array_merge(
             ['software_version' => $this->softwareVersion(), 'capabilities' => self::CAPABILITIES],
@@ -70,7 +70,7 @@ class RunnerHttpClient
      * @param array<string, mixed> $body
      * @return array<string, mixed>|null
      */
-    public function postUnauthenticated(string $path, array $body): ?array
+    public function postUnauthenticated(string $path, #[\SensitiveParameter] array $body): ?array
     {
         return $this->httpPost($path, $body);
     }
@@ -78,14 +78,20 @@ class RunnerHttpClient
     /**
      * Low-level HTTP POST. Returns decoded JSON response or null on network error / empty body.
      *
+     * Bytes that are not UTF-8 (job output can hold any) become U+FFFD
+     * instead of failing the encoding, which would drop the whole request.
+     *
      * @param array<string, mixed> $body
      * @param string[] $extraHeaders Additional HTTP headers.
      * @return array<string, mixed>|null
      */
-    protected function httpPost(string $path, array $body, array $extraHeaders = []): ?array
-    {
+    protected function httpPost(
+        string $path,
+        #[\SensitiveParameter] array $body,
+        #[\SensitiveParameter] array $extraHeaders = []
+    ): ?array {
         $url = $this->apiUrl . $path;
-        $payload = json_encode($body);
+        $payload = json_encode($body, JSON_INVALID_UTF8_SUBSTITUTE);
         if ($payload === false) {
             return null;
         }

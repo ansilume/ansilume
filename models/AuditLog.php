@@ -131,6 +131,8 @@ class AuditLog extends ActiveRecord
     public const ACTION_WORKFLOW_LAUNCH_DENIED = 'workflow.launch.denied';
     public const ACTION_WORKFLOW_STEP_DENIED = 'workflow.step.denied';
     public const ACTION_TRIGGER_DENIED = 'trigger.denied';
+    /** An inbound trigger launched a job or workflow; records how the token was sent, never the token. */
+    public const ACTION_TRIGGER_FIRED = 'trigger.fired';
     public const ACTION_SCHEDULE_LAUNCH_DENIED = 'schedule.launch.denied';
 
     // -- Notification template actions -----------------------------------------

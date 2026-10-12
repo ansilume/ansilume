@@ -1,18 +1,23 @@
 import { test, expect } from '@playwright/test';
+import { expectNotInPage } from '../../lib/survey-secrets';
+import { TRIGGER_HEADER, curlExample, generateTriggerToken, lastCopied, recordCopies } from '../../lib/triggers';
 
 // Inbound-trigger spec for workflow templates. Mirrors the job-template
 // trigger flow:
 //   1. Operator visits /workflow-template/view?id=N
-//   2. Clicks "Generate Token" — the raw value is shown once in a flash
-//   3. Captures the token and POSTs to /trigger/fire-workflow?token=…
+//   2. Clicks "Generate Token" — the raw value is shown once, in the
+//      X-Trigger-Token header form of the card, never in a URL
+//   3. Captures the token and POSTs to /trigger/fire-workflow with the header
 //   4. Endpoint returns 201 + workflow_job_id
 //   5. Cleanup: revokes the token so it can't accidentally be reused
 //
 // Pinned here because the JSON contract (workflow_job_id field, 201
-// status) is what external systems will hard-code.
+// status) is what external systems will hard-code. Every transport and error
+// answer: tests/trigger/fire.spec.ts.
 
 test.describe('Workflow template inbound trigger', () => {
-  test('generate token, fire workflow via /trigger/fire-workflow, revoke', async ({ page, request, baseURL }) => {
+  test('generate token, fire workflow via /trigger/fire-workflow with the header, revoke', async ({ page, request, baseURL }) => {
+    await recordCopies(page);
     // Navigate to the seeded workflow template's view page. Use the
     // exact-match link to avoid matching e2e-paused-workflow / e2e-approval-workflow.
     await page.goto('/workflow-template/index?sort=-id');
@@ -23,33 +28,44 @@ test.describe('Workflow template inbound trigger', () => {
     const card = page.locator('.card', { hasText: 'Inbound Trigger' });
     await expect(card).toBeVisible({ timeout: 5_000 });
 
-    // If a previous run left a token in place, revoke it first so we land
-    // back at the "Generate Token" button.
-    if (await card.locator('button:has-text("Revoke Token")').isVisible({ timeout: 1_000 }).catch(() => false)) {
-      page.once('dialog', (d) => d.accept());
-      await card.locator('button:has-text("Revoke Token")').click();
-      await page.waitForLoadState('domcontentloaded');
-    }
+    // Generate a fresh token (revoking one a previous run left). The
+    // post-redirect view shows the raw value once.
+    const rawToken = await generateTriggerToken(page, 'wf-');
 
-    // Generate a fresh token. The post-redirect view shows the raw value once.
-    await card.locator('button:has-text("Generate Token")').click();
-    await page.waitForLoadState('domcontentloaded');
-
-    const tokenCode = page.locator('#wf-trigger-token-display');
-    await expect(tokenCode).toBeVisible({ timeout: 5_000 });
-    const rawToken = (await tokenCode.textContent())?.trim() ?? '';
-    expect(rawToken.length).toBe(64);
+    // Regression: the card showed the token in URLs, which end up in access
+    // logs. It shows the header form for the workflow endpoint instead.
+    const html = await page.content();
+    expect(html, 'no URL with the token').not.toContain(`token=${rawToken}`);
+    await expect(page.locator('.alert-trigger_token_raw')).toHaveCount(0);
+    const endpoint = ((await page.locator('#wf-trigger-endpoint').textContent()) ?? '').trim();
+    expect(endpoint).toMatch(/^https?:\/\/[^/]+\/trigger\/fire-workflow$/);
+    const curl = curlExample(rawToken, endpoint);
+    await expect(page.locator('#wf-trigger-curl-example')).toHaveText(curl);
+    const note = page.locator('#wf-trigger-transport-note');
+    await expect(note).toContainText('that form is deprecated');
+    // Regression: the note named /trigger/<token> too, which reaches job
+    // templates only; a workflow token sent there is a 404.
+    await expect(note).toContainText('(?token=…) keep working');
+    await expect(note).not.toContainText('/trigger/<token>');
+    await page.locator('#btn-copy-wf-curl').click();
+    await expect(page.locator('#btn-copy-wf-curl')).toHaveText('Copied!');
+    expect(await lastCopied(page)).toBe(curl);
 
     // Fire the workflow through the public trigger endpoint. The token is
     // the credential here; the request fixture's session cookies don't
     // change behaviour because TriggerController has no auth filter.
     const response = await request.post(`${baseURL}/trigger/fire-workflow`, {
-      params: { token: rawToken },
+      headers: { [TRIGGER_HEADER]: rawToken },
     });
     expect(response.status()).toBe(201);
     const body = (await response.json()) as { workflow_job_id?: number };
     expect(typeof body.workflow_job_id).toBe('number');
     expect(body.workflow_job_id).toBeGreaterThan(0);
+
+    // Shown once: after a reload the card masks the token.
+    await page.reload();
+    await expect(page.locator('#wf-trigger-curl-masked')).toHaveText(curlExample('*'.repeat(16), endpoint));
+    await expectNotInPage(page, rawToken);
 
     // Cleanup so the seeded template stays in a known state across runs.
     // The revoke form has an onsubmit=confirm() — accept it.
@@ -61,8 +77,8 @@ test.describe('Workflow template inbound trigger', () => {
 
   test('unknown token returns 404 from /trigger/fire-workflow', async ({ request, baseURL }) => {
     const response = await request.post(`${baseURL}/trigger/fire-workflow`, {
-      params: { token: 'definitely-not-a-real-token-1234567890abcdef' },
+      headers: { [TRIGGER_HEADER]: 'definitely-not-a-real-token-1234567890abcdef' },
     });
-    expect([401, 403, 404]).toContain(response.status());
+    expect(response.status()).toBe(404);
   });
 });

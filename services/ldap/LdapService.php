@@ -80,7 +80,7 @@ class LdapService extends Component
      * {@see getLastError()} for diagnostic detail (NEVER show to the
      * end user — see class docblock).
      */
-    public function authenticate(string $username, string $password): ?LdapAuthResult
+    public function authenticate(string $username, #[\SensitiveParameter] string $password): ?LdapAuthResult
     {
         $this->lastError = null;
 

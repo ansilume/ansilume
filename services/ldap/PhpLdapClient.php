@@ -103,7 +103,7 @@ class PhpLdapClient implements LdapClientInterface
         return $this->buildEntry($conn, $entry);
     }
 
-    public function bindAsUser(string $dn, string $password): bool
+    public function bindAsUser(string $dn, #[\SensitiveParameter] string $password): bool
     {
         // Empty password protection: many directory servers grant an
         // "unauthenticated" bind for empty passwords (RFC 4513 §5.1.2)

@@ -57,7 +57,9 @@ class RunnerHttpClientTest extends TestCase
     /**
      * Every authenticated request reports the runner's version and the
      * features it honours, so the server knows which runners neutralise a
-     * repository's vault settings.
+     * repository's vault settings and which take password survey answers
+     * as a file. The claim request carries them too: the server decides
+     * per claim how the answers travel.
      */
     public function testEveryAuthenticatedRequestReportsVersionAndCapabilities(): void
     {
@@ -66,13 +68,13 @@ class RunnerHttpClientTest extends TestCase
         $client->post('/api/runner/v1/jobs/claim', []);
         $client->post('/api/runner/v1/jobs/7/logs', ['stream' => 'stdout', 'content' => 'x', 'sequence' => 0]);
 
-        $this->assertSame(['vault_password_source'], RunnerHttpClient::CAPABILITIES);
+        $this->assertSame(['vault_password_source', 'secret_extra_vars'], RunnerHttpClient::CAPABILITIES);
         $this->assertSame(
-            ['software_version' => '2.8.0', 'capabilities' => ['vault_password_source']],
+            ['software_version' => '2.8.0', 'capabilities' => ['vault_password_source', 'secret_extra_vars']],
             $client->sent[0]['body']
         );
         $this->assertSame(
-            ['software_version' => '2.8.0', 'capabilities' => ['vault_password_source'], 'stream' => 'stdout', 'content' => 'x', 'sequence' => 0],
+            ['software_version' => '2.8.0', 'capabilities' => ['vault_password_source', 'secret_extra_vars'], 'stream' => 'stdout', 'content' => 'x', 'sequence' => 0],
             $client->sent[1]['body']
         );
         $this->assertSame(['Authorization: Bearer runner-token'], $client->sent[1]['headers']);
@@ -86,7 +88,7 @@ class RunnerHttpClientTest extends TestCase
         $client->post('/api/runner/v1/heartbeat', []);
 
         $this->assertSame('dev', $client->sent[0]['body']['software_version']);
-        $this->assertSame(['vault_password_source'], $client->sent[0]['body']['capabilities']);
+        $this->assertSame(['vault_password_source', 'secret_extra_vars'], $client->sent[0]['body']['capabilities']);
     }
 
     public function testCallersCanOverrideTheReportedFields(): void
@@ -106,6 +108,51 @@ class RunnerHttpClientTest extends TestCase
 
         $this->assertSame(['name' => 'runner-1'], $client->sent[0]['body']);
         $this->assertSame([], $client->sent[0]['headers']);
+    }
+
+    /**
+     * Regression (review RUN-2): a body with bytes that are not UTF-8 (job
+     * output can hold any) failed json_encode(), and the request was dropped
+     * without a word. Now the request goes out with U+FFFD in their place.
+     */
+    public function testBytesThatAreNotUtf8ArriveAsReplacementCharacters(): void
+    {
+        $recorder = new RunnerApiRecorder();
+        $client = new RunnerHttpClient($recorder->start(), 'runner-token');
+        try {
+            $logged = $client->post('/api/runner/v1/jobs/7/logs', ['stream' => 'stdout', 'content' => "cut \xC3", 'sequence' => 0]);
+            $registered = $client->postUnauthenticated('/api/runner/v1/register', ['name' => "runner-\xFF"]);
+            $requests = $recorder->requests();
+        } finally {
+            $recorder->stop();
+        }
+
+        $this->assertSame(['ok' => true], $logged);
+        $this->assertSame(['ok' => true], $registered);
+        $this->assertSame(200, $client->getLastHttpStatus());
+        $this->assertSame(['/api/runner/v1/jobs/7/logs', '/api/runner/v1/register'], array_column($requests, 'path'));
+        $log = json_decode($requests[0]['body'], true);
+        $this->assertIsArray($log);
+        $this->assertSame("cut \u{FFFD}", $log['content']);
+        $this->assertSame(['name' => "runner-\u{FFFD}"], json_decode($requests[1]['body'], true));
+    }
+
+    /**
+     * A body JSON cannot express at all is not sent.
+     */
+    public function testABodyJsonCannotExpressIsNotSent(): void
+    {
+        $recorder = new RunnerApiRecorder();
+        $client = new RunnerHttpClient($recorder->start(), 'runner-token');
+        try {
+            $result = $client->post('/api/runner/v1/jobs/7/logs', ['sequence' => NAN]);
+            $requests = $recorder->requests();
+        } finally {
+            $recorder->stop();
+        }
+
+        $this->assertNull($result);
+        $this->assertSame([], $requests);
     }
 
     /**

@@ -207,8 +207,9 @@ class RunnerControllerSyncProjectTest extends TestCase
 
         $controller = file_get_contents(dirname(__DIR__, 3) . '/commands/RunnerController.php');
         $this->assertNotFalse($controller);
+        // The payload may be marked #[\SensitiveParameter]: it carries credentials and survey answers.
         $this->assertMatchesRegularExpression(
-            '/function\s+syncProject\(array \$payload\): \?string\s*\{\s*return \(new RunnerProjectSync\(\$this\)\)->sync\(\$payload\);/',
+            '/function\s+syncProject\((?:#\[\\\\SensitiveParameter\]\s*)?array \$payload\): \?string\s*\{\s*return \(new RunnerProjectSync\(\$this\)\)->sync\(\$payload\);/',
             $controller,
             'syncProject must delegate to RunnerProjectSync'
         );

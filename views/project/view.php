@@ -11,6 +11,7 @@ declare(strict_types=1);
 use app\components\LintVerdict;
 use app\models\Project;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = $model->name;
@@ -104,13 +105,13 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
 </div>
 <script>
 (function () {
-    var statusUrl = <?= json_encode(\yii\helpers\Url::to(['sync-status', 'id' => $model->id])) // xss-ok: json_encode escapes?>;
+    var statusUrl = <?= Json::htmlEncode(Url::to(['sync-status', 'id' => $model->id])) // xss-ok: hex-escaped JSON?>;
     var output = document.getElementById('sync-log-output');
     var badge = document.getElementById('sync-status-badge');
     var startedAt = document.getElementById('sync-started-at');
     var workerEl = document.getElementById('sync-worker-indicator');
-    var lastSeq = <?= json_encode((int)($initialLogs ? end($initialLogs)->sequence : 0)) // xss-ok: int?>;
-    var initialStatus = <?= json_encode($model->status) // xss-ok: json_encode escapes?>;
+    var lastSeq = <?= Json::htmlEncode((int)($initialLogs ? end($initialLogs)->sequence : 0)) // xss-ok: int?>;
+    var initialStatus = <?= Json::htmlEncode($model->status) // xss-ok: hex-escaped JSON?>;
     var pollIntervalMs = 2000;
     var stopOnTerminal = function () { /* set after first poll resolves */ };
 

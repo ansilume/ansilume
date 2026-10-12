@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\E2eConsoleGuard;
 use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Inventory;
@@ -26,9 +27,12 @@ use yii\console\ExitCode;
  * E2E test data seeding and teardown.
  *
  * All entities are prefixed with "e2e-" for safe identification and cleanup.
+ * Every action refuses to run unless YII_ENV is dev or test (E2eConsoleGuard).
  */
 class E2eController extends Controller
 {
+    use E2eConsoleGuard;
+
     private const PREFIX = 'e2e-';
 
     /**
@@ -173,6 +177,16 @@ class E2eController extends Controller
     {
         // Wipe e2e-ui-* runners from prior Playwright runs (runners/create-token.spec.ts).
         \Yii::$app->db->createCommand('DELETE FROM runner WHERE name LIKE :p', [':p' => 'e2e-ui-%'])->execute();
+        $logger = function (string $msg): void {
+            $this->stdout($msg);
+        };
+        // First, so their templates, schedules and jobs are older than the other
+        // fixtures, which specs look up on the first page of lists sorted newest first.
+        (new E2eUnusablePasswordNameSeeder($logger))->seed($userId);
+        $secretParents = (new E2eSurveySecretSeeder($logger))->seed($userId);
+        (new E2eSurveyEditorSeeder($logger))->seed($userId, $secretParents);
+        (new E2eExtraVarsEditorSeeder($logger))->seed($userId, $secretParents);
+        (new E2eCancelOnlyUserSeeder($logger))->seed();
 
         $runnerGroupId = $this->seedRunnerGroup($userId);
         $this->seedSecondRunnerGroup($userId);
@@ -189,9 +203,6 @@ class E2eController extends Controller
         $this->seedApprovalWorkflow($userId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
         $this->seedJobWithArtifacts($userId, $templateId);
-        $logger = function (string $msg): void {
-            $this->stdout($msg);
-        };
         (new E2eLogStreamSeeder($logger))->seed($userId, $templateId);
         (new E2eWorkflowPausedSeeder($logger))->seed($userId, $templateId);
         (new E2eSurveyTemplateSeeder($logger))->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);

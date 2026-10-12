@@ -153,7 +153,7 @@ abstract class BaseRunnerApiController extends Controller
     /**
      * @return array{ok: true}|array{ok: true, data: mixed}
      */
-    protected function ok(mixed $data = null): array
+    protected function ok(#[\SensitiveParameter] mixed $data = null): array
     {
         if ($data === null) {
             return ['ok' => true];

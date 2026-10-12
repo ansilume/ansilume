@@ -28,7 +28,7 @@ final class ForwardedHeaders
      * @param array<array-key, mixed> $server
      * @return list<list<array{for: string|null, proto: string|null}>>
      */
-    public static function chains(array $server): array
+    public static function chains(#[\SensitiveParameter] array $server): array
     {
         $chains = [];
         $forwardedFor = self::header($server, 'HTTP_X_FORWARDED_FOR');
@@ -56,7 +56,7 @@ final class ForwardedHeaders
      *
      * @param array<array-key, mixed> $server
      */
-    public static function sslFlagged(array $server): bool
+    public static function sslFlagged(#[\SensitiveParameter] array $server): bool
     {
         return strtolower(self::header($server, 'HTTP_X_FORWARDED_SSL')) === 'on'
             || strtolower(self::header($server, 'HTTP_FRONT_END_HTTPS')) === 'on';
@@ -114,7 +114,7 @@ final class ForwardedHeaders
     /**
      * @param array<array-key, mixed> $server
      */
-    private static function header(array $server, string $key): string
+    private static function header(#[\SensitiveParameter] array $server, string $key): string
     {
         return is_string($server[$key] ?? null) ? $server[$key] : '';
     }

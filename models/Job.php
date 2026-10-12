@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\models\traits\SealedSecretExtraVarsTrait;
 use yii\db\ActiveRecord;
 
 /**
  * @property int         $id
  * @property int|null    $job_template_id
  * @property string      $status
- * @property string|null $extra_vars       JSON
+ * @property string|null $extra_vars       JSON; password answers show as SurveySecrets::PLACEHOLDER
  * @property string|null $limit
  * @property int|null    $verbosity
  * @property int         $check_mode          1 = dry run (--check --diff)
@@ -38,9 +39,15 @@ use yii\db\ActiveRecord;
  * @property JobLog[]             $logs
  * @property JobHostSummary[]     $hostSummaries
  * @property JobArtifact[]        $artifacts
+ *
+ * The sealed password answers (column secret_extra_vars) are read and
+ * written only through getSealedSecretExtraVars() and
+ * setSealedSecretExtraVars(), see SealedSecretExtraVarsTrait.
  */
 class Job extends ActiveRecord
 {
+    use SealedSecretExtraVarsTrait;
+
     public const STATUS_PENDING = 'pending';
     public const STATUS_QUEUED = 'queued';
     public const STATUS_RUNNING = 'running';

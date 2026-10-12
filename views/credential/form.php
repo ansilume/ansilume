@@ -8,6 +8,7 @@ declare(strict_types=1);
 
 use app\models\Credential;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->isNewRecord ? 'New Credential' : 'Edit: ' . $model->name;
@@ -182,7 +183,7 @@ document.addEventListener('DOMContentLoaded', function () {
             btnGenerate.disabled = true;
             btnGenerate.textContent = 'Generating…';
 
-            fetch(<?= json_encode(\yii\helpers\Url::to(['/credential/generate-ssh-key'])) ?>, {
+            fetch(<?= Json::htmlEncode(\yii\helpers\Url::to(['/credential/generate-ssh-key'])) ?>, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

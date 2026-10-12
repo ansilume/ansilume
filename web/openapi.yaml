@@ -71,6 +71,23 @@ info:
       are refused once that user may no longer launch; see the Triggers
       endpoints.
 
+    ## Password survey answers
+
+    A job template's survey can have password fields (`type: password`, see
+    `SurveyField`). The value of an extra var whose top-level key is the
+    name of such a field is a password answer, whatever sends it:
+    `extra_vars` of `POST /api/v1/jobs`, the body of a trigger, the
+    `extra_vars` of a schedule, or the web UI. Ansilume stores password
+    answers only encrypted, with `APP_SECRET_KEY` like credentials, and
+    gives them only to the runner that runs the job. Responses show the
+    placeholder `$encrypted$` in their place, in `extra_vars` and
+    `execution_command` of every job and in `extra_vars` of every schedule.
+    A launch that sends `$encrypted$` as a password answer is refused:
+    `POST /api/v1/jobs`, `/trigger/fire` and `/trigger/{token}` answer
+    `422` and launch nothing, while `/trigger/fire-workflow` answers `201`
+    and the run fails at its start step. In the `extra_vars` of a schedule,
+    `$encrypted$` keeps the answer the schedule has stored.
+
     ## Errors
 
     Error responses have the shape `{ "error": { "message": "..." } }` and
@@ -83,12 +100,11 @@ info:
     role's `{name}`), and `500` for an unexpected error. An unknown nested
     ID in the path (`artifact_id`, `userId`, `projectId`) answers `404` in
     the usual shape. The trigger endpoints, outside `/api/v1/`, answer
-    `403` and `500` as `{ "error": "Launch refused." }` and
-    `{ "error": "Launch failed." }`. Their `400` (missing token), `404`
-    (unknown or revoked token, or another method than POST on
-    `/trigger/{token}`) and `405` (another method than POST on
-    `/trigger/fire` and `/trigger/fire-workflow`) are the web UI's HTML
-    error page, without a JSON body.
+    `403`, `422` and `500` as `{ "error": "<message>" }`, for example
+    `{ "error": "Launch refused." }`. Their `400` (no token), `404` (unknown
+    or revoked token, and every other path under `/trigger/`) and `405`
+    (another method than POST, also on `/trigger/{token}`) are the web UI's
+    HTML error page, without a JSON body.
 
 servers:
   - url: http://localhost:8080
@@ -144,9 +160,21 @@ tags:
       than 365 days after it answers 422.
   - name: Triggers
     description: |
-      Inbound triggers. The token is the only authentication. A trigger runs
-      as the user who generated its token and is refused while that user may
-      not launch the template.
+      Inbound triggers: another system launches a job template or a
+      workflow template with its trigger token, the only authentication.
+      Send the token in the `X-Trigger-Token` header, or as
+      `Authorization: Bearer <token>`. Tokens in the URL, the `token` query
+      parameter and the path form `/trigger/{token}` (job templates only),
+      still work but are deprecated: URLs end up in access logs and in
+      proxies. When a request carries the token more than once, the header
+      wins, then the URL, then `Authorization: Bearer`, so a caller that
+      sends an unrelated `Authorization` header keeps working with its URL
+      token. A trigger runs as the user who generated its token and is
+      refused while that user may not launch the template. Every launch is
+      audited as `trigger.fired`, with how the token was sent (`transport`:
+      `header`, `bearer` or `url`) and never the token. Generate and revoke
+      tokens on the template's page or with the `trigger-token` endpoints of
+      job and workflow templates.
   - name: Roles
   - name: Profile
   - name: LDAP
@@ -563,7 +591,9 @@ paths:
         one vault password, when a file or dynamic inventory belongs to another
         project than the template, and when the project, inventory, runner
         group or approval rule does not exist. An inventory of a project the
-        caller cannot see counts as not existing.
+        caller cannot see counts as not existing. The survey and the extra
+        vars are checked by the rules described at `survey_fields` and
+        `extra_vars` of `JobTemplateInput` (422 with the first problem).
       requestBody:
         required: true
         content:
@@ -577,6 +607,18 @@ paths:
               runner_group_id: 1
               verbosity: 0
               forks: 5
+              extra_vars: '{"http_port": 8080}'
+              survey_fields:
+                - name: app_env
+                  label: Environment
+                  type: select
+                  required: true
+                  default: staging
+                  options: [staging, production]
+                - name: db_password
+                  label: Database password
+                  type: password
+                  required: true
       responses:
         '201': { $ref: '#/components/responses/JobTemplateResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -603,7 +645,11 @@ paths:
         another project is rejected too; older templates that already have one
         keep working and report the `inventory_other_project` warning. A new
         inventory must exist and belong to a project the caller can see, as on
-        create.
+        create. The survey rules (see `survey_fields` and `extra_vars` of
+        `JobTemplateInput`) apply only when the update changes what they
+        check, so templates saved before the rules keep saving. Extra vars
+        that hold a number too large for JSON are rejected on every update
+        (see `extra_vars`).
       requestBody:
         required: true
         content:
@@ -623,6 +669,44 @@ paths:
         its jobs keep their link to it. Its trigger token is revoked.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /api/v1/job-templates/{id}/trigger-token:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    post:
+      tags: [Job Templates, Triggers]
+      summary: Generate or replace the template's trigger token
+      description: |
+        Requires `job-template.update` and operator access to the template's
+        project (403 otherwise), as on the template's page. Generates a new
+        trigger token and returns it; this response is the only place it
+        ever appears, the server keeps only its SHA-256 hash. A token the
+        template had before stops working at once.
+
+        The trigger now runs as the caller (`trigger_user_id`), whoever
+        generated the previous token: every call checks that this user is
+        active, holds `job.launch` and may operate the template's project.
+        Audited as `job-template.trigger-token.generated` with source `api`.
+        Send the token in the `X-Trigger-Token` header of
+        `POST /trigger/fire`. An unknown or deleted job template answers 404.
+      responses:
+        '201': { $ref: '#/components/responses/TriggerTokenCreatedResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Job Templates, Triggers]
+      summary: Revoke the template's trigger token
+      description: |
+        Requires `job-template.update` and operator access to the template's
+        project (403 otherwise). The trigger stops working at once. Revoking
+        a template without a token answers 200 as well and changes nothing;
+        only an actual revocation is audited, as
+        `job-template.trigger-token.revoked` with source `api`. An unknown or
+        deleted job template answers 404.
+      responses:
+        '200': { $ref: '#/components/responses/TriggerTokenRevokedResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -650,16 +734,30 @@ paths:
         The response lists the credentials the job will use and the
         template's warnings (e.g. a vault password that does not open the
         template's encrypted files); warnings never block a launch.
+
+        Values in `extra_vars` whose key is a password field of the
+        template's survey are password answers: they are stored only
+        encrypted, and the response shows `$encrypted$` in their place (see
+        Password survey answers above). Refused with 422, and nothing is
+        stored: `$encrypted$` sent as an answer, a template with a password
+        field whose name cannot carry an answer, and extra vars that JSON
+        cannot hold, such as a number too large for JSON (`1e999`), in
+        either form of `extra_vars`. Other failures, such as an
+        `APP_SECRET_KEY` that cannot encrypt, answer 500 `Launch failed.`
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/JobLaunchInput' }
+            example:
+              job_template_id: 12
+              extra_vars: { app_version: "1.4.2", db_password: "<database password>" }
+              limit: web
       responses:
         '201': { $ref: '#/components/responses/JobLaunchResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/JobLaunchRejected' }
         '500': { $ref: '#/components/responses/ServerError' }
   /api/v1/jobs/{id}:
     get:
@@ -830,6 +928,12 @@ paths:
         not launch when it is due: the refusal is audited as
         `schedule.launch.denied` and the `schedule.failed_to_launch`
         notification is sent. This holds on installations without teams too.
+
+        Password answers in `extra_vars` are stored only encrypted; see
+        `extra_vars` of `ScheduleInput` for how to keep, replace and drop
+        them, and for the 422 answers. These come after the template checks
+        above and the field validation, so they never name the password
+        fields of a template the caller may not use.
       requestBody:
         required: true
         content:
@@ -840,6 +944,7 @@ paths:
               job_template_id: 1
               cron_expression: "0 2 * * *"
               timezone: UTC
+              extra_vars: '{"app_env": "production", "db_password": "<database password>"}'
               enabled: true
       responses:
         '201': { $ref: '#/components/responses/ScheduleResponse' }
@@ -867,11 +972,21 @@ paths:
         (`created_by`), whom its jobs run as; `created_by` in the body is
         ignored. Every update stores a fresh `next_run_at`, the next time the
         cron expression matches.
+
+        Fields the body leaves out keep their value. A body without
+        `extra_vars` keeps the extra vars and the stored password answers,
+        unless it changes `job_template_id` while answers are stored: such a
+        request answers 422 until it sends `extra_vars` with the answers
+        again, as stored answers never move to another job template. See
+        `extra_vars` of `ScheduleInput`.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ScheduleInput' }
+            example:
+              cron_expression: "30 2 * * *"
+              extra_vars: '{"app_env": "production", "db_password": "$encrypted$"}'
       responses:
         '200': { $ref: '#/components/responses/ScheduleResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1804,6 +1919,45 @@ paths:
                     error:
                       message: You may not launch this workflow.
         '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/workflow-templates/{id}/trigger-token:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    post:
+      tags: [Workflow Templates, Triggers]
+      summary: Generate or replace the workflow's trigger token
+      description: |
+        Requires `workflow-template.update` and operator access to the
+        project of every job step (403 otherwise), as on the workflow's page.
+        Generates a new trigger token and returns it; this response is the
+        only place it ever appears, the server keeps only its SHA-256 hash. A
+        token the workflow had before stops working at once.
+
+        The trigger now runs as the caller (`trigger_user_id`), whoever
+        generated the previous token: every call checks that this user is
+        active, holds `workflow.launch` and may operate the project of every
+        job step. Audited as `workflow-template.trigger-token.generated` with
+        source `api`. Send the token in the `X-Trigger-Token` header of
+        `POST /trigger/fire-workflow`. An unknown or deleted workflow
+        template answers 404.
+      responses:
+        '201': { $ref: '#/components/responses/TriggerTokenCreatedResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Workflow Templates, Triggers]
+      summary: Revoke the workflow's trigger token
+      description: |
+        Requires `workflow-template.update` and operator access to the
+        project of every job step (403 otherwise). The trigger stops working
+        at once. Revoking a workflow without a token answers 200 as well and
+        changes nothing; only an actual revocation is audited, as
+        `workflow-template.trigger-token.revoked` with source `api`. An
+        unknown or deleted workflow template answers 404.
+      responses:
+        '200': { $ref: '#/components/responses/TriggerTokenRevokedResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # ────────────────────────── Workflow Jobs ──────────────────────────
   /api/v1/workflow-jobs:
@@ -1984,13 +2138,24 @@ paths:
   /trigger/fire:
     post:
       tags: [Triggers]
-      summary: Public webhook endpoint to launch a job by trigger token
+      summary: Launch a job by trigger token
       description: |
-        Authentication is the token itself (query parameter). This endpoint is
-        **not** under `/api/v1/` and does not use the Bearer scheme. Generate
-        or revoke the token on the job template's page, which needs
-        `job-template.update` and operator access to the template's project;
-        the raw token is shown once, the server keeps only its SHA-256 hash.
+        Authentication is the trigger token itself, sent in the
+        `X-Trigger-Token` header (recommended) or as
+        `Authorization: Bearer <token>`. This endpoint is **not** under
+        `/api/v1/`, and the Bearer token here is the trigger token, not an
+        API token. The `token` query parameter still works but is
+        deprecated. Generate or revoke the token on the job template's page
+        or with `POST` and `DELETE /api/v1/job-templates/{id}/trigger-token`,
+        which need `job-template.update` and operator access to the
+        template's project; the raw token is shown once, the server keeps
+        only its SHA-256 hash.
+
+        ```bash
+        curl -X POST -H "X-Trigger-Token: <trigger-token>" \
+          -H "Content-Type: application/json" -d "{}" \
+          https://ansilume.example.com/trigger/fire
+        ```
 
         The job runs as the user who generated the token. Tokens generated
         before Ansilume recorded that run as the template's creator; the
@@ -2000,15 +2165,31 @@ paths:
         holds `job.launch` and may operate the template's project. Otherwise
         the call answers 403 `{"error": "Launch refused."}` and is audited as
         `trigger.denied` with the reason (`not_permitted` or
-        `no_project_access`); the caller learns nothing else.
+        `no_project_access`) and the transport; the caller learns nothing
+        else. A launch is audited as `trigger.fired` with the transport and
+        the `job_id`.
 
         The optional JSON body overrides `extra_vars`, `limit` and
-        `verbosity` of the job template.
-      security: []
+        `verbosity` of the job template. Values in `extra_vars` whose key is
+        a password field of the template's survey are password answers,
+        stored only encrypted. A launch the server refuses for a reason the
+        caller can fix answers 422 with the reason, for example
+        `$encrypted$` sent as a password answer. Any method but POST answers
+        405.
+      security:
+        - triggerTokenHeader: []
+        - triggerTokenBearer: []
+        - {}
       parameters:
         - in: query
           name: token
-          required: true
+          required: false
+          deprecated: true
+          description: |
+            The trigger token in the URL. Deprecated: URLs end up in access
+            logs and in proxies. Ansilume's nginx masks it in its access log,
+            from `token=` to the end of the URL; send the token in the
+            `X-Trigger-Token` header instead.
           schema: { type: string }
       requestBody:
         required: false
@@ -2023,23 +2204,32 @@ paths:
         '400': { $ref: '#/components/responses/TriggerTokenMissing' }
         '403': { $ref: '#/components/responses/TriggerLaunchRefused' }
         '404': { $ref: '#/components/responses/TriggerNotFound' }
+        '422': { $ref: '#/components/responses/TriggerLaunchRejected' }
         '500': { $ref: '#/components/responses/TriggerLaunchFailed' }
 
   /trigger/{token}:
     post:
       tags: [Triggers]
-      summary: Launch a job by trigger token, with the token in the path
+      summary: Launch a job by trigger token in the path (deprecated)
+      deprecated: true
       description: |
-        Same as `/trigger/fire?token=...`, with the token (64 hexadecimal
-        characters) in the path; the job template page shows this form. Runs
-        as the user who generated the token, with the same checks and
-        answers.
+        Deprecated: the path ends up in access logs and in proxies. Send the
+        token in the `X-Trigger-Token` header of `POST /trigger/fire`
+        instead; the template page shows only that form.
+
+        Same as `/trigger/fire`, with the token in the path, also with a
+        trailing slash. Runs as the user who generated the token, with the
+        same checks and answers; an `X-Trigger-Token` header wins over the
+        path. Ansilume's nginx masks the path in its access log. Any method
+        but POST answers 405, and every other path under `/trigger/` answers
+        404. Tokens are lowercase, as generated; the path also takes
+        uppercase hexadecimal, which answers 404 like any unknown token.
       security: []
       parameters:
         - in: path
           name: token
           required: true
-          schema: { type: string, pattern: '^[a-f0-9]{64}$' }
+          schema: { type: string, pattern: '^[a-fA-F0-9]{64}$' }
       requestBody:
         required: false
         content:
@@ -2049,17 +2239,22 @@ paths:
         '201': { $ref: '#/components/responses/TriggerJobLaunched' }
         '403': { $ref: '#/components/responses/TriggerLaunchRefused' }
         '404': { $ref: '#/components/responses/TriggerNotFound' }
+        '422': { $ref: '#/components/responses/TriggerLaunchRejected' }
         '500': { $ref: '#/components/responses/TriggerLaunchFailed' }
 
   /trigger/fire-workflow:
     post:
       tags: [Triggers]
-      summary: Public webhook endpoint to launch a workflow by trigger token
+      summary: Launch a workflow by trigger token
       description: |
         Mirror of `/trigger/fire` for workflow templates: launches a run of
-        the workflow template whose inbound-trigger token is given. The token
-        is hashed (SHA-256) on the server; generated tokens are shown to the
-        operator exactly once. Generating or revoking it needs
+        the workflow template whose trigger token is sent, in the
+        `X-Trigger-Token` header (recommended), as
+        `Authorization: Bearer <token>`, or in the deprecated `token` query
+        parameter. The token is hashed (SHA-256) on the server; generated
+        tokens are shown exactly once. Generating or revoking it, on the
+        workflow's page or with `POST` and
+        `DELETE /api/v1/workflow-templates/{id}/trigger-token`, needs
         `workflow-template.update` and operator access to the project of every
         job step.
 
@@ -2068,20 +2263,34 @@ paths:
         `trigger_user_id` of `GET /api/v1/workflow-templates/{id}` names the
         user for callers who may change the workflow. Every call checks that
         this user is active, holds `workflow.launch` and may operate the
-        project of every job step. Otherwise the call answers 403
-        `{"error": "Launch refused."}` and is audited as
-        `workflow.launch.denied` with source `trigger`. Each job step is
-        checked again, as the same user, when it starts.
+        project of every job step, also for a workflow without steps.
+        Otherwise the call answers 403 `{"error": "Launch refused."}` and is
+        audited as `workflow.launch.denied` with source `trigger` and the
+        transport. Each job step is checked again, as the same user, when it
+        starts. A launch is audited as `trigger.fired` with the transport and
+        the `workflow_job_id`.
 
         The optional JSON body's `extra_vars` reach the start step only, when
         it is a job step. Later steps get their extra vars from the previous
         step's output, as each step's `extra_vars_template` maps them. Other
-        keys are ignored.
-      security: []
+        keys are ignored. A start step whose launch is refused, for example
+        because a password answer is `$encrypted$`, does not fail the call:
+        it answers 201, and the run fails at that step with the reason in
+        `steps[].error` of `GET /api/v1/workflow-jobs/{id}`. Any method but
+        POST answers 405.
+      security:
+        - triggerTokenHeader: []
+        - triggerTokenBearer: []
+        - {}
       parameters:
         - in: query
           name: token
-          required: true
+          required: false
+          deprecated: true
+          description: |
+            The trigger token in the URL. Deprecated: URLs end up in access
+            logs and in proxies. Send it in the `X-Trigger-Token` header
+            instead.
           schema: { type: string }
       requestBody:
         required: false
@@ -2264,6 +2473,23 @@ components:
       scheme: bearer
       bearerFormat: opaque-hex
       description: API token minted via `/profile/tokens` or `php yii api-token/create`.
+    triggerTokenHeader:
+      type: apiKey
+      in: header
+      name: X-Trigger-Token
+      description: |
+        The trigger token of a job or workflow template, for the `/trigger/`
+        endpoints only. The recommended way to send it: headers stay out of
+        access logs and proxy logs, unlike URLs.
+    triggerTokenBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: 64 hexadecimal characters
+      description: |
+        The trigger token as `Authorization: Bearer <token>`, for the
+        `/trigger/` endpoints only; an API token does not work here. A token
+        in the URL wins over it, and only the Bearer scheme counts, so a
+        caller with an unrelated `Authorization` header keeps working.
 
   parameters:
     IdPath:
@@ -2573,18 +2799,47 @@ components:
     TriggerNotFound:
       description: |
         Unknown or revoked token. Also sends the `webhook.invalid_token`
-        notification, so operators notice leaked or stale tokens. The body is
-        the web UI's HTML error page, not JSON.
+        notification with the token's first six characters, so operators
+        notice leaked or stale tokens. Every other path under `/trigger/`
+        answers 404 `Page not found.` too, without a notification. The body
+        is the web UI's HTML error page, not JSON.
       content:
         text/html:
           schema: { type: string }
     TriggerTokenMissing:
       description: |
-        The `token` query parameter is missing. The body is the web UI's HTML
-        error page, not JSON.
+        `Missing trigger token.`: the request carries no usable token, in no
+        `X-Trigger-Token` header, no `token` query parameter and no
+        `Authorization: Bearer` header. An empty value, or a list such as
+        `token[]=...`, counts as none. The body is the web UI's HTML error
+        page, not JSON.
       content:
         text/html:
           schema: { type: string }
+    TriggerLaunchRejected:
+      description: |
+        The job template refused the launch for a reason the caller or an
+        operator can fix; nothing was launched. `error` says why:
+        `$encrypted$` sent as a password answer (send the real value), a
+        password field whose name cannot carry an answer (rename it in the
+        survey), or extra vars that JSON cannot hold, such as a number too
+        large for JSON (`1e999`), in the extra vars or in a password answer.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TriggerRejectedError' }
+          examples:
+            placeholder:
+              summary: A password answer was the placeholder
+              value:
+                error: 'The value of "db_password" is the placeholder $encrypted$; send the real value.'
+            unusableName:
+              summary: A password field needs another name
+              value:
+                error: 'Survey field "db[pw]" has a name that cannot be used for a password answer; rename it in the survey before launching.'
+            numberTooLarge:
+              summary: A number JSON cannot hold, in a password answer
+              value:
+                error: 'The password answers cannot be stored: they contain a number too large for JSON.'
     TriggerLaunchFailed:
       description: |
         The launch failed for another reason, for example a workflow without
@@ -2594,6 +2849,66 @@ components:
           schema: { $ref: '#/components/schemas/TriggerError' }
           example:
             error: Launch failed.
+    TriggerTokenCreatedResponse:
+      description: |
+        The new trigger token and the user the trigger now runs as. The
+        token appears in no other response; the response is sent with
+        `Cache-Control: no-store`.
+      headers:
+        Cache-Control:
+          description: Always `no-store`, as the body holds a secret.
+          schema: { type: string, enum: [no-store] }
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/TriggerTokenCreated' }
+          example:
+            data: { token: "<trigger-token>", trigger_user_id: 7 }
+    TriggerTokenRevokedResponse:
+      description: The template has no trigger token now.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/TriggerTokenRevoked' }
+          example:
+            data: { revoked: true }
+    JobLaunchRejected:
+      description: |
+        Nothing was launched or stored. `job_template_id` is missing, the
+        launch would leave a password answer unprotected (`$encrypted$` sent
+        as an answer, or a password field of the template whose name cannot
+        carry an answer: rename it in the survey), or JSON cannot hold the
+        extra vars, such as a number too large for JSON (`1e999`); the
+        message says whether that is in the extra vars or in a password
+        answer.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            placeholder:
+              summary: A password answer was the placeholder
+              value:
+                error:
+                  message: 'The value of "db_password" is the placeholder $encrypted$; send the real value.'
+            unusableName:
+              summary: A password field needs another name
+              value:
+                error:
+                  message: 'Survey field "db[pw]" has a name that cannot be used for a password answer; rename it in the survey before launching.'
+            numberTooLarge:
+              summary: A number JSON cannot hold, in the extra vars
+              value:
+                error:
+                  message: 'The extra vars cannot be stored: they contain a number too large for JSON.'
+            missingTemplate:
+              summary: No job template given
+              value:
+                error:
+                  message: job_template_id is required.
 
   schemas:
     ChangePasswordInput:
@@ -3017,7 +3332,11 @@ components:
         limit:           { type: string, nullable: true }
         tags:            { type: string, nullable: true }
         skip_tags:       { type: string, nullable: true }
-        has_survey:      { type: boolean }
+        has_survey:
+          type: boolean
+          description: |
+            Whether the template has survey fields. Neither the survey
+            definition nor the template's extra vars are returned.
         has_trigger_token:
           type: boolean
           description: |
@@ -3096,12 +3415,40 @@ components:
           type: string
           enum: [pending, queued, running, succeeded, failed, canceled, timed_out, pending_approval, rejected]
         launched_by:     { type: string, nullable: true, description: "Username of whoever launched the job." }
-        extra_vars:      { type: object, nullable: true, additionalProperties: true }
+        extra_vars:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: |
+            The extra vars the job was launched with: the template's, the
+            survey answers and the launch's own, merged. Password answers
+            (values whose key is a password field of the template's survey)
+            show as `$encrypted$`; only the runner that runs the job gets
+            them. Do not send these extra vars back as a new launch:
+            `$encrypted$` as a password answer is refused. Jobs from before
+            the update to encrypted answers show `$encrypted$` once the
+            update has reached them (see docs/updating.md).
+          example: { app_env: production, db_password: "$encrypted$" }
         limit:           { type: string, nullable: true }
         verbosity:       { type: integer, nullable: true }
         check_mode:      { type: boolean }
         exit_code:       { type: integer, nullable: true, description: "-1 when the job ended without an exit code from ansible, for example after a timeout or a failure before execution." }
-        execution_command: { type: string, nullable: true }
+        execution_command:
+          type: string
+          nullable: true
+          description: |
+            The `ansible-playbook` command line the server built when a runner
+            claimed the job, for display; null before the claim. Password
+            answers show as `$encrypted$` in its `--extra-vars` JSON. A runner
+            with the `secret_extra_vars` capability gets the answers in a
+            private file and adds `--extra-vars @<file>` itself. For a job
+            with password answers that a runner without it claimed, which
+            gets the answers inline, the command starts with
+            `/usr/bin/env ANSIBLE_VERBOSITY=0` and has at most `-vvv`, because
+            ansible-playbook prints its whole command line from verbosity 4 on.
+            Also null for jobs from before that update whose command could not
+            be masked.
+          example: 'ansible-playbook -i __INVENTORY_TMP__ /var/www/runtime/projects/3/site.yml --forks 5 --extra-vars {"app_env":"production","db_password":"$encrypted$"}'
         artifact_count:  { type: integer }
         queued_at:       { type: integer, nullable: true }
         started_at:      { type: integer, nullable: true }
@@ -3131,7 +3478,18 @@ components:
         job_template_id: { type: integer }
         template_id: { type: integer, deprecated: true, description: "Older name of job_template_id, still accepted." }
         extra_vars:
-          description: Extra vars for this run, merged over the template's. An object or a JSON string.
+          description: |
+            Extra vars for this run, merged over the template's. An object or
+            a JSON string. A value whose top-level key is a password field of
+            the template's survey is a password answer: it is stored only
+            encrypted. `$encrypted$` as such a value is refused with 422, so
+            the `extra_vars` of an earlier job cannot be sent back as they are.
+            A number JSON cannot hold, such as `1e999`, is refused with 422
+            in either form. Text that is not UTF-8, which only a form-encoded
+            body can carry, is refused with 422 in the object form
+            (`extra_vars[<key>]=...`); a string that is not valid JSON, such
+            text included, is ignored, and the job runs with the template's
+            extra vars.
           oneOf:
             - { type: object, additionalProperties: true }
             - { type: string }
@@ -3140,7 +3498,7 @@ components:
         check_mode: { type: boolean }
       example:
         job_template_id: 12
-        extra_vars: { app_version: "1.4.2" }
+        extra_vars: { app_version: "1.4.2", db_password: "<database password>" }
         limit: web
     JobArtifact:
       type: object
@@ -3194,6 +3552,22 @@ components:
         job_template_id: { type: integer }
         cron_expression: { type: string }
         timezone:        { type: string }
+        extra_vars:
+          type: string
+          nullable: true
+          description: |
+            Extra vars of the scheduled jobs, a JSON object as text, as the
+            schedule's edit form shows them; `null` when there are none.
+            Password answers appear as `$encrypted$`; send them back
+            unchanged to keep them (see `extra_vars` of `ScheduleInput`).
+            Callers who may only view the schedule get the same text. A value
+            whose key became a password field of the job template after it
+            was stored appears as `$encrypted$` too; the schedule's next run,
+            or the next save with `extra_vars`, stores it encrypted. Values
+            under the exact name of a password field whose name cannot carry
+            an answer appear as `$encrypted$` too; launches of such a
+            template are refused until the field is renamed.
+          example: '{"app_env": "production", "db_password": "$encrypted$"}'
         enabled:         { type: boolean }
         last_run_at:     { type: integer, nullable: true }
         next_run_at:     { type: integer, nullable: true }
@@ -3292,7 +3666,36 @@ components:
             with 422. At most one vault password across the primary and the
             additional credentials; more is rejected with 422.
         playbook: { type: string }
-        extra_vars: { type: string, nullable: true }
+        extra_vars:
+          type: string
+          nullable: true
+          description: |
+            Default extra vars of every launch: a JSON object, as text. A
+            top-level key that is the name of a password field of the survey
+            is rejected with 422 `Remove "<key>" from Extra Vars: a password
+            survey field cannot have a default; enter it at launch.` when the
+            request changes the extra vars or the names of the password
+            fields (one added, renamed, removed, or retyped to or from
+            password). The extra vars change when their JSON value does: a
+            key, or a value with its type (`"1"` and `1` differ, and so do a
+            list and an object, and a whole number beyond the 64-bit range
+            and the same digits as text). Spacing, key order and a number
+            written another way that PHP reads as the same number within the
+            64-bit range (`1.0` for `1`, `9007199254740994.0` for
+            `9007199254740994`) are no change. Beyond that range, a whole
+            number written without a fraction or an exponent is the same only
+            as the same digits (`1e20` for `100000000000000000000` is a
+            change), and a whole number that a client rounded is a change
+            too. A key written twice counts with its last value. Templates
+            saved before this rule keep such a key through other changes;
+            the template page shows its value as `$encrypted$`.
+
+            Extra vars that hold a number too large for JSON, such as
+            `1e999`, are rejected with 422 `The extra vars cannot be stored:
+            they contain a number too large for JSON.` on every save, also
+            when the request leaves stored extra vars that hold one as they
+            are.
+          example: '{"http_port": 8080}'
         verbosity: { type: integer, minimum: 0, maximum: 5, default: 0 }
         forks: { type: integer, minimum: 1, default: 5 }
         become: { type: boolean, default: false }
@@ -3304,7 +3707,92 @@ components:
         timeout_minutes: { type: integer, default: 120 }
         runner_group_id: { type: integer, nullable: true }
         approval_rule_id: { type: integer, nullable: true }
-        survey_fields: { type: string, nullable: true, description: JSON array of survey field definitions }
+        survey_fields:
+          description: |
+            The survey: launch-time inputs whose answers become extra vars,
+            as a list of `SurveyField` or the same list as JSON text; `null`
+            removes the survey. The survey is checked only when the request
+            changes it (on create: always), so templates saved before these
+            rules keep saving. A rejected survey answers 422 with the first
+            problem:
+
+            - `Survey_fields must be valid JSON.`
+            - `Survey fields must be a JSON list of field definitions.`
+            - `Survey field <n> must be a JSON object with a name and a type.`
+              (`<n>` counts from 1)
+            - `Survey field name "<name>" is not a valid variable name: use
+              letters, digits and underscores, and start with a letter or an
+              underscore.` Checked for new and renamed fields, names compared
+              exactly as stored, and for every password field whose name is
+              not printable ASCII without a space at its start or end.
+            - `Survey field name "<name>" is used more than once.`
+            - `Survey field "<name>" has an unknown type "<type>"; use one of:
+              text, textarea, integer, boolean, select, password.`
+            - `The default of survey field "<name>" must be a single value,
+              not a list or an object.`
+            - `A password field cannot have a default value.`
+          oneOf:
+            - type: array
+              nullable: true
+              items: { $ref: '#/components/schemas/SurveyField' }
+            - { type: string, nullable: true }
+
+    SurveyField:
+      type: object
+      description: |
+        One input of a job template's survey. The answer becomes the extra
+        var `name`. The answer of a `password` field is a password answer:
+        stored only encrypted and shown as `$encrypted$` (see Password survey
+        answers). A password field has no default; it is entered at launch.
+      required: [name]
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+          description: |
+            The extra var the answer is stored under. New and renamed fields
+            need a variable name, compared exactly as stored, so whitespace
+            added to a name makes it a new name. Fields saved under another
+            name before keep it, but a password field can carry an answer
+            only when its name is printable ASCII without a space at its
+            start or end, not empty, not numeric and without `[` or `]`. A
+            control character (a line break, a tab) or a character outside
+            ASCII (a non-breaking space, a byte order mark, a zero-width
+            space, a letter like `ä`) anywhere in the name makes it
+            unusable. Launches of a template with such a password field are
+            refused until it is renamed; values stored under its exact name
+            are password answers all the same, shown as `$encrypted$`. A
+            changed survey cannot keep a password field name that is not
+            printable ASCII without a space at its start or end, nor give
+            such a name to a field retyped to password; a name that is empty,
+            numeric or has `[` or `]` may stay, but the template's launches
+            stay refused.
+            Messages show the characters of a name that are not
+            printable ASCII escaped as in JSON, such as
+            `"db_password\u00a0"` for a trailing non-breaking space.
+          example: db_password
+        label: { type: string, description: "Shown on the launch form; the name when empty." }
+        type:
+          type: string
+          enum: [text, textarea, integer, boolean, select, password]
+          default: text
+        required: { type: boolean, default: false }
+        default:
+          description: A single value; must be empty for a password field.
+          oneOf:
+            - { type: string }
+            - { type: number }
+            - { type: boolean }
+        options:
+          type: array
+          items: { type: string }
+          description: The choices of a `select` field.
+        hint: { type: string, description: "Help text under the input on the launch form." }
+      example:
+        name: db_password
+        label: Database password
+        type: password
+        required: true
 
     ScheduleInput:
       type: object
@@ -3317,7 +3805,46 @@ components:
         job_template_id: { type: integer, description: "A job template the caller may operate." }
         cron_expression: { type: string, description: "Standard 5-field cron expression" }
         timezone: { type: string, default: UTC }
-        extra_vars: { type: string, nullable: true }
+        extra_vars:
+          type: string
+          nullable: true
+          description: |
+            Extra vars of the scheduled jobs: a JSON object, as text. A value
+            whose key is a password field of the job template's survey, or the
+            key of an answer the schedule has stored, is a password answer: the
+            schedule stores it only encrypted, keeps `$encrypted$` in its
+            place, and passes it on encrypted to the jobs it launches. In a
+            request:
+
+            - `$encrypted$` as the value keeps the stored answer, so the
+              `extra_vars` of a schedule response (`GET`, `POST`, `PUT`) can
+              be sent back unchanged to keep every answer;
+            - any other value replaces the stored answer, or adds one;
+            - a stored answer whose key is missing is dropped;
+            - `null`, `""` or a JSON value without keys clears every answer;
+            - a `PUT` without `extra_vars` keeps the extra vars and every
+              answer, unless it changes `job_template_id`.
+
+            Stored answers never follow a schedule to another job template:
+            with a new `job_template_id`, send every answer again. Rejected
+            with 422, the first problem only:
+
+            - `"<key>" has no stored value; enter the real value.`
+            - `"<key>": the job template changed; enter the real value.`
+            - `The job template changed: send extra_vars with the password
+              answers again.` (a `PUT` that changes `job_template_id` without
+              `extra_vars` while answers are stored)
+            - `The stored password answers cannot be decrypted; enter the
+              real values.` (`APP_SECRET_KEY` changed since they were stored)
+            - `The extra vars cannot be stored: they contain a number too
+              large for JSON.` (a number such as `1e999`, in a password
+              answer too; also a `PUT` without `extra_vars` while the stored
+              extra vars hold such a number)
+            - `The extra vars are too long: with $encrypted$ in place of the
+              password answers they exceed 65535 bytes.`
+            - `The password answers cannot be encrypted. Check APP_SECRET_KEY.`
+            - `The database update has not finished; run the migrations.`
+          example: '{"app_env": "production", "db_password": "$encrypted$"}'
         enabled: { type: boolean, default: true }
 
     RunnerGroup:
@@ -3360,15 +3887,24 @@ components:
           example: "2.2.16"
         capabilities:
           type: array
-          items: { type: string, enum: [vault_password_source] }
-          description: >-
+          items: { type: string, enum: [vault_password_source, secret_extra_vars] }
+          description: |
             Features the runner reported on its most recent request, limited to
-            names this server knows. `vault_password_source`: the runner honours a
-            project's vault password source and, for "Ansilume only" projects,
-            neutralises the repository's ansible.cfg vault settings. Empty for
-            runners that report nothing, including every runner older than 2.8;
-            those apply the repository's vault settings whatever the project says.
-          example: [vault_password_source]
+            names this server knows. Empty for runners that report nothing,
+            including every runner older than 2.8.
+
+            - `vault_password_source`: the runner honours a project's vault
+              password source and, for "Ansilume only" projects, neutralises
+              the repository's ansible.cfg vault settings. Runners without it
+              apply the repository's vault settings whatever the project says.
+            - `secret_extra_vars`: the runner gets password survey answers
+              apart from the command and passes them to ansible-playbook in a
+              private file (`--extra-vars @<file>`), and masks them in the job
+              output. Runners without it, every runner from before this
+              capability, get the answers inline in the command, with the
+              verbosity capped at 3 and `ANSIBLE_VERBOSITY=0` set, so that
+              ansible-playbook does not print its command line.
+          example: [vault_password_source, secret_extra_vars]
         transport:
           type: string
           nullable: true
@@ -3723,7 +4259,13 @@ components:
             Extra vars this step takes from the output of the previous step:
             a JSON object mapping an extra var name to the name of an output
             variable, or the same object as JSON text. Unused on the start
-            step, which has no previous step.
+            step, which has no previous step. Either form with a number too
+            large for JSON, such as `1e999`, is rejected with 422
+            `steps[<n>]: The extra vars cannot be stored: they contain a
+            number too large for JSON.` An object with text that is not
+            valid UTF-8, which only a form-encoded body can carry, is
+            rejected with 422 `steps[<n>]: The extra vars cannot be stored:
+            they contain characters that are not valid UTF-8.`
           oneOf:
             - { type: object, additionalProperties: { type: string } }
             - { type: string }
@@ -3769,8 +4311,11 @@ components:
             Why the step failed without a job: the user the workflow runs as
             may not launch the step's job template (inactive, without
             `workflow.launch`, or without operator access to its project), the
-            job template or approval rule no longer exists, the job could not
-            be launched, or the step's type is none of job, approval and pause
+            job template or approval rule no longer exists, the launch was
+            refused for a reason the message names (for example
+            `The value of "db_password" is the placeholder $encrypted$; send
+            the real value.`), the job could not be launched for another
+            reason, or the step's type is none of job, approval and pause
             (`Not run: unknown step type "1".`), which older versions could
             store. null otherwise.
           example: 'Not launched: user #7, whom this workflow runs as, may not launch job template "Deploy web" (#15).'
@@ -3802,10 +4347,42 @@ components:
     TriggerError:
       type: object
       description: |
-        The trigger endpoints answer 403 and 500 with a plain message. Their
-        other errors (400, 404, 405) are the web UI's HTML error page.
+        The trigger endpoints answer 403 and 500 with a plain message, and
+        422 with the reason (`TriggerRejectedError`). Their other errors
+        (400, 404, 405) are the web UI's HTML error page.
       properties:
         error: { type: string, enum: ['Launch refused.', 'Launch failed.'] }
+    TriggerRejectedError:
+      type: object
+      description: Why `/trigger/fire` or `/trigger/{token}` launched nothing (422).
+      properties:
+        error:
+          type: string
+          example: 'The value of "db_password" is the placeholder $encrypted$; send the real value.'
+    TriggerTokenCreated:
+      type: object
+      required: [token, trigger_user_id]
+      properties:
+        token:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: |
+            The new trigger token. Store it now: it is never shown again, and
+            the server keeps only its SHA-256 hash. Send it in the
+            `X-Trigger-Token` header.
+          example: "<trigger-token>"
+        trigger_user_id:
+          type: integer
+          description: The user the trigger runs as from now on, the caller.
+          example: 7
+    TriggerTokenRevoked:
+      type: object
+      required: [revoked]
+      properties:
+        revoked:
+          type: boolean
+          enum: [true]
+          description: Always true; also when the template had no token.
 
     RoleSummary:
       type: object

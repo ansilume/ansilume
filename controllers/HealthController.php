@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\PendingMigrations;
 use app\models\Job;
 use app\models\Runner;
 use app\models\RunnerGroup;
@@ -142,17 +143,12 @@ class HealthController extends Controller
 
     protected function countMigrationFiles(): int
     {
-        $path = (string)\Yii::getAlias('@app/migrations');
-        $files = glob($path . '/m*.php');
-        return $files !== false ? count($files) : 0;
+        return (new PendingMigrations())->expectedCount();
     }
 
     protected function countAppliedMigrations(): int
     {
-        // Yii's migration table always has m000000_000000_base; exclude it.
-        return (int)\Yii::$app->db->createCommand(
-            "SELECT COUNT(*) FROM {{%migration}} WHERE version != 'm000000_000000_base'"
-        )->queryScalar();
+        return (new PendingMigrations())->appliedCount();
     }
 
     protected function setHttpStatus(int $code): void

@@ -8,12 +8,16 @@ use app\models\JobTemplate;
 
 /**
  * Seeds a second JobTemplate alongside the regular e2e-template, this one
- * equipped with a three-field survey so the launch form exercises all
- * supported survey field types (text, boolean, select) in a single flow.
+ * equipped with a four-field survey so the launch form exercises the survey
+ * field types text, boolean, select and password in a single flow.
+ *
+ * The password field is optional, so a launch may leave it empty
+ * (survey-launch.spec.ts launches both ways), and has no default.
  */
 class E2eSurveyTemplateSeeder
 {
     private const TEMPLATE_NAME = 'e2e-survey-template';
+    public const PASSWORD_FIELD = 'db_password';
 
     /** @var callable(string): void */
     private $logger;
@@ -76,10 +80,19 @@ class E2eSurveyTemplateSeeder
                 'default' => 'info',
                 'hint' => '',
             ],
+            [
+                'name' => self::PASSWORD_FIELD,
+                'label' => 'Database password',
+                'type' => 'password',
+                'required' => false,
+                'default' => '',
+                'options' => [],
+                'hint' => 'Optional. Stored encrypted; job pages show $encrypted$.',
+            ],
         ], JSON_UNESCAPED_UNICODE);
         $template->save(false);
 
-        ($this->logger)("  Created survey template '" . self::TEMPLATE_NAME . "' (ID {$template->id}) with 3 survey fields.\n");
+        ($this->logger)("  Created survey template '" . self::TEMPLATE_NAME . "' (ID {$template->id}) with 4 survey fields.\n");
 
         return (int)$template->id;
     }

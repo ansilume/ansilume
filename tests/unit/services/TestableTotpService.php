@@ -11,7 +11,7 @@ use app\services\TotpService;
  */
 class TestableTotpService extends TotpService
 {
-    public function encryptSecret(string $plainSecret): string
+    public function encryptSecret(#[\SensitiveParameter] string $plainSecret): string
     {
         return parent::encryptSecret($plainSecret);
     }

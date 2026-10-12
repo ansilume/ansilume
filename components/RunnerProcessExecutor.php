@@ -8,6 +8,18 @@ use yii\console\Controller;
 
 /**
  * Spawns an ansible-playbook process and streams its output to the server.
+ *
+ * Output is read in chunks that can end inside a UTF-8 character. Those
+ * bytes wait for the next chunk of their stream, so every posted chunk is
+ * whole characters: the server takes JSON, and a chunk cut inside a
+ * character could not be encoded. The bytes still waiting when a stream
+ * ends are posted with its last chunk.
+ *
+ * Output then goes through an {@see OutputMasker} per stream, which masks
+ * the job's password answers; by default it masks nothing. A chunk the
+ * masker holds back completely is not posted, and what it still holds when
+ * the process ends is posted before the timeout line and before the runner
+ * reports completion.
  */
 class RunnerProcessExecutor
 {
@@ -15,11 +27,16 @@ class RunnerProcessExecutor
 
     private RunnerHttpClient $http;
     private Controller $controller;
+    private OutputMasker $masker;
 
-    public function __construct(RunnerHttpClient $http, Controller $controller)
+    /** @var array<string, string> per stream, the first bytes of a character the next chunk completes */
+    private array $incomplete = [];
+
+    public function __construct(RunnerHttpClient $http, Controller $controller, ?OutputMasker $masker = null)
     {
         $this->http = $http;
         $this->controller = $controller;
+        $this->masker = $masker ?? new OutputMasker([]);
     }
 
     /**
@@ -30,8 +47,13 @@ class RunnerProcessExecutor
      * @param array<string, string> $env
      * @return array{0: int, 1: int, 2: bool}  [exit code, final sequence number, timed-out flag]
      */
-    public function run(int $jobId, array $cmd, array $payload, array $env, int $timeoutMinutes): array
-    {
+    public function run(
+        int $jobId,
+        #[\SensitiveParameter] array $cmd,
+        #[\SensitiveParameter] array $payload,
+        #[\SensitiveParameter] array $env,
+        int $timeoutMinutes
+    ): array {
         $process = $this->startProcess($jobId, $cmd, $payload, $env);
         if ($process === null) {
             return [-1, 0, false];
@@ -43,13 +65,25 @@ class RunnerProcessExecutor
     }
 
     /**
+     * How long the process may run.
+     */
+    protected function timeoutSeconds(int $timeoutMinutes): int
+    {
+        return $timeoutMinutes * 60;
+    }
+
+    /**
      * @param string[] $cmd
      * @param array<string, mixed> $payload
      * @param array<string, string> $env
      * @return array{0: array<int, resource>, 1: resource}|null  [pipes, process] or null on failure
      */
-    private function startProcess(int $jobId, array $cmd, array $payload, array $env): ?array
-    {
+    private function startProcess(
+        int $jobId,
+        #[\SensitiveParameter] array $cmd,
+        #[\SensitiveParameter] array $payload,
+        #[\SensitiveParameter] array $env
+    ): ?array {
         $descriptorspec = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
@@ -86,7 +120,7 @@ class RunnerProcessExecutor
      */
     private function streamProcessOutput(int $jobId, $process, array $pipes, int $timeoutMinutes): array
     {
-        $deadline = time() + ($timeoutMinutes * 60);
+        $deadline = time() + $this->timeoutSeconds($timeoutMinutes);
         $sequence = 0;
         $timedOut = false;
 
@@ -100,6 +134,9 @@ class RunnerProcessExecutor
 
             $sequence = $this->drainAndStreamLogs($jobId, $pipes, $sequence, $remaining);
         }
+
+        $sequence = $this->postLog($jobId, 'stdout', $this->finishStream('stdout'), $sequence);
+        $sequence = $this->postLog($jobId, 'stderr', $this->finishStream('stderr'), $sequence);
 
         fclose($pipes[1]);
         fclose($pipes[2]);
@@ -166,9 +203,84 @@ class RunnerProcessExecutor
         }
 
         $streamName = ($stream === $stdoutPipe) ? 'stdout' : 'stderr';
+
+        return $this->postLog($jobId, $streamName, $this->maskWholeCharacters($streamName, $chunk), $sequence);
+    }
+
+    /**
+     * The masked output of $chunk, the next chunk of $stream, up to its last
+     * whole UTF-8 character. The bytes of a character it ends inside wait
+     * for the next chunk, so the masker and the server see whole characters.
+     */
+    private function maskWholeCharacters(string $stream, #[\SensitiveParameter] string $chunk): string
+    {
+        $bytes = ($this->incomplete[$stream] ?? '') . $chunk;
+        $whole = strlen($bytes) - self::incompleteTail($bytes);
+        $this->incomplete[$stream] = substr($bytes, $whole);
+
+        return $this->masker->feed($stream, substr($bytes, 0, $whole));
+    }
+
+    /**
+     * The masked rest of $stream after it ended: the bytes of a character
+     * it never completed, then what the masker held back.
+     */
+    private function finishStream(string $stream): string
+    {
+        $rest = $this->incomplete[$stream] ?? '';
+        unset($this->incomplete[$stream]);
+
+        return $this->masker->feed($stream, $rest) . $this->masker->flush($stream);
+    }
+
+    /**
+     * How many bytes at the end of $bytes begin a UTF-8 character that is
+     * not complete yet: 0 to 3. Bytes that cannot be UTF-8 count as complete,
+     * so they pass on at once.
+     */
+    private static function incompleteTail(#[\SensitiveParameter] string $bytes): int
+    {
+        $length = strlen($bytes);
+        for ($back = 1; $back <= min(3, $length); $back++) {
+            $byte = ord($bytes[$length - $back]);
+            if (($byte & 0xC0) !== 0x80) {
+                // Not a continuation byte: the character starts here.
+                return self::characterLength($byte) > $back ? $back : 0;
+            }
+        }
+
+        return 0;
+    }
+
+    /**
+     * The length in bytes of the UTF-8 character that starts with $byte; 1
+     * for ASCII and for a byte no character starts with.
+     */
+    private static function characterLength(int $byte): int
+    {
+        return match (true) {
+            $byte >= 0xF8 => 1,
+            $byte >= 0xF0 => 4,
+            $byte >= 0xE0 => 3,
+            $byte >= 0xC0 => 2,
+            default => 1,
+        };
+    }
+
+    /**
+     * POST one log chunk; nothing when it is empty (the masker may hold back
+     * a whole chunk, and the server rejects empty content).
+     *
+     * @return int Updated sequence number.
+     */
+    private function postLog(int $jobId, string $stream, #[\SensitiveParameter] string $content, int $sequence): int
+    {
+        if ($content === '') {
+            return $sequence;
+        }
         $this->http->post("/api/runner/v1/jobs/{$jobId}/logs", [
-            'stream' => $streamName,
-            'content' => $chunk,
+            'stream' => $stream,
+            'content' => $content,
             'sequence' => $sequence,
         ]);
 

@@ -54,8 +54,12 @@ class FakeLdapClient implements LdapClientInterface
      *   single strings are wrapped into a one-element list. The configured
      *   username/email/displayName/uid attributes should be supplied here.
      */
-    public function addUser(string $username, string $dn, string $password, array $attributes = []): void
-    {
+    public function addUser(
+        string $username,
+        string $dn,
+        #[\SensitiveParameter] string $password,
+        array $attributes = []
+    ): void {
         $normalised = [];
         foreach ($attributes as $name => $value) {
             $key = strtolower((string)$name);
@@ -123,7 +127,7 @@ class FakeLdapClient implements LdapClientInterface
         return new LdapEntry($row['dn'], $row['attributes']);
     }
 
-    public function bindAsUser(string $dn, string $password): bool
+    public function bindAsUser(string $dn, #[\SensitiveParameter] string $password): bool
     {
         if ($password === '' || $dn === '') {
             $this->lastError = 'Empty DN or password rejected.';

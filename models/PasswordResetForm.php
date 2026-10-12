@@ -17,7 +17,7 @@ class PasswordResetForm extends Model
 
     private User $_user;
 
-    public function __construct(string $token, array $config = [])
+    public function __construct(#[\SensitiveParameter] string $token, array $config = [])
     {
         $user = User::findByPasswordResetToken($token);
         if ($user === null) {

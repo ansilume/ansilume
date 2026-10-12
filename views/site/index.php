@@ -26,6 +26,7 @@ use app\models\Job;
 use app\models\WorkflowJob;
 use app\models\WorkflowStep;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = 'Dashboard';
@@ -497,7 +498,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
 <script src="/js/chart.min.js"></script>
 <script>
 (function () {
-    var chartDataUrl = <?= json_encode(Url::to(['/site/chart-data'])) ?>;
+    var chartDataUrl = <?= Json::htmlEncode(Url::to(['/site/chart-data'])) ?>;
 
     Chart.defaults.color = '#8a9099';
     Chart.defaults.borderColor = 'rgba(255,255,255,0.07)';

@@ -42,10 +42,27 @@ class RunnerCapabilityRecordingTest extends WebControllerTestCase
         $this->heartbeat(['software_version' => '2.8.0', 'capabilities' => RunnerHttpClient::CAPABILITIES]);
 
         $runner = $this->reloaded();
-        $this->assertSame('vault_password_source', $runner->capabilities);
-        $this->assertSame([Runner::CAPABILITY_VAULT_PASSWORD_SOURCE], $runner->capabilityList());
+        $this->assertSame('vault_password_source,secret_extra_vars', $runner->capabilities);
+        $this->assertSame([Runner::CAPABILITY_VAULT_PASSWORD_SOURCE, Runner::CAPABILITY_SECRET_EXTRA_VARS], $runner->capabilityList());
         $this->assertTrue($runner->supports(Runner::CAPABILITY_VAULT_PASSWORD_SOURCE));
+        $this->assertTrue($runner->supports(Runner::CAPABILITY_SECRET_EXTRA_VARS));
         $this->assertSame('2.8.0', $runner->software_version);
+    }
+
+    /**
+     * The stored value follows the server's list, whatever order the runner
+     * reports, and a 2.8 runner that reports only the vault capability does
+     * not get the password answers as a file.
+     */
+    public function testCapabilitiesAreStoredInTheServersOrder(): void
+    {
+        $this->heartbeat(['capabilities' => ['secret_extra_vars', 'vault_password_source']]);
+        $this->assertSame('vault_password_source,secret_extra_vars', $this->reloaded()->capabilities);
+
+        $this->heartbeat(['capabilities' => ['vault_password_source']]);
+        $runner = $this->reloaded();
+        $this->assertSame('vault_password_source', $runner->capabilities);
+        $this->assertFalse($runner->supports(Runner::CAPABILITY_SECRET_EXTRA_VARS));
     }
 
     public function testUnknownNamesAndNonStringEntriesAreIgnored(): void

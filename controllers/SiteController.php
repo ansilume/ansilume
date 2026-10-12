@@ -529,7 +529,7 @@ class SiteController extends BaseController
         return $this->render('forgot-password', ['model' => $model]);
     }
 
-    public function actionResetPassword(string $token = ''): Response|string
+    public function actionResetPassword(#[\SensitiveParameter] string $token = ''): Response|string
     {
         if (!\Yii::$app->user->isGuest) {
             return $this->goHome();

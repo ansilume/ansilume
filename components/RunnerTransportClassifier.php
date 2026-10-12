@@ -73,7 +73,7 @@ final class RunnerTransportClassifier
      * @param list<string> $trusted
      * @return array{transport: string|null, remote_addr: string|null} nulls when the peer is unknown
      */
-    public static function classify(array $server, array $trusted): array
+    public static function classify(#[\SensitiveParameter] array $server, array $trusted): array
     {
         $peer = self::ip($server['REMOTE_ADDR'] ?? null);
         if ($peer === null) {
@@ -104,8 +104,12 @@ final class RunnerTransportClassifier
      * @param list<string> $trusted
      * @return array<string, string|int>
      */
-    public static function changes(array $current, array $server, array $trusted, int $now): array
-    {
+    public static function changes(
+        array $current,
+        #[\SensitiveParameter] array $server,
+        array $trusted,
+        int $now
+    ): array {
         $seen = self::classify($server, $trusted);
         $changes = [];
         foreach ($seen as $column => $value) {
@@ -233,7 +237,7 @@ final class RunnerTransportClassifier
     /**
      * @param array<array-key, mixed> $server
      */
-    private static function header(array $server, string $key): string
+    private static function header(#[\SensitiveParameter] array $server, string $key): string
     {
         return is_string($server[$key] ?? null) ? $server[$key] : '';
     }

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\CredentialSecretPolicy;
+use app\components\SecretCipher;
+use app\components\SecretCipherException;
 use app\models\Credential;
 use yii\base\Component;
 use yii\base\Exception;
@@ -12,9 +14,9 @@ use yii\base\Exception;
 /**
  * Handles encryption/decryption of credential secret data.
  *
- * Secret data is stored as AES-256-CBC encrypted JSON in the `secret_data` column.
- * The encryption key is derived from the APP_SECRET_KEY environment variable.
- * Raw secrets are never written to logs.
+ * Secret data is stored as AES-256-CBC encrypted JSON in the `secret_data` column
+ * ({@see SecretCipher}). The encryption key is derived from the APP_SECRET_KEY
+ * environment variable. Raw secrets are never written to logs.
  */
 class CredentialService extends Component
 {
@@ -28,7 +30,7 @@ class CredentialService extends Component
      * @param Credential $credential The credential model (already validated).
      * @param array<string, string> $secrets Map of field name => raw value, e.g. ['private_key' => '...'].
      */
-    public function storeSecrets(Credential $credential, array $secrets): bool
+    public function storeSecrets(Credential $credential, #[\SensitiveParameter] array $secrets): bool
     {
         $credential->secret_data = $this->encryptSecrets($secrets);
         return $credential->save();
@@ -39,7 +41,7 @@ class CredentialService extends Component
      *
      * @param array<string, mixed> $secrets
      */
-    public function encryptSecrets(array $secrets): string
+    public function encryptSecrets(#[\SensitiveParameter] array $secrets): string
     {
         return $this->encrypt(json_encode($secrets, JSON_THROW_ON_ERROR));
     }
@@ -88,7 +90,7 @@ class CredentialService extends Component
      * @param array<string, string> $secrets
      * @return array<string, string>
      */
-    public function redact(array $secrets): array
+    public function redact(#[\SensitiveParameter] array $secrets): array
     {
         return array_fill_keys(array_keys($secrets), '***REDACTED***');
     }
@@ -129,7 +131,7 @@ class CredentialService extends Component
      *
      * @return array{public_key: string, algorithm: string, bits: int, key_secure: bool|null}
      */
-    public function analyzePrivateKey(string $privateKey): array
+    public function analyzePrivateKey(#[\SensitiveParameter] string $privateKey): array
     {
         $tmp = tempnam(sys_get_temp_dir(), 'ansilume_key_');
         // Normalise to Unix line endings — browsers submit \r\n from textareas
@@ -214,45 +216,27 @@ class CredentialService extends Component
         }
     }
 
-    private function encrypt(string $plaintext): string
+    /**
+     * @throws Exception wrapping the cipher error, as before the cipher was shared
+     */
+    private function encrypt(#[\SensitiveParameter] string $plaintext): string
     {
-        $key = $this->deriveKey();
-        $iv = random_bytes(16);
-        $cipher = openssl_encrypt($plaintext, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-
-        if ($cipher === false) {
-            throw new Exception('Credential encryption failed.');
+        try {
+            return (new SecretCipher())->encrypt($plaintext);
+        } catch (SecretCipherException $e) {
+            throw new Exception($e->describeFor('Credential', 'encryption'), 0, $e);
         }
-
-        return base64_encode($iv . $cipher);
     }
 
+    /**
+     * @throws Exception wrapping the cipher error, as before the cipher was shared
+     */
     private function decrypt(string $ciphertext): string
     {
-        $key = $this->deriveKey();
-        $raw = base64_decode($ciphertext, true);
-
-        if ($raw === false || strlen($raw) < 17) {
-            throw new Exception('Credential decryption failed: invalid ciphertext.');
+        try {
+            return (new SecretCipher())->decrypt($ciphertext);
+        } catch (SecretCipherException $e) {
+            throw new Exception($e->describeFor('Credential', 'decryption'), 0, $e);
         }
-
-        $iv = substr($raw, 0, 16);
-        $cipher = substr($raw, 16);
-        $plain = openssl_decrypt($cipher, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-
-        if ($plain === false) {
-            throw new Exception('Credential decryption failed.');
-        }
-
-        return $plain;
-    }
-
-    private function deriveKey(): string
-    {
-        $secret = $_ENV['APP_SECRET_KEY'] ?? '';
-        if (strlen($secret) < 16) {
-            throw new Exception('APP_SECRET_KEY is not set or too short. Set it in your .env file.');
-        }
-        return hash('sha256', $secret, true);
     }
 }

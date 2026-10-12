@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\SurveySecrets;
+use app\models\traits\SealedSecretExtraVarsTrait;
+use app\services\JobLaunchSecrets;
 use Cron\CronExpression;
 use yii\db\ActiveRecord;
 
@@ -13,7 +16,7 @@ use yii\db\ActiveRecord;
  * @property int         $job_template_id
  * @property string      $cron_expression  Standard 5-field cron: min hour dom mon dow
  * @property string      $timezone         PHP timezone name
- * @property string|null $extra_vars       JSON extra vars override
+ * @property string|null $extra_vars       JSON extra vars override; password answers show as SurveySecrets::PLACEHOLDER
  * @property bool        $enabled
  * @property int|null    $last_run_at      Unix timestamp of last execution
  * @property int|null    $next_run_at      Pre-computed Unix timestamp of next execution
@@ -23,9 +26,15 @@ use yii\db\ActiveRecord;
  *
  * @property JobTemplate $jobTemplate
  * @property User        $creator
+ *
+ * The sealed password answers (column secret_extra_vars) are read and
+ * written only through getSealedSecretExtraVars() and
+ * setSealedSecretExtraVars(), see SealedSecretExtraVarsTrait.
  */
 class Schedule extends ActiveRecord
 {
+    use SealedSecretExtraVarsTrait;
+
     /** Longest cron expression and timezone the string rules accept. */
     public const CRON_FIELD_MAX_LENGTH = 64;
 
@@ -107,13 +116,23 @@ class Schedule extends ActiveRecord
         }
     }
 
+    /**
+     * The extra vars must be JSON a launch can store: JSON allows a number
+     * too large for it (1e999, -1e999), which PHP reads as infinity and
+     * cannot write back, so every run would fail to launch. They get the
+     * message of that refusal. This runs before ScheduleSecrets seals the
+     * password answers, so a password answer like that gets it too.
+     */
     public function validateJson(string $attribute): void
     {
-        if (!empty($this->$attribute)) {
-            json_decode((string)$this->$attribute);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                $this->addError($attribute, 'Must be valid JSON.');
-            }
+        if (empty($this->$attribute)) {
+            return;
+        }
+        $decoded = json_decode((string)$this->$attribute);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->addError($attribute, 'Must be valid JSON.');
+        } elseif (json_encode($decoded) === false) {
+            $this->addError($attribute, SurveySecrets::unencodable(JobLaunchSecrets::EXTRA_VARS, json_last_error()));
         }
     }
 

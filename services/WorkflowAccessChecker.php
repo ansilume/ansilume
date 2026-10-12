@@ -100,8 +100,9 @@ class WorkflowAccessChecker extends Component
      * only to a user who may see the workflow ({@see refusal()}).
      *
      * @param string $source web, api or trigger
+     * @param array<string, scalar> $auditContext added to the refusal's audit entry, e.g. how a trigger token was sent
      */
-    public function assertMayLaunch(int $userId, WorkflowTemplate $template, string $source): void
+    public function assertMayLaunch(int $userId, WorkflowTemplate $template, string $source, array $auditContext = []): void
     {
         $denied = $this->deniedJobTemplateIds($userId, (int)$template->id);
         if ($denied === [] && $this->isActiveWithPermission($userId, 'workflow.launch')) {
@@ -114,7 +115,7 @@ class WorkflowAccessChecker extends Component
             'workflow_template',
             (int)$template->id,
             $userId,
-            ['source' => $source, 'job_template_ids' => $denied]
+            ['source' => $source, 'job_template_ids' => $denied] + $auditContext
         );
         if ($denied === []) {
             throw new WorkflowAccessDeniedException('You may not launch workflows.');

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\PendingMigrations;
 use app\models\NotificationTemplate;
 use app\models\Runner;
 use app\models\User;
@@ -45,12 +46,9 @@ class HealthController extends Controller
 
         // Migrations
         try {
-            $path = (string)\Yii::getAlias('@app/migrations');
-            $files = glob($path . '/m*.php');
-            $expected = $files !== false ? count($files) : 0;
-            $applied = (int)\Yii::$app->db->createCommand(
-                "SELECT COUNT(*) FROM {{%migration}} WHERE version != 'm000000_000000_base'"
-            )->queryScalar();
+            $migrations = $this->pendingMigrations();
+            $expected = $migrations->expectedCount();
+            $applied = $migrations->appliedCount();
 
             if ($applied < $expected) {
                 $pending = $expected - $applied;
@@ -80,6 +78,14 @@ class HealthController extends Controller
 
         $this->stdout("[health] status: ok\n");
         return ExitCode::OK;
+    }
+
+    /**
+     * The migration state the check reports.
+     */
+    protected function pendingMigrations(): PendingMigrations
+    {
+        return new PendingMigrations();
     }
 
     private function checkRbacRoles(bool &$healthy): void

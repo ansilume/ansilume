@@ -116,8 +116,12 @@ final class VaultCheckRun
      * @return list<ProjectVaultEntry>|null null when the checkout changed since the scan
      * @throws VaultCheckTimeout when the time budget is used up
      */
-    public function unopened(string $root, array $entries, string $secretKey, string $password): ?array
-    {
+    public function unopened(
+        string $root,
+        array $entries,
+        string $secretKey,
+        #[\SensitiveParameter] string $password
+    ): ?array {
         $unopened = [];
         foreach (self::byPath($entries) as $path => $group) {
             $results = $this->known($root, $group, $secretKey) ?? $this->check($root, (string)$path, $group, $secretKey, $password);
@@ -161,8 +165,13 @@ final class VaultCheckRun
      * @param list<ProjectVaultEntry> $group entries of the file $path
      * @return list<bool>|null null when the file changed since the scan
      */
-    private function check(string $root, string $path, array $group, string $secretKey, string $password): ?array
-    {
+    private function check(
+        string $root,
+        string $path,
+        array $group,
+        string $secretKey,
+        #[\SensitiveParameter] string $password
+    ): ?array {
         $this->guardTime();
         $envelopes = VaultEntryReader::envelopes($root, $path, $group);
         $results = [];
@@ -178,7 +187,7 @@ final class VaultCheckRun
         return $results;
     }
 
-    private function opens(VaultEnvelope $envelope, string $secretKey, string $password): bool
+    private function opens(VaultEnvelope $envelope, string $secretKey, #[\SensitiveParameter] string $password): bool
     {
         $key = $secretKey . "\0" . $envelope->fingerprint();
         if (!isset($this->opens[$key])) {

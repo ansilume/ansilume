@@ -11,6 +11,7 @@ use app\models\JobArtifact;
 use app\models\JobSearchForm;
 use app\models\JobTemplate;
 use app\services\ArtifactService;
+use app\services\JobLaunchRejectedException;
 use app\services\JobLaunchService;
 use app\services\WorkflowAccessChecker;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
@@ -120,6 +121,9 @@ class JobsController extends BaseApiController
             $job = $svc->launch($template, (int)($user->id ?? 0), $overrides);
             // The template's warnings, as the launch page shows them: jobs are never blocked by them.
             return $this->success($this->serializeJob($job, true), 201) + ['warnings' => JobTemplateWarnings::forTemplate($template)];
+        } catch (JobLaunchRejectedException $e) {
+            // The caller can fix it: a password answer sent as the placeholder, a survey field name to rename.
+            return $this->error($e->getMessage(), 422);
         } catch (\RuntimeException $e) {
             \Yii::error('Job launch failed: ' . $e->getMessage(), __CLASS__);
             return $this->error('Launch failed.', 500);
@@ -308,16 +312,18 @@ class JobsController extends BaseApiController
     }
 
     /**
+     * The launch overrides of the request body. extra_vars goes to the launch
+     * as sent, a JSON object (decoded) or a JSON string: the launch refuses
+     * values JSON cannot hold (422) in either form.
+     *
      * @param array<string, mixed> $body
      * @return array<string, mixed>
      */
-    private function buildOverrides(array $body): array
+    private function buildOverrides(#[\SensitiveParameter] array $body): array
     {
         $overrides = [];
         if (!empty($body['extra_vars'])) {
-            $overrides['extra_vars'] = is_array($body['extra_vars'])
-                ? json_encode($body['extra_vars'])
-                : $body['extra_vars'];
+            $overrides['extra_vars'] = $body['extra_vars'];
         }
         if (!empty($body['limit'])) {
             $overrides['limit'] = $body['limit'];
@@ -336,7 +342,7 @@ class JobsController extends BaseApiController
      *
      * @param array<string, mixed> $body
      */
-    private function templateIdFrom(array $body): ?int
+    private function templateIdFrom(#[\SensitiveParameter] array $body): ?int
     {
         $raw = $body['job_template_id'] ?? $body['template_id'] ?? null;
         if (!is_numeric($raw) || (int)$raw <= 0) {

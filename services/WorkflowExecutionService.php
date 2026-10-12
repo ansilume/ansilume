@@ -37,7 +37,7 @@ class WorkflowExecutionService extends Component
     public function launch(
         WorkflowTemplate $template,
         int $launchedBy,
-        array $overrides = [],
+        #[\SensitiveParameter] array $overrides = [],
         string $source = 'web'
     ): WorkflowJob {
         $startStep = $template->getStartStep();
@@ -83,7 +83,7 @@ class WorkflowExecutionService extends Component
     public function executeStep(
         WorkflowJob $wfJob,
         WorkflowStep $step,
-        array $overrides = []
+        #[\SensitiveParameter] array $overrides = []
     ): WorkflowJobStep {
         $wjs = new WorkflowJobStep();
         $wjs->workflow_job_id = $wfJob->id;
@@ -409,7 +409,7 @@ class WorkflowExecutionService extends Component
         WorkflowJob $wfJob,
         WorkflowJobStep $wjs,
         WorkflowStep $step,
-        array $overrides
+        #[\SensitiveParameter] array $overrides
     ): void {
         switch ($step->step_type) {
             case WorkflowStep::TYPE_JOB:
@@ -435,7 +435,7 @@ class WorkflowExecutionService extends Component
         WorkflowJob $wfJob,
         WorkflowJobStep $wjs,
         WorkflowStep $step,
-        array $overrides
+        #[\SensitiveParameter] array $overrides
     ): void {
         $template = $step->jobTemplate;
         if ($template === null) {
@@ -457,6 +457,9 @@ class WorkflowExecutionService extends Component
         $launcher = \Yii::$app->get('jobLaunchService');
         try {
             $job = $launcher->launch($template, $launchedBy, $overrides);
+        } catch (JobLaunchRejectedException $e) {
+            $this->failStep($wfJob, $wjs, $e->getMessage());
+            return;
         } catch (\RuntimeException $e) {
             \Yii::error("Workflow job #{$wfJob->id}: launching job template #{$template->id} failed: {$e->getMessage()}", __CLASS__);
             $this->failStep($wfJob, $wjs, 'The job could not be launched; see the application log.');

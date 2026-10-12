@@ -35,8 +35,13 @@ class Runner extends ActiveRecord
 
     /** The runner neutralises the repository's ansible.cfg vault settings when a project asks for it. */
     public const CAPABILITY_VAULT_PASSWORD_SOURCE = 'vault_password_source';
+    /**
+     * The runner takes password survey answers from payload['secret_extra_vars'] and passes them to
+     * ansible-playbook as a file (--extra-vars @file); runners without it get them inline in the command.
+     */
+    public const CAPABILITY_SECRET_EXTRA_VARS = 'secret_extra_vars';
     /** Every capability the server records; runners may report others, which are ignored. */
-    public const CAPABILITIES = [self::CAPABILITY_VAULT_PASSWORD_SOURCE];
+    public const CAPABILITIES = [self::CAPABILITY_VAULT_PASSWORD_SOURCE, self::CAPABILITY_SECRET_EXTRA_VARS];
 
     public static function tableName(): string
     {
@@ -142,7 +147,7 @@ class Runner extends ActiveRecord
     /**
      * Find a runner by its raw token (hashes and compares).
      */
-    public static function findByToken(string $rawToken): ?self
+    public static function findByToken(#[\SensitiveParameter] string $rawToken): ?self
     {
         if ($rawToken === '') {
             return null;
@@ -159,7 +164,7 @@ class Runner extends ActiveRecord
      * @param array<array-key, mixed> $server $_SERVER
      * @return array<string, string|int>
      */
-    public function transportChanges(array $server, int $now): array
+    public function transportChanges(#[\SensitiveParameter] array $server, int $now): array
     {
         $changes = RunnerTransportClassifier::changes(
             ['transport' => $this->transport, 'remote_addr' => $this->remote_addr],

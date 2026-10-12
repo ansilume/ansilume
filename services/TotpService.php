@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SecretCipher;
+use app\components\SecretCipherException;
 use app\models\User;
 use OTPHP\TOTP;
 use yii\base\Component;
@@ -71,7 +73,7 @@ class TotpService extends Component
     /**
      * Build the otpauth:// provisioning URI for QR code scanning.
      */
-    public function buildProvisioningUri(string $secret, User $user): string
+    public function buildProvisioningUri(#[\SensitiveParameter] string $secret, User $user): string
     {
         if ($secret === '') {
             throw new \InvalidArgumentException('TOTP secret must not be empty.');
@@ -86,7 +88,7 @@ class TotpService extends Component
     /**
      * Generate a QR code as a data URI (PNG, base64-encoded) for embedding in HTML.
      */
-    public function generateQrDataUri(string $provisioningUri): string
+    public function generateQrDataUri(#[\SensitiveParameter] string $provisioningUri): string
     {
         $renderer = new \BaconQrCode\Renderer\ImageRenderer(
             new \BaconQrCode\Renderer\RendererStyle\RendererStyle(250),
@@ -100,7 +102,7 @@ class TotpService extends Component
     /**
      * Verify a TOTP code against a secret. Accepts ±1 time period.
      */
-    public function verifyCode(string $secret, string $code): bool
+    public function verifyCode(#[\SensitiveParameter] string $secret, #[\SensitiveParameter] string $code): bool
     {
         if (!preg_match('/^\d{6}$/', $code)) {
             return false;
@@ -118,42 +120,31 @@ class TotpService extends Component
     // ── Encrypted secret storage ─────────────────────────────────────────────
 
     /**
-     * Encrypt a TOTP secret for database storage.
+     * Encrypt a TOTP secret for database storage ({@see SecretCipher}).
+     *
+     * @throws Exception wrapping the cipher error, as before the cipher was shared
      */
-    protected function encryptSecret(string $plainSecret): string
+    protected function encryptSecret(#[\SensitiveParameter] string $plainSecret): string
     {
-        $key = $this->deriveKey();
-        $iv = random_bytes(16);
-        $cipher = openssl_encrypt($plainSecret, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-
-        if ($cipher === false) {
-            throw new Exception('TOTP secret encryption failed.');
+        try {
+            return (new SecretCipher())->encrypt($plainSecret);
+        } catch (SecretCipherException $e) {
+            throw new Exception($e->describeFor('TOTP secret', 'encryption'), 0, $e);
         }
-
-        return base64_encode($iv . $cipher);
     }
 
     /**
      * Decrypt a TOTP secret from database storage.
+     *
+     * @throws Exception wrapping the cipher error, as before the cipher was shared
      */
     protected function decryptSecret(string $ciphertext): string
     {
-        $key = $this->deriveKey();
-        $raw = base64_decode($ciphertext, true);
-
-        if ($raw === false || strlen($raw) < 17) {
-            throw new Exception('TOTP secret decryption failed: invalid ciphertext.');
+        try {
+            return (new SecretCipher())->decrypt($ciphertext);
+        } catch (SecretCipherException $e) {
+            throw new Exception($e->describeFor('TOTP secret', 'decryption'), 0, $e);
         }
-
-        $iv = substr($raw, 0, 16);
-        $cipher = substr($raw, 16);
-        $plain = openssl_decrypt($cipher, 'AES-256-CBC', $key, OPENSSL_RAW_DATA, $iv);
-
-        if ($plain === false) {
-            throw new Exception('TOTP secret decryption failed.');
-        }
-
-        return $plain;
     }
 
     // ── Recovery codes ───────────────────────────────────────────────────────
@@ -188,7 +179,7 @@ class TotpService extends Component
      *
      * @param string[] $hashedCodes
      */
-    public function verifyRecoveryCode(string $code, array $hashedCodes): int
+    public function verifyRecoveryCode(#[\SensitiveParameter] string $code, array $hashedCodes): int
     {
         $code = strtoupper(str_replace('-', '', trim($code)));
         /** @var \yii\base\Security $security */
@@ -205,7 +196,7 @@ class TotpService extends Component
      * Use a recovery code: verify it and remove from the user's stored codes.
      * Returns true if the code was valid and consumed.
      */
-    public function useRecoveryCode(User $user, string $code): bool
+    public function useRecoveryCode(User $user, #[\SensitiveParameter] string $code): bool
     {
         $codes = $this->getStoredRecoveryCodes($user);
         $index = $this->verifyRecoveryCode($code, $codes);
@@ -249,7 +240,7 @@ class TotpService extends Component
      *
      * @return string[] Raw recovery codes to display once.
      */
-    public function enable(User $user, string $plainSecret): array
+    public function enable(User $user, #[\SensitiveParameter] string $plainSecret): array
     {
         $recovery = $this->generateRecoveryCodes();
 
@@ -284,15 +275,6 @@ class TotpService extends Component
     }
 
     // ── Internals ────────────────────────────────────────────────────────────
-
-    private function deriveKey(): string
-    {
-        $secret = $_ENV['APP_SECRET_KEY'] ?? '';
-        if (strlen($secret) < 16) {
-            throw new Exception('APP_SECRET_KEY is not set or too short. Set it in your .env file.');
-        }
-        return hash('sha256', $secret, true);
-    }
 
     private function generateSingleRecoveryCode(): string
     {

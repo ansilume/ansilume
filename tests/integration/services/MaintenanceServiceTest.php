@@ -88,8 +88,12 @@ class MaintenanceServiceTest extends DbTestCase
         $report = $maintenance->runIfDue();
 
         $this->assertSame(['artifact-cleanup'], $report['ran']);
-        // stale-sync-sweep skips on every tick when there's nothing to recover.
-        $this->assertSame(['stale-sync-sweep'], array_column($report['skipped'], 'task'));
+        // stale-sync-sweep skips on every tick when there's nothing to recover,
+        // and the survey password scrub when no finished job has answers.
+        $this->assertSame(
+            [['task' => 'stale-sync-sweep', 'reason' => 'none-stale'], ['task' => 'survey-secret-scrub', 'reason' => 'done']],
+            $report['skipped']
+        );
         $this->assertSame(1, $report['results']['artifact-cleanup']['expired']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['by_count']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
@@ -235,6 +239,23 @@ class MaintenanceServiceTest extends DbTestCase
         $this->assertSame(Project::STATUS_ERROR, $project->status);
         $this->assertNull($project->sync_started_at);
         $this->assertStringContainsString('Sweeper recovered stuck sync', (string)$project->last_sync_error);
+    }
+
+    public function testRunIfDueReportsTheStaleSyncSweepWhenItRecoveredAProject(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->status = Project::STATUS_SYNCING;
+        $project->sync_started_at = time() - 1000;
+        $project->save(false);
+        \Yii::$app->set('artifactService', $this->makeArtifactService(0));
+        $maintenance = new MaintenanceService();
+        $maintenance->artifactCleanupIntervalSeconds = 0;
+
+        $report = $maintenance->runIfDue();
+
+        $this->assertSame(['stale-sync-sweep'], $report['ran']);
+        $this->assertSame(['recovered' => 1, 'threshold_seconds' => 900], $report['results']['stale-sync-sweep']);
     }
 
     public function testStaleSyncSweepIgnoresFreshSyncingProject(): void

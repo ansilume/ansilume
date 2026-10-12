@@ -6,6 +6,8 @@ declare(strict_types=1);
 /** @var app\models\Schedule $model */
 /** @var array $templates  id => name map of job templates */
 
+use app\components\SurveySecrets;
+use app\components\VersionedAssetUrl;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
@@ -58,7 +60,11 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
                 'placeholder' => "{\n  \"env\": \"production\"\n}",
                 'data-extra-vars-editor' => '1',
             ])
-            ->hint('Optional JSON extra vars that override the template defaults for scheduled runs.') ?>
+            ->hint(
+                'Optional JSON extra vars that override the template defaults for scheduled runs. '
+                . 'Answers to the template\'s password survey fields are stored encrypted and show as <code>'
+                . Html::encode(SurveySecrets::PLACEHOLDER) . '</code>: leave it to keep the stored answer, or replace it to change it.'
+            ) ?>
     </div>
     <div class="col-12">
         <?= $form->field($model, 'enabled')->checkbox() ?>
@@ -95,7 +101,7 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
 </script>
 
 <link rel="stylesheet" href="/css/vendor/codemirror/codemirror.css">
-<link rel="stylesheet" href="/css/extra-vars-editor.css">
+<?= Html::cssFile(VersionedAssetUrl::of('/css/extra-vars-editor.css')) ?>
 <script src="/js/vendor/codemirror/codemirror.js"></script>
 <script src="/js/vendor/codemirror/mode/javascript/javascript.js"></script>
 <script src="/js/vendor/codemirror/mode/yaml/yaml.js"></script>
@@ -103,4 +109,4 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
 <script src="/js/vendor/codemirror/addon/edit/closebrackets.js"></script>
 <script src="/js/vendor/codemirror/addon/selection/active-line.js"></script>
 <script src="/js/vendor/js-yaml/js-yaml.min.js"></script>
-<script src="/js/extra-vars-editor.js"></script>
+<?= Html::jsFile(VersionedAssetUrl::of('/js/extra-vars-editor.js')) ?>

@@ -10,6 +10,7 @@ use app\models\AuditLog;
 use app\models\User;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\TriggerTokenService;
 use app\services\WorkflowAccessDeniedException;
 use yii\data\ActiveDataProvider;
 use yii\helpers\ArrayHelper;
@@ -338,14 +339,7 @@ class WorkflowTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireWorkflowOperate((int)$model->id);
-        $rawToken = $model->generateTriggerToken((int)\Yii::$app->user->id);
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_GENERATED,
-            'workflow_template',
-            $id,
-            \Yii::$app->user->id,
-            ['name' => $model->name],
-        );
+        $rawToken = (new TriggerTokenService())->generate($model, (int)\Yii::$app->user->id);
         $this->session()->setFlash('success', 'Trigger token generated. Copy it now — it will not be shown again.');
         // Flash the raw token once so the view can display it. The DB stores only the hash.
         $this->session()->setFlash('trigger_token_raw', $rawToken);
@@ -356,14 +350,7 @@ class WorkflowTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireWorkflowOperate((int)$model->id);
-        $model->revokeTriggerToken();
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_WORKFLOW_TEMPLATE_TRIGGER_TOKEN_REVOKED,
-            'workflow_template',
-            $id,
-            \Yii::$app->user->id,
-            ['name' => $model->name],
-        );
+        (new TriggerTokenService())->revoke($model, (int)\Yii::$app->user->id);
         $this->session()->setFlash('success', 'Trigger token revoked. The /trigger/fire-workflow endpoint is now disabled for this workflow.');
         return $this->redirect(['view', 'id' => $id]);
     }

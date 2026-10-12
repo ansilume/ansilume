@@ -92,7 +92,7 @@ class RunnerTokenResolver
         return '';
     }
 
-    private function selfRegister(string $name, string $bootstrapSecret): string
+    private function selfRegister(string $name, #[\SensitiveParameter] string $bootstrapSecret): string
     {
         $group = $_ENV['RUNNER_GROUP'] ?? '';
         $groupInfo = $group !== '' ? " in group '{$group}'" : '';
@@ -140,7 +140,7 @@ class RunnerTokenResolver
      *
      * @param array<string, mixed>|null $response
      */
-    private function failPermanently(?array $response, string $error): string
+    private function failPermanently(#[\SensitiveParameter] ?array $response, string $error): string
     {
         if ($response === null) {
             $apiUrl = (string)($_ENV['API_URL'] ?? '(server)');
@@ -169,7 +169,7 @@ class RunnerTokenResolver
     /**
      * @param array<string, mixed>|null $response
      */
-    private function extractToken(?array $response): string
+    private function extractToken(#[\SensitiveParameter] ?array $response): string
     {
         if ($response === null || empty($response['ok'])) {
             return '';
@@ -181,7 +181,7 @@ class RunnerTokenResolver
     /**
      * @param array<string, mixed>|null $response
      */
-    private function registrationErrorText(?array $response): string
+    private function registrationErrorText(#[\SensitiveParameter] ?array $response): string
     {
         if ($response === null) {
             return 'HTTP ' . $this->http->getLastHttpStatus() . ' without a readable response body';
@@ -192,8 +192,11 @@ class RunnerTokenResolver
     /**
      * @return array<string, string>
      */
-    private function buildRegisterPayload(string $name, string $bootstrapSecret, string $group): array
-    {
+    private function buildRegisterPayload(
+        string $name,
+        #[\SensitiveParameter] string $bootstrapSecret,
+        string $group
+    ): array {
         $payload = [
             'name' => $name,
             'bootstrap_secret' => $bootstrapSecret,
@@ -221,7 +224,7 @@ class RunnerTokenResolver
         sleep(self::REGISTER_RETRY_SECONDS);
     }
 
-    private function cacheToken(string $name, string $token): void
+    private function cacheToken(string $name, #[\SensitiveParameter] string $token): void
     {
         $cacheFile = $this->tokenCacheFile($name);
         \app\helpers\FileHelper::safeFilePutContents($cacheFile, $token);

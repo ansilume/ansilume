@@ -58,7 +58,7 @@ final class RunnerVaultMode
      *         instead of the runner
      */
     public static function fromPayload(
-        array $payload,
+        #[\SensitiveParameter] array $payload,
         ?string $decoyDirectory = null,
         string $envBinary = self::ENV_BINARY,
     ): self {
@@ -97,7 +97,7 @@ final class RunnerVaultMode
      * @param array<string, string> $env the environment after credential injection
      * @return array{command: list<string>, env: array<string, string>}
      */
-    public function apply(array $command, array $env): array
+    public function apply(#[\SensitiveParameter] array $command, #[\SensitiveParameter] array $env): array
     {
         if ($this->isolation === null) {
             return ['command' => array_values($command), 'env' => $env];

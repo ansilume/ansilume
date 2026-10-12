@@ -128,8 +128,11 @@ class UsersController extends BaseApiController
      * @param array<string, mixed> $body
      * @return array{error: array{message: string}}|null
      */
-    private function applyAuthSourceOnCreate(User $model, array $body, string $authSource): ?array
-    {
+    private function applyAuthSourceOnCreate(
+        User $model,
+        #[\SensitiveParameter] array $body,
+        string $authSource
+    ): ?array {
         if ($authSource === User::AUTH_SOURCE_LDAP) {
             $model->markAsLdapManaged();
             $this->applyLdapMetadata($model, $body);
@@ -156,7 +159,7 @@ class UsersController extends BaseApiController
      *
      * @param array<string, mixed> $body
      */
-    private function applyLdapMetadata(User $model, array $body): void
+    private function applyLdapMetadata(User $model, #[\SensitiveParameter] array $body): void
     {
         if (array_key_exists('ldap_dn', $body)) {
             $dn = (string)$body['ldap_dn'];
@@ -176,7 +179,7 @@ class UsersController extends BaseApiController
      * @param array<string, mixed> $body
      * @return array{error: array{message: string}}|null
      */
-    private function rejectAuthSourceChange(User $model, array $body): ?array
+    private function rejectAuthSourceChange(User $model, #[\SensitiveParameter] array $body): ?array
     {
         if (array_key_exists('auth_source', $body) && (string)$body['auth_source'] !== $model->auth_source) {
             return $this->error('auth_source is immutable once the user exists.', 422);
@@ -191,7 +194,7 @@ class UsersController extends BaseApiController
      * @param array<string, mixed> $body
      * @return array{error: array{message: string}}|null
      */
-    private function applyPasswordOnUpdate(User $model, array $body): ?array
+    private function applyPasswordOnUpdate(User $model, #[\SensitiveParameter] array $body): ?array
     {
         $password = $body['password'] ?? null;
         if (!is_string($password) || $password === '') {
@@ -330,7 +333,7 @@ class UsersController extends BaseApiController
     /**
      * @param array<string, mixed> $body
      */
-    private function applyBody(User $model, array $body): void
+    private function applyBody(User $model, #[\SensitiveParameter] array $body): void
     {
         foreach (['username', 'email'] as $field) {
             if (array_key_exists($field, $body)) {
@@ -348,7 +351,7 @@ class UsersController extends BaseApiController
     /**
      * @param array<string, mixed> $body
      */
-    private function assignRole(User $model, array $body): void
+    private function assignRole(User $model, #[\SensitiveParameter] array $body): void
     {
         $roleName = $body['role'] ?? null;
         if (!is_string($roleName) || $roleName === '') {

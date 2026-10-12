@@ -5,6 +5,13 @@ declare(strict_types=1);
 namespace app\tests\unit\config;
 
 use PHPUnit\Framework\TestCase;
+use yii\base\Application;
+use yii\log\FileTarget;
+use yii\log\Logger;
+use yii\web\IdentityInterface;
+use yii\web\Request;
+use yii\web\Session;
+use yii\web\User;
 
 /**
  * Regression: Yii's default `logVars` on log targets appended the complete
@@ -14,9 +21,40 @@ use PHPUnit\Framework\TestCase;
  *
  * Every log target in every application config must disable context variable
  * dumping explicitly via `logVars => []` so secrets can never reach log files.
+ *
+ * The console target keeps SQL statements out of the log, and the web target
+ * keeps session IDs out of it.
  */
 class LogTargetSecurityTest extends TestCase
 {
+    private const SQL_CANARY = 'canary-sql-value-5521';
+    private const SESSION_CANARY = 'canarysessionid0123456789abcdefg';
+
+    private string $logFile = '';
+
+    /** @var array<string, mixed> */
+    private array $savedComponents = [];
+
+    /** @var array<string, mixed> */
+    private array $savedServer = [];
+
+    protected function setUp(): void
+    {
+        $this->savedServer = $_SERVER;
+    }
+
+    protected function tearDown(): void
+    {
+        $_SERVER = $this->savedServer;
+        foreach ($this->savedComponents as $id => $definition) {
+            \Yii::$app->set($id, $definition);
+        }
+        $this->savedComponents = [];
+        if ($this->logFile !== '' && file_exists($this->logFile)) {
+            unlink($this->logFile);
+        }
+    }
+
     /** @return array<string, array{0: string}> */
     public static function configFileProvider(): array
     {
@@ -32,17 +70,7 @@ class LogTargetSecurityTest extends TestCase
      */
     public function testAllLogTargetsDisableContextVariableDumping(string $file): void
     {
-        $config = require dirname(__DIR__, 3) . '/config/' . $file;
-
-        $this->assertIsArray($config['components'] ?? null, "{$file}: components missing");
-        $log = $config['components']['log'] ?? null;
-        $this->assertIsArray($log, "{$file}: log component missing");
-        $targets = $log['targets'] ?? null;
-        $this->assertIsArray($targets, "{$file}: log targets missing");
-        $this->assertNotEmpty($targets, "{$file}: log targets empty");
-
-        foreach ($targets as $index => $target) {
-            $this->assertIsArray($target, "{$file}: log target #{$index} is not an array config");
+        foreach ($this->logTargets($file) as $index => $target) {
             $this->assertArrayHasKey(
                 'logVars',
                 $target,
@@ -55,5 +83,209 @@ class LogTargetSecurityTest extends TestCase
                 "{$file}: log target #{$index} must set logVars to an empty array"
             );
         }
+    }
+
+    /**
+     * Regression: the console target logged info for every category, and
+     * yii\db\Command logs each SQL statement at info with its values filled
+     * in. Every job that `schedule/run` launched wrote its extra vars,
+     * survey password answers included, to runtime/logs/app.log; so did
+     * migrations and the queue worker.
+     *
+     * The categories are the ones yii\db\Command::logQuery() uses.
+     */
+    public function testTheConsoleLogKeepsSqlStatementsOut(): void
+    {
+        $target = $this->fileTarget('console.php');
+
+        $target->collect([
+            $this->message(
+                "INSERT INTO `job` (`extra_vars`) VALUES ('{\"db_password\":\"" . self::SQL_CANARY . "\"}')",
+                Logger::LEVEL_INFO,
+                'yii\db\Command::execute'
+            ),
+            $this->message(
+                "SELECT * FROM `user` WHERE `password_reset_token`='" . self::SQL_CANARY . "'",
+                Logger::LEVEL_INFO,
+                'yii\db\Command::query'
+            ),
+            $this->message('Schedule #7 launched job #42.', Logger::LEVEL_INFO, 'app\services\ScheduleService::launchSchedule'),
+        ], true);
+
+        $written = (string)file_get_contents($this->logFile);
+        $this->assertStringNotContainsString(self::SQL_CANARY, $written);
+        $this->assertStringNotContainsString('yii\db\Command', $written);
+        $this->assertStringContainsString('Schedule #7 launched job #42.', $written);
+    }
+
+    /**
+     * The console log still has the application's own info lines, warnings,
+     * and database errors (logged under the exception's class).
+     */
+    public function testTheConsoleLogKeepsEverythingElse(): void
+    {
+        $target = $this->fileTarget('console.php');
+
+        $target->collect([
+            $this->message('Schedule #7 launched job #42.', Logger::LEVEL_INFO, 'app\services\ScheduleService::launchSchedule'),
+            $this->message('[12] app\jobs\SyncProjectJob (attempt: 1) - Started', Logger::LEVEL_INFO, 'yii\queue\Queue'),
+            $this->message('SQLSTATE[HY000] [2002] Connection refused', Logger::LEVEL_ERROR, 'yii\db\Exception'),
+            $this->message('Opening DB connection: mysql:host=db;dbname=ansilume', Logger::LEVEL_INFO, 'yii\db\Connection::open'),
+            $this->message('Runner heartbeat is late.', Logger::LEVEL_WARNING, 'app\services\RunnerService'),
+        ], true);
+
+        $written = (string)file_get_contents($this->logFile);
+        $this->assertStringContainsString('[info][app\services\ScheduleService::launchSchedule] Schedule #7 launched job #42.', $written);
+        $this->assertStringContainsString('[info][yii\queue\Queue] [12] app\jobs\SyncProjectJob (attempt: 1) - Started', $written);
+        $this->assertStringContainsString('[error][yii\db\Exception] SQLSTATE[HY000] [2002] Connection refused', $written);
+        $this->assertStringContainsString('[info][yii\db\Connection::open] Opening DB connection', $written);
+        $this->assertStringContainsString('[warning][app\services\RunnerService] Runner heartbeat is late.', $written);
+    }
+
+    /**
+     * Regression: the web target used Yii's default prefix, which puts the
+     * session ID into every error and warning line, so anyone who could
+     * read app.log could take over the session of the user it names.
+     */
+    public function testTheWebLogNamesTheClientAndUserButNotTheSession(): void
+    {
+        $this->installWebRequest('203.0.113.7', 42);
+        $target = $this->fileTarget('web.php');
+
+        $target->collect([$this->message('Not found.', Logger::LEVEL_WARNING, 'yii\web\HttpException:404')], true);
+
+        $written = (string)file_get_contents($this->logFile);
+        $this->assertStringContainsString(' [203.0.113.7][42][warning][yii\web\HttpException:404] Not found.', $written);
+        $this->assertStringNotContainsString(self::SESSION_CANARY, $written);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function logTargets(string $file): array
+    {
+        $config = require dirname(__DIR__, 3) . '/config/' . $file;
+
+        $this->assertIsArray($config['components'] ?? null, "{$file}: components missing");
+        $log = $config['components']['log'] ?? null;
+        $this->assertIsArray($log, "{$file}: log component missing");
+        $targets = $log['targets'] ?? null;
+        $this->assertIsArray($targets, "{$file}: log targets missing");
+        $this->assertNotEmpty($targets, "{$file}: log targets empty");
+        $list = [];
+        foreach ($targets as $index => $target) {
+            $this->assertIsArray($target, "{$file}: log target #{$index} is not an array config");
+            $list[] = $target;
+        }
+
+        return $list;
+    }
+
+    /**
+     * The only file target of $file, writing to a temporary file instead of
+     * runtime/logs/app.log.
+     */
+    private function fileTarget(string $file): FileTarget
+    {
+        $targets = $this->logTargets($file);
+        $this->assertCount(1, $targets, "{$file}: expected one log target");
+        $logFile = tempnam(sys_get_temp_dir(), 'ansilume-log-target-');
+        $this->assertIsString($logFile);
+        unlink($logFile);
+        $this->logFile = $logFile;
+        $target = \Yii::createObject(['logFile' => $logFile] + $targets[0]);
+        $this->assertInstanceOf(FileTarget::class, $target);
+
+        return $target;
+    }
+
+    /**
+     * @return array{0: string, 1: int, 2: string, 3: float}
+     */
+    private function message(string $text, int $level, string $category): array
+    {
+        return [$text, $level, $category, microtime(true)];
+    }
+
+    /**
+     * Makes the application look like it is serving a web request from $ip
+     * for the user $userId, with an active session whose ID is the canary.
+     * tearDown() restores the components.
+     */
+    private function installWebRequest(string $ip, int $userId): void
+    {
+        $_SERVER['REMOTE_ADDR'] = $ip;
+        $user = new User(['identityClass' => \app\models\User::class, 'enableSession' => false, 'enableAutoLogin' => false]);
+        $user->setIdentity($this->identity($userId));
+        $session = new class () extends Session {
+            public string $canary = '';
+
+            public function getIsActive()
+            {
+                return $this->canary !== '';
+            }
+
+            public function getId()
+            {
+                return $this->canary;
+            }
+
+            public function close()
+            {
+            }
+        };
+        $session->canary = self::SESSION_CANARY;
+        $this->install('request', new Request(['cookieValidationKey' => 'test-key']));
+        $this->install('user', $user);
+        $this->install('session', $session);
+    }
+
+    /**
+     * Installs $component as $id and instantiates it, as a request that used
+     * it would have: log prefixes only look at instantiated components.
+     */
+    private function install(string $id, object $component): void
+    {
+        $app = \Yii::$app;
+        $this->assertInstanceOf(Application::class, $app);
+        if (!array_key_exists($id, $this->savedComponents)) {
+            $this->savedComponents[$id] = $app->getComponents(true)[$id] ?? null;
+        }
+        $app->set($id, $component);
+        $this->assertSame($component, $app->get($id));
+    }
+
+    private function identity(int $id): IdentityInterface
+    {
+        return new class ($id) implements IdentityInterface {
+            public function __construct(private int $id)
+            {
+            }
+
+            public static function findIdentity($id)
+            {
+                return null;
+            }
+
+            public static function findIdentityByAccessToken($token, $type = null)
+            {
+                return null;
+            }
+
+            public function getId()
+            {
+                return $this->id;
+            }
+
+            public function getAuthKey()
+            {
+                return null;
+            }
+
+            public function validateAuthKey($authKey)
+            {
+                return false;
+            }
+        };
     }
 }

@@ -7,6 +7,7 @@ namespace app\tests\integration\services;
 use app\models\AuditLog;
 use app\models\Job;
 use app\services\JobLaunchService;
+use app\services\RelaunchService;
 use app\tests\integration\DbTestCase;
 
 class JobLaunchServiceTest extends DbTestCase
@@ -159,23 +160,12 @@ class JobLaunchServiceTest extends DbTestCase
             'verbosity' => 3,
             'check_mode' => 1,
         ]);
+        // Only a finished job is re-launched.
+        $original->status = Job::STATUS_SUCCEEDED;
+        $original->save(false);
 
-        // Simulate controller relaunch logic
-        $overrides = [];
-        if ($original->extra_vars) {
-            $overrides['extra_vars'] = $original->extra_vars;
-        }
-        if ($original->limit) {
-            $overrides['limit'] = $original->limit;
-        }
-        if ($original->verbosity !== null) {
-            $overrides['verbosity'] = $original->verbosity;
-        }
-        if ($original->check_mode) {
-            $overrides['check_mode'] = 1;
-        }
-
-        $relaunched = $this->service->launch($template, $user->id, $overrides);
+        // The controller's re-launch code
+        $relaunched = (new RelaunchService($this->service))->relaunch($original, $user->id);
 
         // All parameters must match 1:1
         $this->assertSame(1, (int)$relaunched->check_mode, 'check_mode not preserved');

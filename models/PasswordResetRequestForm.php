@@ -79,7 +79,7 @@ class PasswordResetRequestForm extends Model
         return true;
     }
 
-    private function buildResetUrl(?string $token): string
+    private function buildResetUrl(#[\SensitiveParameter] ?string $token): string
     {
         // APP_URL (→ appBaseUrl) wins over request hostInfo so reverse-proxy
         // deployments don't mail out the internal hostname the app saw on

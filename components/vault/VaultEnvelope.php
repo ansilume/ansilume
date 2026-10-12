@@ -83,7 +83,7 @@ final class VaultEnvelope
      * Whether Ansible would decrypt this vault with the password. The
      * password is normalised like a password file first; '' never opens.
      */
-    public function opens(string $password): bool
+    public function opens(#[\SensitiveParameter] string $password): bool
     {
         $password = self::normalizePassword($password);
         if ($password === '') {
@@ -109,7 +109,7 @@ final class VaultEnvelope
      * The password as Ansible reads it from a password file: Python
      * whitespace stripped at both ends.
      */
-    public static function normalizePassword(string $password): string
+    public static function normalizePassword(#[\SensitiveParameter] string $password): string
     {
         return trim($password, self::PYTHON_WHITESPACE);
     }

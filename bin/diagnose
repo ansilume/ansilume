@@ -33,11 +33,14 @@ fail()    { printf "  ${RED}✗${NC} %s\n" "$1"; }
 info()    { printf "  %s\n" "$1"; }
 
 # Redact values that look like secrets from a key=value stream.
-# Matches: PASSWORD, SECRET, KEY, TOKEN (case-insensitive), and the
-# arguments of a Redis AUTH command ("Redis command was: AUTH <password>").
+# Matches: PASSWORD, SECRET, KEY, TOKEN (case-insensitive), the arguments of
+# a Redis AUTH command ("Redis command was: AUTH <password>"), and the token
+# of the deprecated trigger path form trigger/<64 hex characters>, which
+# nginx log lines and route errors of older versions contain.
 redact() {
     sed -E -e 's/(PASSWORD|SECRET|KEY|TOKEN)([=:][[:space:]]*)([^[:space:]]+)/\1\2***REDACTED***/gi' \
-        -e 's/(AUTH)([[:space:]]+[^[:space:]]+){1,2}/\1 ***REDACTED***/g'
+        -e 's/(AUTH)([[:space:]]+[^[:space:]]+){1,2}/\1 ***REDACTED***/g' \
+        -e 's#(trigger/)[0-9a-fA-F]{64}#\1***REDACTED***#g'
 }
 
 # Map curl's "000" write-out (transport failure) to a readable label.

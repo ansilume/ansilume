@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SurveySecretBackfill;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 use yii\base\Component;
+use yii\caching\CacheInterface;
 
 /**
  * Throttled, idempotent maintenance dispatcher.
@@ -22,11 +24,21 @@ use yii\base\Component;
  * which has SETNX semantics — so two schedule-runner instances launched
  * accidentally in parallel cannot double-trigger a sweep.
  *
- * Currently only artifact cleanup is wired up; new tasks should follow the
- * same pattern (config-driven interval, separate cache key, structured result).
+ * Artifact cleanup follows that pattern; new periodic tasks should too
+ * (config-driven interval, separate cache key, structured result). Two tasks
+ * run on every tick instead: the stale-sync sweep, and the encryption of
+ * survey password answers that finished jobs stored in plaintext before
+ * 2.9, which works through the job history a few seconds per tick until it
+ * is done ({@see SurveySecretBackfill}).
  */
 class MaintenanceService extends Component
 {
+    /** The cache key that marks the survey password scrub as done. */
+    public const SURVEY_SECRET_SCRUB_DONE_KEY = 'maintenance:survey-secret-scrub:done';
+
+    /** The cache key of the survey password scrub's position. */
+    public const SURVEY_SECRET_SCRUB_CURSOR_KEY = 'maintenance:survey-secret-scrub:cursor';
+
     /**
      * Interval in seconds between artifact-cleanup runs. 0 disables the
      * scheduled sweep — in that case operators must run `php yii artifact/cleanup`
@@ -42,6 +54,14 @@ class MaintenanceService extends Component
      * timeout + a comfortable buffer.
      */
     public int $staleSyncThresholdSeconds = 900; // 15 minutes
+
+    /**
+     * Seconds per tick the encryption of stored survey password answers of
+     * finished jobs may take (a page of rows that started is finished); 0
+     * disables it. The schedule-runner's health check allows a loop of up to
+     * 150 seconds.
+     */
+    public float $surveySecretScrubBudgetSeconds = 5.0;
 
     /**
      * Run every task whose cooldown has expired and report what happened.
@@ -78,7 +98,93 @@ class MaintenanceService extends Component
             $report['skipped'][] = ['task' => 'stale-sync-sweep', 'reason' => 'none-stale'];
         }
 
+        $scrub = $this->maybeRunSurveySecretScrub();
+        if ($scrub['ran']) {
+            $report['ran'][] = 'survey-secret-scrub';
+            $report['results']['survey-secret-scrub'] = $scrub['result'];
+        } else {
+            $report['skipped'][] = ['task' => 'survey-secret-scrub', 'reason' => $scrub['reason']];
+        }
+
         return $report;
+    }
+
+    /**
+     * Forget the survey password scrub's position and done mark, so the
+     * next ticks check the whole job history again. Migration m000081 calls
+     * this: when it runs, the data may be from before 2.9 (an update, or a
+     * restored backup), whatever the cache says. Operators run it through
+     * `php yii maintenance/reset-survey-secret-scrub` after restoring a
+     * backup taken after the update started, for which m000081 does not run
+     * again. Only these two cache keys are deleted.
+     */
+    public function resetSurveySecretScrub(): void
+    {
+        /** @var CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        $cache->delete(self::SURVEY_SECRET_SCRUB_DONE_KEY);
+        $cache->delete(self::SURVEY_SECRET_SCRUB_CURSOR_KEY);
+    }
+
+    /**
+     * Encrypt the stored survey password answers of finished jobs, from
+     * where the previous tick stopped until the budget is used up. The
+     * position and the done mark live in the cache: when they are lost the
+     * scrub starts over, which is safe because it skips rows that are done.
+     *
+     * It reports as run only when it checked rows; a tick that only found it
+     * done, blocked (pending migrations, no usable APP_SECRET_KEY) or failed
+     * before the first row is skipped, with that reason.
+     *
+     * @return array{ran: bool, reason: string, result: array<string, int>}
+     */
+    private function maybeRunSurveySecretScrub(): array
+    {
+        if ($this->surveySecretScrubBudgetSeconds <= 0) {
+            return ['ran' => false, 'reason' => 'disabled', 'result' => []];
+        }
+        /** @var CacheInterface $cache */
+        $cache = \Yii::$app->cache;
+        if ($cache->get(self::SURVEY_SECRET_SCRUB_DONE_KEY) !== false) {
+            return ['ran' => false, 'reason' => SurveySecretBackfill::STATUS_DONE, 'result' => []];
+        }
+
+        $cursor = SurveySecretBackfill::cursorFrom($cache->get(self::SURVEY_SECRET_SCRUB_CURSOR_KEY));
+        $slice = $this->surveySecretBackfill()->scrubFinishedJobs($cursor, $this->surveySecretScrubBudgetSeconds);
+        $this->storeSurveySecretScrubState($cache, $slice['status'], $slice['cursor']);
+
+        $result = $slice['counts'] + ['done' => $slice['status'] === SurveySecretBackfill::STATUS_DONE ? 1 : 0];
+
+        return ['ran' => $slice['counts']['checked'] > 0, 'reason' => $slice['status'], 'result' => $result];
+    }
+
+    /**
+     * @param array{template: int, job: int} $cursor
+     */
+    private function storeSurveySecretScrubState(CacheInterface $cache, string $status, array $cursor): void
+    {
+        if ($status === SurveySecretBackfill::STATUS_DONE) {
+            $cache->set(self::SURVEY_SECRET_SCRUB_DONE_KEY, time(), 0);
+            $cache->delete(self::SURVEY_SECRET_SCRUB_CURSOR_KEY);
+            return;
+        }
+        if ($status === SurveySecretBackfill::STATUS_PARTIAL || $status === SurveySecretBackfill::STATUS_ERROR) {
+            $cache->set(self::SURVEY_SECRET_SCRUB_CURSOR_KEY, $cursor, 0);
+        }
+        if ($status === SurveySecretBackfill::STATUS_ERROR) {
+            \Yii::warning('MaintenanceService: the encryption of stored survey password answers stopped after an error; the next run continues.', __CLASS__);
+        }
+    }
+
+    /**
+     * The backfill the scrub runs; its report lines go to the application
+     * log (counts and IDs only).
+     */
+    protected function surveySecretBackfill(): SurveySecretBackfill
+    {
+        return new SurveySecretBackfill(\Yii::$app->db, static function (string $line): void {
+            \Yii::info('survey-secret-scrub: ' . $line, MaintenanceService::class);
+        });
     }
 
     /**

@@ -37,6 +37,10 @@ return [
                     // Never dump request/environment context ($_SERVER contains
                     // APP_SECRET_KEY, DB_PASSWORD, ...) into the log file.
                     'logVars' => [],
+                    // yii\db\Command logs every SQL statement at info with its
+                    // values filled in (job extra vars, password answers, tokens).
+                    // Database errors are still logged, under the exception class.
+                    'except' => ['yii\db\Command::*'],
                 ],
             ],
         ],

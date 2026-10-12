@@ -83,6 +83,11 @@ RUN echo 'www-data ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/www-data \
 RUN mkdir -p /var/www/runtime/ansible-home /var/www/.ansible/tmp /var/www/.cache \
     && chown -R www-data:www-data /var/www/runtime /var/www/.ansible /var/www/.cache
 
+# The runner's own PHP settings (zend.exception_ignore_args = On keeps secret
+# arguments out of exception traces). Not docker/php/php.ini: its error_log
+# line would move the runner's PHP errors from stderr into a file.
+COPY docker/runner/php.ini /usr/local/etc/php/conf.d/ansilume-runner.ini
+
 COPY docker/runner/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

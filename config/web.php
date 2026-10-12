@@ -28,6 +28,7 @@ $config = [
         'api/v1/approval-rules' => 'app\controllers\api\v1\ApprovalRulesController',
         'api/v1/approvals' => 'app\controllers\api\v1\ApprovalsController',
         'api/v1/workflow-templates' => 'app\controllers\api\v1\WorkflowTemplatesController',
+        'api/v1/trigger-tokens' => 'app\controllers\api\v1\TriggerTokensController',
         'api/v1/workflow-jobs' => 'app\controllers\api\v1\WorkflowJobsController',
         'api/v1/roles' => 'app\controllers\api\v1\RolesController',
         'api/v1/profile' => 'app\controllers\api\v1\ProfileController',
@@ -124,6 +125,9 @@ $config = [
                     // Never dump request/environment context ($_SERVER contains
                     // APP_SECRET_KEY, DB_PASSWORD, ...) into the log file.
                     'logVars' => [],
+                    // [IP][user ID]. Yii's default prefix adds the session ID,
+                    // which would let anyone who reads app.log take over sessions.
+                    'prefix' => [\app\components\LogPrefix::class, 'ipAndUser'],
                 ],
             ],
         ],
@@ -164,6 +168,8 @@ $config = [
                 ['pattern' => 'api/v1/job-templates/<id:\d+>', 'route' => 'api/v1/job-templates/view', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/job-templates/<id:\d+>', 'route' => 'api/v1/job-templates/update', 'verb' => 'PUT'],
                 ['pattern' => 'api/v1/job-templates/<id:\d+>', 'route' => 'api/v1/job-templates/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/job-templates/<id:\d+>/trigger-token', 'route' => 'api/v1/trigger-tokens/generate-for-job-template', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/job-templates/<id:\d+>/trigger-token', 'route' => 'api/v1/trigger-tokens/revoke-for-job-template', 'verb' => 'DELETE'],
                 ['pattern' => 'api/v1/job-templates', 'route' => 'api/v1/job-templates/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/job-templates', 'route' => 'api/v1/job-templates/create', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/projects/<id:\d+>/sync', 'route' => 'api/v1/projects/sync', 'verb' => 'POST'],
@@ -215,6 +221,8 @@ $config = [
                 ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/view', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/update', 'verb' => 'PUT'],
                 ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>/trigger-token', 'route' => 'api/v1/trigger-tokens/generate-for-workflow-template', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>/trigger-token', 'route' => 'api/v1/trigger-tokens/revoke-for-workflow-template', 'verb' => 'DELETE'],
                 ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/create', 'verb' => 'POST'],
                 // Roles API
@@ -295,8 +303,19 @@ $config = [
                 // Health check and metrics
                 'health' => 'health/index',
                 'metrics' => 'metrics/index',
-                // Inbound trigger
-                ['pattern' => 'trigger/<token:[a-f0-9]{64}>', 'route' => 'trigger/fire', 'verb' => 'POST'],
+                // Inbound triggers. The token belongs in the X-Trigger-Token
+                // header; /trigger/<token> is the deprecated path form. These
+                // rules take every verb (TriggerController answers 405 to
+                // anything but POST), and every other path under trigger/
+                // gets a 404 from trigger/not-found: a path that resolves to
+                // no route would be written to the error log, token and all.
+                // Yii trims slashes from patterns, so a trailing slash needs
+                // its own rule with 'suffix' => '/'.
+                ['pattern' => 'trigger/<action:fire|fire-workflow>', 'route' => 'trigger/<action>'],
+                ['pattern' => 'trigger/<action:fire|fire-workflow>', 'route' => 'trigger/<action>', 'suffix' => '/'],
+                ['pattern' => 'trigger/<token:[a-fA-F0-9]{64}>', 'route' => 'trigger/fire'],
+                ['pattern' => 'trigger/<token:[a-fA-F0-9]{64}>', 'route' => 'trigger/fire', 'suffix' => '/'],
+                ['pattern' => 'trigger/<token:.+>', 'route' => 'trigger/not-found'],
                 // Roles (name-keyed, not id-keyed)
                 ['pattern' => 'role', 'route' => 'role/index', 'verb' => 'GET'],
                 ['pattern' => 'role/create', 'route' => 'role/create'],
@@ -384,10 +403,7 @@ $config = [
 
 if (YII_ENV_DEV) {
     $config['bootstrap'][] = 'debug';
-    $config['modules']['debug'] = [
-        'class' => 'yii\debug\Module',
-        'allowedIPs' => ['*'],
-    ];
+    $config['modules']['debug'] = require __DIR__ . '/debug.php';
     $config['bootstrap'][] = 'gii';
     $config['modules']['gii'] = [
         'class' => 'yii\gii\Module',

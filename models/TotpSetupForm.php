@@ -18,7 +18,7 @@ class TotpSetupForm extends Model
     private string $_secret;
     private User $_user;
 
-    public function __construct(User $user, string $secret, array $config = [])
+    public function __construct(User $user, #[\SensitiveParameter] string $secret, array $config = [])
     {
         $this->_user = $user;
         $this->_secret = $secret;

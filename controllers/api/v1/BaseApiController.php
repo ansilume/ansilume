@@ -127,7 +127,7 @@ abstract class BaseApiController extends Controller
     /**
      * @return array{data: mixed}
      */
-    protected function success(mixed $data, int $status = 200): array
+    protected function success(#[\SensitiveParameter] mixed $data, int $status = 200): array
     {
         \Yii::$app->response->statusCode = $status;
         return ['data' => $data];

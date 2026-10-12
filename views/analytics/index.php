@@ -10,6 +10,7 @@ declare(strict_types=1);
 /** @var array<int, string> $users */
 
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = 'Analytics';
@@ -570,7 +571,7 @@ $this->title = 'Analytics';
     <script src="<?= \Yii::$app->request->baseUrl ?>/js/chart.min.js"></script>
     <script>
     (function() {
-        var trendData = <?= json_encode($data['jobTrend'] ?? []) ?>;
+        var trendData = <?= Json::htmlEncode($data['jobTrend'] ?? []) ?>;
         var labels = trendData.map(function(r) { return r.period; });
         var succeeded = trendData.map(function(r) { return r.succeeded; });
         var failed = trendData.map(function(r) { return r.failed; });

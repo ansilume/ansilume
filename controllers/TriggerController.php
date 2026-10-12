@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\TriggerTokenResolver;
 use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\NotificationTemplate;
 use app\models\WorkflowTemplate;
+use app\services\AuditService;
+use app\services\JobLaunchRejectedException;
 use app\services\JobLaunchService;
 use app\services\NotificationDispatcher;
 use app\services\ProjectAccessChecker;
@@ -15,20 +18,26 @@ use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
 use yii\filters\VerbFilter;
+use yii\web\BadRequestHttpException;
 use yii\web\Controller;
 use yii\web\NotFoundHttpException;
+use yii\web\Request;
 use yii\web\Response;
 
 /**
  * Inbound trigger endpoints.
  *
- *   POST /trigger/fire?token=…           — fire a Job for a JobTemplate
- *   POST /trigger/fire-workflow?token=…  — launch a WorkflowJob for a WorkflowTemplate
+ *   POST /trigger/fire           — fire a Job for a JobTemplate
+ *   POST /trigger/fire-workflow  — launch a WorkflowJob for a WorkflowTemplate
  *
  * Allows external systems (CI pipelines, monitoring tools, etc.) to
  * launch a job or a full workflow without requiring session
  * authentication or a full API token. The trigger token itself is the
- * credential — treat the URL as a secret.
+ * credential: send it in the X-Trigger-Token header, or as
+ * `Authorization: Bearer <token>`. The URL forms ?token=<token> and
+ * POST /trigger/<token> still work but are deprecated, because URLs end up
+ * in access logs and proxies ({@see TriggerTokenResolver}). Every call
+ * records how the token was sent in its audit entry, never the token.
  *
  * A trigger runs as the user who generated its token (the template's
  * creator for tokens generated before that was recorded). Every call checks
@@ -43,11 +52,15 @@ use yii\web\Response;
  * Optional JSON body for fire-workflow:
  *   { "extra_vars": { "env": "prod" } }   // applied to the start step only
  *
- * Response (JSON):
+ * Response (JSON unless noted):
  *   201: { "job_id": 42 }              (fire)
  *   201: { "workflow_job_id": 17 }     (fire-workflow)
+ *   400: no token (HTML error page)
  *   403: { "error": "Launch refused." } the user the trigger runs as may not launch it
- *   404: token not found or trigger not enabled
+ *   404: token not found or trigger not enabled (HTML error page)
+ *   405: not a POST (HTML error page)
+ *   422: { "error": "<why>" }           (fire) the launch was refused, e.g. a password
+ *                                        survey answer was the placeholder $encrypted$
  *   500: { "error": "Launch failed." }
  */
 class TriggerController extends Controller
@@ -74,30 +87,26 @@ class TriggerController extends Controller
     }
 
     /**
-     * Fire a job for the template matching the given trigger token, as the
-     * user who generated the token.
+     * Fire a job for the template matching the presented trigger token, as
+     * the user who generated the token.
+     *
+     * @throws BadRequestHttpException when the request carries no token
+     * @throws NotFoundHttpException when no template has the token
      */
-    public function actionFire(string $token): Response
+    public function actionFire(): Response
     {
-        $template = JobTemplate::findByTriggerToken($token);
+        $presented = $this->presentedToken();
+        $template = JobTemplate::findByTriggerToken($presented['token']);
         if ($template === null) {
-            // Fire a notification so operators can spot leaked/stale tokens.
-            /** @var NotificationDispatcher $dispatcher */
-            $dispatcher = \Yii::$app->get('notificationDispatcher');
-            $dispatcher->dispatch(NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN, [
-                'trigger' => [
-                    'token_prefix' => substr($token, 0, 6),
-                    'ip' => (string)(\Yii::$app->request->userIP ?? ''),
-                    'user_agent' => substr((string)(\Yii::$app->request->userAgent ?? ''), 0, 200),
-                ],
-            ]);
+            // Notify operators so they can spot leaked or stale tokens.
+            $this->notifyUnknownToken($presented['token'], []);
             throw new NotFoundHttpException('Trigger not found.');
         }
 
         $launchedBy = $template->getTriggerUserId();
         $denial = $this->launchDenial($launchedBy, $template);
         if ($denial !== null) {
-            return $this->refuseJobLaunch($template, $launchedBy, $denial);
+            return $this->refuseJobLaunch($template, $launchedBy, $denial, $presented['transport']);
         }
 
         /** @var JobLaunchService $launcher */
@@ -106,64 +115,124 @@ class TriggerController extends Controller
         try {
             $job = $launcher->launch($template, $launchedBy, $this->parseOverrides());
         } catch (\RuntimeException $e) {
-            \Yii::error("Trigger for template #{$template->id} failed: " . $e->getMessage(), __CLASS__);
-            return $this->asJson(['error' => 'Launch failed.'])->setStatusCode(500);
+            return $this->jobLaunchFailure($template, $e);
         }
 
-        \Yii::$app->response->statusCode = 201;
-        return $this->asJson(['job_id' => $job->id]);
+        $this->auditFired('job_template', (int)$template->id, $launchedBy, [
+            'transport' => $presented['transport'],
+            'job_id' => (int)$job->id,
+        ]);
+
+        return $this->asJson(['job_id' => $job->id])->setStatusCode(201);
     }
 
     /**
-     * Launch a workflow for the template matching the given trigger token.
-     * Mirror of {@see actionFire()} but for WorkflowTemplate — every step
-     * (job + approval + pause) gets dispatched by WorkflowExecutionService,
-     * as the user who generated the token.
+     * Launch a workflow for the template matching the presented trigger
+     * token. Mirror of {@see actionFire()} but for WorkflowTemplate — every
+     * step (job + approval + pause) gets dispatched by
+     * WorkflowExecutionService, as the user who generated the token.
      *
      * The optional JSON body's `extra_vars` is forwarded as launch
      * overrides. They reach the start step only, when it is a job step;
      * later steps get their extra vars from the previous step's output, as
      * configured on each step.
+     *
+     * @throws BadRequestHttpException when the request carries no token
+     * @throws NotFoundHttpException when no workflow template has the token
      */
-    public function actionFireWorkflow(string $token): Response
+    public function actionFireWorkflow(): Response
     {
-        $template = WorkflowTemplate::findByTriggerToken($token);
+        $presented = $this->presentedToken();
+        $template = WorkflowTemplate::findByTriggerToken($presented['token']);
         if ($template === null) {
-            /** @var NotificationDispatcher $dispatcher */
-            $dispatcher = \Yii::$app->get('notificationDispatcher');
-            $dispatcher->dispatch(NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN, [
-                'trigger' => [
-                    'token_prefix' => substr($token, 0, 6),
-                    'kind' => 'workflow',
-                    'ip' => (string)(\Yii::$app->request->userIP ?? ''),
-                    'user_agent' => substr((string)(\Yii::$app->request->userAgent ?? ''), 0, 200),
-                ],
-            ]);
+            $this->notifyUnknownToken($presented['token'], ['kind' => 'workflow']);
             throw new NotFoundHttpException('Trigger not found.');
-        }
-
-        $overrides = $this->parseOverrides();
-        // Workflows only honour extra_vars at launch time (limit/verbosity
-        // are job-template-scoped). Drop the others silently — operators
-        // can still set them per step on the template definition.
-        $launchOverrides = [];
-        if (!empty($overrides['extra_vars'])) {
-            $launchOverrides['extra_vars'] = $overrides['extra_vars'];
         }
 
         $launchedBy = $template->getTriggerUserId();
 
+        /** @var WorkflowAccessChecker $access */
+        $access = \Yii::$app->get('workflowAccessChecker');
         /** @var WorkflowExecutionService $executor */
         $executor = \Yii::$app->get('workflowExecutionService');
 
         try {
-            $workflowJob = $executor->launch($template, $launchedBy, $launchOverrides, 'trigger');
+            // The launch checks this again; checking here first lets the
+            // audited refusal say how the token was sent.
+            $access->assertMayLaunch($launchedBy, $template, 'trigger', ['transport' => $presented['transport']]);
+            $workflowJob = $executor->launch($template, $launchedBy, $this->workflowOverrides(), 'trigger');
         } catch (\RuntimeException $e) {
             return $this->workflowLaunchFailure($template, $e);
         }
 
-        \Yii::$app->response->statusCode = 201;
-        return $this->asJson(['workflow_job_id' => $workflowJob->id]);
+        $this->auditFired('workflow_template', (int)$template->id, $launchedBy, [
+            'transport' => $presented['transport'],
+            'workflow_job_id' => (int)$workflowJob->id,
+        ]);
+
+        return $this->asJson(['workflow_job_id' => $workflowJob->id])->setStatusCode(201);
+    }
+
+    /**
+     * Every other path under /trigger/. It may hold a token, so it answers
+     * 404 from here: an unresolvable route would write the whole path into
+     * the error log.
+     *
+     * @throws NotFoundHttpException always
+     */
+    public function actionNotFound(): never
+    {
+        throw new NotFoundHttpException('Page not found.');
+    }
+
+    /**
+     * The token of the request and how it was sent.
+     *
+     * @return array{token: non-empty-string, transport: string}
+     * @throws BadRequestHttpException when the request carries no token
+     */
+    private function presentedToken(): array
+    {
+        $presented = TriggerTokenResolver::resolve($this->webRequest());
+        if ($presented === null) {
+            throw new BadRequestHttpException('Missing trigger token.');
+        }
+
+        return $presented;
+    }
+
+    /**
+     * Tell operators about a call with an unknown token. Only the token's
+     * first six characters go into the notification.
+     *
+     * @param array<string, string> $details
+     */
+    private function notifyUnknownToken(#[\SensitiveParameter] string $token, array $details): void
+    {
+        $request = $this->webRequest();
+        /** @var NotificationDispatcher $dispatcher */
+        $dispatcher = \Yii::$app->get('notificationDispatcher');
+        $dispatcher->dispatch(NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN, [
+            'trigger' => ['token_prefix' => substr($token, 0, 6)] + $details + [
+                'ip' => (string)($request->userIP ?? ''),
+                'user_agent' => substr((string)($request->userAgent ?? ''), 0, 200),
+            ],
+        ]);
+    }
+
+    /**
+     * Answer a job trigger that did not launch: 422 with the reason when the
+     * launch was refused for a reason the caller can fix, 500 otherwise.
+     */
+    private function jobLaunchFailure(JobTemplate $template, \RuntimeException $e): Response
+    {
+        if ($e instanceof JobLaunchRejectedException) {
+            \Yii::warning("Trigger for template #{$template->id} rejected: " . $e->getMessage(), __CLASS__);
+            return $this->asJson(['error' => $e->getMessage()])->setStatusCode(422);
+        }
+        \Yii::error("Trigger for template #{$template->id} failed: " . $e->getMessage(), __CLASS__);
+
+        return $this->asJson(['error' => 'Launch failed.'])->setStatusCode(500);
     }
 
     /**
@@ -206,14 +275,14 @@ class TriggerController extends Controller
      * Audit and answer a refused job trigger. The caller only learns that
      * the launch was refused.
      */
-    private function refuseJobLaunch(JobTemplate $template, int $launchedBy, string $reason): Response
+    private function refuseJobLaunch(JobTemplate $template, int $launchedBy, string $reason, string $transport): Response
     {
-        \Yii::$app->get('auditService')->log(
+        $this->audit()->log(
             AuditLog::ACTION_TRIGGER_DENIED,
             'job_template',
             (int)$template->id,
             $launchedBy,
-            ['reason' => $reason, 'project_id' => (int)$template->project_id]
+            ['reason' => $reason, 'project_id' => (int)$template->project_id, 'transport' => $transport]
         );
         \Yii::warning(
             "Trigger for template #{$template->id} refused: user #{$launchedBy}, whom it runs as, may not launch it ({$reason}).",
@@ -224,14 +293,38 @@ class TriggerController extends Controller
     }
 
     /**
+     * Record that a trigger launched something, as the user it runs as.
+     *
+     * @param array<string, scalar> $context how the token was sent and what was launched
+     */
+    private function auditFired(string $objectType, int $templateId, int $launchedBy, array $context): void
+    {
+        $this->audit()->log(AuditLog::ACTION_TRIGGER_FIRED, $objectType, $templateId, $launchedBy, $context);
+    }
+
+    /**
+     * The overrides of the JSON body that a workflow takes: only extra_vars
+     * (limit and verbosity are job template settings, set per step on the
+     * workflow instead). Other keys are dropped silently.
+     *
+     * @return array<string, mixed>
+     */
+    private function workflowOverrides(): array
+    {
+        $overrides = $this->parseOverrides();
+
+        return isset($overrides['extra_vars']) ? ['extra_vars' => $overrides['extra_vars']] : [];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function parseOverrides(): array
     {
         $overrides = [];
 
-        $raw = \Yii::$app->request->rawBody;
-        if (!empty($raw)) {
+        $raw = $this->webRequest()->getRawBody();
+        if ($raw !== '') {
             $body = json_decode($raw, true);
             if (is_array($body)) {
                 if (!empty($body['extra_vars'])) {
@@ -247,5 +340,21 @@ class TriggerController extends Controller
         }
 
         return $overrides;
+    }
+
+    private function webRequest(): Request
+    {
+        $request = \Yii::$app->request;
+        assert($request instanceof Request);
+
+        return $request;
+    }
+
+    private function audit(): AuditService
+    {
+        /** @var AuditService $audit */
+        $audit = \Yii::$app->get('auditService');
+
+        return $audit;
     }
 }

@@ -40,7 +40,7 @@ class RedactingRedisConnection extends Connection
      * @param array<int, mixed> $params
      * @return mixed
      */
-    protected function sendRawCommand($command, $params)
+    protected function sendRawCommand(#[\SensitiveParameter] $command, #[\SensitiveParameter] $params)
     {
         if ($this->discarding) {
             return $this->sendIgnoringErrors($command, $params);
@@ -79,7 +79,7 @@ class RedactingRedisConnection extends Connection
      * @param array<int, mixed> $params
      * @return mixed
      */
-    private function sendIgnoringErrors($command, $params)
+    private function sendIgnoringErrors(#[\SensitiveParameter] $command, #[\SensitiveParameter] $params)
     {
         try {
             return parent::sendRawCommand($command, $params);
@@ -91,7 +91,7 @@ class RedactingRedisConnection extends Connection
     /**
      * Strip the command (and with it every AUTH argument) from an error message.
      */
-    public static function redact(string $message): string
+    public static function redact(#[\SensitiveParameter] string $message): string
     {
         $position = strpos($message, self::COMMAND_MARKER);
         $base = $position === false ? 'Redis AUTH failed.' : substr($message, 0, $position);
@@ -102,7 +102,7 @@ class RedactingRedisConnection extends Connection
     /**
      * @param array<int, mixed> $params
      */
-    private static function isAuth(array $params): bool
+    private static function isAuth(#[\SensitiveParameter] array $params): bool
     {
         return isset($params[0]) && is_string($params[0]) && strcasecmp($params[0], 'AUTH') === 0;
     }

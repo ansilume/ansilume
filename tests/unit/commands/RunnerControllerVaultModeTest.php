@@ -33,7 +33,7 @@ class RunnerControllerVaultModeTest extends TestCase
     protected function setUp(): void
     {
         $this->dir = sys_get_temp_dir() . '/runner_vault_job_' . uniqid('', true);
-        mkdir($this->dir, 0o700, true);
+        mkdir($this->dir . '/tmp', 0o700, true);
         // A vault setting on the runner host: forwarded like every ANSIBLE_*.
         $this->environment = new TemporaryEnvironment(['ANSIBLE_VAULT_ID_MATCH' => 'True']);
     }
@@ -85,12 +85,11 @@ class RunnerControllerVaultModeTest extends TestCase
     /**
      * Fail closed: when the decoy cannot be created the job fails with the
      * reason and the command never runs with the repository's settings.
-     * Nothing was written yet, so nothing is left behind.
+     * Nothing was written yet, so nothing is left behind: the job's
+     * directory does not exist yet.
      */
     public function testAnUnusableDecoyDirectoryFailsTheJobWithoutRunningIt(): void
     {
-        $inventories = $this->inventoryTempFiles();
-
         $this->executeJob(
             $this->controller($this->dir . '/missing'),
             $this->payload(['vault_password_source' => 'ansilume', 'inventory_type' => 'static', 'inventory_content' => "localhost\n"])
@@ -104,7 +103,34 @@ class RunnerControllerVaultModeTest extends TestCase
         $this->assertStringContainsString("could not neutralise the repository's vault settings, so the job did not run", (string)$logs[0]['content']);
         $this->assertStringContainsString($this->dir . '/missing', (string)$logs[0]['content']);
         $this->assertSame(['exit_code' => 1, 'has_changes' => false], $this->completion());
-        $this->assertSame($inventories, $this->inventoryTempFiles(), 'no inventory temp file was written');
+        $this->assertSame([], $this->leftIn($this->dir . '/tmp'), 'no job directory was created');
+    }
+
+    /**
+     * Regression: the credentials were injected outside the try whose
+     * finally removes the decoy, so an injection that threw left the decoy
+     * in the temp directory for good. Now one finally covers the injection,
+     * and the job's directory goes too.
+     */
+    public function testTheDecoyIsRemovedWhenCredentialInjectionThrows(): void
+    {
+        mkdir($this->dir . '/decoys', 0o700);
+        $payload = $this->payload(['vault_password_source' => 'ansilume', 'inventory_type' => 'static']);
+        $payload['credentials'] = [[
+            'credential_type' => 'ssh_key',
+            'username' => null,
+            'secrets' => ['private_key' => ['not', 'a', 'key']],
+        ]];
+
+        try {
+            $this->executeJob($this->controller($this->dir . '/decoys'), $payload);
+            $this->fail('expected a TypeError from the credential injection');
+        } catch (\TypeError) {
+            $this->assertSame([], $this->posts, 'nothing ran');
+        }
+
+        $this->assertSame([], $this->leftIn($this->dir . '/decoys'), 'the decoy is removed');
+        $this->assertSame([], $this->leftIn($this->dir . '/tmp'), "the job's directory is removed");
     }
 
     // -- Helpers ------------------------------------------------------------------
@@ -117,9 +143,14 @@ class RunnerControllerVaultModeTest extends TestCase
             return ['ok' => true];
         });
 
-        return new class ('runner', \Yii::$app, $http, $decoyDirectory) extends RunnerController {
-            public function __construct($id, $module, RunnerHttpClient $http, private readonly ?string $decoyDirectory)
-            {
+        return new class ('runner', \Yii::$app, $http, $decoyDirectory, $this->dir . '/tmp') extends RunnerController {
+            public function __construct(
+                $id,
+                $module,
+                RunnerHttpClient $http,
+                private readonly ?string $decoyDirectory,
+                private readonly string $temp
+            ) {
                 parent::__construct($id, $module);
                 $this->http = $http;
             }
@@ -129,6 +160,11 @@ class RunnerControllerVaultModeTest extends TestCase
                 return $this->decoyDirectory === null
                     ? parent::vaultMode($payload)
                     : RunnerVaultMode::fromPayload($payload, $this->decoyDirectory);
+            }
+
+            protected function tempDirectory(): string
+            {
+                return $this->temp;
             }
 
             public function stdout($string): int
@@ -216,15 +252,12 @@ class RunnerControllerVaultModeTest extends TestCase
     }
 
     /**
-     * Inventory files the runner writes (InventoryService on the server uses
-     * the same prefix with tempnam() names, so those are left out).
+     * What is in $directory, links and dotfiles included.
      *
      * @return list<string>
      */
-    private function inventoryTempFiles(): array
+    private function leftIn(string $directory): array
     {
-        $files = glob(sys_get_temp_dir() . '/ansilume_inv_*.yml') ?: [];
-
-        return array_values(preg_grep('#/ansilume_inv_[0-9a-f]{13,}\.\d+\.yml$#', $files) ?: []);
+        return array_values(array_diff(scandir($directory) ?: [], ['.', '..']));
     }
 }

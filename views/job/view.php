@@ -15,6 +15,7 @@ use app\models\JobHostSummary;
 use app\models\JobLog;
 use app\models\JobTask;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = 'Job #' . $job->id;
@@ -348,7 +349,7 @@ function appendAnsi(text) {
 }
 
 <?php foreach ($logs as $logEntry) : ?>
-appendAnsi(<?= json_encode($logEntry->content) ?>);
+appendAnsi(<?= Json::htmlEncode($logEntry->content) ?>);
 <?php endforeach; ?>
 
 if (logEl.scrollHeight > logEl.clientHeight) {
@@ -362,7 +363,7 @@ if (logEl.scrollHeight > logEl.clientHeight) {
     var badgeEl   = document.getElementById('status-badge');
     var liveEl    = document.getElementById('live-indicator');
     var lastSeq   = <?= empty($logs) ? -1 : end($logs)->sequence ?>;
-    var pollUrl   = <?= json_encode(Url::to(['/job/log-poll', 'id' => $job->id])) ?>;
+    var pollUrl   = <?= Json::htmlEncode(Url::to(['/job/log-poll', 'id' => $job->id])) ?>;
     var statusClasses = {
         pending: 'secondary', queued: 'secondary', running: 'primary',
         succeeded: 'success', failed: 'danger', canceled: 'warning'

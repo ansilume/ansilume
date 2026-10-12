@@ -20,6 +20,10 @@ use yii\base\Component;
  *   3. Set the job to status=queued; a runner of the template's runner
  *      group claims it through the runner API.
  *
+ * Password answers (extra vars whose key is a password survey field) are
+ * stored only sealed, in job.secret_extra_vars; job.extra_vars and the
+ * runner payload hold the placeholder instead (see JobLaunchSecrets).
+ *
  * Ansible execution is intentionally NOT performed here.
  */
 class JobLaunchService extends Component
@@ -29,14 +33,17 @@ class JobLaunchService extends Component
      *
      * @param JobTemplate $template The template to execute.
      * @param int $launchedBy User ID of the person launching.
-     * @param array<string, mixed> $overrides Optional launch-time overrides: extra_vars, limit, verbosity.
+     * @param array<string, mixed> $overrides Optional launch-time overrides: extra_vars, survey, limit,
+     *     verbosity, check_mode, and a LaunchContext under LaunchContext::KEY (server code only).
      *
      * @return Job The created job record.
      *
+     * @throws JobLaunchRejectedException when the launch is refused for a reason the caller can fix.
      * @throws \RuntimeException on failure.
      */
-    public function launch(JobTemplate $template, int $launchedBy, array $overrides = []): Job
+    public function launch(JobTemplate $template, int $launchedBy, #[\SensitiveParameter] array $overrides = []): Job
     {
+        $context = self::contextFrom($overrides);
         $job = $this->buildJobRecord($template, $launchedBy, $overrides);
         $needsApproval = $this->requiresApproval($template);
 
@@ -58,6 +65,9 @@ class JobLaunchService extends Component
             }
 
             $transaction->commit();
+        } catch (\yii\db\Exception $e) {
+            $transaction->rollBack();
+            throw self::saveFailed($e);
         } catch (\Throwable $e) {
             $transaction->rollBack();
             throw new \RuntimeException('Job launch failed: ' . $e->getMessage(), 0, $e);
@@ -68,7 +78,7 @@ class JobLaunchService extends Component
             'job',
             $job->id,
             $launchedBy,
-            ['template_id' => $template->id, 'template_name' => $template->name]
+            ['template_id' => $template->id, 'template_name' => $template->name] + ($context === null ? [] : $context->auditContext)
         );
 
         if ($needsApproval) {
@@ -86,6 +96,36 @@ class JobLaunchService extends Component
         }
 
         return $job;
+    }
+
+    /**
+     * The LaunchContext of $overrides: only an instance counts, which request
+     * data cannot produce.
+     *
+     * @param array<string, mixed> $overrides
+     */
+    private static function contextFrom(#[\SensitiveParameter] array $overrides): ?LaunchContext
+    {
+        $context = $overrides[LaunchContext::KEY] ?? null;
+
+        return $context instanceof LaunchContext ? $context : null;
+    }
+
+    /**
+     * The exception for a database error while saving the job. Its message
+     * carries the SQL with every value, so it is neither passed on nor
+     * logged: only SQLSTATE and the driver's error code are.
+     */
+    private static function saveFailed(\yii\db\Exception $e): \RuntimeException
+    {
+        $info = $e->errorInfo;
+        \Yii::error(sprintf(
+            'Job launch failed: the job could not be saved (SQLSTATE %s, driver error %s).',
+            is_scalar($info[0] ?? null) ? (string)$info[0] : 'unknown',
+            is_scalar($info[1] ?? null) ? (string)$info[1] : 'unknown'
+        ), __CLASS__);
+
+        return new \RuntimeException('Job launch failed: the job could not be saved.');
     }
 
     private function requiresApproval(JobTemplate $template): bool
@@ -114,20 +154,16 @@ class JobLaunchService extends Component
     /**
      * @param array<string, mixed> $overrides
      */
-    private function buildJobRecord(JobTemplate $template, int $launchedBy, array $overrides): Job
+    private function buildJobRecord(JobTemplate $template, int $launchedBy, #[\SensitiveParameter] array $overrides): Job
     {
-        $job = new Job();
+        $job = $this->newJobRecord();
         $job->job_template_id = $template->id;
         $job->launched_by = $launchedBy;
         $job->status = Job::STATUS_PENDING;
         $job->created_at = time();
         $job->updated_at = time();
 
-        // Merge extra_vars: template defaults ← survey answers ← explicit overrides
-        $merged = $this->mergeExtraVars($template, $overrides);
-        if ($merged !== []) {
-            $job->extra_vars = json_encode($merged, JSON_UNESCAPED_UNICODE) ?: null;
-        }
+        $this->applyExtraVars($job, $template, $overrides);
 
         if (!empty($overrides['limit'])) {
             $job->limit = (string)$overrides['limit'];
@@ -150,13 +186,40 @@ class JobLaunchService extends Component
     }
 
     /**
+     * The job record a launch fills in.
+     */
+    protected function newJobRecord(): Job
+    {
+        return new Job();
+    }
+
+    /**
+     * Merge extra_vars (template defaults ← survey answers ← explicit
+     * overrides), then store the password answers sealed and the rest, with
+     * placeholders, in job.extra_vars.
+     *
+     * @param array<string, mixed> $overrides
+     * @throws JobLaunchRejectedException also when the extra vars or answers
+     *     cannot be stored as JSON (a number too large for JSON, text that is not UTF-8)
+     * @throws \RuntimeException
+     */
+    private function applyExtraVars(Job $job, JobTemplate $template, #[\SensitiveParameter] array $overrides): void
+    {
+        $secrets = (new JobLaunchSecrets())->apply($template, $this->mergeExtraVars($template, $overrides), self::contextFrom($overrides));
+        if ($secrets['public'] !== []) {
+            $job->extra_vars = JobLaunchSecrets::encode($secrets['public'], JobLaunchSecrets::EXTRA_VARS);
+        }
+        $job->setSealedSecretExtraVars($secrets['sealed']);
+    }
+
+    /**
      * Build merged extra_vars: template defaults, then survey answers, then explicit overrides.
-     * Survey passwords are accepted but will be visible in extra_vars — callers should be aware.
+     * Password answers among them are sealed afterwards (applyExtraVars()).
      *
      * @param array<string, mixed> $overrides
      * @return array<string, mixed>
      */
-    protected function mergeExtraVars(\app\models\JobTemplate $template, array $overrides): array
+    protected function mergeExtraVars(\app\models\JobTemplate $template, #[\SensitiveParameter] array $overrides): array
     {
         // Start with template defaults
         $base = [];

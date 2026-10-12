@@ -39,7 +39,7 @@ interface LdapClientInterface
      * Verify a user's password by re-binding as their DN. Returns true only
      * if the directory accepts the credentials.
      */
-    public function bindAsUser(string $dn, string $password): bool;
+    public function bindAsUser(string $dn, #[\SensitiveParameter] string $password): bool;
 
     /**
      * Return the names of groups the user (identified by their DN) is a

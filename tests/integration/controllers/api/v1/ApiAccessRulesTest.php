@@ -9,6 +9,7 @@ use app\models\ApiToken;
 use app\models\User;
 use app\tests\integration\controllers\WebControllerTestCase;
 use yii\base\InlineAction;
+use yii\filters\VerbFilter;
 
 /**
  * Every REST action declares the permission it requires, and the base
@@ -95,6 +96,11 @@ class ApiAccessRulesTest extends WebControllerTestCase
         'Teams' => [
             'index' => 'admin', 'view' => 'admin', 'create' => 'admin', 'update' => 'admin', 'delete' => 'admin',
             'add-member' => 'admin', 'remove-member' => 'admin', 'add-project' => 'admin', 'remove-project' => 'admin',
+        ],
+        'TriggerTokens' => [
+            'generate-for-job-template' => 'job-template.update', 'revoke-for-job-template' => 'job-template.update',
+            'generate-for-workflow-template' => 'workflow-template.update',
+            'revoke-for-workflow-template' => 'workflow-template.update',
         ],
         'Users' => [
             'index' => 'user.view', 'view' => 'user.view', 'create' => 'user.create',
@@ -242,9 +248,23 @@ class ApiAccessRulesTest extends WebControllerTestCase
         \Yii::$app->response->statusCode = 200;
         \Yii::$app->response->data = null;
         $controller = $this->controller($name);
+        // A verb filter runs before the gate: send the verb the action takes.
+        $_SERVER['REQUEST_METHOD'] = $this->verbOf($controller, $action);
         $method = 'action' . str_replace(' ', '', ucwords(str_replace('-', ' ', $action)));
 
         return $controller->beforeAction(new InlineAction($action, $controller, $method));
+    }
+
+    /**
+     * The first verb the controller's verb filter allows for $action; GET
+     * for controllers and actions without one.
+     */
+    private function verbOf(BaseApiController $controller, string $action): string
+    {
+        $filter = $controller->getBehavior('verbs');
+        $verbs = $filter instanceof VerbFilter ? ($filter->actions[$action] ?? []) : [];
+
+        return is_array($verbs) && is_string($verbs[0] ?? null) ? $verbs[0] : 'GET';
     }
 
     /**

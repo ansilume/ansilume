@@ -83,8 +83,9 @@ cd /path/to/ansilume
 # 1. Pull latest changes
 git pull --ff-only
 
-# 2. Pull latest base images and rebuild
-docker compose up -d --build
+# 2. Rebuild the images and recreate every container, so that the app runs
+#    the migrations and every service loads the new code and configuration
+docker compose up -d --build --force-recreate
 ```
 
 If `git pull` fails with merge conflicts, you have local modifications. Either stash them (`git stash`) or reset to upstream (`git reset --hard origin/main`).
@@ -128,6 +129,804 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 ```
 
 ---
+
+## After updating from 2.8.1 or older: encrypted password answers, trigger tokens in a header, logs without secrets
+
+Answers to password fields of job template surveys are now stored only
+encrypted, and `$encrypted$` stands in their place on pages, in the API and
+in the stored command line. Trigger tokens go in a request header, and nginx
+no longer writes tokens from URLs to its access log. The application log no
+longer records every SQL statement with its values, session IDs, or trigger
+URLs that hold a token. The update encrypts the answers that earlier
+versions stored in plaintext. What to do:
+
+1. Now, whether you update or not: look for users that an end-to-end test
+   seed left on the installation (see **End-to-end test commands are
+   locked**).
+2. Before the update, if job templates have password survey fields, check
+   `APP_SECRET_KEY` (see **Before you update: APP_SECRET_KEY**).
+3. Update the runners (see **Update the runners**).
+4. Git checkout: recreate the containers right after `git pull` (see
+   **Database and deployment**).
+5. Read what the update printed and fix the job templates it lists (see
+   **The update encrypts the stored answers**). Change the passwords that
+   were given as survey answers before the update where that matters (see
+   **What the update cannot encrypt**).
+6. Move the callers of triggers to the header, then generate new tokens for
+   those that sent the token in the URL (see **Send trigger tokens in a
+   header**).
+7. Purge old log files (see **Purge old logs**).
+8. Give custom roles that should re-launch jobs `job.launch` (see
+   **Re-launch needs job.launch**).
+
+**Before you update: APP_SECRET_KEY.** Password answers are encrypted with
+`APP_SECRET_KEY`, like credentials. When any job template has a password
+field, the update checks first that the key can encrypt, which needs at
+least 16 characters. If it cannot, the update changes nothing, prints
+
+```
+APP_SECRET_KEY is not set or shorter than 16 characters, so the stored survey password answers cannot be encrypted. Set APP_SECRET_KEY in .env to the value your credentials were encrypted with, then start the containers again. Nothing was changed.
+```
+
+and stops, and the app container does not start until the key is fixed.
+Check the key in the install directory before the update. This prints `1`
+when the key has at least 16 characters, and never prints the key:
+
+```bash
+grep -c '^APP_SECRET_KEY=.\{16,\}' .env
+```
+
+A shorter key never encrypted anything, because credentials need the same
+16 characters. If credentials were stored with an earlier value, put that
+value back; otherwise generate a new one with `openssl rand -hex 32`. Then
+start the containers again: `docker compose up -d` (git checkout:
+`docker compose up -d --build --force-recreate`, see **Database and
+deployment**). Installations without password fields do not need the key
+for the update. Afterwards, keep `APP_SECRET_KEY` as it is:
+changing it makes the stored answers unreadable, as it does with
+credentials.
+
+**Password answers are stored encrypted.** A password field in a survey
+used to change only the input of the launch form. Its answer was stored in
+plaintext with the job's extra vars, shown on the job page and returned by
+the jobs API to everyone who could see the job, viewers included, copied by
+re-launch, and passed to `ansible-playbook` on its command line. Now the
+value of an extra var whose top-level key is the name of a password field of
+the job's template is a password answer, wherever it comes from: the survey,
+the advanced overrides of the launch form, `POST /api/v1/jobs`, a trigger, a
+schedule, a re-launch, or the template's own extra vars. Ansilume stores it
+only encrypted (`job.secret_extra_vars`, `schedule.secret_extra_vars`) and
+decrypts it only on the server, when a runner claims the job. Everywhere
+else the value is `$encrypted$`: the extra vars and the execution command of
+the job page, of its live log view and of the jobs API, the runner payload
+stored with the job, the schedule page, form and API, and the template page.
+Audit entries name the keys of carried answers, never their values.
+
+- Some launches that 2.8.1 ran are refused now, with the reason: the launch
+  form shows it, `POST /api/v1/jobs` and job triggers answer `422`, a
+  workflow step fails with it as its error (a workflow trigger still answers
+  `201`), and a scheduled run fails to launch with it. These are:
+  - `$encrypted$` sent as a password answer, which happens when the extra
+    vars of an earlier job are copied into a new launch; 2.8.1 used the
+    placeholder as the password:
+    `The value of "db_password" is the placeholder $encrypted$; send the real value.`
+  - a job template with a password field whose name cannot carry an answer
+    (see **The update encrypts the stored answers**);
+  - extra vars or answers that JSON cannot hold: a number such as `1e999`,
+    which PHP reads as infinity, or text that is not UTF-8 in a form field,
+    such as a survey answer. 2.8.1 dropped the extra vars and survey answers
+    of such a launch and ran the job with the template's extra vars only:
+    `The extra vars cannot be stored: they contain a number too large for JSON.`,
+    or `The password answers cannot be stored: ...` for a password answer.
+    Extra vars sent as JSON text that is not valid JSON, text that is not
+    UTF-8 included, are still ignored, as in 2.8.1, and so is a trigger body
+    that is not valid JSON.
+- Job output is whatever the playbook prints. Runners of this release
+  replace known answers with `********` in it, as far as they can (see
+  **Update the runners**); older runners do not.
+- If `APP_SECRET_KEY` changes, stored answers cannot be decrypted any more.
+  Jobs that wait in the queue then fail before they start with
+  `The job's encrypted survey answers cannot be decrypted (was APP_SECRET_KEY changed?). Launch the job template again and enter the password answers.`,
+  and re-launches and schedules need the answers entered again.
+- Anyone who may change a job template, or push to the repository of its
+  project, can make the stored answers of its jobs and schedules reach a
+  playbook of their choosing, as with credentials. Stored answers never
+  follow a schedule to another job template, nor a re-launch to another
+  project or inventory.
+
+**The update encrypts the stored answers.** Migration
+`m000081_000000_encrypt_survey_password_answers` runs when the app container
+starts. It removes the default value of every password field (launches never
+used it), encrypts the answers of schedules and of unfinished jobs (pending,
+queued, waiting for approval, running), where the extra vars, the runner
+payload and the stored command now hold `$encrypted$`, and lists the job
+templates that need an operator. An answer is the value under the exact name
+of a password field of the job's template, also of a field whose name cannot
+carry an answer (see below); the first line of the output counts the
+templates of such fields among those with password fields. It works only on
+job templates, schedules and unfinished jobs, so it usually takes well
+under a second (about 7,500 rows a second were measured). Watch it with
+`docker compose logs -f app`, and if `docker compose up -d` gave up waiting
+for the app container, run it again once the migration is done. An
+interrupted run keeps what it committed, and the next start finishes the
+rest. The output has counts and IDs only, for example:
+
+```
+    > Survey password answers: 14 job templates checked, 2 of them with password fields.
+    > Job templates whose password fields lost their default value: 1 (#7).
+    > Job templates with a password field whose name cannot carry an answer; they cannot be launched until the field is renamed in the survey editor: 1 (#9).
+    > Schedules that launch those job templates: 2 (#3, #4).
+    > Job templates whose Extra Vars hold a password field's name, a stored default of the password; remove the key from the Extra Vars: 1 (#5).
+    > Schedules: 3 checked, 2 encrypted.
+    > Unfinished jobs: 40 checked, 12 encrypted.
+    > Finished jobs of these job templates: 1234. Their stored answers are encrypted in the background by maintenance/run in the schedule-runner container, a few seconds per minute; it logs its progress as "survey-secret-scrub".
+```
+
+Act on what it lists:
+
+- **A password field whose name cannot carry an answer** (empty, a number,
+  with `[` or `]` in it, with a space at its start or end, or with a
+  character anywhere in it that is not printable ASCII: a control character
+  such as a line break or a tab, or a character outside ASCII such as a
+  non-breaking space, a byte order mark, a zero-width space or a letter like
+  `ä`): its template refuses every launch with
+  `Survey field "db[pw]" has a name that cannot be used for a password answer; rename it in the survey before launching.`
+  The message shows characters that are not printable ASCII escaped as in
+  JSON, such as `"db_password\u00a0"` for a trailing non-breaking space.
+  Answers stored under the field's exact name are encrypted all the same
+  and show as `$encrypted$`. Rename the field in the survey editor and
+  change the playbook and the schedules that use the old name: in each
+  schedule, enter the password under the new name and remove the old key,
+  whose answer stays encrypted under the old name. The editor removes
+  spaces, line breaks, tabs, non-breaking spaces and byte order marks around
+  a name when it saves; retype a name that holds any other such character.
+- **Extra Vars that hold a password field's name**: the template keeps a
+  plaintext default of that password. The template page shows it as
+  `$encrypted$`, but the edit form shows it to everyone who may edit the
+  template. Remove the key from the Extra Vars and enter the value at launch,
+  or as a schedule's answer.
+- **Job templates skipped because their survey is not valid JSON**: fix the
+  survey in the editor or with `PUT /api/v1/job-templates/{id}`.
+- **Rows left unchanged** (stored encrypted answers that cannot be
+  decrypted, a value that would not fit its column, an error): they keep
+  their plaintext, see **What the update cannot encrypt**.
+- **Stored commands that were cleared**: the job's stored command did not
+  contain its extra vars as stored, so it was emptied instead of keeping an
+  answer.
+
+**Finished jobs are encrypted in the background.** The history can be long,
+so `maintenance/run`, which the schedule-runner runs every minute, encrypts
+the answers of finished jobs in the same way, 5 seconds a minute, from where
+the previous minute stopped. About 35,000 jobs a minute were measured, so a
+million finished jobs take about half an hour. Until it has reached a job,
+the job page and the jobs API still show that job's answers in plaintext.
+Re-launching such a job works: the new job stores the answers encrypted.
+Follow the progress with `docker compose logs -f schedule-runner`, one line
+a minute while it works:
+
+```
+[maintenance] ran: survey-secret-scrub (checked=35000, encrypted=1200, undecryptable=0, too_long=0, failed=0, command_cleared=0, done=0)
+```
+
+It is finished at `done=1` and quiet afterwards. The IDs of rows it left
+unchanged are in the schedule-runner's application log, as
+`survey-secret-scrub:` lines (git checkout: `runtime/logs/app.log`;
+prebuilt: `docker compose exec schedule-runner grep survey-secret-scrub /var/www/runtime/logs/app.log`).
+It waits while migrations are pending or `APP_SECRET_KEY` cannot encrypt.
+Its position and its done mark are kept in Redis; if Redis loses them, it
+starts over, which is safe. Restoring a database backup from before the
+update runs `m000081` again, which starts it over as well. A backup taken
+after `m000081` ran does not: the jobs it had not encrypted yet when the
+backup was taken would keep their plaintext answers, as Redis still holds
+the position and done mark from before the restore. Restore such a backup
+in this order:
+
+```bash
+docker compose stop schedule-runner
+# restore the database, see Rollback below
+docker compose exec app php yii maintenance/reset-survey-secret-scrub
+docker compose start schedule-runner
+```
+
+The command prints `The survey password scrub starts over at the next maintenance run.`
+It deletes only the position and the done mark, and jobs already encrypted
+are skipped, so it is safe to run at any time. With the schedule-runner
+stopped, a pass that is under way cannot store its old position again, and
+no schedule launches a job meanwhile. Do not flush the cache instead
+(`php yii cache/flush cache`): the cache shares its Redis database with the
+sessions and the queue, so that logs every user out and drops queued work.
+
+**What the update cannot encrypt.** It recognizes answers by the names the
+password fields have now. These keep their plaintext:
+
+- jobs whose job template was purged, as no survey says which of their keys
+  are passwords;
+- answers of fields that were renamed, removed, or changed to another type
+  since the job ran;
+- answers of fields whose name cannot carry an answer that were stored
+  under another key than the exact name: the name a caller sent instead
+  (such as `db_password` for a field named `db_password` with a trailing
+  space), or a name PHP made of it (from the launch form, such as `db[pw`
+  for `db[pw]`); answers under the exact name are encrypted;
+- the rows the update listed as left unchanged;
+- job output in which a playbook printed an answer;
+- database backups and binary logs from before the update, and old log
+  files (see **Purge old logs**).
+
+Until now every user who could see a job, the viewer role included, could
+read its password answers, and the console log recorded the answers of
+scheduled jobs. Treat the passwords given as survey answers before the
+update as known to those users, and change them where that matters.
+
+To find rows that keep a plaintext answer, use these read-only queries with
+the database client of the `db` container
+(`docker compose exec db sh -c 'mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"'`).
+They select IDs only. Replace `<template id>` and `<field name>`, for
+example with a field's old name after a rename:
+
+```sql
+-- Jobs of a job template whose extra vars hold a value for <field name>
+-- that is not the placeholder. For jobs of purged job templates, use
+-- "job_template_id IS NULL" instead.
+SELECT id FROM job
+WHERE job_template_id = <template id>
+  AND JSON_VALID(extra_vars)
+  AND JSON_CONTAINS_PATH(extra_vars, 'one', '$."<field name>"')
+  AND BINARY JSON_UNQUOTE(JSON_EXTRACT(extra_vars, '$."<field name>"')) <> BINARY '$encrypted$';
+
+-- The same for schedules
+SELECT id FROM schedule
+WHERE job_template_id = <template id>
+  AND JSON_VALID(extra_vars)
+  AND JSON_CONTAINS_PATH(extra_vars, 'one', '$."<field name>"')
+  AND BINARY JSON_UNQUOTE(JSON_EXTRACT(extra_vars, '$."<field name>"')) <> BINARY '$encrypted$';
+
+-- Job templates whose own extra vars hold <field name>
+SELECT id FROM job_template
+WHERE JSON_VALID(extra_vars)
+  AND JSON_CONTAINS_PATH(extra_vars, 'one', '$."<field name>"');
+```
+
+Keep the `BINARY JSON_UNQUOTE(...)` form: on MariaDB, comparing
+`JSON_EXTRACT(...)` with `JSON_QUOTE('$encrypted$')` also matches rows that
+hold the placeholder.
+
+**Update the runners.** Runners of this release report the capability
+`secret_extra_vars`. They get the password answers of a job apart from its
+command and pass them to `ansible-playbook` in a file of the job's private
+directory (`--extra-vars @<file>`, mode 0600, removed after the job), so the
+answers show neither in the process list of the runner host nor in the
+command line that `ansible-playbook` prints at `-vvvv`. They also replace
+known answers with `********` in the job output and in task names before
+sending them; answers shorter than 4 characters and values that Ansible
+prints in another form stay visible (see
+[runners.md](runners.md#password-survey-answers)). If such a runner cannot
+create the job's directory or write the file (temp directory missing,
+read-only or full), the job fails and does not run, with
+`The runner could not create the job's private directory or files in its temp directory.`
+or, when only the file could not be written,
+`The runner could not write the survey answers file.` Updated runners also
+bring the two runner fixes listed under **Fixes that change behaviour**: a
+private directory for the files of each job, and job output without gaps.
+
+Older runners keep working. The server decides per claim, so a runner group
+can mix old and new runners. Old runners get the answers inline in the
+command, as before, protected as far as possible: the `-v` flags are capped
+at `-vvv`, and the command starts with `/usr/bin/env ANSIBLE_VERBOSITY=0`,
+which also overrides a `verbosity` in the repository's `ansible.cfg` and an
+`ANSIBLE_VERBOSITY` from a Token credential, because ansible-core prints
+every command-line argument above verbosity 3. The answers still show in the
+process list of the runner host while the job runs. When the job asked for
+verbosity 4 or 5, the job log ends with
+
+```
+[ansilume] Verbosity was lowered from 4 to 3: this runner does not support encrypted survey answers and would print them at higher verbosity. Update the runner image.
+```
+
+and the `job.started` audit entry has `verbosity_capped_from`. Jobs without
+password answers run as before on every runner. Runners older than 1.0 build
+the command themselves: they get the capped verbosity but not
+`ANSIBLE_VERBOSITY=0`, so update them.
+
+- Prebuilt images: `docker compose pull && docker compose up -d` updates the
+  bundled runners.
+- Ansible deploy role: running the role for the new version updates its
+  runners.
+- External runners: deploy the new `ghcr.io/ansilume/ansilume-runner` image.
+- Runners installed without Docker: `git pull && composer install --no-dev
+  --optimize-autoloader`, then restart the process
+  (`sudo systemctl restart ansilume-runner`). Before the restart:
+  - add `PrivateTmp=true` to the `[Service]` section of the systemd unit
+    and run `sudo systemctl daemon-reload`, so that the files the runner
+    keeps in its temp directory are its own; until a runner is updated,
+    this is what keeps its job files away from other users of the host (see
+    [runners.md](runners.md#running-without-docker));
+  - check that PHP has the `posix` extension: `php -m | grep -x posix`
+    prints `posix`. Without it, the runner removes no job directory that a
+    killed runner process left behind, and names them at every start
+    instead;
+  - set `zend.exception_ignore_args = On` in the runner's php.ini, as the
+    images do (see **Purge old logs**).
+
+  Once every runner on the host runs this release, remove the files that
+  runners of 2.8.1 or older left in their temp directory, as their owner or
+  root: `sudo rm -f -- /tmp/ansilume_inv_*.yml /tmp/ansilume_tasks_*.ndjson`
+  (in a runner's `TMPDIR` instead, if it has one), and the inventories that
+  runners older than 1.0 wrote without `.yml` (`ansilume_inv_<unique>`).
+  They are static inventories, which can hold host passwords, and task
+  records, whose task names can carry answers, and those runners left them
+  readable by every local user. Updated runners do not remove them, as a
+  runner of 2.8.1 or older on the host may still be using one. A runner
+  that shares their temp directory names those that the command removes at
+  start (see [runners.md](runners.md#password-survey-answers)); one with
+  `PrivateTmp=true` does not see the host's `/tmp`.
+- Git checkout: the runners keep the old code in memory until they restart;
+  recreating the containers restarts them (see **Database and deployment**).
+
+`GET /api/v1/runners` lists `secret_extra_vars` in `capabilities` of a
+runner once it runs the new code, and the `job.started` audit entry of each
+job says `runner_supports_secret_extra_vars`.
+
+**Re-launch reuses the encrypted answers.** Re-launching a job with password
+answers reuses them encrypted: nobody enters or sees them. This holds only
+while the job template still uses the project and the inventory the job ran
+with; otherwise the re-launch is refused with
+`The template's project or inventory changed since this job ran; launch the template and enter the password answers.`
+Answers that cannot be decrypted give
+`The original job's encrypted survey answers cannot be decrypted; launch the template and enter the password answers.`
+A finished job from before the update that the background encryption has
+not reached yet re-launches with the plaintext it holds, which the new job
+stores encrypted. The `job.launched` audit entry of a re-launch names the
+job it repeats (`relaunch_of`) and the keys of the answers it carried
+(`carried_secret_keys`).
+
+**Re-launch needs job.launch.** It needed `job.cancel` before, while the
+button checked `job.launch`. The default roles have both or neither; give
+`job.launch` to custom roles that should re-launch. Only a finished job whose
+job template still exists can be re-launched, as the button always showed: a
+crafted request could re-launch a queued or running job, or a job of a
+deleted template, which then stayed queued for good. Such requests now get
+`Job #N cannot be re-launched in status "queued".` or
+`Original template no longer exists.`
+
+**Schedules keep their answers encrypted.** The schedule page, the edit
+form and the schedules API show password answers as `$encrypted$`: every
+schedule response of the API now has `extra_vars`, the text the edit form
+shows, or `null`. Send that text back, in the form or in a `PUT`, to keep
+every answer: leave a placeholder to keep its answer, replace it to change
+the answer, remove the key to drop it, and empty the extra vars to clear
+them all. A `PUT` without `extra_vars` keeps them. Changing the job template
+of a schedule needs the answers entered again, as stored answers never move
+to another template. All of this holds for the answers of every password
+field, also of one whose name cannot carry an answer; the schedules of its
+job template fail to launch until the field is renamed. A value whose key
+became a password field after the schedule was saved shows as `$encrypted$`
+at once; it is stored encrypted at the schedule's next run, or at the next
+save that sends the extra vars, as the form always does. Such a run writes
+a `schedule.updated` audit entry with `secret_keys_sealed` (names only). A
+scheduled run fails and logs, with the usual `schedule.failed_to_launch`
+notification:
+
+- `Schedule #12 (Nightly deploy) failed to launch: Its stored password answers cannot be decrypted (was APP_SECRET_KEY changed?); edit the schedule and enter them again.`
+  Every run fails until the answers are entered again.
+- `Schedule #12 (Nightly deploy) failed to launch: The schedule changed while its run was being launched; it runs again at its next time.`
+  The schedule held such a value and was moved to another job template, or
+  deleted, while the run was being launched. Nothing was launched; the next
+  run uses the schedule as it was saved.
+
+The `schedule.created` and `schedule.updated` audit entries now record
+`job_template_id`, on updates `previous_job_template_id`, and the names of
+the answers kept, replaced, added and dropped.
+
+**Scheduled runs wait for the update.** While migrations are pending,
+`schedule/run` launches nothing and prints
+`Schedules not run: 1 database migration(s) pending; they run once the update has finished.`
+Runs that fall due meanwhile launch once after the update. This covers the
+schedule-runner of prebuilt installations, which can start before the app
+container has migrated, and git checkouts, whose schedule-runner runs the new
+code as soon as `git pull` brings it.
+
+**Survey definitions are checked when they change.** Saving a job template
+whose survey changed, in the survey editor or with the API, now checks the
+survey: new and renamed fields need a variable name (letters, digits and
+underscores, not starting with a digit), names must be unique, types must be
+known, and a password field cannot have a default. Names are compared as
+stored: `db_password` with a space after it is another name than
+`db_password`. A password field whose name is not printable ASCII without a
+space at its start or end (see **Act on what it lists**) cannot keep that
+name once the survey changes, and a field with such a name cannot become a
+password field. Messages show the characters of a name that are not
+printable ASCII escaped as in JSON, such as `\u00a0` for a non-breaking
+space, so that invisible ones can be found. Templates saved before keep
+saving and cloning while their survey stays as it is. The survey editor
+shows these errors, which were invisible before, removes whitespace around
+names, offers no default for password fields, and clears the default when a
+field becomes a password field. A field of a type Ansilume does not know
+shows as Text in the editor, as the launch form already treated it, and is
+saved so.
+
+A job template's Extra Vars may not hold a top-level key that is the name of
+one of its password fields, as its value would be a plaintext default of the
+password: `Remove "db_password" from Extra Vars: a password survey field cannot have a default; enter it at launch.`
+This is checked when a save changes the Extra Vars or the names of the
+password fields (one added, renamed, removed, or retyped to or from
+password); other survey edits, such as defaults, labels or options, do not
+count. The Extra Vars change when their JSON value does:
+
+- A key, or a value with its type, counts: `"1"` and `1` differ, and so do a
+  list and an object, and a whole number beyond the 64-bit range and the
+  same digits as text, such as `12345678901234567890` and
+  `"12345678901234567890"`.
+- Spacing, line breaks and the order of the keys do not count. A key written
+  twice counts with its last value, as at a launch.
+- A number written another way that PHP reads as the same number within the
+  64-bit range (`-9223372036854775808` to `9223372036854775807`) does not
+  count, such as `1.0` for `1`, `1e2` for `100` or `9007199254740994.0` for
+  `9007199254740994`. Two numbers written with a fraction or an exponent are
+  the same when PHP reads them as the same floating-point number, such as
+  `0.50` for `0.5`. Such a whole number counts as unchanged, but a launch
+  passes the form with a fraction or an exponent as PHP writes the
+  floating-point number, in the fewest digits that read back as it. Without
+  the sign, from 2^54 (`18014398509481984`) on, that can be another whole
+  number, such as `18014398509481990` for `18014398509481992.0`, and from
+  10^17 on it has an exponent and reaches the playbook as a floating-point
+  number, such as `1.0e+18` for `1e18`.
+- Beyond the 64-bit range, a whole number written without a fraction or an
+  exponent is the same only as the same digits: `1e20` for
+  `100000000000000000000` is a change.
+- A whole number that a client rounded counts, such as `9007199254740993`
+  sent back as `9007199254740992`. So does a number written with a fraction
+  or an exponent that PHP reads as another whole number: PHP reads it as the
+  nearest floating-point number, which above 2^53 (`9007199254740992`) can
+  be another whole number, so `9007199254740993.0` for `9007199254740993` is
+  a change.
+
+Templates saved before the rule keep saving such edits with the key in
+place; to change their Extra Vars, remove the key and enter the value at
+launch.
+
+**The Extra Vars editor keeps the text as typed.** The Extra Vars editor of
+the job template form, the schedule form and the Advanced Overrides of the
+launch page rewrote the Extra Vars as soon as the page opened, so every save
+from the web UI, and every launch of a template without a survey, sent them
+rewritten: whole numbers beyond 2^53 rounded (`9007199254740993` became
+`9007199254740992`), a number too large for JSON (`1e999`) became `null`,
+`1.0` became `1`, and keys that look like whole numbers moved first. While
+the text did not parse, the form sent the last version that did. Now a form
+sends the Extra Vars as stored until they are edited, and in JSON mode as
+typed; only line breaks arrive as CRLF, as browsers send them, which leaves
+the JSON value as it is. A form whose Extra Vars do not parse is not
+submitted, and the editor says why. YAML mode and the switch between JSON
+and YAML still go through JavaScript numbers: they refuse a number that
+JavaScript cannot hold exactly instead of changing it (see
+[troubleshooting.md](troubleshooting.md#extra-vars-editor-the-form-is-not-submitted-or-yaml-is-not-converted)),
+and YAML mode still writes `1.0` as `1`; edit in JSON mode to keep a number
+as written. YAML mode reads YAML 1.2, while Ansible reads its own YAML files
+as YAML 1.1, so some plain values are sent with another meaning than Ansible
+gives them there, without a message: `0644` as the number `644`, which
+Ansible reads as octal (`420`), `yes`, `no`, `on` and `off` as text, which
+Ansible reads as booleans, and `1:30` as text, which Ansible reads as `90`.
+A date such as `2026-10-11` is sent as the text `2026-10-11T00:00:00.000Z`.
+Quote such values, write booleans as `true` and `false`, or use JSON mode.
+Browsers load the new editor at once, as the address of its script now
+changes with its content.
+
+**Send trigger tokens in a header.** Triggers take the token in the
+`X-Trigger-Token` header, or as `Authorization: Bearer <token>`:
+
+```bash
+curl -X POST -H "X-Trigger-Token: <token>" -H "Content-Type: application/json" \
+  -d "{}" https://ansilume.example.com/trigger/fire
+```
+
+The template pages show only this form. The URL forms,
+`/trigger/fire?token=<token>`, `/trigger/fire-workflow?token=<token>` and,
+for job templates only, `POST /trigger/<token>`, keep working but are
+deprecated: URLs end up in access logs, in proxies in front of Ansilume and
+in the logs of the systems that call the trigger. A header wins over a token
+in the URL, and a token in the URL wins over Bearer, so a caller that sends
+an unrelated `Authorization` header keeps working.
+
+Every launch through a trigger is now audited as `trigger.fired`, with how
+the token was sent (`transport`: `header`, `bearer` or `url`) and the job or
+workflow run it launched; refusals (`trigger.denied`, and
+`workflow.launch.denied` with source `trigger`) record the transport too.
+This lists the templates whose callers still send the token in the URL:
+
+```sql
+-- Templates whose trigger was called with the token in the URL
+SELECT object_type, object_id, COUNT(*) AS calls,
+  FROM_UNIXTIME(MAX(created_at)) AS last_call
+FROM audit_log
+WHERE action IN ('trigger.fired', 'trigger.denied', 'workflow.launch.denied')
+  AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.transport')) = 'url'
+GROUP BY object_type, object_id
+ORDER BY object_type, object_id;
+```
+
+Without database access, look at `GET /api/v1/audit-logs?action=trigger.fired`
+(needs `user.view`; 25 entries a page).
+
+Once a caller sends the header, generate a new token for its template, on
+the template page or with `POST /api/v1/job-templates/{id}/trigger-token`
+(`/api/v1/workflow-templates/{id}/trigger-token` for workflows), and give
+the caller the new token: the old one stops working at once. A token that
+was sent in a URL is in the access logs of nginx and of any proxy in front
+of it, in log shippers, possibly in the application log, and in the logs of
+the calling system. Generating rebinds the trigger: it runs as the user who
+generates the token, so generate it as the user the trigger should run as
+(see **Triggers run as the user who generated the token** in the 2.8.0
+section below).
+
+**nginx no longer logs tokens from URLs.** The access log of the bundled
+nginx uses the new format `ansilume_masked`, with the fields of nginx's
+`combined` format. From the first `token=` query parameter on, the rest of
+the URL becomes `token=[REDACTED]`, which also covers password-reset links,
+and the path of `/trigger/<token>` becomes `/trigger/[REDACTED]`, in the
+request and in the referrer. Lines written before the update stay as they
+are (see **Purge old logs**). The error log of nginx cannot be masked: it
+repeats the request line on request errors, so only the header keeps a token
+out of it, and out of proxies in front of nginx (see
+[deployment.md](deployment.md#https--tls)).
+
+- Prebuilt images: the new `ghcr.io/ansilume/ansilume-nginx` image has the
+  configuration; `docker compose pull && docker compose up -d` applies it.
+- Git checkout: nginx reads `docker/nginx/default.conf` only when it starts,
+  and `docker compose up -d --build` does not recreate it; recreate the
+  containers after `git pull` (see **Database and deployment**).
+- Ansible deploy role: running the role again renders the new configuration.
+- Your own nginx configuration in place of `docker/nginx/default.conf`: copy
+  the four `map` blocks and the `log_format` from the top of
+  `docker/nginx/default.conf` into the `http` context, outside `server {}`,
+  and end your `access_log` line with `ansilume_masked`.
+
+**Other changes to triggers:**
+
+- `GET`, and any method but `POST`, on `/trigger/<token>` answers `405`; it
+  answered `404` before. Monitors that probe the URL may notice.
+- A call without a usable token (no header, an empty `?token=`, or
+  `token[]=…`) answers `400` `Missing trigger token.`; an empty `?token=`
+  answered `404` and sent the `webhook.invalid_token` notification before.
+- A job trigger whose launch is refused (see **Password answers are stored
+  encrypted**) answers `422` with the reason, `{"error": "..."}`; such calls
+  launched a job in 2.8.1. A workflow trigger answers `201` for them, and
+  its run fails at the start step with the reason.
+- A workflow trigger whose user may not launch now answers `403` and is
+  audited for a workflow without steps too; it answered `500`.
+- Every other path under `/trigger/` answers `404` without writing the path,
+  which could hold a token, to the application log.
+- The trigger card shows a new token once; the page used to print it a
+  second time, at the top.
+- Revoking a template that has no token no longer writes a
+  `*.trigger-token.revoked` audit entry.
+- `bin/diagnose` also masks `trigger/<token>` in the log lines it prints.
+
+**Purge old logs.** Earlier versions wrote secrets into logs that stay after
+the update:
+
+- The console log (`runtime/logs/app.log` of the app, queue-worker and
+  schedule-runner containers) recorded every SQL statement with its values,
+  among them the extra vars and password answers of the jobs that schedules
+  launched, runner payloads, and the statements of migrations. It no longer
+  records these statements (`yii\db\Command`); errors, warnings and
+  Ansilume's own lines stay, and the message of a database error can still
+  quote its statement.
+- Every line of the web application log carried the session ID
+  (`[IP][user ID][session ID]`), so anyone who could read `app.log` could
+  take over those sessions. The prefix is `[IP][user ID]` now; log parsers
+  that expect three fields must expect two.
+- A launch that failed with a database error logged the SQL statement with
+  every value; it logs the SQLSTATE and the driver's error code now.
+- The stack traces of errors in `app.log` showed the first 15 characters of
+  every text argument of the calls in them, and the error pages of debug
+  mode all of it: passwords of users and of LDAP, password-reset and API
+  tokens, TOTP and recovery codes, the runner token and
+  `RUNNER_BOOTSTRAP_SECRET`, credential secrets, vault passwords and the
+  Redis password could be among them. Ansilume's own methods now leave such
+  values out (`Object(SensitiveParameterValue)`), and the images set
+  `zend.exception_ignore_args = On`, so that traces show no arguments at
+  all, not even those of PHP's own functions and of Yii. Servers and
+  runners that run without these images: set it in their php.ini. A git
+  checkout gets it from `docker/php/php.ini` once its containers are
+  recreated (see **Database and deployment**).
+- The access log of nginx, which goes to Docker's log of the nginx
+  container, holds trigger tokens and password-reset tokens from URLs.
+- On installations that run with `YII_ENV=dev`, as git checkouts set up
+  from `.env.example` do, the data of the debug toolbar in `runtime/debug/`
+  holds request headers, among them `X-Trigger-Token` and `Authorization`,
+  and new trigger tokens. It stores `****` for them now. It still keeps
+  cookies, URLs, form posts and the server environment with the `.env`
+  secrets, so never expose such an installation.
+
+Prebuilt images: the update recreates the app, queue-worker, schedule-runner
+and nginx containers from the new images, which removes their old log files
+and Docker logs; nothing is left to purge in them. Git checkout, and the
+deploy role installed from source: the containers share `runtime/` with the
+install directory, so truncate the old files once and drop the debug data:
+
+```bash
+docker compose exec -T app sh -c 'for f in /var/www/runtime/logs/app.log*; do if [ -f "$f" ]; then : > "$f"; fi; done; rm -rf /var/www/runtime/debug/*'
+```
+
+This also clears the IDs the background encryption has logged so far; the
+queries under **What the update cannot encrypt** find those rows again.
+Recreating the containers (see **Database and deployment**) drops the Docker
+log of nginx and PHP's error log `/var/log/php_errors.log` in the PHP
+containers, whose stack traces showed text arguments as those in `app.log`
+did. In every installation, purge copies elsewhere yourself: log shippers
+and Docker logging drivers (journald, syslog, Loki, …), central log stores,
+backups of the hosts, reverse proxies in front of Ansilume, the CI logs of
+systems that call triggers, and PHP's error log on servers and runners that
+run without these images.
+
+**End-to-end test commands are locked.** `php yii e2e/seed`,
+`php yii e2e/teardown` and every other `e2e/*` command now refuse to run
+unless `YII_ENV` is `dev` or `test`, with exit code 78 and
+
+```
+Refused: the e2e commands run only with YII_ENV dev or test, and YII_ENV is "prod" here.
+```
+
+The seed creates users whose passwords are public in the Ansilume
+repository, among them `e2e-admin`, a superadmin, and the teardown deletes
+every record named `e2e-*`. Earlier versions ran both anywhere. Check now,
+whether you update or not, that no seed ran on your installation:
+
+```sql
+SELECT id, username, is_superadmin, status FROM user WHERE username LIKE 'e2e-%';
+```
+
+Disable or delete every user it lists, `e2e-admin` first (status `10` is
+active), on the Users page or with the API, and look in the audit log for
+what they did. Do not run `e2e/teardown` to clean up: it deletes every record
+whose name starts with `e2e-`. Installations that run with `YII_ENV=dev`, as
+git checkouts set up from `.env.example` do, are not protected; production
+must run with `YII_ENV=prod`.
+
+**YII_DEBUG is read strictly.** `1`, `true`, `on` and `yes`, in any case,
+turn debug mode on; anything else turns it off. Before, every value but an
+empty one and `0` turned it on, so `YII_DEBUG=false`, `off` or `no` showed
+error pages with stack traces and opened the test-only web endpoints under
+`/e2e/`. The shipped configurations use `0` and `1` and behave as before;
+check `.env` for other values.
+
+**Fixes that change behaviour:**
+
+- The survey editor ran a survey field's text that contained `</script>` as
+  script code in the browser of everyone who opened the template's edit form
+  (stored cross-site scripting). It now escapes it, as every inline script
+  of the web UI does now.
+- Job output with `<!--<script` in it no longer hides the rest of the job
+  page.
+- A launch that failed with a database error showed the SQL statement with
+  every value, password answers included. It now shows
+  `Job launch failed: the job could not be saved.`
+- The launch form accepts only its own fields: extra vars, limit, verbosity,
+  check mode and survey answers. Anything else in a crafted request is
+  ignored, and a list where a single value belongs is ignored instead of
+  causing a server error.
+- Re-launching a job that is not finished, or whose job template was
+  deleted, is refused (see **Re-launch needs job.launch**).
+- Runners of this release give every job a new directory in their temp
+  directory that only the runner's user can open (mode `0700`), and keep
+  the job's own files there, each readable by that user only: a static
+  inventory, which can hold host passwords, the callback plugin's task
+  records, whose task names can carry answers, and the survey answers file.
+  The runner removes the directory with everything in it when the job ends.
+  Before, the static inventory and the task records were written straight
+  into the temp directory and were `0644`, so where a runner shares its
+  temp directory with other users of the host, as a runner without Docker
+  can, those users could read them while the job ran and could interfere
+  with jobs that use a static inventory; and the inventory stayed behind
+  when a credential could not be set up. Updated runners name such files
+  that they find in their temp directory at start, but do not remove them
+  (see **Update the runners**). Playbooks now see the job's
+  directory as `inventory_dir` of a static inventory. If a runner cannot
+  create the directory or these files, the job fails before it runs with
+  `The runner could not create the job's private directory or files in its temp directory.`
+  Until a runner without Docker is updated, `PrivateTmp=true` (see
+  **Update the runners**) keeps these files away from other users.
+- Saving a job template or a schedule, in the web UI or with the API,
+  refuses extra vars that hold a number too large for JSON, such as `1e999`:
+  `The extra vars cannot be stored: they contain a number too large for JSON.`
+  So does `POST` or `PUT /api/v1/workflow-templates` for a step's
+  `extra_vars_template`, given as JSON text or as an object, as
+  `steps[<n>]: ...`. 2.8.1 stored such extra vars, and launches with them
+  are refused now (see **Password answers are stored encrypted**), except
+  that it stored a step given such an object without its extra vars. A job
+  template or schedule that already holds such a number gets the error at
+  its next save, whatever else changes, and cloning such a template fails:
+  write the value as a string or as a smaller number.
+- Runners of this release no longer lose job output: a log chunk that ended
+  inside a multi-byte character, such as `ü` at an 8 KB boundary, was
+  dropped together with the next chunk, and a chunk with bytes that are not
+  UTF-8 was dropped whole. Such bytes now arrive as `�` (U+FFFD).
+
+**API contract change:**
+
+- `GET /api/v1/jobs`, `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs` and
+  `POST /api/v1/jobs/{id}/cancel` show password answers as `$encrypted$` in
+  `extra_vars` and `execution_command`. The `execution_command` of a job
+  with password answers that a runner without `secret_extra_vars` claimed
+  starts with `/usr/bin/env ANSIBLE_VERBOSITY=0` and has at most `-vvv`.
+- `POST /api/v1/jobs` answers `422` with the reason for the launches it
+  refuses now (see **Password answers are stored encrypted**); in 2.8.1 it
+  answered `201` for them. A number too large for JSON is refused with
+  `extra_vars` as an object or as JSON text. Text that is not UTF-8, which
+  only a form-encoded body can carry, is refused in `extra_vars[<key>]`
+  fields, while `extra_vars` as JSON text that is not valid JSON, such text
+  included, is ignored, as before, and the job runs with the template's
+  extra vars. Other launch failures still answer `500`.
+- Every response of the schedules API has the new field `extra_vars`, the
+  text the edit form shows, password answers as `$encrypted$`, or `null`;
+  clients that refuse unknown fields must accept it. `POST` and
+  `PUT /api/v1/schedules` store password answers in `extra_vars` encrypted.
+  `$encrypted$` keeps a stored answer, and new `422` answers name the
+  problem, for example `"db_password" has no stored value; enter the real value.`
+  A `PUT` without `extra_vars` keeps the answers, unless it changes
+  `job_template_id`; then it answers `422` until `extra_vars` comes with the
+  answers.
+- `POST` and `PUT /api/v1/job-templates` answer `422` for survey definitions
+  and extra vars that break the rules above, when the request changes what
+  a rule checks. The spec now documents `survey_fields`, a list of
+  `SurveyField` or the same list as JSON text.
+- `POST` and `PUT /api/v1/job-templates` and `/api/v1/schedules` answer
+  `422` `The extra vars cannot be stored: they contain a number too large for JSON.`
+  for extra vars that hold such a number, a `PUT` also when it leaves stored
+  extra vars that hold one as they are. `POST` and
+  `PUT /api/v1/workflow-templates` answer `422` `steps[<n>]: ...` for a
+  step's `extra_vars_template` with such a number, given as JSON text or as
+  an object; for the object, 2.8.1 answered `201` or `200` and stored the
+  step without its extra vars.
+- New: `POST` and `DELETE /api/v1/job-templates/{id}/trigger-token` and
+  `/api/v1/workflow-templates/{id}/trigger-token`. `POST` generates a token
+  and answers `201` with `{"data": {"token": "...", "trigger_user_id": 7}}`
+  and `Cache-Control: no-store`; it is the only response with the token.
+  `DELETE` revokes it and answers `200` with `{"data": {"revoked": true}}`,
+  also when there was none. They need the permissions of the web UI and are
+  audited the same way, with source `api`.
+- Triggers take the token in `X-Trigger-Token` or `Authorization: Bearer`;
+  the `token` query parameter and `/trigger/{token}` are deprecated. An empty
+  `?token=` answers `400` instead of `404`, methods other than `POST` on
+  `/trigger/{token}` answer `405` instead of `404`, and refused job launches
+  answer `422` (see **Other changes to triggers**).
+- Runners report the capability `secret_extra_vars`.
+- Audit: the new action `trigger.fired`; `transport` in `trigger.denied` and
+  in `workflow.launch.denied` with source `trigger`;
+  `runner_supports_secret_extra_vars`, and `verbosity_capped_from` when
+  capped, in `job.started`; `relaunch_of` (re-launch) or `schedule_id`
+  (schedule) with `carried_secret_keys` in `job.launched`.
+
+**Database and deployment.** Two migrations run when the app container
+starts. `m000080_000000_add_secret_extra_vars` adds `secret_extra_vars` to
+`job` and `schedule`, a column at the end of the table, which MariaDB 10.11
+and MySQL 8 add instantly. `m000081_000000_encrypt_survey_password_answers`
+encrypts the stored answers, see above. Code of this release that runs
+before them works with the old tables: launches without password answers
+work, and a launch with one fails with
+`The database update has not finished; run the migrations.` instead of
+storing the answer in plaintext. No new setting is needed in `.env`.
+
+- Prebuilt images and quickstart: `docker compose pull && docker compose
+  up -d`, or quickstart `--update`, is all.
+- Git checkout: right after `git pull`, run
+  `docker compose up -d --build --force-recreate`. The containers serve the
+  new code from the bind mount at once, but `app` runs the migrations only
+  when it starts, the queue worker and the runners keep the old code until
+  they restart, and nginx reads its configuration only at start, while
+  `docker compose up -d --build` alone does not recreate it. The app,
+  queue-worker, schedule-runner and runner containers mount the single file
+  `docker/php/php.ini`, which now sets `zend.exception_ignore_args = On`,
+  and such a mount keeps showing the old file after `git pull` replaces it,
+  until the container restarts. `--force-recreate` recreates all of them.
+  A restart is not enough: it keeps each container's own files, which
+  recreating drops: the Docker log of nginx, PHP's error log
+  `/var/log/php_errors.log` in the PHP containers, whose stack traces from
+  before the update can show arguments (see **Purge old logs**), and what
+  runners of 2.8.1 left in their `/tmp` (see **Files of older runners** in
+  [runners.md](runners.md)).
+- Ansible deploy role: run the playbook again; it renders the new nginx
+  configuration and recreates the containers.
 
 ## After updating from 2.8.0 or older: team scoping for workflows, approvals and triggers
 
@@ -924,6 +1723,12 @@ If an update causes problems:
 ```bash
 docker compose exec -T db mariadb -uansilume -p"$DB_PASSWORD" ansilume < backup.sql
 ```
+
+A backup taken after the update to encrypted survey password answers
+(migration `m000081`) had run needs the schedule-runner stopped during the
+restore and `php yii maintenance/reset-survey-secret-scrub` afterwards, see
+**Finished jobs are encrypted in the background** under
+[After updating from 2.8.1 or older](#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets).
 
 ---
 

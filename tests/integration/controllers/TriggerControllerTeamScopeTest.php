@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\components\TriggerTokenResolver;
 use app\controllers\TriggerController;
 use app\models\AuditLog;
 use app\models\Job;
@@ -26,9 +27,12 @@ use yii\web\Response;
  * Team scoping of the inbound triggers, with the real launch services: a
  * trigger runs as the user who generated its token (the template's creator
  * for older tokens) and only while that user may launch what it triggers.
+ * The token travels in the X-Trigger-Token header, as callers should send
+ * it; the other transports are covered by TriggerControllerTokenTransportTest.
  */
 class TriggerControllerTeamScopeTest extends WebControllerTestCase
 {
+    use PresentsTriggerTokens;
     use TeamScopeFixtures;
 
     /** @var list<array{0: string, 1: mixed}> */
@@ -346,12 +350,16 @@ class TriggerControllerTeamScopeTest extends WebControllerTestCase
 
     private function fire(string $token): Response
     {
-        return (new TriggerController('trigger', \Yii::$app))->actionFire($token);
+        $this->presentTriggerToken($token);
+
+        return (new TriggerController('trigger', \Yii::$app))->actionFire();
     }
 
     private function fireWorkflow(string $token): Response
     {
-        return (new TriggerController('trigger', \Yii::$app))->actionFireWorkflow($token);
+        $this->presentTriggerToken($token);
+
+        return (new TriggerController('trigger', \Yii::$app))->actionFireWorkflow();
     }
 
     /**
@@ -409,8 +417,13 @@ class TriggerControllerTeamScopeTest extends WebControllerTestCase
         $this->assertCount(1, $denials);
         $this->assertSame($userId, (int)$denials[0]->user_id);
         $this->assertSame(
-            ['reason' => $reason, 'project_id' => (int)$template->project_id],
-            json_decode((string)$denials[0]->metadata, true)
+            ['reason' => $reason, 'project_id' => (int)$template->project_id, 'transport' => TriggerTokenResolver::TRANSPORT_HEADER],
+            json_decode((string)$denials[0]->metadata, true),
+            'the denial says how the token was sent, never the token'
+        );
+        $this->assertFalse(
+            AuditLog::find()->where(['action' => AuditLog::ACTION_TRIGGER_FIRED, 'object_id' => $template->id])->exists(),
+            'a refused trigger fired nothing'
         );
     }
 
@@ -436,8 +449,9 @@ class TriggerControllerTeamScopeTest extends WebControllerTestCase
         $this->assertCount(1, $denials);
         $this->assertSame($userId, (int)$denials[0]->user_id);
         $this->assertSame(
-            ['source' => 'trigger', 'job_template_ids' => $deniedTemplateIds],
-            json_decode((string)$denials[0]->metadata, true)
+            ['source' => 'trigger', 'job_template_ids' => $deniedTemplateIds, 'transport' => TriggerTokenResolver::TRANSPORT_HEADER],
+            json_decode((string)$denials[0]->metadata, true),
+            'the denial says how the token was sent, never the token'
         );
     }
 

@@ -8,6 +8,7 @@ use app\controllers\ApprovalController;
 use app\controllers\ApprovalRuleController;
 use app\controllers\AuditLogController;
 use app\controllers\CredentialController;
+use app\controllers\JobController;
 use app\controllers\JobTemplateController;
 use app\controllers\ProfileController;
 use app\controllers\ProjectController;
@@ -423,5 +424,39 @@ class ControllerAccessRulesTest extends TestCase
     {
         $verbs = $this->getVerbRules(ProfileController::class);
         $this->assertActionIsPostOnly($verbs, 'change-password');
+    }
+
+    // ── JobController ────────────────────────────────────────────────────────
+
+    public function testJobCancelRequiresPermission(): void
+    {
+        $rules = $this->getAccessRules(JobController::class);
+        $this->assertActionRequiresRole($rules, 'cancel', 'job.cancel');
+    }
+
+    /**
+     * Regression: re-launch was allowed by job.cancel, while the job page
+     * shows the Re-launch button for job.launch only. A re-launch starts a
+     * job, so it needs job.launch, and no rule may let job.cancel through:
+     * the access filter allows on the first matching rule, so a rule that
+     * lists relaunch with job.cancel would still admit cancel-only roles.
+     */
+    public function testJobRelaunchRequiresLaunchPermissionOnly(): void
+    {
+        $rules = $this->getAccessRules(JobController::class);
+        $this->assertActionRequiresRole($rules, 'relaunch', 'job.launch');
+
+        foreach ($rules as $rule) {
+            if (in_array('relaunch', $rule['actions'] ?? [], true)) {
+                $this->assertSame(['job.launch'], $rule['roles'] ?? [], 'every rule that lists relaunch grants job.launch only');
+            }
+        }
+    }
+
+    public function testJobCancelAndRelaunchArePostOnly(): void
+    {
+        $verbs = $this->getVerbRules(JobController::class);
+        $this->assertActionIsPostOnly($verbs, 'cancel');
+        $this->assertActionIsPostOnly($verbs, 'relaunch');
     }
 }

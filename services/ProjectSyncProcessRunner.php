@@ -53,7 +53,7 @@ class ProjectSyncProcessRunner
      * @return array{0: string, 1: string, 2: int}
      * @throws \RuntimeException on proc_open failure or timeout.
      */
-    public function run(Project $project, array $cmd, array $env, int $timeoutSeconds): array
+    public function run(Project $project, array $cmd, #[\SensitiveParameter] array $env, int $timeoutSeconds): array
     {
         $descriptors = [
             0 => ['pipe', 'r'],

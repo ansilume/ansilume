@@ -27,7 +27,7 @@ final class RedisSettings
     /**
      * @param array<string, mixed> $env Usually $_ENV.
      */
-    public static function fromEnvironment(array $env): self
+    public static function fromEnvironment(#[\SensitiveParameter] array $env): self
     {
         $password = (string)($env['REDIS_PASSWORD'] ?? '');
 

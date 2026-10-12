@@ -18,7 +18,8 @@ trait TriggerTokenTrait
 {
     /**
      * Generate a new random trigger token for $createdBy, the user the
-     * trigger will run as. Returns the raw value.
+     * trigger will run as; it replaces any earlier token. Returns the raw
+     * value. Callers that also audit use TriggerTokenService.
      */
     public function generateTriggerToken(int $createdBy): string
     {
@@ -66,10 +67,11 @@ trait TriggerTokenTrait
 
     /**
      * Look up a template by its raw trigger token. Returns null for empty
-     * input and unknown tokens; TriggerController turns either into a 404
-     * and an invalid-token notification.
+     * input and unknown tokens; TriggerController answers an unknown token
+     * with a 404 and an invalid-token notification. The token stays out of
+     * stack traces.
      */
-    public static function findByTriggerToken(string $token): ?self
+    public static function findByTriggerToken(#[\SensitiveParameter] string $token): ?self
     {
         if ($token === '') {
             return null;

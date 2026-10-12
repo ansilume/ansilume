@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\SurveySecrets;
+use app\services\JobLaunchSecrets;
 use yii\db\ActiveQuery;
 use yii\db\ActiveRecord;
 
@@ -96,13 +98,22 @@ class WorkflowStep extends ActiveRecord
         ];
     }
 
+    /**
+     * The extra vars mapping must be JSON that can be stored and written
+     * back: JSON allows a number too large for it (1e999, -1e999), which PHP
+     * reads as infinity and cannot write back (the API returns the mapping
+     * decoded). It gets the message a launch refuses such extra vars with.
+     */
     public function validateJson(string $attribute): void
     {
-        if (!empty($this->$attribute)) {
-            json_decode((string)$this->$attribute);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                $this->addError($attribute, ucfirst($attribute) . ' must be valid JSON.');
-            }
+        if (empty($this->$attribute)) {
+            return;
+        }
+        $decoded = json_decode((string)$this->$attribute);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->addError($attribute, ucfirst($attribute) . ' must be valid JSON.');
+        } elseif (json_encode($decoded) === false) {
+            $this->addError($attribute, SurveySecrets::unencodable(JobLaunchSecrets::EXTRA_VARS, json_last_error()));
         }
     }
 

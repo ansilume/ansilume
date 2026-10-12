@@ -10,6 +10,7 @@ use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
 use yii\helpers\Html;
+use yii\helpers\Json;
 
 $this->title = 'Workflow Job #' . $model->id;
 $steps = $model->stepExecutions;
@@ -166,8 +167,8 @@ $steps = $model->stepExecutions;
     // updating the overall status badge, finished timestamp, and per-step
     // status / started / finished / job-link / current-row highlight in
     // place. Stops polling when the status becomes terminal.
-    var pollUrl = <?= json_encode(\yii\helpers\Url::to(['status', 'id' => $model->id])) ?>;
-    var jobViewUrl = <?= json_encode(\yii\helpers\Url::to(['/job/view', 'id' => 'JOBID'])) ?>;
+    var pollUrl = <?= Json::htmlEncode(\yii\helpers\Url::to(['status', 'id' => $model->id])) ?>;
+    var jobViewUrl = <?= Json::htmlEncode(\yii\helpers\Url::to(['/job/view', 'id' => 'JOBID'])) ?>;
     var statusEl = document.getElementById('wj-status');
     var liveEl = document.getElementById('wj-live');
     var finishedEl = document.getElementById('wj-finished');

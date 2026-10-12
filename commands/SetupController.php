@@ -22,7 +22,7 @@ class SetupController extends Controller
     public function actionAdmin(
         string $username = 'admin',
         string $email = 'admin@example.com',
-        string $password = ''
+        #[\SensitiveParameter] string $password = ''
     ): int {
         if (User::find()->where(['is_superadmin' => true])->exists()) {
             $this->stdout("A superadmin already exists. Aborting.\n");

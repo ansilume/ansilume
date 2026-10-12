@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\SurveySecrets;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\JobLaunchSecrets;
 use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
@@ -26,7 +28,9 @@ use yii\web\NotFoundHttpException;
  * Steps (create and update): a "steps" list replaces all steps. Every step
  * needs a name (max 128) and a step_type of job (default), approval or
  * pause; a job step needs job_template_id, an approval step approval_rule_id
- * of an existing approval rule. Job templates that do not exist or that the
+ * of an existing approval rule. extra_vars_template, JSON text or a JSON
+ * object, must be JSON that can be stored: a number too large for JSON
+ * answers 422 in either form. Job templates that do not exist or that the
  * caller cannot see answer 422, visible ones the caller may not operate 403,
  * both naming them in error.job_template_ids. Nothing is written unless the
  * template and every step are valid; then the template and its steps are
@@ -260,8 +264,13 @@ class WorkflowTemplatesController extends BaseApiController
         $step->name = self::text($data['name'] ?? '');
         $step->step_type = array_key_exists('step_type', $data) ? self::text($data['step_type']) : WorkflowStep::TYPE_JOB;
         $step->step_order = $index;
-        $step->extra_vars_template = self::extraVarsTemplate($data['extra_vars_template'] ?? null);
-        if (!$step->validate(['name', 'step_type', 'step_order', 'extra_vars_template'])) {
+        $unencodable = self::readExtraVarsTemplate($step, $data['extra_vars_template'] ?? null);
+        $step->validate(['name', 'step_type', 'step_order', 'extra_vars_template']);
+        if ($unencodable !== null) {
+            // After the errors of the other attributes, as for JSON text.
+            $step->addError('extra_vars_template', $unencodable);
+        }
+        if ($step->hasErrors()) {
             return $this->firstError($step);
         }
 
@@ -526,16 +535,25 @@ class WorkflowTemplatesController extends BaseApiController
     }
 
     /**
-     * extra_vars_template as stored: JSON text. A JSON object in the request
-     * is encoded.
+     * Set the step's extra_vars_template from the request: JSON text as
+     * stored, or a JSON object, encoded. Returns why an object cannot be
+     * encoded, or null: 1e999 arrives as infinity, and a form-encoded body
+     * can carry text that is not UTF-8. The message is the launch's, which
+     * WorkflowStep::validateJson() gives such a number in JSON text too.
      */
-    private static function extraVarsTemplate(mixed $value): ?string
+    private static function readExtraVarsTemplate(WorkflowStep $step, mixed $value): ?string
     {
-        if ($value === null) {
+        if (!is_array($value)) {
+            $step->extra_vars_template = $value === null ? null : self::text($value);
             return null;
         }
+        $json = json_encode($value);
+        if ($json === false) {
+            return SurveySecrets::unencodable(JobLaunchSecrets::EXTRA_VARS, json_last_error());
+        }
+        $step->extra_vars_template = $json;
 
-        return is_array($value) ? (string)json_encode($value) : self::text($value);
+        return null;
     }
 
     /**

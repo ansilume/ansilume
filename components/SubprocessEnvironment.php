@@ -77,8 +77,11 @@ final class SubprocessEnvironment
      * @param list<string> $extraNames Additional names an operator explicitly allowed.
      * @return array<string, string>
      */
-    public static function build(array $parentEnv, array $overrides = [], array $extraNames = []): array
-    {
+    public static function build(
+        #[\SensitiveParameter] array $parentEnv,
+        array $overrides = [],
+        array $extraNames = []
+    ): array {
         $fromRequest = self::isCgiRequestEnvironment($parentEnv);
         $env = [];
         foreach ($parentEnv as $name => $value) {
@@ -140,7 +143,7 @@ final class SubprocessEnvironment
      *
      * @param array<string, string> $env
      */
-    private static function isCgiRequestEnvironment(array $env): bool
+    private static function isCgiRequestEnvironment(#[\SensitiveParameter] array $env): bool
     {
         return isset($env['GATEWAY_INTERFACE']) || isset($env['REQUEST_METHOD']);
     }

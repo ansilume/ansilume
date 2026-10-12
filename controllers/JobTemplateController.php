@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\components\JobTemplateWarnings;
+use app\components\WebLaunchOverrides;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Inventory;
@@ -14,6 +15,7 @@ use app\models\RunnerGroup;
 use app\models\User;
 use app\services\JobLaunchService;
 use app\services\LintService;
+use app\services\TriggerTokenService;
 use app\controllers\traits\TeamScopingTrait;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
@@ -286,6 +288,8 @@ class JobTemplateController extends BaseController
         }
         $clone->name = $this->resolveCloneName($source->name);
         $clone->created_by = (int)(\Yii::$app->user->id ?? 0);
+        // The survey rules compare with the source, so a legacy survey clones as it is.
+        $clone->setCopiedFrom($source);
         $this->restrictInventories($clone);
 
         $cloned = $this->credentialService()->copyWithCredentials($clone, $source, [
@@ -335,13 +339,8 @@ class JobTemplateController extends BaseController
         $id = (int)(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0));
         $template = $this->findModel($id);
         $this->requireChildOperate($template->project_id);
-        /** @var array<string, mixed> $overrides */
-        $overrides = (array)\Yii::$app->request->post('overrides', []);
-        /** @var array<string, mixed> $survey */
-        $survey = (array)\Yii::$app->request->post('survey', []);
-        if (!empty($survey)) {
-            $overrides['survey'] = $survey;
-        }
+        // Only the form's fields: server-only launch data cannot be posted.
+        $overrides = WebLaunchOverrides::fromRequest(\Yii::$app->request->post('overrides'), \Yii::$app->request->post('survey'));
 
         if (\Yii::$app->request->isPost) {
             try {
@@ -366,14 +365,7 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        $rawToken = $model->generateTriggerToken((int)\Yii::$app->user->id);
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED,
-            'job_template',
-            $id,
-            \Yii::$app->user->id,
-            ['name' => $model->name]
-        );
+        $rawToken = (new TriggerTokenService())->generate($model, (int)\Yii::$app->user->id);
         $this->session()->setFlash('success', 'Trigger token generated. Copy it now — it will not be shown again.');
         // Flash the raw token once so the view can display it. The DB stores only the hash.
         $this->session()->setFlash('trigger_token_raw', $rawToken);
@@ -384,14 +376,7 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        $model->revokeTriggerToken();
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_REVOKED,
-            'job_template',
-            $id,
-            \Yii::$app->user->id,
-            ['name' => $model->name]
-        );
+        (new TriggerTokenService())->revoke($model, (int)\Yii::$app->user->id);
         $this->session()->setFlash('success', 'Trigger token revoked. The /trigger endpoint is now disabled for this template.');
         return $this->redirect(['view', 'id' => $id]);
     }

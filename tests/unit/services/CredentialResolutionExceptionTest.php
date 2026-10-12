@@ -29,4 +29,21 @@ class CredentialResolutionExceptionTest extends TestCase
             $e->getMessage()
         );
     }
+
+    /**
+     * Relaunching the job would read the same answers, so the message sends
+     * the operator to the template.
+     */
+    public function testUndecryptableSurveyAnswersTellOperatorsWhatToDo(): void
+    {
+        $e = CredentialResolutionException::surveyAnswersUndecryptable();
+
+        $this->assertSame([], $e->failures);
+        $this->assertSame(
+            "The job's encrypted survey answers cannot be decrypted (was APP_SECRET_KEY changed?). "
+                . 'Launch the job template again and enter the password answers.',
+            $e->getMessage()
+        );
+        $this->assertNull($e->getPrevious());
+    }
 }
