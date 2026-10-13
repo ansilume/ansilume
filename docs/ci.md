@@ -73,6 +73,18 @@ curl -s 'https://scrutinizer-ci.com/api/repositories/g/ansilume/ansilume/inspect
   | jq -r '._embedded.inspections[] | "\(.created_at[0:16])  \(.metadata.source_reference[0:7])  build=\(.build.status)  tests=\(.build.details.tests.status // "-")  analysis=\(.build.details.analysis.status // "-")"'
 ```
 
+## When GitHub Actions is red
+
+The output of the step that failed shows the real error:
+
+```bash
+gh run view <run id> --log-failed
+```
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| PHPStan: `Child process error ... PHPStan process crashed because it reached configured PHP memory limit`, only in CI | PHPStan's parallel workers inherit the container's CLI `memory_limit` (256M). The CI runner has 4 cores, so each worker analyses a quarter of the files; a development machine with more cores splits them finer and passes | `bin/tests-phpstan.sh` passes `--memory-limit=1G` to every worker (since the CI run of v2.10.0). If the code outgrows it, raise it there and in `PhpstanMemoryLimitTest`. To reproduce it locally, include `phpstan.neon` in a config that sets `parallel: maximumNumberOfProcesses: 4` |
+
 ## When Scrutinizer is red
 
 | Symptom | Cause | Fix |
