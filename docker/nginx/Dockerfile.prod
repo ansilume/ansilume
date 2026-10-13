@@ -20,5 +20,7 @@ COPY web/css      /var/www/web/css
 COPY web/js       /var/www/web/js
 COPY web/*.svg    /var/www/web/
 COPY web/index.php /var/www/web/index.php
+# default.conf serves the API spec at /openapi.yaml (tests/unit/docker/NginxImageFilesTest.php)
+COPY web/openapi.yaml /var/www/web/openapi.yaml
 
 EXPOSE 80

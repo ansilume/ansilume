@@ -286,12 +286,19 @@ class WorkflowTemplateController extends BaseController
     /**
      * Save a step from the add-step form, inside the guard's transaction. It
      * is validated again with the workflow locked: a step it routes to may
-     * have been removed meanwhile.
+     * have been removed meanwhile. A step whose Step Order was left empty
+     * goes after the last step, worked out here, with the workflow locked,
+     * so that steps added at the same time go one after the other.
      *
      * @throws WorkflowStepChangeRefusedException (422) for a step that cannot be saved
      */
     private function saveNewStep(WorkflowTemplate $model, WorkflowStep $step): bool
     {
+        /** @var \app\services\WorkflowStepReorderService $reorder */
+        $reorder = \Yii::$app->get('workflowStepReorderService');
+        if ($step->getAttribute('step_order') === null) {
+            $step->step_order = $reorder->endOrder($model);
+        }
         if (!$step->save()) {
             throw new WorkflowStepChangeRefusedException(
                 array_values($step->getFirstErrors())[0] ?? 'Validation failed.',
@@ -301,8 +308,6 @@ class WorkflowTemplateController extends BaseController
         // Renumber the whole template to a sparse 10/20/30 layout so a
         // user-typed step_order=15 keeps room for future inserts and
         // future ▲/▼ moves stay deterministic.
-        /** @var \app\services\WorkflowStepReorderService $reorder */
-        $reorder = \Yii::$app->get('workflowStepReorderService');
         $reorder->resequence($model);
 
         return true;

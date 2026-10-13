@@ -112,6 +112,54 @@ class WorkflowStepReorderServiceTest extends DbTestCase
         $this->assertSame([10, 20, 30], $sorted, 'Up-then-down must be a true round-trip.');
     }
 
+    /**
+     * endOrder() is ORDER_STEP above the highest step, so a step that gets
+     * it goes after the last one whatever the numbering: sparse, numbered by
+     * the API (0, 1, 2), with the gap of a removed step, or with equal
+     * orders saved by older versions.
+     */
+    public function testEndOrderIsAboveTheHighestStep(): void
+    {
+        foreach ([[10, 20, 30], [0, 1, 2], [10, 30], [5, 5]] as $orders) {
+            [$wt] = $this->seedSteps($orders);
+
+            $this->assertSame(
+                max($orders) + WorkflowStepReorderService::ORDER_STEP,
+                $this->service->endOrder($wt),
+                implode(', ', $orders)
+            );
+        }
+    }
+
+    /**
+     * A workflow without steps gets the first slot; the steps of other
+     * workflows do not count.
+     */
+    public function testEndOrderOfAWorkflowWithoutStepsIsTheFirstSlot(): void
+    {
+        [$empty] = $this->seedSteps([]);
+        $this->seedSteps([40]);
+
+        $this->assertSame(WorkflowStepReorderService::ORDER_STEP, $this->service->endOrder($empty));
+    }
+
+    /**
+     * endOrder() never exceeds what the column holds; a highest step there
+     * (set by hand) ties with the new step, which resequence() puts after
+     * it.
+     */
+    public function testEndOrderStaysWithinTheColumn(): void
+    {
+        [$near] = $this->seedSteps([WorkflowStep::MAX_STEP_ORDER - 3]);
+        $this->assertSame(WorkflowStep::MAX_STEP_ORDER, $this->service->endOrder($near));
+
+        [$full, [$existing]] = $this->seedSteps([WorkflowStep::MAX_STEP_ORDER]);
+        $this->assertSame(WorkflowStep::MAX_STEP_ORDER, $this->service->endOrder($full));
+        $added = $this->createWorkflowStep($full->id, $this->service->endOrder($full));
+        $this->service->resequence($full);
+        $this->assertSame([10, 20], array_values($this->reload([$existing, $added])), 'the new step goes last');
+    }
+
     public function testMoveDoesNotTouchStepsInOtherTemplates(): void
     {
         $user = $this->createUser();

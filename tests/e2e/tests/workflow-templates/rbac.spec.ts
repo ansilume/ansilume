@@ -28,14 +28,27 @@ import {
   STEPS_CLEANUP,
   STEPS_LOCKED_NOTICE,
   STEPS_WORKFLOW,
+  STEP_ORDER_HINT,
+  STEP_ORDER_INPUT,
+  STEP_ORDER_PLACEHOLDER,
   activeRunId,
   addStepFormErrors,
+  addStepThroughForm,
+  removingSteps,
   stepsLockedNotice,
+  templateStepNames,
+  templateStepNumbers,
   templateStepRow,
 } from '../../lib/workflows';
 
 /** The job template select of the add-step form. */
 const STEP_TEMPLATE_SELECT = '#workflowstep-job_template_id';
+
+/**
+ * commands/E2eWorkflowScopingSeeder.php: a pause step only. Without a job
+ * step a workflow belongs to no project, so everyone may view it.
+ */
+const PAUSE_ONLY_WORKFLOW = 'e2e-pause-only-wf';
 
 /**
  * Job templates in e2e-project, which e2e-operator's team operates, that have
@@ -89,6 +102,15 @@ test.describe('Workflow Templates RBAC', () => {
     await expectForbidden(page);
     await openWorkflowTemplate(page, EMPTY_WORKFLOW);
     await expect(page.locator('#page-content')).toContainText('No steps defined yet.');
+  });
+
+  // The hint below the steps belongs to the add-step form: only users who
+  // may change the steps see it (workflow-templates/step-order.spec.ts).
+  test('viewer sees neither the add-step form nor the Step Order hint on a workflow with steps', async ({ page }) => {
+    await openWorkflowTemplate(page, PAUSE_ONLY_WORKFLOW);
+    await expect(page.locator('#workflow-steps-table tbody tr')).toHaveCount(1);
+    await expect(page.locator('#add-step-form')).toHaveCount(0);
+    await expect(page.getByText(STEP_ORDER_HINT)).toHaveCount(0);
   });
 
   test('operator can create workflow templates', async ({ page }) => {
@@ -249,6 +271,30 @@ test.describe('Workflow Templates RBAC', () => {
     });
   }
 
+  // Regression: the form pre-filled Step Order with the number of steps,
+  // which sorts before the 10, 20, 30… the steps are renumbered to, so a
+  // step added without changing it landed first and became the start step.
+  // An empty Step Order adds the step after the last one (admins:
+  // workflow-templates/step-order.spec.ts).
+  test('operator adds steps without changing Step Order: they land at the end, in the order added', async ({ page }) => {
+    const added = ['e2e-operator-default-job', 'e2e-operator-default-pause'];
+    await openWorkflowTemplate(page, OPERATOR_STEPS_WORKFLOW);
+    expect(await stepNames(page)).toEqual([OPERATOR_STEPS_JOB]);
+
+    await removingSteps(page, added, async () => {
+      await addStepThroughForm(page, { name: added[0], type: 'job', target: 'e2e-template' });
+      await expect(templateStepNames(page)).toHaveText([OPERATOR_STEPS_JOB, added[0]]);
+      await addStepThroughForm(page, { name: added[1], type: 'pause' });
+      await expect(templateStepNames(page)).toHaveText([OPERATOR_STEPS_JOB, ...added]);
+      await expect(templateStepNumbers(page)).toHaveText(['10', '20', '30']);
+      // The operator gets the same field and hint as admins.
+      await expect(page.locator(STEP_ORDER_INPUT)).toHaveValue('');
+      await expect(page.locator(STEP_ORDER_INPUT)).toHaveAttribute('placeholder', STEP_ORDER_PLACEHOLDER);
+      await expect(page.locator('#workflow-steps-table + *')).toHaveText(STEP_ORDER_HINT);
+    });
+    expect(await stepNames(page)).toEqual([OPERATOR_STEPS_JOB]);
+  });
+
   test('operator gets 403 on a forged approval step, and nothing is added', async ({ page, browser }, testInfo) => {
     const ruleId = await asAdmin(browser, testInfo, async (admin) => idWhere(await indexRows(admin, '/approval-rule/index'), 0, GATE_RULE));
     const id = await openWorkflowTemplate(page, STEPS_WORKFLOW);
@@ -277,6 +323,8 @@ test.describe('Workflow Templates RBAC', () => {
     await expect(page.locator('#add-step-form')).toHaveCount(0);
     await expect(page.locator('#page-content form[action*="/workflow-template/move-step"]')).toHaveCount(0);
     await expect(page.locator('#page-content form[action*="/workflow-template/remove-step"]')).toHaveCount(0);
+    // Nor the hint on where new steps go.
+    await expect(page.getByText(STEP_ORDER_HINT)).toHaveCount(0);
     // Name and description, launching and the trigger token stay open.
     await expect(page.locator('#page-content').getByRole('link', { name: 'Edit', exact: true })).toBeVisible();
     await expect(page.locator('#page-content form[action*="/workflow-template/launch"] button')).toBeVisible();

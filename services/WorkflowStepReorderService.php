@@ -12,7 +12,7 @@ use yii\db\Transaction;
 /**
  * Re-order steps within a {@see WorkflowTemplate}.
  *
- * Two operations:
+ * Three operations:
  *
  *   - {@see moveUp()} / {@see moveDown()}: swap a step with its immediate
  *     neighbour by step_order. Wrapped in a transaction so a partial swap
@@ -23,6 +23,9 @@ use yii\db\Transaction;
  *     types step_order=15 to wedge between 10 and 20 keeps room for
  *     future inserts; without this, sparse becomes dense over time and
  *     "insert between two existing steps" stops working.
+ *
+ *   - {@see endOrder()}: the step_order after the last step, which a step
+ *     added with Step Order left empty gets.
  *
  * The previous UX exposed step_order as a free integer field with no
  * move action — the only way to reorder was to manually renumber every
@@ -41,6 +44,23 @@ class WorkflowStepReorderService extends Component
     public function moveDown(WorkflowStep $step): bool
     {
         return $this->swap($step, direction: 1);
+    }
+
+    /**
+     * The step_order that puts a new step of $template after its last step:
+     * ORDER_STEP above the highest, so ORDER_STEP in a workflow without
+     * steps. It never exceeds WorkflowStep::MAX_STEP_ORDER; a step that ties
+     * there goes after the other, as every tie does (resequence()). Read it
+     * with the workflow locked (WorkflowStepChangeGuard::change()), so that
+     * steps added at the same time go one after the other.
+     */
+    public function endOrder(WorkflowTemplate $template): int
+    {
+        $highest = WorkflowStep::find()
+            ->where(['workflow_template_id' => $template->id])
+            ->max('step_order');
+
+        return min((int)$highest + self::ORDER_STEP, WorkflowStep::MAX_STEP_ORDER);
     }
 
     /**

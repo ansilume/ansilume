@@ -27,6 +27,11 @@ use yii\helpers\ArrayHelper;
  * approval a gated step follows only its On Failure route: left empty, the
  * run ends as failed, and the Always route is not taken. A gated job step
  * whose job ran and failed goes on as any job step does.
+ *
+ * The add-step form's Step Order is empty by default, and a step added with
+ * it empty goes after the last step (STEP_ORDER_PLACEHOLDER, STEP_ORDER_HINT).
+ * Regression (2.10.1): since 2.3.15 the form pre-filled the number of steps,
+ * which sorts before the renumbered 10, 20, 30…, so such a step went first.
  */
 final class WorkflowTemplatePage
 {
@@ -66,6 +71,15 @@ final class WorkflowTemplatePage
      * GATED_JOB_WORKFLOW_STEPS_REFUSED), then this.
      */
     public const STEPS_LOCKED_NOTE = 'You may still rename the workflow, launch it and manage its trigger token.';
+
+    /** The placeholder of the add-step form's Step Order, which is empty by default: then the step goes last. */
+    public const STEP_ORDER_PLACEHOLDER = 'At the end';
+
+    /** The hint below the steps table, for users who may change the steps. */
+    public const STEP_ORDER_HINT = 'Leave Step Order empty to add the step at the end. To put a step between two '
+        . 'others, enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every '
+        . 'add and move. '
+        . 'Use ▲ / ▼ to move a step.';
 
     /** The routes the add-step form posts. */
     private const ROUTE_FIELDS = ['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'];
@@ -125,12 +139,18 @@ final class WorkflowTemplatePage
      * posted "0" means "end workflow" (WorkflowStep::END_WORKFLOW) and must
      * stay 0. A step keeps only the target of its type: the form posts the
      * job and the approval dropdown for every type, and a job template left
-     * on a pause step would still decide who may see the workflow.
+     * on a pause step would still decide who may see the workflow. A Step
+     * Order left empty or out (a JSON body may post an empty list) becomes
+     * null: the step goes after the last one, which the controller works
+     * out with the workflow locked.
      *
      * @param array<array-key, mixed> $posted
      */
     public static function completeFromForm(WorkflowStep $step, array $posted): void
     {
+        if (in_array($step->getAttribute('step_order'), ['', []], true)) {
+            $step->setAttribute('step_order', null);
+        }
         foreach (self::ROUTE_FIELDS as $field) {
             if (!array_key_exists($field, $posted) || $posted[$field] === '') {
                 $step->$field = null;

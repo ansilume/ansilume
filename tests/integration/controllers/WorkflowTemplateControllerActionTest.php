@@ -626,9 +626,13 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $wedged = WorkflowStep::find()->where(['workflow_template_id' => $wf->id, 'name' => 'wedged'])->one();
         $this->assertNotNull($wedged);
 
-        $byOrder = [(int)$a->step_order, (int)$wedged->step_order, (int)$b->step_order];
-        sort($byOrder);
-        $this->assertSame([10, 20, 30], $byOrder, 'Sparse 10/20/30 layout after the resequence pass.');
+        // Not sorted first: that let a step land anywhere (2.10.1 found
+        // steps added with the form's default landing first).
+        $this->assertSame(
+            [10, 20, 30],
+            [(int)$a->step_order, (int)$wedged->step_order, (int)$b->step_order],
+            'The step typed as 15 lands between #10 and #20, then the steps are 10/20/30.'
+        );
     }
 
     // ── Team scoping (regression) ────────────────────────────────────────────

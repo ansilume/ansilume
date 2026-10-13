@@ -640,6 +640,33 @@ then the run has ended as failed. Launch again; for an error that repeats,
 see
 [A page or an API call fails with a server error](#a-page-or-an-api-call-fails-with-a-server-error).
 
+## Workflow steps run in the wrong order
+
+**Symptom:** A workflow run starts with another step than intended, runs
+its steps in another order than they were added, or runs a job step before
+the approval step that should come first. Build, Test and Deploy, for
+example, run as Deploy, Test, Build.
+
+**Cause:** A run starts with the step at the top of the steps table on the
+workflow's page, the lowest `#`, and where a step's On Success branch is
+empty, it goes on with the next step down; a branch that names a step goes
+there. From 2.3.15 to 2.10.0, a step added with the Step Order that the Add
+Step form filled in went to the top, not to the end (see
+[updating.md](updating.md#after-updating-from-2100-or-older-new-workflow-steps-go-to-the-end)).
+A typed Step Order puts a step after the steps with the same number or a
+lower one.
+
+**Fix:** On the workflow's page, move the steps with ▲ / ▼ until the table
+lists them in the order they should run, and check the branches that name a
+step. To add a step at the end, leave Step Order empty (`At the end`); a
+step that is removed and added again, as several entries here advise, goes
+to the end too unless its Step Order is typed. When a move is refused, see
+[Changing workflow steps is refused](#changing-workflow-steps-is-refused).
+The query under **Check your workflows** in
+[updating.md](updating.md#after-updating-from-2100-or-older-new-workflow-steps-go-to-the-end)
+lists the job steps that come before the first approval step of their
+workflow.
+
 ## Changing workflow steps is refused
 
 **Symptom:** Adding, removing or moving a step on a workflow's page, or

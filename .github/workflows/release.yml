@@ -259,6 +259,16 @@ jobs:
             exit 1
           fi
 
+      # nginx serves the API spec as a static file baked into its image.
+      - name: Check /openapi.yaml through nginx
+        run: |
+          code=$(curl -sS -o /tmp/openapi.yaml -w '%{http_code}' http://localhost:8080/openapi.yaml)
+          if [ "${code}" != "200" ] || ! head -n 1 /tmp/openapi.yaml | grep -q '^openapi: '; then
+            echo "::error::/openapi.yaml returned HTTP ${code} without the spec"
+            head -n 5 /tmp/openapi.yaml || true
+            exit 1
+          fi
+
       # Playbooks run on runners, so a bundled runner must reach nothing but
       # nginx, and Redis must refuse unauthenticated clients. /health above
       # being 200 proves the app itself authenticates to Redis.

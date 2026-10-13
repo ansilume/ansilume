@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { expectFlash } from '../../lib/helpers';
 import { forgePost } from '../../lib/scoping';
 import { openWorkflowTemplate } from '../../lib/triggers';
-import { LOCKED_PAUSE, LOCKED_WORKFLOW, activeRunId, runStepRow, templateStepRow } from '../../lib/workflows';
+import { LOCKED_PAUSE, LOCKED_WORKFLOW, STEP_ORDER_HINT, activeRunId, runStepRow, templateStepRow } from '../../lib/workflows';
 
 /**
  * A run follows the live steps of its workflow at every transition, so the
@@ -30,6 +30,8 @@ test.describe('Steps of a workflow with an active run', () => {
     await expect(page.locator('#page-content form[action*="/workflow-template/move-step"]')).toHaveCount(0);
     await expect(page.locator('#page-content form[action*="/workflow-template/remove-step"]')).toHaveCount(0);
     await expect(page.locator('#workflow-steps-table thead th')).toHaveText(['#', 'Name', 'Type', 'Target', 'On Success', 'On Failure', 'Always']);
+    // Nor the hint on where new steps go.
+    await expect(page.getByText(STEP_ORDER_HINT)).toHaveCount(0);
     // Renaming, launching and the trigger token are no step changes.
     await expect(page.locator('#page-content').getByRole('link', { name: 'Edit', exact: true })).toBeVisible();
     await expect(page.locator('#page-content form[action*="/workflow-template/launch"] button')).toBeVisible();

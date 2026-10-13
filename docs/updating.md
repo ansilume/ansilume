@@ -130,6 +130,108 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.10.0 or older: new workflow steps go to the end
+
+A step added on a workflow's page without a Step Order now goes to the end
+of the workflow. From 2.3.15 to 2.10.0, a step added with the Step Order
+that the Add Step form filled in went to the top instead, and the
+workflow's runs started with it; in a workflow with an approval step, such
+a job step ran before the approval. The update changes no steps. What to
+do:
+
+1. Run the read-only query under **Check your workflows**, before or after
+   the update, and fix the order of the workflows it lists (see **Fix the
+   order**).
+2. Review the step order of every other workflow on its page as well: the
+   query finds only job steps in front of an approval step (see **New
+   steps went to the top**).
+3. Tell the users who add workflow steps that an empty Step Order now adds
+   the step at the end (see **New steps go to the end**).
+
+**New steps went to the top.** From 2.3.15 on, every step added or moved on
+a workflow's page renumbers the workflow's steps 10, 20, 30…, but the Add
+Step form kept filling Step Order with the number of steps the workflow
+had: 1 when it had one step, 2 when it had two. That number sorts before
+10, so a step added without changing Step Order became the first step of
+the workflow; in a workflow with ten steps or more, it landed near the
+top, never at the end. Build, Test and Deploy, added one after the other
+this way, ran as Deploy, Test, Build. Steps whose Step Order was typed in
+went where the number put them, and steps created or replaced through the
+API take their order from their list. The first step added on the page to
+a workflow whose steps are numbered 0, 1, 2…, as the API numbers them,
+went to the end; the steps added after it went to the top again.
+
+**What it changed.** The step that went to the top became the step the
+workflow's runs start with, and an empty On Success branch goes on with the
+next step in the order, so after Deploy came Test, then Build. Branches
+that name a step kept their target. A job step that landed in front of an
+approval step this way ran before it: its job ran without that approval,
+whatever the decision.
+
+**Check your workflows.** This read-only query lists the job steps that
+come before the first approval step of their workflow in the step order. A
+run reaches them before it asks for the approval, unless a branch that
+names a step leads past them. `added_after_approval_step` is 1 for a job
+step that was added after that approval step and still comes before it:
+through the form's Step Order, or because someone typed a lower number or
+moved a step. Check each listed workflow on its page, those steps first.
+The update changes no steps, so the query lists the same before and after
+it:
+
+```sql
+-- Job steps that come before the first approval step of their workflow
+SELECT w.id AS workflow_id, w.name AS workflow, s.id AS step_id,
+  s.step_order, s.name AS step, a.step_order AS approval_step_order,
+  a.name AS approval_step, s.id > a.id AS added_after_approval_step
+FROM workflow_template w
+JOIN workflow_step a ON a.workflow_template_id = w.id
+  AND CAST(a.step_type AS BINARY) = 'approval'
+JOIN workflow_step s ON s.workflow_template_id = w.id
+  AND CAST(s.step_type AS BINARY) = 'job'
+  AND (s.step_order, s.id) < (a.step_order, a.id)
+WHERE w.deleted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM workflow_step b
+    WHERE b.workflow_template_id = w.id
+      AND CAST(b.step_type AS BINARY) = 'approval'
+      AND (b.step_order, b.id) < (a.step_order, a.id))
+ORDER BY w.id, s.step_order, s.id;
+```
+
+The query cannot find the other cases of the wrong order, such as Build,
+Test and Deploy in reverse, or a pause step at the top. On a workflow's
+page, the steps table lists the steps by `#`: a run starts with the step at
+the top and, where On Success is empty, goes on with the next one down.
+
+**Fix the order.** On the workflow's page, move a step with ▲ / ▼, one
+place per click; each move is audited as `workflow-template.step.moved`.
+Only admins (`approval-rule.update`) change the steps of a workflow with an
+approval step, or with a job step whose job template has an approval rule,
+and no step moves while a run of the workflow is active (see
+[troubleshooting.md](troubleshooting.md#changing-workflow-steps-is-refused)).
+The page of each run of the workflow lists its steps in the order they
+ran, with their jobs: check what a job that ran before its approval step
+did.
+
+**New steps go to the end.** The Step Order field of the Add Step form is
+empty now, with the placeholder `At the end`, and takes no number below 0.
+Left empty, it adds the step after the last step of the workflow. A number
+puts the step where it did before: after the steps with the same number or
+a lower one, in front of those with a higher one. A step removed and added
+again, to change its target or its branches, goes to the end as well
+unless a number is typed: type the number of the step it should follow,
+or move it with ▲ / ▼ afterwards. The hint below the
+steps reads
+`Leave Step Order empty to add the step at the end. To put a step between two others, enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every add and move. Use ▲ / ▼ to move a step.`
+An emptied Step Order field, and a number above 2147483647, ended in a
+server error (`500`) before; such a number is refused now. The API is
+unchanged: it takes the order of the steps from their list.
+
+**Prebuilt installations serve the API spec.** The nginx image
+`ghcr.io/ansilume/ansilume-nginx` now contains `web/openapi.yaml`. Before,
+`/openapi.yaml` answered `404` on installations from the prebuilt images,
+and the Swagger UI container could not load the spec; git checkouts served
+it all along. Pull the new images to get it.
+
 ## After updating from 2.9.0 or older: approvals and workflows
 
 Approval rules are managed by admins, and nobody approves their own

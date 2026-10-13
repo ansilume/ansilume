@@ -44,6 +44,10 @@ class WorkflowTemplatePageTest extends DbTestCase
                 'GATED_JOB_ALWAYS_NOTE' => '(not after a rejected, timed-out or canceled approval)',
                 'GATED_TEMPLATES_HINT' => 'Job templates with an approval rule are not listed: only admins may add a job step for them.',
                 'STEPS_LOCKED_NOTE' => 'You may still rename the workflow, launch it and manage its trigger token.',
+                'STEP_ORDER_PLACEHOLDER' => 'At the end',
+                'STEP_ORDER_HINT' => 'Leave Step Order empty to add the step at the end. To put a step between two others, '
+                    . 'enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every add and move. '
+                    . 'Use ▲ / ▼ to move a step.',
             ],
             (new \ReflectionClass(WorkflowTemplatePage::class))->getConstants(\ReflectionClassConstant::IS_PUBLIC)
         );
@@ -177,6 +181,37 @@ class WorkflowTemplatePageTest extends DbTestCase
         $this->assertSame(12, $step->on_success_step_id);
         $this->assertSame(WorkflowStep::END_WORKFLOW, $step->on_failure_step_id);
         $this->assertSame(5, $step->on_always_step_id);
+    }
+
+    /**
+     * A Step Order left empty or out means "after the last step": null,
+     * which the controller turns into that order with the workflow locked.
+     * Any other value stays as posted, "0" too; validation judges it.
+     *
+     * Regression (2.10.1): an empty Step Order reached the database as NULL
+     * (500), a left-out or empty-list one as 0, which put the step first.
+     */
+    public function testAStepOrderLeftEmptyOrOutMeansAfterTheLastStep(): void
+    {
+        $leftOut = $this->step(WorkflowStep::TYPE_PAUSE);
+        WorkflowTemplatePage::completeFromForm($leftOut, []);
+        $this->assertNull($leftOut->getAttribute('step_order'), 'left out');
+        foreach (['left empty' => '', 'an empty list' => [], 'null' => null] as $case => $value) {
+            $step = $this->step(WorkflowStep::TYPE_PAUSE);
+            $step->setAttribute('step_order', $value);
+
+            WorkflowTemplatePage::completeFromForm($step, ['step_order' => $value]);
+
+            $this->assertNull($step->getAttribute('step_order'), $case);
+        }
+        foreach (['0', '15', 0, 15, 'abc', '-1'] as $value) {
+            $step = $this->step(WorkflowStep::TYPE_PAUSE);
+            $step->setAttribute('step_order', $value);
+
+            WorkflowTemplatePage::completeFromForm($step, ['step_order' => $value]);
+
+            $this->assertSame($value, $step->getAttribute('step_order'), 'kept: ' . json_encode($value));
+        }
     }
 
     /**

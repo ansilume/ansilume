@@ -1,4 +1,5 @@
 import { Locator, Page, expect } from '@playwright/test';
+import { expectFlash, submitForm } from './helpers';
 import { indexRows, rowsWhere } from './scoping';
 
 /**
@@ -131,6 +132,97 @@ export const ROUTE_END_FAILED = 'end workflow (failed)';
 export const GATED_JOB_FAILURE_ROUTE = `${ROUTE_NEXT_STEP}; ${ROUTE_END_FAILED} after a refused approval`;
 export const GATED_JOB_FAILURE_TITLE = 'After a rejected, timed-out or canceled approval, when the job never ran. '
   + 'A job that ran and failed goes on with the next step.';
+
+/**
+ * The Step Order field of the add-step form. It is empty by default, and an
+ * empty Step Order adds the step after the current last step; its
+ * placeholder says so (services/WorkflowTemplatePage.php
+ * STEP_ORDER_PLACEHOLDER). A typed number puts the step after the steps with
+ * a lower or equal number.
+ */
+export const STEP_ORDER_INPUT = '#workflowstep-step_order';
+export const STEP_ORDER_PLACEHOLDER = 'At the end';
+
+/**
+ * services/WorkflowTemplatePage.php STEP_ORDER_HINT: the hint below the
+ * steps table, shown when the workflow has steps and the user may change
+ * them.
+ */
+export const STEP_ORDER_HINT = 'Leave Step Order empty to add the step at the end. To put a step between two others, '
+  + 'enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every add and move. '
+  + 'Use ▲ / ▼ to move a step.';
+
+/** The "#" (step order) cells of the steps table of the open workflow template page, in table order. */
+export function templateStepNumbers(page: Page): Locator {
+  return page.locator('#workflow-steps-table tbody tr td:nth-child(1)');
+}
+
+/** The Name cells of the steps table of the open workflow template page, in table order. */
+export function templateStepNames(page: Page): Locator {
+  return page.locator('#workflow-steps-table tbody tr td:nth-child(2)');
+}
+
+/** A step for addStepThroughForm(). */
+export interface FormStep {
+  name: string;
+  type: 'job' | 'approval' | 'pause';
+  /** The label of the job template of a job step, or of the approval rule of an approval step. */
+  target?: string;
+  /** Typed into Step Order; left out, the field stays as the form shows it. */
+  order?: string;
+}
+
+/**
+ * Adds `step` through the add-step form of the open workflow template page,
+ * which shows the workflow again afterwards with the success flash.
+ */
+export async function addStepThroughForm(page: Page, step: FormStep): Promise<void> {
+  await page.locator('#workflowstep-name').fill(step.name);
+  await page.locator('#ws-step-type').selectOption(step.type);
+  if (step.order !== undefined) {
+    await page.locator(STEP_ORDER_INPUT).fill(step.order);
+  }
+  if (step.type === 'job') {
+    await page.locator('#workflowstep-job_template_id').selectOption({ label: step.target ?? '' });
+  } else if (step.type === 'approval') {
+    await page.locator('#workflowstep-approval_rule_id').selectOption({ label: step.target ?? '' });
+  }
+  await submitForm(page, 'Add Step');
+  // The form was sent: no field, hidden or not, refused it.
+  expect(await addStepFormErrors(page)).toEqual([]);
+  await expectFlash(page, 'success', `Step "${step.name}" added.`);
+}
+
+/** Removes the step named `name` with its Remove button on the open workflow template page. */
+export async function removeTemplateStep(page: Page, name: string): Promise<void> {
+  page.once('dialog', (dialog) => dialog.accept());
+  await templateStepRow(page, name).locator('form[action*="/workflow-template/remove-step"] button').click();
+  await expectFlash(page, 'success', 'Step removed.');
+  await expect(templateStepRow(page, name)).toHaveCount(0);
+}
+
+/**
+ * Runs `use`, which adds the steps `names` on the open workflow template
+ * page, then removes those the page lists, so a seeded workflow is left as
+ * it was for the other tests on it. When `use` fails, the removal is tried
+ * on the page as it is, and the failure is thrown on.
+ */
+export async function removingSteps(page: Page, names: string[], use: () => Promise<void>): Promise<void> {
+  const removeListed = async (): Promise<void> => {
+    for (const name of names) {
+      if (await templateStepRow(page, name).count() > 0) {
+        await removeTemplateStep(page, name);
+      }
+    }
+  };
+  try {
+    await use();
+  } catch (error) {
+    await removeListed().catch(() => undefined);
+    throw error;
+  }
+  await removeListed();
+}
 
 /** Columns of the run index: #, Workflow, Status, Launched By, Started, Finished. */
 const RUN_INDEX = '/workflow-job/index';

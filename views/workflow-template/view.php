@@ -224,8 +224,8 @@ $routeLabel = static function (?int $target, string $whenNull) use ($stepOptions
                 </tbody>
             </table>
             <?php if ($canChangeSteps) : ?>
-            <p class="form-text small mb-3">
-                Use ▲ / ▼ to reorder. Step numbers are auto-spaced (10, 20, 30…) so you can manually wedge a new step between two existing ones by typing any value in between.
+            <p class="form-text small mb-3" id="ws-step-order-hint">
+                <?= Html::encode(WorkflowTemplatePage::STEP_ORDER_HINT) ?>
             </p>
             <?php endif; ?>
         <?php endif; ?>
@@ -257,9 +257,15 @@ $routeLabel = static function (?int $target, string $whenNull) use ($stepOptions
                     ) ?>
                 </div>
                 <div class="col-md-2">
+                    <?php
+                    // Empty by default: the step then goes after the last one.
+                    // Steps are renumbered 10, 20, 30… after every add, so a
+                    // pre-filled number of steps put a new step first.
+                    ?>
                     <?= $form->field($step, 'step_order')->textInput([
                         'type' => 'number',
-                        'value' => count($steps),
+                        'min' => 0,
+                        'placeholder' => WorkflowTemplatePage::STEP_ORDER_PLACEHOLDER,
                     ]) ?>
                 </div>
             </div>
@@ -290,7 +296,7 @@ $routeLabel = static function (?int $target, string $whenNull) use ($stepOptions
             </div>
             <?php endif; ?>
             <?php
-            // Build options with "next step" (NULL) as default and "end workflow" (-1) as explicit choice
+            // Build options with "next step" (NULL) as default and "end workflow" (WorkflowStep::END_WORKFLOW, 0) as explicit choice
             $branchOptions = [WorkflowStep::END_WORKFLOW => '— end workflow —'] + $stepOptions;
             ?>
             <div id="ws-routing-explainer" class="form-text small mb-1">

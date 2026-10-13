@@ -78,14 +78,16 @@ class ApprovalWorkflowDocsContractTest extends TestCase
     private const STEP_GATES_ITS_RUNS = 'An approval step gates the runs of its workflow, not the job templates in it';
 
     /**
-     * The section is the newest one, and the one before it keeps its
-     * heading, which the contract tests of 2.9.0 read.
+     * The section follows the one of the patch after it (2.10.1, the newest),
+     * and the one before it keeps its heading, which the contract tests of
+     * 2.9.0 read.
      */
-    public function testTheSectionIsTheNewestAndTheOlderOnesStay(): void
+    public function testTheSectionFollowsThePatchAndTheOlderOnesStay(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][1] ?? '');
+        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][1] ?? null, 'This section comes next.');
+        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][2] ?? '');
     }
 
     public function testTheChecklistStartsWithTheChecksBeforeTheUpdate(): void

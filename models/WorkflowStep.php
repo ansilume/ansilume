@@ -47,6 +47,12 @@ class WorkflowStep extends ActiveRecord
      */
     public const END_WORKFLOW = 0;
 
+    /**
+     * The largest step_order the column holds (a signed INT). A larger one,
+     * such as a typed 3000000000, answered 500 before it was refused.
+     */
+    public const MAX_STEP_ORDER = 2147483647;
+
     public const APPROVAL_RULE_REQUIRED = 'An approval step needs an approval rule.';
     public const APPROVAL_RULE_NOT_FOUND = 'The selected approval rule does not exist.';
     public const APPROVAL_ALWAYS_REFUSED = 'An approval step cannot have an Always branch: a rejection would continue past it.';
@@ -81,7 +87,9 @@ class WorkflowStep extends ActiveRecord
                 'range' => [self::TYPE_JOB, self::TYPE_APPROVAL, self::TYPE_PAUSE],
                 'strict' => true,
             ],
-            [['step_order'], 'integer', 'min' => 0],
+            // May be empty: the web's add-step then puts the step after the
+            // last one (WorkflowStepReorderService::endOrder()).
+            [['step_order'], 'integer', 'min' => 0, 'max' => self::MAX_STEP_ORDER],
             [['job_template_id', 'approval_rule_id'], 'integer'],
             [
                 ['job_template_id'],
