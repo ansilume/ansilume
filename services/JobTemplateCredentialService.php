@@ -25,6 +25,13 @@ use yii\base\Component;
  * stored credentials of an older template that has two. After a save the
  * vault password is checked against the project's last vault scan
  * ({@see VaultCheckService}).
+ *
+ * What a gated job template runs is for admins to change
+ * ({@see GatedJobTemplateLock}): a save the lock refuses writes nothing and
+ * returns false with GatedJobTemplateLock::CHANGE_REFUSED among the
+ * template's errors (GatedJobTemplateLock::refused()). The lock is asked
+ * before validation and again, on the template row locked FOR UPDATE, as the
+ * first statement of the save's transaction.
  */
 class JobTemplateCredentialService extends Component
 {
@@ -32,10 +39,18 @@ class JobTemplateCredentialService extends Component
      * @param list<mixed>|null $additionalIds additional credential ids in
      *        precedence order; null keeps the current additional credentials
      * @param array<string, mixed> $auditContext
+     * @param int|null $actorId the user who saves, whom GatedJobTemplateLock
+     *        may refuse; null: the signed-in user, whom the audit entry names
+     *        (console runs have none)
      */
-    public function saveWithCredentials(JobTemplate $template, ?array $additionalIds, array $auditContext = []): bool
+    public function saveWithCredentials(JobTemplate $template, ?array $additionalIds, array $auditContext = [], ?int $actorId = null): bool
     {
         $isNew = $template->isNewRecord;
+        $lock = new GatedJobTemplateLock();
+        // Before validation: a refused change gets that answer, not a validation error.
+        if ($lock->vetoes($template, $additionalIds, $actorId, false)) {
+            return false;
+        }
         [$previousPrimary, $before] = $this->storedState($template);
         // validate() clears earlier errors, so it runs first; the credentials
         // are checked even when it fails, and the form shows all errors at once.
@@ -45,8 +60,17 @@ class JobTemplateCredentialService extends Component
         if ($extras === null || $this->rejectsSecondVault($template, $this->described($primary, $extras)) || !$valid) {
             return false;
         }
-        $syncPivot = $isNew || $additionalIds !== null || $primary !== $previousPrimary;
-        $after = $this->persist($template, $syncPivot ? $extras : null, $before);
+        // A new template has no pivot rows yet (no stored primary): its primary or its list writes them.
+        $syncPivot = $additionalIds !== null || $primary !== $previousPrimary;
+        $after = $this->persist(
+            $template,
+            $syncPivot ? $extras : null,
+            $before,
+            static fn (): bool => $lock->vetoes($template, $additionalIds, $actorId, true)
+        );
+        if ($after === null) {
+            return false;
+        }
 
         $this->audit(
             $isNew ? AuditLog::ACTION_TEMPLATE_CREATED : AuditLog::ACTION_TEMPLATE_UPDATED,
@@ -159,21 +183,33 @@ class JobTemplateCredentialService extends Component
 
     /**
      * Saves the template and, unless $extras is null, rewrites its pivot
-     * rows. Returns the credential ids it has afterwards, primary first.
+     * rows, in one transaction whose first step is $vetoed: when it vetoes
+     * the save (GatedJobTemplateLock, on the locked template row), nothing
+     * is written. Returns the credential ids the template has afterwards,
+     * primary first; null when vetoed.
      *
      * @param list<int>|null $extras
      * @param list<int> $before
-     * @return list<int>
+     * @param callable(): bool $vetoed
+     * @return list<int>|null
      */
-    private function persist(JobTemplate $template, ?array $extras, array $before): array
+    private function persist(JobTemplate $template, ?array $extras, array $before, callable $vetoed): ?array
     {
         $primary = self::positiveIntOrNull($template->credential_id);
-        $this->inTransaction(function () use ($template, $extras, $primary): void {
+        $saved = false;
+        $this->inTransaction(function () use ($template, $extras, $primary, $vetoed, &$saved): void {
+            if ($vetoed()) {
+                return;
+            }
             $template->save(false);
             if ($extras !== null) {
                 $this->writePivot((int)$template->id, $primary, $extras);
             }
+            $saved = true;
         });
+        if (!$saved) {
+            return null;
+        }
         unset($template->jobTemplateCredentials, $template->credential);
 
         return $extras === null ? $before : array_values(array_filter(array_merge([$primary], $extras)));

@@ -55,7 +55,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Live job output** — streaming stdout/stderr with ANSI colors, per-task progress, and full play recap per host
 - **Host summaries & task results** — structured results captured via a custom Ansible callback plugin
 - **Job templates** — reusable launch configs with extra vars, verbosity, become, forks, limits, tags, and survey fields for launch-time input; answers to password fields are stored encrypted and shown as `$encrypted$`
-- **Workflows** — chain multiple templates with on-success / on-failure / always branches and manual approval gates
+- **Workflows** — chain multiple templates with on-success / on-failure / always branches and manual approval gates; a rejected gate ends the run as failed unless an on-failure branch continues it, launch extra vars reach every job step, and runs keep their history when the steps change
 - **Pull-based runners** — lightweight agents self-register via bootstrap token; isolate execution from the control plane
 - **Runner groups** — logical grouping with per-group tokens, health tracking, and a selftest playbook
 - **Cancel & timeout** — in-flight jobs can be canceled; configurable per-template execution timeouts
@@ -81,7 +81,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Two-factor authentication** — optional TOTP 2FA per user (Google Authenticator, Authy, 1Password, …) with bcrypt-hashed recovery codes and rate-limited verification
 - **Password reset** — self-service reset via signed email link
 - **Full audit trail** — every launch, configuration change, credential access, and permission edit recorded against an actor
-- **Approval workflows** — gate sensitive steps behind named approval rules with per-rule approver lists
+- **Approval workflows** — gate sensitive job templates and workflow steps behind named approval rules with per-rule approver lists; rules are managed and assigned by admins, who alone change the steps of workflows with an approval step or a job step whose template has a rule, and what a job template with a rule runs (every field but its name and description), nobody approves their own launch, and timeouts apply every minute. A rule gates a job template, not a playbook or an inventory: whoever may create job templates in a project can create one without a rule, and whoever may change the inventory, project or credentials of a template with a rule changes what its jobs run. An approval step gates the runs of its workflow, not the job templates in it: whoever may launch those templates can launch them directly, or from another workflow without the step
 
 ### Operations
 - **Air-gapped / offline ready** — all CSS, JavaScript, and fonts are bundled locally; the UI requires no outbound internet access and works fully offline in isolated or restricted networks
@@ -146,17 +146,18 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 - Answers to password survey fields are encrypted with the same key — pages, the API and the stored command line show `$encrypted$`; re-launches and schedules reuse them without showing them
 - Runners get password answers in a `0600` file instead of on the command line and mask them in job output (best effort); older runners get them inline with the verbosity capped so that Ansible does not print them. Each job's answers file, task records and static inventory live in a directory of the job that only the runner's user can open, removed when the job ends
 - TOTP secrets are AES-256-CBC encrypted at rest — the same key used for credentials
-- RBAC roles: `viewer` (read-only) · `operator` (launch + manage) · `admin` (full access) — plus custom roles
+- RBAC roles: `viewer` (read-only) · `operator` (launch + manage) · `admin` (full access) — plus custom roles; approval rules are created, changed and assigned by admins only (`approval-rule.update`), and only admins change what a job template with an approval rule runs
+- Approvals: the user who launched a job never approves it, admins included, and only active approvers who hold `approval.decide` (or are superadmins) and may see the job count; a launch is refused when too few of them remain besides the launcher
 - Team-based resource isolation: projects and all child resources (templates, inventories, jobs, schedules, approval requests, analytics) restricted to team members, workflows to members who may access the project of every job step; viewer role grants read-only access, operator role grants full CRUD + launch
-- Schedules, triggers and workflow steps launch as a recorded user (the schedule's creator, the user who generated the trigger token, the workflow's launcher) and are refused once that user is disabled or may no longer launch the template
+- Schedules, triggers and workflow steps launch as a recorded user (for a schedule, the user who last changed what or when it runs, or enabled it; the user who generated the trigger token; the workflow's launcher), who never approves these jobs, and are refused once that user is disabled or may no longer launch the template
 - Superadmin flag (`is_superadmin`) bypasses all team-scoped restrictions
 - All state-changing actions require explicit authorization
 - Optional TOTP 2FA per user — disabling requires a current authenticator code or recovery code
 - Recovery codes are bcrypt-hashed; rate limiting (5 attempts, 5 min lockout) on TOTP verification
 - Ansible execution runs in isolated worker processes with auditable command construction
-- Runner and trigger tokens are stored as SHA-256 hashes — raw tokens are shown exactly once
+- Runner, API and trigger tokens are stored as SHA-256 hashes — raw tokens are shown exactly once
 - Trigger tokens travel in a request header; tokens in URLs, still accepted but deprecated, are masked in the nginx access log
-- The console log no longer records every SQL statement with its values, and log lines carry no session ID; the stack traces of errors leave out the arguments of calls (`#[\SensitiveParameter]`, and `zend.exception_ignore_args = On` in the images); `bin/diagnose` redacts secrets before printing
+- The console log no longer records every SQL statement with its values, and log lines carry no session ID; the application log names database errors, also those that nothing catches and those that the framework logs itself, by their class, SQLSTATE and driver error code, never with their statement; the stack traces of errors leave out the arguments of calls (`#[\SensitiveParameter]`, and `zend.exception_ignore_args = On` in the images); `bin/diagnose` redacts secrets before printing
 - Artifact collection skips symlinks to prevent path traversal and file exfiltration
 - Fully offline capable — no CDN dependencies, no external asset loading; safe to deploy in air-gapped, classified, or compliance-restricted environments
 

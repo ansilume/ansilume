@@ -18,7 +18,7 @@ $this->title = $model->isNewRecord ? 'New Workflow Template' : 'Edit: ' . $model
         <?php if (!$model->isNewRecord) : ?>
             <li class="breadcrumb-item"><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></li>
         <?php endif; ?>
-        <li class="breadcrumb-item active"><?= $model->isNewRecord ? 'New' : 'Edit' ?></li>
+        <li class="breadcrumb-item active"><?= Html::encode($model->isNewRecord ? 'New' : 'Edit') ?></li>
     </ol>
 </nav>
 <h2><?= Html::encode($this->title) ?></h2>

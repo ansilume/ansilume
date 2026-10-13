@@ -4,16 +4,32 @@ declare(strict_types=1);
 
 namespace app\tests\integration\commands;
 
+use app\commands\E2eApprovalSeeder;
 use app\commands\E2eCancelOnlyUserSeeder;
 use app\commands\E2eController;
+use app\commands\E2eDeletedTemplateApprovalSeeder;
 use app\commands\E2eExtraVarsEditorSeeder;
+use app\commands\E2eFailingNotificationSeeder;
+use app\commands\E2eLockedTemplateSeeder;
+use app\commands\E2eRunnerGroupGuardSeeder;
+use app\commands\E2eScheduleRunAsSeeder;
 use app\commands\E2eSurveyEditorSeeder;
 use app\commands\E2eSurveySecretSeeder;
 use app\commands\E2eTeardownHelper;
 use app\commands\E2eUnusablePasswordNameSeeder;
+use app\models\ApprovalRule;
 use app\models\JobTemplate;
+use app\models\NotificationTemplate;
+use app\models\Project;
+use app\models\RunnerGroup;
 use app\models\Schedule;
+use app\models\Team;
+use app\models\TeamMember;
+use app\models\TeamProject;
 use app\models\User;
+use app\services\ApproverEligibility;
+use app\services\ProjectAccessChecker;
+use app\services\ScheduleService;
 use app\tests\integration\DbTestCase;
 use yii\console\ExitCode;
 
@@ -28,8 +44,10 @@ use yii\console\ExitCode;
  * e2e fixtures of the database and the vault checkouts on disk.
  *
  * `yii e2e/seed` runs here only up to the fixtures that live in the
- * database alone: the seeders after them write fixture projects into /tmp
- * and the runtime directory, outside the test's transaction.
+ * database, and the one file every seed writes when it is missing, the
+ * playbook of e2e-project in /tmp: the seeders after them write fixture
+ * projects into /tmp and the runtime directory, outside the test's
+ * transaction.
  */
 class E2eControllerTest extends DbTestCase
 {
@@ -52,6 +70,29 @@ class E2eControllerTest extends DbTestCase
     private const STOP_LINE = "  Restored user '" . E2eCancelOnlyUserSeeder::USERNAME . "' ";
 
     private const SEED_STOPPED = 'The test stopped the seed at the cancel-only user.';
+
+    /**
+     * The lines of e2e/seed after which e2e-team and the approval fixtures
+     * exist: the team's (a fresh seed creates it) and E2eApprovalSeeder's last.
+     */
+    private const TEAM_AND_APPROVAL_LINES = ['  Created team (ID ', '  Restored approval fixtures: '];
+
+    private const SEED_STOPPED_AFTER_APPROVALS = 'The test stopped the seed after the team and the approval fixtures.';
+
+    /** The line E2eScheduleRunAsSeeder prints; the seed writes nothing to disk before it. */
+    private const RUN_AS_LINE = '  Restored ' . E2eScheduleRunAsSeeder::SCHEDULE . ' (ID ';
+
+    private const SEED_STOPPED_AFTER_RUN_AS = 'The test stopped the seed after the run-as schedule.';
+
+    /** The line E2eFailingNotificationSeeder prints, after the locked and the deleted gated template. */
+    private const FAILING_NOTIFICATION_LINE = '  Restored ' . E2eFailingNotificationSeeder::NAME . ' (ID ';
+
+    private const SEED_STOPPED_AFTER_FAILING_NOTIFICATION = 'The test stopped the seed after the failing notification.';
+
+    /** The line E2eRunnerGroupGuardSeeder prints, right after the failing notification; the seed wrote nothing to disk before it. */
+    private const RUNNER_GROUP_GUARD_LINE = '  Restored ' . E2eRunnerGroupGuardSeeder::TEMPLATE_GROUP . ' (ID ';
+
+    private const SEED_STOPPED_AFTER_RUNNER_GROUPS = 'The test stopped the seed after the runner groups in use.';
 
     /**
      * @return array<string, array{0: string}>
@@ -246,6 +287,259 @@ class E2eControllerTest extends DbTestCase
         foreach (array_slice(self::SURVEY_SEED_LINES, 4) as $line) {
             $this->assertSame(1, substr_count($controller->out, $line), "printed once: {$line}");
         }
+    }
+
+    /**
+     * Regression: e2e/seed found e2e-approval-rule from an earlier seed and
+     * kept it as it was, with e2e-admin as its only approver. The launcher
+     * never approves their own job, so every launch by e2e-admin of
+     * e2e-approval-workflow, and of any template the rule gates, was refused.
+     *
+     * The whole seed writes fixture projects to disk, so the test runs the
+     * seed's approval rule step alone.
+     */
+    public function testRegressionTheSeedGivesTheApprovalRuleOfAnEarlierSeedASecondApprover(): void
+    {
+        $admin = $this->namedUser('e2e-admin', 'admin');
+        $operator = $this->namedUser('e2e-operator', 'operator');
+        $stale = $this->createApprovalRule((int)$admin->id);
+        $stale->name = 'e2e-approval-rule';
+        $stale->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $stale->approver_config = (string)json_encode(['user_ids' => [(int)$admin->id]]);
+        $stale->required_approvals = 1;
+        $stale->save(false);
+        $controller = $this->controller(null);
+
+        $id = (new \ReflectionMethod(E2eController::class, 'seedApprovalRule'))->invoke($controller, (int)$admin->id);
+
+        $this->assertSame((int)$stale->id, $id);
+        $rule = ApprovalRule::findOne($stale->id);
+        $this->assertNotNull($rule);
+        $this->assertSame(
+            ['user_ids' => [(int)$admin->id, (int)$operator->id]],
+            json_decode((string)$rule->approver_config, true),
+            'e2e-operator decides on what e2e-admin launches'
+        );
+        $this->assertSame(1, (int)ApprovalRule::find()->where(['name' => 'e2e-approval-rule'])->count());
+        $this->assertSame("  Restored approval rule e2e-approval-rule (ID {$stale->id}): e2e-admin and e2e-operator approve.\n", $controller->out);
+    }
+
+    /**
+     * A fresh seed restores the approval fixtures after e2e-team got
+     * e2e-template's project, which restricts the project to the team: only
+     * then does e2e-approval-launcher join the team and may launch
+     * e2e-dual-gated-template (tests/e2e/tests/approvals/two-approvals.spec.ts).
+     * Seeded before the team, the launcher stayed outside it, and the launch
+     * was refused.
+     *
+     * The test stops the seed once both are restored, before the seeders
+     * that write fixture projects to disk.
+     */
+    public function testOnAFreshSeedTheApprovalLauncherJoinsTheTeamOfTheProjectAndMayLaunch(): void
+    {
+        $this->assertNull(Team::findOne(['name' => 'e2e-team']), 'a fresh seed');
+        $seen = [];
+        $controller = $this->controller(null, null, static function (string $line) use (&$seen): void {
+            foreach (self::TEAM_AND_APPROVAL_LINES as $start) {
+                if (str_starts_with($line, $start)) {
+                    $seen[$start] = true;
+                }
+            }
+            if (count($seen) === count(self::TEAM_AND_APPROVAL_LINES)) {
+                throw new \RuntimeException(self::SEED_STOPPED_AFTER_APPROVALS);
+            }
+        });
+
+        try {
+            $controller->runAction('seed');
+            $this->fail('The seed ended without restoring e2e-team and the approval fixtures.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(self::SEED_STOPPED_AFTER_APPROVALS, $e->getMessage());
+        }
+
+        $template = $this->templateNamed(E2eApprovalSeeder::DUAL_TEMPLATE);
+        $projectId = (int)$template->project_id;
+        $team = Team::findOne(['name' => 'e2e-team']);
+        $this->assertNotNull($team);
+        $this->assertTrue(
+            TeamProject::find()->where(['team_id' => $team->id, 'project_id' => $projectId, 'role' => TeamProject::ROLE_OPERATOR])->exists(),
+            'e2e-team may operate the project of e2e-template'
+        );
+        $launcher = User::findOne(['username' => E2eApprovalSeeder::LAUNCHER]);
+        $this->assertNotNull($launcher);
+        $this->assertTrue(TeamMember::find()->where(['team_id' => $team->id, 'user_id' => $launcher->id])->exists(), 'in e2e-team');
+        $access = \Yii::$app->get('projectAccessChecker');
+        $this->assertInstanceOf(ProjectAccessChecker::class, $access);
+        $this->assertTrue($access->canOperate((int)$launcher->id, $projectId));
+        $rule = ApprovalRule::findOne(['name' => E2eApprovalSeeder::DUAL_RULE]);
+        $this->assertNotNull($rule);
+        $eligibility = \Yii::$app->get('approverEligibility');
+        $this->assertInstanceOf(ApproverEligibility::class, $eligibility);
+        $this->assertNull($eligibility->jobLaunchRefusal($rule, $template, (int)$launcher->id), 'e2e-admin and e2e-operator decide');
+    }
+
+    /**
+     * The seed restores e2e-admin's schedule of a template that
+     * e2e-approval-rule gates, on e2e-template's project, which e2e-team
+     * operates: e2e-operator may change the schedule, which then runs as
+     * e2e-operator, whose job only e2e-admin may approve
+     * (tests/e2e/tests/schedules/runs-as.spec.ts).
+     *
+     * The test stops the seed at that line, before the seeders that write
+     * fixture projects to disk.
+     */
+    public function testTheSeedRestoresE2eAdminsScheduleOfAGatedTemplateThatE2eOperatorMayChange(): void
+    {
+        $controller = $this->controller(null, null, static function (string $line): void {
+            if (str_starts_with($line, self::RUN_AS_LINE)) {
+                throw new \RuntimeException(self::SEED_STOPPED_AFTER_RUN_AS);
+            }
+        });
+
+        try {
+            $controller->runAction('seed');
+            $this->fail('The seed ended without restoring the run-as schedule.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(self::SEED_STOPPED_AFTER_RUN_AS, $e->getMessage());
+        }
+
+        $schedule = Schedule::findOne(['name' => E2eScheduleRunAsSeeder::SCHEDULE]);
+        $this->assertNotNull($schedule);
+        $admin = User::findOne(['username' => 'e2e-admin']);
+        $operator = User::findOne(['username' => 'e2e-operator']);
+        $this->assertNotNull($admin);
+        $this->assertNotNull($operator);
+        $this->assertSame((int)$admin->id, (int)$schedule->created_by, 'it runs as e2e-admin');
+        $this->assertFalse((bool)$schedule->enabled);
+        $template = $this->templateNamed(E2eScheduleRunAsSeeder::TEMPLATE);
+        $this->assertSame((int)$template->id, (int)$schedule->job_template_id);
+        $this->assertSame($this->parentsOf('e2e-template'), $this->parentsOf(E2eScheduleRunAsSeeder::TEMPLATE));
+        $rule = ApprovalRule::findOne(['name' => E2eApprovalSeeder::RULE]);
+        $this->assertNotNull($rule);
+        $this->assertSame((int)$rule->id, (int)$template->approval_rule_id);
+
+        $schedules = \Yii::$app->get('scheduleService');
+        $this->assertInstanceOf(ScheduleService::class, $schedules);
+        $this->assertTrue($schedules->canOperate((int)$operator->id, $schedule), 'e2e-operator may change it (e2e-team)');
+        $eligibility = \Yii::$app->get('approverEligibility');
+        $this->assertInstanceOf(ApproverEligibility::class, $eligibility);
+        $this->assertNull($eligibility->jobLaunchRefusal($rule, $template, (int)$operator->id), 'e2e-admin decides on what e2e-operator launches');
+    }
+
+    /**
+     * The seed restores, right after the run-as schedule, e2e-locked-template
+     * in e2e-locked-project (no team: e2e-operator may change it as far as
+     * the lock lets them, e2e-viewer sees it) with e2e-template's inventory,
+     * runner group and credential, the deleted e2e-deleted-gate-template on
+     * e2e-template's parents, both gated by e2e-approval-rule, and
+     * e2e-failing-notification (tests/e2e/tests/job-templates/rbac.spec.ts,
+     * approvals/deleted-template.spec.ts,
+     * notification-templates/send-test.spec.ts).
+     *
+     * The test stops the seed at the failing notification's line, before
+     * the seeders that write fixture projects to disk.
+     */
+    public function testTheSeedRestoresTheLockedTemplateTheDeletedGatedTemplateAndTheFailingNotification(): void
+    {
+        $controller = $this->controller(null, null, static function (string $line): void {
+            if (str_starts_with($line, self::FAILING_NOTIFICATION_LINE)) {
+                throw new \RuntimeException(self::SEED_STOPPED_AFTER_FAILING_NOTIFICATION);
+            }
+        });
+
+        try {
+            $controller->runAction('seed');
+            $this->fail('The seed ended without restoring the failing notification.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(self::SEED_STOPPED_AFTER_FAILING_NOTIFICATION, $e->getMessage());
+        }
+
+        $rule = ApprovalRule::findOne(['name' => E2eApprovalSeeder::RULE]);
+        $this->assertNotNull($rule);
+        $locked = $this->templateNamed(E2eLockedTemplateSeeder::TEMPLATE);
+        $parent = $this->templateNamed('e2e-template');
+        $this->assertSame((int)$rule->id, (int)$locked->approval_rule_id);
+        $this->assertSame(
+            [(int)$parent->inventory_id, (int)$parent->runner_group_id, (int)$parent->credential_id],
+            [(int)$locked->inventory_id, (int)$locked->runner_group_id, (int)$locked->credential_id]
+        );
+        $project = Project::findOne($locked->project_id);
+        $this->assertNotNull($project);
+        $this->assertSame(E2eLockedTemplateSeeder::PROJECT, $project->name);
+        $operator = User::findOne(['username' => 'e2e-operator']);
+        $viewer = User::findOne(['username' => 'e2e-viewer']);
+        $this->assertNotNull($operator);
+        $this->assertNotNull($viewer);
+        $access = \Yii::$app->get('projectAccessChecker');
+        $this->assertInstanceOf(ProjectAccessChecker::class, $access);
+        $this->assertTrue($access->canOperate((int)$operator->id, (int)$locked->project_id), 'e2e-operator may rename it');
+        $this->assertTrue($access->canView((int)$viewer->id, (int)$locked->project_id), 'e2e-viewer sees it');
+
+        $deleted = JobTemplate::findWithDeleted()->where(['name' => E2eDeletedTemplateApprovalSeeder::TEMPLATE])->one();
+        $this->assertInstanceOf(JobTemplate::class, $deleted);
+        $this->assertNotNull($deleted->deleted_at);
+        $this->assertSame((int)$rule->id, (int)$deleted->approval_rule_id);
+        $this->assertSame($this->parentsOf('e2e-template'), [(int)$deleted->project_id, (int)$deleted->inventory_id, (int)$deleted->runner_group_id]);
+
+        $notification = NotificationTemplate::findOne(['name' => E2eFailingNotificationSeeder::NAME]);
+        $this->assertNotNull($notification);
+        $this->assertSame(['url' => E2eFailingNotificationSeeder::URL], $notification->getParsedConfig());
+    }
+
+    /**
+     * The seed restores the runner groups in use of
+     * runner-groups/delete-in-use.spec.ts and rbac.spec.ts: one that
+     * e2e-group-template uses (on e2e-template's project and inventory), one
+     * that the runner e2e-group-runner belongs to.
+     *
+     * The test stops the seed at their line, before the seeders that write
+     * fixture projects to disk.
+     */
+    public function testTheSeedRestoresARunnerGroupThatATemplateUsesAndOneThatARunnerBelongsTo(): void
+    {
+        $controller = $this->controller(null, null, static function (string $line): void {
+            if (str_starts_with($line, self::RUNNER_GROUP_GUARD_LINE)) {
+                throw new \RuntimeException(self::SEED_STOPPED_AFTER_RUNNER_GROUPS);
+            }
+        });
+
+        try {
+            $controller->runAction('seed');
+            $this->fail('The seed ended without restoring the runner groups in use.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(self::SEED_STOPPED_AFTER_RUNNER_GROUPS, $e->getMessage());
+        }
+
+        $templateGroup = RunnerGroup::findOne(['name' => E2eRunnerGroupGuardSeeder::TEMPLATE_GROUP]);
+        $runnerGroup = RunnerGroup::findOne(['name' => E2eRunnerGroupGuardSeeder::RUNNER_GROUP]);
+        $this->assertNotNull($templateGroup);
+        $this->assertNotNull($runnerGroup);
+        $template = $this->templateNamed(E2eRunnerGroupGuardSeeder::TEMPLATE);
+        $parent = $this->templateNamed('e2e-template');
+        $this->assertSame(
+            [(int)$parent->project_id, (int)$parent->inventory_id, (int)$templateGroup->id],
+            [(int)$template->project_id, (int)$template->inventory_id, (int)$template->runner_group_id]
+        );
+        $this->assertSame(0, (int)$templateGroup->getRunners()->count());
+        $this->assertSame(['e2e-group-runner'], $runnerGroup->getRunners()->select('name')->column());
+        $this->assertSame(0, (int)$runnerGroup->getJobTemplates()->count());
+    }
+
+    /**
+     * A user named $username who holds the RBAC role $role.
+     */
+    private function namedUser(string $username, string $role): User
+    {
+        $user = $this->createUser($role);
+        $user->username = $username;
+        $user->save(false);
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $rbacRole = $auth->getRole($role);
+        $this->assertNotNull($rbacRole, "RBAC role {$role}");
+        $auth->assign($rbacRole, (int)$user->id);
+
+        return $user;
     }
 
     /**

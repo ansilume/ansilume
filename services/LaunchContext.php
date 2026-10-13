@@ -8,8 +8,9 @@ namespace app\services;
  * Launch data only server code can supply, passed to JobLaunchService::launch()
  * as $overrides[LaunchContext::KEY]:
  * - carriedSecrets: password answers carried over from an earlier launch (a
- *   relaunch reuses the job's answers, a schedule its stored ones). They stay
- *   secret even if the template's survey changed since.
+ *   relaunch reuses the job's answers, a schedule its stored ones, a job step
+ *   of a workflow run the run's). They stay secret even if the template's
+ *   survey changed since, and even if the template has no such password field.
  * - auditContext: added to the job.launched audit entry; names, never values.
  *
  * The launch service takes it only as an instance of this class, and request
@@ -49,6 +50,18 @@ final class LaunchContext
     public static function forSchedule(int $scheduleId, #[\SensitiveParameter] array $secrets): self
     {
         return new self($secrets, ['schedule_id' => $scheduleId, 'carried_secret_keys' => self::keysOf($secrets)]);
+    }
+
+    /**
+     * The launch of a job step of workflow run #$workflowJobId, with the
+     * password answers the run was launched with: every job step of the run
+     * keeps them sealed, whatever its template's survey says.
+     *
+     * @param array<string, mixed> $secrets
+     */
+    public static function forWorkflow(int $workflowJobId, #[\SensitiveParameter] array $secrets): self
+    {
+        return new self($secrets, ['workflow_job_id' => $workflowJobId, 'carried_secret_keys' => self::keysOf($secrets)]);
     }
 
     /**

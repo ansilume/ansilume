@@ -5,14 +5,15 @@ declare(strict_types=1);
 namespace app\models\traits;
 
 /**
- * The secret_extra_vars column of job and schedule: password answers sealed
+ * The secret_extra_vars column of job, schedule and workflow_job: password answers sealed
  * by {@see \app\components\SurveySecrets::seal()}, while extra_vars shows
  * the placeholder in their place.
  *
  * It is set in code only: the column has no rule, so load() never assigns
  * it, and fields() leaves it out of toArray().
  *
- * The column comes with migration m000080. Code can run before that
+ * The column comes with migration m000080 (job, schedule) and m000084
+ * (workflow_job). Code can run before the column's
  * migration (a schedule runner that starts before the app container has
  * migrated, or bind-mounted code right after `git pull`), so the column is
  * read and written only through these methods: without the column there

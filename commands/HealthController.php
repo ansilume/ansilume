@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\ErrorText;
 use app\components\PendingMigrations;
 use app\models\NotificationTemplate;
 use app\models\Runner;
@@ -20,6 +21,16 @@ use yii\console\ExitCode;
  */
 class HealthController extends Controller
 {
+    /**
+     * The line of a check that failed with an error. sprintf(): the check
+     * (db, redis, migrations, rbac, users), then what may be said about the
+     * error (ErrorText): its message, but for a database error only its
+     * class, SQLSTATE and driver error code, never its message, which
+     * carries the SQL statement. The redis check prints the Redis error's
+     * message. Docker keeps this output in the container's health log.
+     */
+    public const CHECK_ERROR = "[health] %s: error — %s\n";
+
     public function actionCheck(): int
     {
         $healthy = true;
@@ -29,7 +40,7 @@ class HealthController extends Controller
             \Yii::$app->db->createCommand('SELECT 1')->queryScalar();
             $this->stdout("[health] db: ok\n");
         } catch (\Throwable $e) {
-            $this->stderr("[health] db: error — " . $e->getMessage() . "\n");
+            $this->stderr(sprintf(self::CHECK_ERROR, 'db', ErrorText::of($e)));
             $healthy = false;
         }
 
@@ -40,7 +51,10 @@ class HealthController extends Controller
             $cache->set('health_probe', 1, 5);
             $this->stdout("[health] redis: ok\n");
         } catch (\Throwable $e) {
-            $this->stderr("[health] redis: error — " . $e->getMessage() . "\n");
+            // yii2-redis reports Redis errors as yii\db\Exception, which
+            // ErrorText would reduce to its class; the message names the
+            // cause (RedactingRedisConnection keeps credentials out of it).
+            $this->stderr(sprintf(self::CHECK_ERROR, 'redis', $e->getMessage()));
             $healthy = false;
         }
 
@@ -58,7 +72,7 @@ class HealthController extends Controller
                 $this->stdout("[health] migrations: ok ({$applied}/{$expected})\n");
             }
         } catch (\Throwable $e) {
-            $this->stderr("[health] migrations: error — " . $e->getMessage() . "\n");
+            $this->stderr(sprintf(self::CHECK_ERROR, 'migrations', ErrorText::of($e)));
             $healthy = false;
         }
 
@@ -106,7 +120,7 @@ class HealthController extends Controller
                 $this->stdout("[health] rbac: ok\n");
             }
         } catch (\Throwable $e) {
-            $this->stderr("[health] rbac: error — " . $e->getMessage() . "\n");
+            $this->stderr(sprintf(self::CHECK_ERROR, 'rbac', ErrorText::of($e)));
             $healthy = false;
         }
     }
@@ -140,7 +154,7 @@ class HealthController extends Controller
                 $this->stdout("[health] users: {$userCount} registered\n");
             }
         } catch (\Throwable $e) {
-            $this->stderr("[health] users: error — " . $e->getMessage() . "\n");
+            $this->stderr(sprintf(self::CHECK_ERROR, 'users', ErrorText::of($e)));
             $healthy = false;
         }
     }

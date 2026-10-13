@@ -55,12 +55,15 @@ class WorkflowTemplateControllerStepTypeTest extends WebControllerTestCase
         ])->exists());
     }
 
+    /**
+     * As an admin: only admins (approval-rule.update) add approval steps.
+     */
     public function testAddStepSavesEachStepTypeFromAJsonBody(): void
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
         $rule = $this->createApprovalRule($s['admin']->id);
-        $this->loginAs($s['member']);
+        $this->loginAs($s['admin']);
         $targets = [
             WorkflowStep::TYPE_JOB => ['job_template_id' => (int)$s['own']->id],
             WorkflowStep::TYPE_APPROVAL => ['approval_rule_id' => (int)$rule->id],

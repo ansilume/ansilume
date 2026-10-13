@@ -18,12 +18,18 @@ use app\tests\integration\TeamScopeFixtures;
 
 /**
  * Eligible approvers on an installation without team-restricted projects,
- * where every approver may see every request: they are the rule's approvers,
- * found without an access check per approver.
+ * where every approver may see every request: the rule's approvers who have
+ * an active account, may decide (superadmin or approval.decide) and did not
+ * launch the job, found without checks per approver.
  *
  * Regression: every vote that did not settle a request checked each
  * approver's access, several queries per approver (for a role-based rule:
  * per user of the role), although the answer was always "every approver".
+ *
+ * Regression: inactive and deleted users, users without approval.decide
+ * (plain users, viewers) and the launcher counted as eligible approvers, so
+ * a request could wait for votes nobody could cast, and the launcher could
+ * approve their own job.
  */
 class ApprovalServiceEligibleApproversTest extends DbTestCase
 {
@@ -44,37 +50,37 @@ class ApprovalServiceEligibleApproversTest extends DbTestCase
 
     /**
      * The approvers returned without checking each one are exactly those the
-     * access check finds one by one, for every kind of approver.
+     * per-user checks find: an active account that may decide, may see the
+     * request, and is not the launcher's.
      */
-    public function testEveryKindOfListedApproverIsEligibleAsTheAccessCheckFindsOneByOne(): void
+    public function testOnlyListedApproversWhoMayDecideAreEligibleAsTheChecksFindOneByOne(): void
     {
         $this->assertNoProjectIsRestricted();
         $plain = (int)$this->createUser('eligible-plain')->id;
         $admin = (int)$this->createUserWithRole('eligible-admin', 'admin')->id;
+        $operator = (int)$this->createUserWithRole('eligible-operator', 'operator')->id;
         $viewer = (int)$this->createUserWithRole('eligible-viewer', 'viewer')->id;
         $superadmin = $this->createUser('eligible-superadmin');
         $superadmin->is_superadmin = true;
         $superadmin->save(false);
-        $inactive = $this->createUser('eligible-inactive');
+        $inactive = $this->createUserWithRole('eligible-inactive', 'operator');
         $inactive->status = User::STATUS_INACTIVE;
         $inactive->save(false);
-        $deleted = $this->createUser('eligible-deleted');
+        $deleted = $this->createUserWithRole('eligible-deleted', 'operator');
         $deletedId = (int)$deleted->id;
         $deleted->delete();
-        $expected = [$plain, $admin, (int)$superadmin->id, (int)$inactive->id, $viewer, $deletedId];
+        $launcher = $this->createUserWithRole('eligible-launcher', 'operator');
+        $listed = [$plain, $admin, (int)$superadmin->id, $plain, (int)$inactive->id, $viewer, $deletedId, $operator, (int)$launcher->id];
 
-        $request = $this->requestFor(
-            $this->createUser('eligible-owner'),
-            [$plain, $admin, (int)$superadmin->id, $plain, (int)$inactive->id, $viewer, $deletedId],
-            2
-        );
+        $request = $this->requestFor($launcher, $listed, 2);
 
+        $expected = [$admin, (int)$superadmin->id, $operator];
         $this->assertSame($expected, $this->service()->eligibleApproverIds($request));
         $this->assertSame($expected, $this->checkedOneByOne($request));
-        foreach ($expected as $userId) {
-            $this->assertTrue($this->service()->canUserApprove($request, $userId), "user #{$userId}");
+        foreach (array_unique($listed) as $userId) {
+            $this->assertSame(in_array($userId, $expected, true), $this->service()->canUserApprove($request, $userId), "user #{$userId}");
         }
-        $this->assertFalse($this->service()->canUserApprove($request, (int)$this->createUser('unlisted')->id));
+        $this->assertFalse($this->service()->canUserApprove($request, (int)$this->createUserWithRole('unlisted', 'operator')->id));
     }
 
     public function testARoleBasedRuleMakesEveryUserOfTheRoleEligible(): void
@@ -84,6 +90,10 @@ class ApprovalServiceEligibleApproversTest extends DbTestCase
         $this->assertNotNull($auth);
         $role = $auth->createRole('eligible-approvers-' . uniqid());
         $auth->add($role);
+        // A custom role that grants approval.decide.
+        $decide = $auth->getPermission('approval.decide');
+        $this->assertNotNull($decide);
+        $auth->addChild($role, $decide);
         $members = [];
         foreach (['role-a', 'role-b', 'role-c'] as $suffix) {
             $userId = (int)$this->createUser($suffix)->id;
@@ -123,7 +133,7 @@ class ApprovalServiceEligibleApproversTest extends DbTestCase
     {
         $approvers = [];
         for ($i = 0; $i < $approverCount; $i++) {
-            $approvers[] = (int)$this->createUser('vote-approver')->id;
+            $approvers[] = (int)$this->createUserWithRole('vote-approver', 'operator')->id;
         }
         $request = $this->requestFor($this->createUser('vote-owner'), $approvers, $approverCount);
 
@@ -140,7 +150,9 @@ class ApprovalServiceEligibleApproversTest extends DbTestCase
     }
 
     /**
-     * The rule's distinct approvers who pass the access check one by one.
+     * The rule's distinct approvers who pass the checks one by one: an
+     * active account with approval.decide (or a superadmin), view access to
+     * the request, not the launcher.
      *
      * @return list<int>
      */
@@ -151,10 +163,13 @@ class ApprovalServiceEligibleApproversTest extends DbTestCase
         $this->assertNotNull($rule);
         /** @var WorkflowAccessChecker $access */
         $access = \Yii::$app->get('workflowAccessChecker');
+        $launcher = $request->launcherId();
 
         return array_values(array_filter(
             array_values(array_unique($rule->getApproverUserIds())),
-            static fn (int $userId): bool => $access->canViewApprovalRequest($userId, $request)
+            static fn (int $userId): bool => $userId !== $launcher
+                && $access->isActiveWithPermission($userId, 'approval.decide')
+                && $access->canViewApprovalRequest($userId, $request)
         ));
     }
 

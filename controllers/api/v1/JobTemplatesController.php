@@ -5,10 +5,13 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\components\JobTemplateWarnings;
-use app\models\AuditLog;
 use app\models\Credential;
 use app\models\JobTemplate;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
+use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\GatedJobTemplateLock;
+use app\services\JobTemplateDeletionService;
+use app\services\JobTemplateRuleAssignment;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
 use yii\web\NotFoundHttpException;
@@ -21,6 +24,18 @@ use yii\web\NotFoundHttpException;
  * POST   /api/v1/job-templates
  * PUT    /api/v1/job-templates/{id}
  * DELETE /api/v1/job-templates/{id}
+ *
+ * approval_rule_id is for admins (approval-rule.update): a create with a
+ * rule, or an update that changes or removes it, answers 403 for everyone
+ * else and writes nothing (JobTemplateRuleAssignment). Sending the stored
+ * value again, or leaving the field out, is allowed.
+ *
+ * What a gated template (one with an approval rule) runs is for admins too
+ * (GatedJobTemplateLock): for everyone else an update that changes any
+ * field but name and description, or credential_ids, answers 403 with
+ * GatedJobTemplateLock::CHANGE_REFUSED and writes nothing. A field sent
+ * with its stored value is no change, so the body of a GET sent back with
+ * another name is a rename. A rule change is refused first.
  */
 class JobTemplatesController extends BaseApiController
 {
@@ -46,7 +61,7 @@ class JobTemplatesController extends BaseApiController
     public function actionIndex(): array
     {
         $query = JobTemplate::find()
-            ->with(['project', 'inventory', 'credential', 'jobTemplateCredentials.credential', 'vaultCheck.credential'])
+            ->with(['project', 'inventory', 'credential', 'jobTemplateCredentials.credential', 'vaultCheck.credential', 'approvalRule'])
             ->orderBy(['job_template.id' => SORT_DESC]);
         $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
         if ($filter !== null) {
@@ -96,20 +111,23 @@ class JobTemplatesController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('job-template.create')) {
+        if (!$this->userCan('job-template.create')) {
             return $this->error('Forbidden.', 403);
         }
 
         $model = new JobTemplate();
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
-        $model->created_by = (int)$user->id;
+        $model->created_by = (int)\Yii::$app->user->id;
 
         $userId = $this->currentUserId();
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
+        }
+        $ruleAssignment = new JobTemplateRuleAssignment();
+        $refusal = $ruleAssignment->apply($model, $body, $userId, null);
+        if ($refusal !== null) {
+            return $this->error($refusal, 403);
         }
         $this->restrictInventories($model, $userId);
 
@@ -117,7 +135,8 @@ class JobTemplatesController extends BaseApiController
         if ($credentialIds === false) {
             return $this->error('credential_ids must be an array of credential IDs.', 422);
         }
-        if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, ['source' => 'api'])) {
+        $audit = ['source' => 'api'] + $ruleAssignment->auditContext($model, null);
+        if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, $audit, $userId)) {
             return $this->error($this->firstError($model), 422);
         }
 
@@ -129,9 +148,7 @@ class JobTemplatesController extends BaseApiController
      */
     public function actionUpdate(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('job-template.update')) {
+        if (!$this->userCan('job-template.update')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -146,27 +163,38 @@ class JobTemplatesController extends BaseApiController
         if (!$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
         }
+        $storedRule = ApprovalRuleAssignmentPolicy::storedRuleId($model);
+        $ruleAssignment = new JobTemplateRuleAssignment();
+        $refusal = $ruleAssignment->apply($model, $body, $userId, $storedRule);
+        if ($refusal !== null) {
+            return $this->error($refusal, 403);
+        }
         $this->restrictInventories($model, $userId);
 
         $credentialIds = $this->readCredentialIds($body);
         if ($credentialIds === false) {
             return $this->error('credential_ids must be an array of credential IDs.', 422);
         }
-        if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, ['source' => 'api'])) {
-            return $this->error($this->firstError($model), 422);
+        $audit = ['source' => 'api'] + $ruleAssignment->auditContext($model, $storedRule);
+        if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, $audit, $userId)) {
+            return GatedJobTemplateLock::refused($model)
+                ? $this->error(GatedJobTemplateLock::CHANGE_REFUSED, 403)
+                : $this->error($this->firstError($model), 422);
         }
 
         return $this->success($this->serialize($model, $this->mayChange($model)));
     }
 
     /**
+     * A soft delete, like the web UI: jobs keep their template link. The
+     * template's enabled schedules are disabled and its waiting jobs
+     * canceled (JobTemplateDeletionService); the response counts both.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('job-template.delete')) {
+        if (!$this->userCan('job-template.delete')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -175,19 +203,15 @@ class JobTemplatesController extends BaseApiController
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
         }
-        $name = $model->name;
-        // Soft delete, like the web UI: jobs keep their template link.
-        $model->softDelete();
+        /** @var JobTemplateDeletionService $deletion */
+        $deletion = \Yii::$app->get('jobTemplateDeletionService');
+        $result = $deletion->delete($model, $userId, JobTemplateDeletionService::SOURCE_API);
+        if (!$result['deleted']) {
+            // Another request deleted it first.
+            throw new NotFoundHttpException("Template #{$id} not found.");
+        }
 
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_TEMPLATE_DELETED,
-            'job_template',
-            $id,
-            null,
-            ['name' => $name, 'source' => 'api']
-        );
-
-        return $this->success(['deleted' => true]);
+        return $this->success($result);
     }
 
     /**
@@ -227,12 +251,15 @@ class JobTemplatesController extends BaseApiController
     }
 
     /**
+     * approval_rule_id is not among them: only JobTemplateRuleAssignment
+     * sets it, after its check.
+     *
      * @param array<string, mixed> $body
      */
     private function applyIntFields(JobTemplate $model, array $body): void
     {
-        $fields = ['project_id', 'inventory_id', 'credential_id', 'verbosity', 'forks', 'timeout_minutes', 'runner_group_id', 'approval_rule_id'];
-        $nullable = ['credential_id', 'runner_group_id', 'approval_rule_id'];
+        $fields = ['project_id', 'inventory_id', 'credential_id', 'verbosity', 'forks', 'timeout_minutes', 'runner_group_id'];
+        $nullable = ['credential_id', 'runner_group_id'];
         foreach ($fields as $field) {
             if (!array_key_exists($field, $body)) {
                 continue;
@@ -259,14 +286,17 @@ class JobTemplatesController extends BaseApiController
      * inbound trigger launches as (who generated the token, or created_by
      * for older tokens; null without a token). Only callers who may change
      * the template get them, as only they see the trigger card on its page.
-     * The token and its hash are never returned.
+     * The token and its hash are never returned. approval_rule_id and
+     * approval_rule_name name the rule that gates the template's launches
+     * (null for none), for every caller who may view the template.
      *
-     * @return array{id: int, name: string, description: string|null, project_id: int, project_name: string|null, inventory_id: int, inventory_name: string|null, runner_group_id: int|null, credential_id: int|null, credential_ids: list<int>, credentials: list<array{id: int, name: string, credential_type: string, role: string}>, playbook: string, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, warnings: list<array{code: string, message: string, credential_ids: list<int>}>, created_by: int, created_at: int, updated_at: int, has_trigger_token?: bool, trigger_user_id?: int|null}
+     * @return array{id: int, name: string, description: string|null, project_id: int, project_name: string|null, inventory_id: int, inventory_name: string|null, runner_group_id: int|null, credential_id: int|null, credential_ids: list<int>, credentials: list<array{id: int, name: string, credential_type: string, role: string}>, approval_rule_id: int|null, approval_rule_name: string|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, warnings: list<array{code: string, message: string, credential_ids: list<int>}>, created_by: int, created_at: int, updated_at: int, has_trigger_token?: bool, trigger_user_id?: int|null}
      */
     private function serialize(JobTemplate $t, bool $withTrigger): array
     {
         $credentials = $this->credentialService()->describe($t);
         $additional = array_filter($credentials, static fn (array $c): bool => $c['role'] === Credential::ROLE_ADDITIONAL);
+        $rule = $t->approval_rule_id === null ? null : $t->approvalRule;
 
         $data = [
             'id' => $t->id,
@@ -280,6 +310,8 @@ class JobTemplatesController extends BaseApiController
             'credential_id' => $t->credential_id,
             'credential_ids' => array_values(array_column($additional, 'id')),
             'credentials' => $credentials,
+            'approval_rule_id' => $t->approval_rule_id === null ? null : (int)$t->approval_rule_id,
+            'approval_rule_name' => $rule?->name,
             'playbook' => $t->playbook,
             'verbosity' => $t->verbosity,
             'forks' => $t->forks,

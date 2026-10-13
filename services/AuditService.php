@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ErrorText;
 use app\models\AuditLog;
 use app\services\audit\AuditTargetInterface;
 use yii\base\Component;
@@ -86,6 +87,7 @@ class AuditService extends Component
     public const ACTION_APPROVAL_REQUESTED = AuditLog::ACTION_APPROVAL_REQUESTED;
     public const ACTION_APPROVAL_DECIDED = AuditLog::ACTION_APPROVAL_DECIDED;
     public const ACTION_APPROVAL_TIMED_OUT = AuditLog::ACTION_APPROVAL_TIMED_OUT;
+    public const ACTION_APPROVAL_CANCELED = AuditLog::ACTION_APPROVAL_CANCELED;
     public const ACTION_WORKFLOW_TEMPLATE_CREATED = AuditLog::ACTION_WORKFLOW_TEMPLATE_CREATED;
     public const ACTION_WORKFLOW_TEMPLATE_UPDATED = AuditLog::ACTION_WORKFLOW_TEMPLATE_UPDATED;
     public const ACTION_WORKFLOW_TEMPLATE_DELETED = AuditLog::ACTION_WORKFLOW_TEMPLATE_DELETED;
@@ -125,6 +127,15 @@ class AuditService extends Component
     public const ACTION_LDAP_TEST_PERFORMED = AuditLog::ACTION_LDAP_TEST_PERFORMED;
 
     /**
+     * Logged when an audit target fails to take an entry; the other targets
+     * still get it. sprintf(): the target's class, then what may be said
+     * about the error (ErrorText): its message, but for a database error
+     * only its class, SQLSTATE and driver error code, never its message,
+     * which carries the SQL statement with the entry's values.
+     */
+    public const TARGET_FAILED = 'AuditService: target %s failed: %s';
+
+    /**
      * @var AuditTargetInterface[] Dispatch targets. Populated in init() from
      *                             Yii component configuration.
      */
@@ -158,10 +169,7 @@ class AuditService extends Component
             try {
                 $target->send($entry);
             } catch (\Throwable $e) {
-                \Yii::error(
-                    'AuditService: target ' . get_class($target) . ' failed: ' . $e->getMessage(),
-                    __CLASS__
-                );
+                \Yii::error(sprintf(self::TARGET_FAILED, get_class($target), ErrorText::of($e)), __CLASS__);
             }
         }
     }

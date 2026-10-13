@@ -1,133 +1,155 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Browser, Locator, Page, TestInfo } from '@playwright/test';
+import { openWorkflowTemplate } from '../../lib/triggers';
+import {
+  LAUNCHER_REFUSED,
+  asOperator,
+  decide,
+  decisionForms,
+  flash,
+  requestOfJob,
+  requestStatus,
+} from '../../lib/approvals';
 
 /**
- * Regression tests for issue #14: workflow approval steps must create
- * ApprovalRequest records and advance the workflow when approved/rejected.
+ * Workflow approval steps: the run waits at the step for an approval
+ * request, and the request's outcome decides where the run goes (regression
+ * tests for issue #14 and for gates that fail closed).
  *
- * Uses the e2e-approval-workflow template (approval step -> job step).
- * The approval rule uses APPROVER_TYPE_USERS with only e2e-admin.
+ * e2e-admin starts the runs. The launcher never decides on their own run, so
+ * e2e-operator, the rules' other approver, decides.
+ * - e2e-approval-workflow (commands/E2eController.php): the approval step
+ *   e2e-step-approve on e2e-approval-rule, On Failure: end the workflow, then
+ *   the job step e2e-step-job-after-approval.
+ * - e2e-gate-continue-workflow (commands/E2eWorkflowGateSeeder.php): the
+ *   approval step e2e-gate-continue-approve on e2e-gate-rule WITHOUT an On
+ *   Failure branch, then the job step e2e-gate-continue-job.
  */
+
+/** Launches the workflow template `name`; the ID of the run, whose page is open then. */
+async function launchWorkflow(page: Page, name: string): Promise<string> {
+  await openWorkflowTemplate(page, name);
+  page.once('dialog', (dialog) => dialog.accept());
+  await Promise.all([
+    page.waitForURL(/\/workflow-job\/view\?id=\d+/),
+    page.locator('#page-content form[action*="/workflow-template/launch"] button[type="submit"]').click(),
+  ]);
+  return new URL(page.url()).searchParams.get('id') ?? '';
+}
+
+/** The execution rows of the open run page. */
+function stepRows(page: Page): Locator {
+  return page.locator('#wj-steps-table tbody tr[data-wjs-id]');
+}
+
+/** The execution row of step `name` on the open run page. */
+function stepRow(page: Page, name: string): Locator {
+  return stepRows(page).filter({ has: page.locator('[data-wjs-name-cell]', { hasText: name }) });
+}
+
+/**
+ * Opens run #`runId`, whose approval step `step` waits; the ID of the step's
+ * approval request, by the placeholder job the step links to.
+ */
+async function waitingRequest(page: Page, runId: string, step: string): Promise<string> {
+  await page.goto(`/workflow-job/view?id=${runId}`);
+  const row = stepRow(page, step);
+  await expect(row.locator('[data-wjs-type-cell]')).toHaveText('Approval');
+  await expect(row.locator('[data-wjs-status-cell] .badge')).toHaveText('Running');
+  const job = ((await row.locator('[data-wjs-job-cell] a').textContent()) ?? '').trim().replace('#', '');
+  expect(job, 'the step links its placeholder job').toMatch(/^\d+$/);
+  return requestOfJob(page, job);
+}
+
+/** e2e-operator approves or rejects request #`requestId`. */
+async function operatorDecides(browser: Browser, testInfo: TestInfo, requestId: string, decision: 'approve' | 'reject'): Promise<void> {
+  await asOperator(browser, testInfo, async (operator) => {
+    await operator.goto(`/approval/view?id=${requestId}`);
+    await decide(operator, decision);
+    await expect(flash(operator, 'success')).toHaveText(decision === 'approve' ? 'Approval recorded.' : 'Rejection recorded.');
+    await expect(requestStatus(operator)).toHaveText(decision === 'approve' ? 'Approved' : 'Rejected');
+  });
+}
+
+/** GET /workflow-job/status of run #`runId`, as the page polls it. */
+async function runStatus(page: Page, runId: string): Promise<{ status: string; is_finished: boolean; steps: { step_name: string; status: string }[] }> {
+  const response = await page.request.get(`/workflow-job/status?id=${runId}`);
+  expect(response.status()).toBe(200);
+  return response.json();
+}
+
 test.describe('Workflow Approval Flow', () => {
-  const workflowName = 'e2e-approval-workflow';
+  test('a run waits at its approval step for a request its launcher cannot decide', async ({ page }) => {
+    const runId = await launchWorkflow(page, 'e2e-approval-workflow');
+    await expect(page.locator('#wj-status')).toHaveText('Running');
+    await expect(stepRows(page)).toHaveCount(1);
+    const requestId = await waitingRequest(page, runId, 'e2e-step-approve');
 
-  /**
-   * Launch the approval workflow and return the workflow job URL.
-   * Handles the launch confirmation dialog automatically.
-   */
-  async function launchWorkflow(page: import('@playwright/test').Page): Promise<string | null> {
-    await page.goto('/workflow-template/index');
-    const row = page.locator('table.table tbody tr', { hasText: workflowName });
-    if (!(await row.isVisible({ timeout: 3_000 }).catch(() => false))) {
-      return null;
-    }
+    await page.goto(`/approval/view?id=${requestId}`);
+    await expect(requestStatus(page)).toHaveText('Pending');
+    await expect(page.locator('#approval-launched-by')).toHaveText('e2e-admin');
+    await expect(page.locator('#approval-decision-note')).toHaveText(LAUNCHER_REFUSED);
+    await expect(decisionForms(page)).toHaveCount(0);
 
-    await row.locator('a').first().click();
-    await expect(page).toHaveURL(/workflow-template\/view/);
-
-    // Handle launch confirmation dialog
+    // Canceling the run closes the request with it.
+    await page.goto(`/workflow-job/view?id=${runId}`);
     page.once('dialog', (dialog) => dialog.accept());
-    const launchBtn = page.locator('button:has-text("Launch")').first();
-    await expect(launchBtn).toBeVisible();
-    await launchBtn.click();
-
-    await expect(page).toHaveURL(/workflow-job\/view/, { timeout: 10_000 });
-    return page.url();
-  }
-
-  test('launch approval workflow creates pending approval request', async ({ page }) => {
-    const wfUrl = await launchWorkflow(page);
-    if (wfUrl === null) {
-      test.skip(true, 'e2e-approval-workflow not seeded');
-      return;
-    }
-
-    // Verify the approval step is running
-    const stepsTable = page.locator('table.table-bordered').last();
-    await expect(stepsTable).toContainText('e2e-step-approve');
-    await expect(stepsTable).toContainText('Running');
-
-    // Navigate to approvals -- a pending request should exist
-    await page.goto('/approval/index');
-    const approvalRow = page.locator('table.table tbody tr', { hasText: 'Pending' });
-    await expect(approvalRow.first()).toBeVisible({ timeout: 5_000 });
+    await page.locator('#page-content form[action*="/workflow-job/cancel"] button[type="submit"]').click();
+    await expect(flash(page, 'success')).toHaveText('Workflow canceled.');
+    await expect(page.locator('#wj-status')).toHaveText('Canceled');
+    await page.goto(`/approval/view?id=${requestId}`);
+    await expect(requestStatus(page)).toHaveText('Canceled');
+    await expect(decisionForms(page)).toHaveCount(0);
   });
 
-  test('approving request advances workflow to next step', async ({ page }) => {
-    const wfUrl = await launchWorkflow(page);
-    if (wfUrl === null) {
-      test.skip(true, 'e2e-approval-workflow not seeded');
-      return;
-    }
+  test('approving the request advances the run to the next step', async ({ page, browser }, testInfo) => {
+    const runId = await launchWorkflow(page, 'e2e-approval-workflow');
+    const requestId = await waitingRequest(page, runId, 'e2e-step-approve');
 
-    // Go to approvals and find the pending request
-    await page.goto('/approval/index');
-    const pendingRow = page.locator('table.table tbody tr', { hasText: 'Pending' });
-    await expect(pendingRow.first()).toBeVisible({ timeout: 5_000 });
+    await operatorDecides(browser, testInfo, requestId, 'approve');
 
-    // Click into the approval detail
-    await pendingRow.first().locator('a').first().click();
-    await expect(page).toHaveURL(/approval\/view/);
-
-    // Approve the request (handle confirm dialog)
-    page.once('dialog', (dialog) => dialog.accept());
-    const approveBtn = page.locator('button:has-text("Approve")');
-    await expect(approveBtn).toBeVisible();
-    await approveBtn.click();
-
-    // Should see success flash
-    await expect(page.locator('.alert-success')).toBeVisible({ timeout: 5_000 });
-    // Status should change to Approved (in the first detail table)
-    const statusCell = page.locator('table.table-bordered').first().locator('tr', { hasText: 'Status' });
-    await expect(statusCell).toContainText('Approved');
-
-    // Go back to the workflow job and verify advancement
-    await page.goto(wfUrl);
-    const stepsTable = page.locator('table.table-bordered').last();
-
-    // Approval step should be Succeeded
-    const approvalStepRow = stepsTable.locator('tr', { hasText: 'e2e-step-approve' });
-    await expect(approvalStepRow).toContainText('Succeeded');
-
-    // Job step should exist (Running or another status depending on runner availability)
-    const jobStepRow = stepsTable.locator('tr', { hasText: 'e2e-step-job-after-approval' });
-    await expect(jobStepRow).toBeVisible();
+    await page.goto(`/workflow-job/view?id=${runId}`);
+    await expect(stepRow(page, 'e2e-step-approve').locator('[data-wjs-status-cell] .badge')).toHaveText('Succeeded');
+    // The job step runs now (or already ran, if a runner was quick).
+    const next = stepRow(page, 'e2e-step-job-after-approval');
+    await expect(next).toHaveCount(1);
+    await expect(next.locator('[data-wjs-type-cell]')).toHaveText('Job');
+    await expect(next.locator('[data-wjs-job-cell] a')).toHaveText(/^#\d+$/);
   });
 
-  test('rejecting request fails workflow', async ({ page }) => {
-    const wfUrl = await launchWorkflow(page);
-    if (wfUrl === null) {
-      test.skip(true, 'e2e-approval-workflow not seeded');
-      return;
-    }
+  test('rejecting the request fails the run, and the step names the request', async ({ page, browser }, testInfo) => {
+    const runId = await launchWorkflow(page, 'e2e-approval-workflow');
+    const requestId = await waitingRequest(page, runId, 'e2e-step-approve');
 
-    // Go to approvals and reject the pending request
-    await page.goto('/approval/index');
-    const pendingRow = page.locator('table.table tbody tr', { hasText: 'Pending' });
-    await expect(pendingRow.first()).toBeVisible({ timeout: 5_000 });
+    await operatorDecides(browser, testInfo, requestId, 'reject');
 
-    await pendingRow.first().locator('a').first().click();
-    await expect(page).toHaveURL(/approval\/view/);
+    await page.goto(`/workflow-job/view?id=${runId}`);
+    await expect(page.locator('#wj-status')).toHaveText('Failed');
+    const approval = stepRow(page, 'e2e-step-approve');
+    await expect(approval.locator('[data-wjs-status-cell] .badge')).toHaveText('Failed');
+    await expect(approval.locator('[data-wjs-error]')).toHaveText(`Approval request #${requestId} was rejected.`);
+    await expect(stepRows(page)).toHaveCount(1);
+  });
 
-    // Reject the request (handle confirm dialog)
-    page.once('dialog', (dialog) => dialog.accept());
-    const rejectBtn = page.locator('button:has-text("Reject")');
-    await expect(rejectBtn).toBeVisible();
-    await rejectBtn.click();
+  // Regression: a rejected approval step continued the workflow with the next step.
+  test('a rejection without an On Failure branch ends the run as failed, and the next step never starts', async ({ page, browser }, testInfo) => {
+    const runId = await launchWorkflow(page, 'e2e-gate-continue-workflow');
+    const requestId = await waitingRequest(page, runId, 'e2e-gate-continue-approve');
 
-    // Should see success flash (rejection recorded)
-    await expect(page.locator('.alert-success')).toBeVisible({ timeout: 5_000 });
-    // Status should change to Rejected (in the first detail table)
-    const statusCell = page.locator('table.table-bordered').first().locator('tr', { hasText: 'Status' });
-    await expect(statusCell).toContainText('Rejected');
+    await operatorDecides(browser, testInfo, requestId, 'reject');
 
-    // Go back to workflow job -- it should be failed
-    await page.goto(wfUrl);
-    const statusTable = page.locator('table.table-bordered').first();
-    await expect(statusTable).toContainText('Failed');
+    await page.goto(`/workflow-job/view?id=${runId}`);
+    await expect(page.locator('#wj-status')).toHaveText('Failed');
+    await expect(page.locator('#wj-finished')).not.toHaveText('—');
+    const approval = stepRow(page, 'e2e-gate-continue-approve');
+    await expect(approval.locator('[data-wjs-status-cell] .badge')).toHaveText('Failed');
+    await expect(approval.locator('[data-wjs-error]')).toHaveText(`Approval request #${requestId} was rejected.`);
+    await expect(stepRows(page)).toHaveCount(1);
+    await expect(stepRow(page, 'e2e-gate-continue-job')).toHaveCount(0);
 
-    // Approval step should be Failed
-    const stepsTable = page.locator('table.table-bordered').last();
-    const approvalStepRow = stepsTable.locator('tr', { hasText: 'e2e-step-approve' });
-    await expect(approvalStepRow).toContainText('Failed');
+    // The run is over: nothing starts the job step later either.
+    const status = await runStatus(page, runId);
+    expect(status.status).toBe('failed');
+    expect(status.is_finished).toBe(true);
+    expect(status.steps.map((step) => [step.step_name, step.status])).toEqual([['e2e-gate-continue-approve', 'failed']]);
   });
 });

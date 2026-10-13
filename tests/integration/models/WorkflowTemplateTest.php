@@ -354,4 +354,45 @@ class WorkflowTemplateTest extends DbTestCase
         $this->assertNull(WorkflowTemplate::findByTriggerToken($raw));
         $this->assertSame(1, $generator->delete(), 'nothing else refers to the generator');
     }
+
+    // -- lockLive ---------------------------------------------------------------
+
+    public function testLockLiveTellsALiveTemplateFromADeletedOrMissingOne(): void
+    {
+        $user = $this->createUser('wt_lock');
+        $live = $this->createWorkflowTemplate($user->id);
+        $deleted = $this->createWorkflowTemplate($user->id);
+        $deleted->softDelete();
+
+        $this->assertTrue(WorkflowTemplate::lockLive((int)$live->id));
+        $this->assertFalse(WorkflowTemplate::lockLive((int)$deleted->id), 'soft-deleted');
+        $this->assertFalse(WorkflowTemplate::lockLive(987654321), 'no such row');
+    }
+
+    /**
+     * The lock is a locking read of the template's row (SELECT ... FOR
+     * UPDATE), which a launch and a delete take too.
+     */
+    public function testLockLiveLocksTheRow(): void
+    {
+        $user = $this->createUser('wt_lock_sql');
+        $template = $this->createWorkflowTemplate($user->id);
+        $logger = new \yii\log\Logger();
+        $logger->flushInterval = PHP_INT_MAX;
+        $previous = \Yii::getLogger();
+        \Yii::setLogger($logger);
+        try {
+            WorkflowTemplate::lockLive((int)$template->id);
+        } finally {
+            \Yii::setLogger($previous);
+        }
+
+        $statements = [];
+        foreach ($logger->messages as $message) {
+            if ($message[2] === 'yii\db\Command::query' && $message[1] === \yii\log\Logger::LEVEL_INFO && is_string($message[0])) {
+                $statements[] = $message[0];
+            }
+        }
+        $this->assertSame(['SELECT `deleted_at` FROM `workflow_template` WHERE `id` = ' . $template->id . ' FOR UPDATE'], $statements);
+    }
 }

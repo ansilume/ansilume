@@ -4,18 +4,22 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
-use app\components\SurveySecrets;
+use app\components\ErrorText;
+use app\components\WorkflowStepsInput;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
-use app\services\JobLaunchSecrets;
+use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
-use yii\base\Model;
+use app\services\WorkflowStepChangeGuard;
+use app\services\WorkflowStepChangeRefusedException;
+use app\services\WorkflowTemplateDeletionService;
 use yii\data\ActiveDataProvider;
+use yii\db\Exception as DbException;
 use yii\web\NotFoundHttpException;
 
 /**
@@ -25,20 +29,50 @@ use yii\web\NotFoundHttpException;
  * steps. Seeing one needs view access to every job step's project; updating,
  * deleting and launching it need operator access to every one.
  *
- * Steps (create and update): a "steps" list replaces all steps. Every step
- * needs a name (max 128) and a step_type of job (default), approval or
- * pause; a job step needs job_template_id, an approval step approval_rule_id
- * of an existing approval rule. extra_vars_template, JSON text or a JSON
- * object, must be JSON that can be stored: a number too large for JSON
- * answers 422 in either form. Job templates that do not exist or that the
- * caller cannot see answer 422, visible ones the caller may not operate 403,
- * both naming them in error.job_template_ids. Nothing is written unless the
- * template and every step are valid; then the template and its steps are
- * written in one transaction.
+ * Steps (create and update): a "steps" list replaces all steps; null or no
+ * "steps" keeps them. Every step needs a name (max 128) and a step_type of
+ * job (default), approval or pause; a job step needs job_template_id, an
+ * approval step approval_rule_id of an existing approval rule
+ * (WorkflowStepsInput). extra_vars_template, JSON text or a JSON object, must
+ * be JSON that can be stored: a number too large for JSON answers 422 in
+ * either form. The answers, in this order (update: 403 "Forbidden." first,
+ * without access to the workflow):
+ * - 422 for a template that is not valid, such as an empty name;
+ * - 422 for steps that cannot be read;
+ * - 403 when the caller may not change these steps: gated steps (approval
+ *   steps, and job steps whose job template has an approval rule) are for
+ *   admins (approval-rule.update), so a "steps" list that includes one, or
+ *   any "steps" list for a workflow that has one, needs that permission
+ *   (ApprovalRuleAssignmentPolicy); a job template the caller cannot see
+ *   counts as none here and answers 422 below;
+ * - 422 for unknown approval rules; then 422 for job templates that do not
+ *   exist or that the caller cannot see, 403 for visible ones the caller may
+ *   not operate, both naming them in error.job_template_ids;
+ * - (update) 404 when the workflow was deleted meanwhile, then 409 while a
+ *   run of the workflow is active, naming the runs in error.workflow_job_ids
+ *   (WorkflowStepChangeGuard), checked with the workflow's row locked, as a
+ *   launch locks it;
+ * - 422 for a template or step that cannot be saved.
+ * Nothing is written unless the template and every step are valid; then the
+ * template and its steps are written in one transaction. Runs keep the
+ * history of replaced steps.
+ *
+ * Delete cancels the workflow's active runs (WorkflowTemplateDeletionService)
+ * and answers how many it canceled and how many it could not (canceled_runs,
+ * failed_runs). Launch takes optional extra_vars, which every job
+ * step of the run receives; the engine refuses unusable ones with 422.
  */
 class WorkflowTemplatesController extends BaseApiController
 {
     use ApiTeamScopingTrait;
+
+    /**
+     * Logged at error level, category
+     * app\controllers\api\v1\WorkflowTemplatesController, when a launch fails
+     * with a database error. sprintf(): the workflow template's ID, the error
+     * as ErrorText words it (class, SQLSTATE, driver error code).
+     */
+    public const LAUNCH_FAILED_LOG = 'Launch of workflow template #%d failed: %s';
 
     protected function apiAccessRules(): array
     {
@@ -133,6 +167,10 @@ class WorkflowTemplatesController extends BaseApiController
     }
 
     /**
+     * Soft-deletes the template and cancels its active runs; canceled_runs
+     * counts them, failed_runs the ones whose cancel failed (the maintenance
+     * run retries those).
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionDelete(int $id): array
@@ -141,43 +179,53 @@ class WorkflowTemplatesController extends BaseApiController
         if (!$this->may($model, true)) {
             return $this->error('Forbidden.', 403);
         }
-        $name = $model->name;
-        $model->softDelete();
 
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_WORKFLOW_TEMPLATE_DELETED,
-            'workflow_template',
-            $id,
-            null,
-            ['name' => $name]
-        );
+        /** @var WorkflowTemplateDeletionService $deletion */
+        $deletion = \Yii::$app->get('workflowTemplateDeletionService');
+        $result = $deletion->delete($model, $this->currentUserId(), 'api');
+        if (!$result['deleted']) {
+            // Another request deleted it after it was loaded.
+            throw new NotFoundHttpException("Workflow template #{$id} not found.");
+        }
 
-        return $this->success(['deleted' => true]);
+        return $this->success($result);
     }
 
     /**
      * The service checks that the caller may launch every job step and
-     * audits a refusal.
+     * audits a refusal (403). The body's extra_vars, when it has the key,
+     * are the run's launch extra vars whatever their type: the engine
+     * refuses what it cannot use (not an object, not storable as JSON,
+     * $encrypted$ as a password answer) with a WorkflowLaunchRejectedException,
+     * a 422 here like every other refused launch. A database error (a
+     * yii\db\Exception, or a PDOException that escaped Yii, such as a failed
+     * BEGIN or COMMIT) is no refusal: 500, its message and the log line
+     * (LAUNCH_FAILED_LOG) name it by its class, SQLSTATE and driver error
+     * code only (ErrorText).
      *
      * @return array{data: mixed}|array{error: array<string, mixed>}
      */
     public function actionLaunch(int $id): array
     {
         $model = $this->findModel($id);
+        $body = (array)\Yii::$app->request->bodyParams;
+        $overrides = array_key_exists('extra_vars', $body) ? ['extra_vars' => $body['extra_vars']] : [];
 
         /** @var WorkflowExecutionService $service */
         $service = \Yii::$app->get('workflowExecutionService');
         try {
-            $wfJob = $service->launch($model, (int)\Yii::$app->user->id, [], 'api');
+            $wfJob = $service->launch($model, (int)\Yii::$app->user->id, $overrides, 'api');
+        } catch (WorkflowAccessDeniedException $e) {
+            return $this->errorWithDetails(
+                $e->getMessage(),
+                403,
+                $e->jobTemplateIds === [] ? [] : ['job_template_ids' => $e->jobTemplateIds]
+            );
+        } catch (DbException | \PDOException $e) {
+            $summary = ErrorText::of($e);
+            \Yii::error(sprintf(self::LAUNCH_FAILED_LOG, $id, $summary), __CLASS__);
+            return $this->error($summary, 500);
         } catch (\RuntimeException $e) {
-            // A refusal by team scoping is a RuntimeException too.
-            if ($e instanceof WorkflowAccessDeniedException) {
-                return $this->errorWithDetails(
-                    $e->getMessage(),
-                    403,
-                    $e->jobTemplateIds === [] ? [] : ['job_template_ids' => $e->jobTemplateIds]
-                );
-            }
             return $this->error($e->getMessage(), 422);
         }
 
@@ -190,10 +238,10 @@ class WorkflowTemplatesController extends BaseApiController
     private function applyBody(WorkflowTemplate $model, array $body): void
     {
         if (array_key_exists('name', $body)) {
-            $model->name = self::text($body['name']);
+            $model->name = WorkflowStepsInput::text($body['name']);
         }
         if (array_key_exists('description', $body)) {
-            $model->description = $body['description'] === null ? null : self::text($body['description']);
+            $model->description = $body['description'] === null ? null : WorkflowStepsInput::text($body['description']);
         }
     }
 
@@ -208,22 +256,22 @@ class WorkflowTemplatesController extends BaseApiController
     private function write(WorkflowTemplate $model, array $body, string $auditAction): ?array
     {
         if (!$model->validate()) {
-            return $this->error($this->firstError($model), 422);
+            return $this->error(WorkflowStepsInput::firstError($model), 422);
         }
         $steps = null;
         if (($body['steps'] ?? null) !== null) {
-            $steps = $this->readSteps($body['steps']);
+            $steps = WorkflowStepsInput::read($body['steps']);
             if (is_string($steps)) {
                 return $this->error($steps, 422);
             }
-            $rejected = $this->referenceError($steps);
+            $rejected = $this->stepsPolicyError($model, $steps) ?? $this->referenceError($steps);
             if ($rejected !== null) {
                 return $rejected;
             }
         }
-        $error = $this->persist($model, $steps);
-        if ($error !== null) {
-            return $this->error($error, 422);
+        $rejected = $this->persist($model, $steps);
+        if ($rejected !== null) {
+            return $rejected;
         }
         $this->audit($auditAction, $model, $steps);
 
@@ -231,72 +279,21 @@ class WorkflowTemplatesController extends BaseApiController
     }
 
     /**
-     * The steps of the request as unsaved models in request order, or why
-     * they are rejected.
+     * 403 when the caller may not change the steps to these: approval steps
+     * and gated job steps are for admins. Checked here before the
+     * references; the workflow's own steps are checked again while it is
+     * locked (WorkflowStepChangeGuard).
      *
-     * @return list<WorkflowStep>|string
+     * @param list<WorkflowStep> $steps
+     * @return array{error: array<string, mixed>}|null
      */
-    private function readSteps(mixed $raw): array|string
+    private function stepsPolicyError(WorkflowTemplate $model, array $steps): ?array
     {
-        if (!is_array($raw) || !array_is_list($raw)) {
-            return 'steps must be a list of steps.';
-        }
-        $steps = [];
-        foreach ($raw as $index => $data) {
-            $step = is_array($data) ? $this->readStep($data, $index) : 'A step must be an object.';
-            if (is_string($step)) {
-                return sprintf('steps[%d]: %s', $index, $step);
-            }
-            $steps[] = $step;
-        }
+        /** @var ApprovalRuleAssignmentPolicy $policy */
+        $policy = \Yii::$app->get('approvalRuleAssignmentPolicy');
+        $refusal = $policy->stepsAddRefusal((int)$this->currentUserId(), $model, $steps);
 
-        return $steps;
-    }
-
-    /**
-     * One step of the request as an unsaved model, or why it is rejected.
-     *
-     * @param array<array-key, mixed> $data
-     */
-    private function readStep(array $data, int $index): WorkflowStep|string
-    {
-        $step = new WorkflowStep();
-        $step->name = self::text($data['name'] ?? '');
-        $step->step_type = array_key_exists('step_type', $data) ? self::text($data['step_type']) : WorkflowStep::TYPE_JOB;
-        $step->step_order = $index;
-        $unencodable = self::readExtraVarsTemplate($step, $data['extra_vars_template'] ?? null);
-        $step->validate(['name', 'step_type', 'step_order', 'extra_vars_template']);
-        if ($unencodable !== null) {
-            // After the errors of the other attributes, as for JSON text.
-            $step->addError('extra_vars_template', $unencodable);
-        }
-        if ($step->hasErrors()) {
-            return $this->firstError($step);
-        }
-
-        return $this->readTarget($step, $data);
-    }
-
-    /**
-     * Read the target of the step's type: the job template of a job step,
-     * the approval rule of an approval step. Other IDs are ignored, so a
-     * pause step never carries a job template that would restrict who may
-     * see the workflow.
-     *
-     * @param array<array-key, mixed> $data
-     */
-    private function readTarget(WorkflowStep $step, array $data): WorkflowStep|string
-    {
-        if ($step->step_type === WorkflowStep::TYPE_JOB) {
-            $step->job_template_id = self::toId($data['job_template_id'] ?? null);
-            return $step->job_template_id !== null ? $step : 'A job step needs job_template_id, the ID of a job template.';
-        }
-        if ($step->step_type === WorkflowStep::TYPE_APPROVAL) {
-            $step->approval_rule_id = self::toId($data['approval_rule_id'] ?? null);
-            return $step->approval_rule_id !== null ? $step : 'An approval step needs approval_rule_id, the ID of an approval rule.';
-        }
-
-        return $step;
+        return $refusal === null ? null : $this->error($refusal, 403);
     }
 
     /**
@@ -339,51 +336,71 @@ class WorkflowTemplatesController extends BaseApiController
 
     /**
      * Save the template and, when given, replace its steps, all or nothing.
-     * Returns why the write failed, or null.
+     * Steps are replaced through WorkflowStepChangeGuard: with the workflow
+     * locked, 403 for a caller who may not change them, 409 while a run is
+     * active, and 404 when the workflow was deleted meanwhile. Whether a new
+     * job step is gated was asked before (stepsPolicyError()): a rule that a
+     * job template gets in between is one it got right after, and locks the
+     * workflow from then on. Returns the error response, or null.
      *
      * @param list<WorkflowStep>|null $steps null keeps the current steps
+     * @return array{error: array<string, mixed>}|null
      */
-    private function persist(WorkflowTemplate $model, ?array $steps): ?string
+    private function persist(WorkflowTemplate $model, ?array $steps): ?array
     {
-        $transaction = \Yii::$app->db->beginTransaction();
+        if ($steps === null) {
+            return $model->save() ? null : $this->error(WorkflowStepsInput::firstError($model), 422);
+        }
+        /** @var WorkflowStepChangeGuard $guard */
+        $guard = \Yii::$app->get('workflowStepChangeGuard');
         try {
-            $error = $this->saveAll($model, $steps);
-        } catch (\Throwable $e) {
-            $transaction->rollBack();
-            throw $e;
+            $guard->change(
+                $model,
+                (int)$this->currentUserId(),
+                ApprovalRuleAssignmentPolicy::includesApprovalStep($steps),
+                fn () => $this->saveAll($model, $steps)
+            );
+        } catch (WorkflowStepChangeRefusedException $e) {
+            if ($e->status === WorkflowStepChangeRefusedException::NOT_FOUND) {
+                throw new NotFoundHttpException($e->getMessage(), 0, $e);
+            }
+            return $this->errorWithDetails($e->getMessage(), $e->status, $e->details);
         }
-        if ($error !== null) {
-            $transaction->rollBack();
-            return $error;
-        }
-        $transaction->commit();
 
         return null;
     }
 
     /**
-     * @param list<WorkflowStep>|null $steps
+     * Save the template, then replace its steps. A refusal (422) rolls back
+     * the guard's transaction.
+     *
+     * @param list<WorkflowStep> $steps
+     * @throws WorkflowStepChangeRefusedException when the template or a step cannot be saved
      */
-    private function saveAll(WorkflowTemplate $model, ?array $steps): ?string
+    private function saveAll(WorkflowTemplate $model, array $steps): void
     {
         if (!$model->save()) {
-            return $this->firstError($model);
-        }
-        if ($steps === null) {
-            return null;
+            throw new WorkflowStepChangeRefusedException(
+                WorkflowStepsInput::firstError($model),
+                WorkflowStepChangeRefusedException::INVALID
+            );
         }
         WorkflowStep::deleteAll(['workflow_template_id' => $model->id]);
         foreach ($steps as $index => $step) {
             $step->workflow_template_id = (int)$model->id;
             if (!$step->save()) {
-                return sprintf('steps[%d]: %s', $index, $this->firstError($step));
+                throw new WorkflowStepChangeRefusedException(
+                    sprintf('steps[%d]: %s', $index, WorkflowStepsInput::firstError($step)),
+                    WorkflowStepChangeRefusedException::INVALID
+                );
             }
         }
-
-        return null;
     }
 
     /**
+     * The audit entry names the job templates and the approval rules of the
+     * new steps, when steps were given.
+     *
      * @param list<WorkflowStep>|null $steps
      */
     private function audit(string $action, WorkflowTemplate $model, ?array $steps): void
@@ -392,6 +409,9 @@ class WorkflowTemplatesController extends BaseApiController
         if ($steps !== null) {
             $context['job_template_ids'] = self::presentIds(
                 array_map(static fn (WorkflowStep $s): ?int => $s->job_template_id, $steps)
+            );
+            $context['approval_rule_ids'] = self::presentIds(
+                array_map(static fn (WorkflowStep $s): ?int => $s->approval_rule_id, $steps)
             );
         }
         \Yii::$app->get('auditService')->log($action, 'workflow_template', $model->id, null, $context);
@@ -510,64 +530,11 @@ class WorkflowTemplatesController extends BaseApiController
         return $model;
     }
 
-    private function firstError(Model $model): string
-    {
-        foreach ($model->errors as $errors) {
-            return $errors[0] ?? 'Validation failed.';
-        }
-        return 'Validation failed.';
-    }
-
     private function workflows(): WorkflowAccessChecker
     {
         /** @var WorkflowAccessChecker $checker */
         $checker = \Yii::$app->get('workflowAccessChecker');
         return $checker;
-    }
-
-    /**
-     * A request value as text; anything that is not a scalar becomes empty
-     * and fails validation instead of raising a conversion error.
-     */
-    private static function text(mixed $value): string
-    {
-        return is_scalar($value) ? (string)$value : '';
-    }
-
-    /**
-     * Set the step's extra_vars_template from the request: JSON text as
-     * stored, or a JSON object, encoded. Returns why an object cannot be
-     * encoded, or null: 1e999 arrives as infinity, and a form-encoded body
-     * can carry text that is not UTF-8. The message is the launch's, which
-     * WorkflowStep::validateJson() gives such a number in JSON text too.
-     */
-    private static function readExtraVarsTemplate(WorkflowStep $step, mixed $value): ?string
-    {
-        if (!is_array($value)) {
-            $step->extra_vars_template = $value === null ? null : self::text($value);
-            return null;
-        }
-        $json = json_encode($value);
-        if ($json === false) {
-            return SurveySecrets::unencodable(JobLaunchSecrets::EXTRA_VARS, json_last_error());
-        }
-        $step->extra_vars_template = $json;
-
-        return null;
-    }
-
-    /**
-     * A positive ID from the request: integers and digit strings only, as
-     * filter_var() alone also takes true and 1.0 for 1.
-     */
-    private static function toId(mixed $value): ?int
-    {
-        if (!is_int($value) && !is_string($value)) {
-            return null;
-        }
-        $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-
-        return $id === false ? null : $id;
     }
 
     /**

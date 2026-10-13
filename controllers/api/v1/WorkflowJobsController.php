@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\WorkflowRunOperationFailure;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
@@ -11,6 +12,7 @@ use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
 use yii\data\ActiveDataProvider;
+use yii\db\Exception as DbException;
 use yii\web\NotFoundHttpException;
 
 /**
@@ -80,9 +82,13 @@ class WorkflowJobsController extends BaseApiController
      */
     public function actionCancel(int $id): array
     {
-        return $this->operate($id, static function (WorkflowExecutionService $service, WorkflowJob $run, int $userId): void {
-            $service->cancel($run, $userId);
-        });
+        return $this->operate(
+            $id,
+            WorkflowRunOperationFailure::CANCEL,
+            static function (WorkflowExecutionService $service, WorkflowJob $run, int $userId): void {
+                $service->cancel($run, $userId);
+            }
+        );
     }
 
     /**
@@ -90,9 +96,13 @@ class WorkflowJobsController extends BaseApiController
      */
     public function actionResume(int $id): array
     {
-        return $this->operate($id, static function (WorkflowExecutionService $service, WorkflowJob $run, int $userId): void {
-            $service->resume($run, $userId);
-        });
+        return $this->operate(
+            $id,
+            WorkflowRunOperationFailure::RESUME,
+            static function (WorkflowExecutionService $service, WorkflowJob $run, int $userId): void {
+                $service->resume($run, $userId);
+            }
+        );
     }
 
     /**
@@ -100,11 +110,13 @@ class WorkflowJobsController extends BaseApiController
      * every job step, before the run's state is looked at; 422 when the run
      * is in no state for it. A refusal by the service (access lost since the
      * check) names the job templates only to a caller who may see the run.
+     * A database error answers 500 with WorkflowRunOperationFailure's
+     * message for $name (CANCEL or RESUME), logged without values.
      *
      * @param callable(WorkflowExecutionService, WorkflowJob, int): void $operation
      * @return array{data: mixed}|array{error: array<string, mixed>}
      */
-    private function operate(int $id, callable $operation): array
+    private function operate(int $id, string $name, callable $operation): array
     {
         $run = $this->findModel($id);
         if (!$this->may($run, true)) {
@@ -121,6 +133,8 @@ class WorkflowJobsController extends BaseApiController
                 403,
                 $e->jobTemplateIds === [] ? [] : ['job_template_ids' => $e->jobTemplateIds]
             );
+        } catch (DbException | \PDOException $e) {
+            return $this->error(WorkflowRunOperationFailure::report($name, $id, $e), 500);
         } catch (\RuntimeException $e) {
             return $this->error($e->getMessage(), 422);
         }
@@ -163,14 +177,28 @@ class WorkflowJobsController extends BaseApiController
     }
 
     /**
+     * The run with its launch extra vars and its step executions.
+     *
+     * extra_vars: the vars the run was launched with, which every job step
+     * received, each password answer as $encrypted$; null when there were
+     * none. The sealed answers are never returned.
+     *
+     * Each execution names the step as it was when it ran (step_name,
+     * step_type); workflow_step_id is null once the step was removed from the
+     * workflow.
+     *
      * @return array<string, mixed>
      */
     private function serializeDetailed(WorkflowJob $m): array
     {
         $data = $this->serialize($m);
-        $data['steps'] = array_map(fn (WorkflowJobStep $s) => [
+        $extraVars = $m->launchExtraVars();
+        $data['extra_vars'] = $extraVars === [] ? null : (object)$extraVars;
+        $data['steps'] = array_map(static fn (WorkflowJobStep $s): array => [
             'id' => $s->id,
             'workflow_step_id' => $s->workflow_step_id,
+            'step_name' => $s->stepName(),
+            'step_type' => $s->stepType(),
             'job_id' => $s->job_id,
             'status' => $s->status,
             'started_at' => $s->started_at,

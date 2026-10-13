@@ -5,11 +5,18 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\WorkflowTemplate $model */
 /** @var bool $canOperate operator access to the project of every job step */
-/** @var array<int, string> $jobTemplateOptions job templates the user may operate */
-/** @var array<int, string> $approvalRuleOptions */
+/** @var array<int, string> $jobTemplateOptions job templates the user may operate; without an approval rule unless $mayAssignRules */
+/** @var array<int, string> $approvalRuleOptions offered only to users who may assign approval rules */
+/** @var bool $mayAssignRules the user may add approval steps and gated job steps (approval-rule.update) */
+/** @var string|null $stepsLock why the user may not change the steps (an approval step or a gated job step); null when they may */
+/** @var list<int> $activeRunIds the workflow's active runs, which lock its steps */
 /** @var app\models\User|null $triggerUser whom the inbound trigger runs as; null without a token */
+// The parameters are WorkflowTemplatePage::viewParams(), the route labels and notes its constants.
 
+use app\helpers\ConfirmHelper;
 use app\models\WorkflowStep;
+use app\services\WorkflowStepChangeGuard;
+use app\services\WorkflowTemplatePage;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
@@ -18,6 +25,9 @@ $steps = $model->steps;
 // Changing the workflow needs the RBAC permission and operator access to
 // every job step's project; the controller refuses everything else.
 $canChange = $canOperate && Yii::$app->user->can('workflow-template.update');
+// Its steps, moreover, only while no run is active, and, when it has an
+// approval step or a gated job step, only for admins.
+$canChangeSteps = $canChange && $stepsLock === null && $activeRunIds === [];
 
 // Map of step_id => "#order name" so operators see a human-readable label
 // when picking on_success / on_failure / on_always targets.
@@ -25,6 +35,18 @@ $stepOptions = [];
 foreach ($steps as $s) {
     $stepOptions[$s->id] = '#' . $s->step_order . ' ' . $s->name;
 }
+
+// A route as the steps table shows it; $whenNull is what a route left
+// empty means for the step.
+$routeLabel = static function (?int $target, string $whenNull) use ($stepOptions): string {
+    if ($target === WorkflowStep::END_WORKFLOW) {
+        return '<span class="text-muted">' . Html::encode(WorkflowTemplatePage::ROUTE_END) . '</span>';
+    }
+    if ($target !== null) {
+        return Html::encode($stepOptions[$target] ?? '#' . $target);
+    }
+    return '<span class="text-muted">' . Html::encode($whenNull) . '</span>';
+};
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -41,8 +63,14 @@ foreach ($steps as $s) {
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm']) ?>
         <?php endif; ?>
         <?php if ($canOperate && Yii::$app->user->can('workflow-template.delete')) : ?>
+            <?php
+            // Deleting the workflow cancels its active runs.
+            $deleteQuestion = $activeRunIds === []
+                ? 'Delete this workflow template?'
+                : sprintf('Delete this workflow template? Its %d running run(s) will be canceled.', count($activeRunIds));
+            ?>
             <form action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" method="post" style="display:inline"
-                  onsubmit="return confirm('Delete this workflow template?')">
+                  id="wf-delete-form" onsubmit="<?= ConfirmHelper::attribute($deleteQuestion) ?>">
                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
                 <button type="submit" class="btn btn-outline-danger btn-sm ms-1">Delete</button>
             </form>
@@ -70,6 +98,26 @@ foreach ($steps as $s) {
                 You may view this workflow. Changing or launching it needs operator access to the project of every job step.
             </div>
         <?php endif; ?>
+        <?php if ($canChange && $stepsLock !== null) : ?>
+            <div class="alert alert-secondary small" id="wf-approval-steps-locked-notice">
+                <?= Html::encode($stepsLock) ?>
+                <?= Html::encode(WorkflowTemplatePage::STEPS_LOCKED_NOTE) ?>
+            </div>
+        <?php endif; ?>
+        <?php if ($canChange && $activeRunIds !== []) : ?>
+            <?php
+            // The notice is RUNS_ACTIVE with each named run linked.
+            [$runsBefore, $runsAfter] = explode('%s', WorkflowStepChangeGuard::RUNS_ACTIVE, 2);
+            $runLinks = array_map(
+                static fn (int $runId): string => Html::a(Html::encode('#' . $runId), ['/workflow-job/view', 'id' => $runId]),
+                array_slice($activeRunIds, 0, WorkflowStepChangeGuard::RUN_LIST_LIMIT)
+            );
+            $moreRuns = count($activeRunIds) - count($runLinks);
+            ?>
+            <div class="alert alert-warning small" id="wf-active-runs-notice">
+                <?= Html::encode($runsBefore) ?><?= implode(', ', $runLinks) // xss-ok: Html::a() with encoded text?><?= $moreRuns > 0 ? Html::encode(sprintf(' and %d more', $moreRuns)) : '' ?><?= Html::encode($runsAfter) ?>
+            </div>
+        <?php endif; ?>
 
         <h4>Steps</h4>
         <?php if (empty($steps)) : ?>
@@ -84,7 +132,8 @@ foreach ($steps as $s) {
                         <th>Target</th>
                         <th>On Success</th>
                         <th>On Failure</th>
-                        <?php if ($canChange) : ?>
+                        <th>Always</th>
+                        <?php if ($canChangeSteps) : ?>
                         <th class="text-nowrap">Actions</th>
                         <?php endif; ?>
                     </tr>
@@ -114,25 +163,33 @@ foreach ($steps as $s) {
                                 —
                             <?php endif; ?>
                         </td>
-                        <td><?php
-                        if ($step->on_success_step_id === WorkflowStep::END_WORKFLOW) {
-                            echo '<span class="text-muted">end workflow</span>';
-                        } elseif ($step->on_success_step_id !== null) {
-                            echo Html::encode($stepOptions[$step->on_success_step_id] ?? '#' . $step->on_success_step_id);
-                        } else {
-                            echo '<span class="text-muted">→ next step</span>';
-                        }
-                        ?></td>
-                        <td><?php
-                        if ($step->on_failure_step_id === WorkflowStep::END_WORKFLOW) {
-                            echo '<span class="text-muted">end workflow</span>';
-                        } elseif ($step->on_failure_step_id !== null) {
-                            echo Html::encode($stepOptions[$step->on_failure_step_id] ?? '#' . $step->on_failure_step_id);
-                        } else {
-                            echo '<span class="text-muted">→ next step</span>';
-                        }
-                        ?></td>
-                        <?php if ($canChange) : ?>
+                        <?php
+                        // A rejected, timed-out or canceled approval ends the run as
+                        // failed unless On Failure names a step, and never takes the
+                        // Always route: for an approval step, and for a job step whose
+                        // job template has an approval rule (its job then never ran).
+                        // A gated job step's empty On Failure says both cases: a job
+                        // that ran and failed goes on with the next step.
+                        // An approval step's Always route (saved by older versions) is
+                        // taken only on approval; a gated job step's after its job ran.
+                        $isApproval = $step->step_type === WorkflowStep::TYPE_APPROVAL;
+                        $isGatedJob = $step->step_type === WorkflowStep::TYPE_JOB && $step->jobTemplate?->approval_rule_id !== null;
+                        ?>
+                        <td data-route="success"><?= $routeLabel($step->on_success_step_id, WorkflowTemplatePage::ROUTE_NEXT_STEP) // xss-ok: encoded by $routeLabel?></td>
+                        <?php if ($isGatedJob && $step->on_failure_step_id === null) : ?>
+                        <td data-route="failure"><span class="text-muted" title="<?= Html::encode(WorkflowTemplatePage::GATED_JOB_FAILURE_TITLE) ?>"><?= Html::encode(WorkflowTemplatePage::GATED_JOB_FAILURE_ROUTE) ?></span></td>
+                        <?php else : ?>
+                        <td data-route="failure"><?= $routeLabel($step->on_failure_step_id, $isApproval ? WorkflowTemplatePage::ROUTE_END_FAILED : WorkflowTemplatePage::ROUTE_NEXT_STEP) // xss-ok: encoded by $routeLabel?></td>
+                        <?php endif; ?>
+                        <td data-route="always">
+                            <?= $routeLabel($step->on_always_step_id, '—') // xss-ok: encoded by $routeLabel?>
+                            <?php if ($isApproval && $step->on_always_step_id !== null) : ?>
+                                <span class="text-muted small"><?= Html::encode(WorkflowTemplatePage::APPROVAL_ALWAYS_NOTE) ?></span>
+                            <?php elseif ($isGatedJob && $step->on_always_step_id !== null) : ?>
+                                <span class="text-muted small"><?= Html::encode(WorkflowTemplatePage::GATED_JOB_ALWAYS_NOTE) ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <?php if ($canChangeSteps) : ?>
                         <td class="text-nowrap">
                             <?= Html::beginForm(['move-step', 'id' => $model->id], 'post', ['class' => 'd-inline']) ?>
                                 <?= Html::hiddenInput('step_id', (string)$step->id) ?>
@@ -166,14 +223,22 @@ foreach ($steps as $s) {
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            <?php if ($canChangeSteps) : ?>
             <p class="form-text small mb-3">
                 Use ▲ / ▼ to reorder. Step numbers are auto-spaced (10, 20, 30…) so you can manually wedge a new step between two existing ones by typing any value in between.
             </p>
+            <?php endif; ?>
         <?php endif; ?>
 
-        <?php if ($canChange) : ?>
+        <?php if ($canChangeSteps) : ?>
             <h5 class="mt-4">Add Step</h5>
-            <?php $step = new WorkflowStep(); ?>
+            <?php
+            $step = new WorkflowStep();
+            // Approval steps are for admins: the controller refuses them from anyone else.
+            $typeOptions = $mayAssignRules
+                ? WorkflowStep::typeLabels()
+                : array_diff_key(WorkflowStep::typeLabels(), [WorkflowStep::TYPE_APPROVAL => true]);
+            ?>
             <?php $form = ActiveForm::begin([
                 'action' => ['add-step', 'id' => $model->id],
                 'id' => 'add-step-form',
@@ -187,7 +252,7 @@ foreach ($steps as $s) {
                 </div>
                 <div class="col-md-3">
                     <?= $form->field($step, 'step_type')->dropDownList(
-                        WorkflowStep::typeLabels(),
+                        $typeOptions,
                         ['id' => 'ws-step-type']
                     ) ?>
                 </div>
@@ -200,12 +265,21 @@ foreach ($steps as $s) {
             </div>
             <div class="row g-2" id="ws-target-job">
                 <div class="col-md-6">
+                    <?php
+                    // Gated job steps are for admins too: job templates with an approval
+                    // rule are offered to admins only, and the controller refuses them
+                    // from anyone else.
+                    ?>
                     <?= $form->field($step, 'job_template_id')->dropDownList(
                         $jobTemplateOptions,
                         ['prompt' => '— select a job template —']
-                    )->label('Job Template') ?>
+                    )->label('Job Template')->hint(
+                        $mayAssignRules ? false : Html::encode(WorkflowTemplatePage::GATED_TEMPLATES_HINT),
+                        ['id' => 'ws-gated-templates-hint']
+                    ) ?>
                 </div>
             </div>
+            <?php if ($mayAssignRules) : ?>
             <div class="row g-2" id="ws-target-approval" style="display:none">
                 <div class="col-md-6">
                     <?= $form->field($step, 'approval_rule_id')->dropDownList(
@@ -214,6 +288,7 @@ foreach ($steps as $s) {
                     )->label('Approval Rule') ?>
                 </div>
             </div>
+            <?php endif; ?>
             <?php
             // Build options with "next step" (NULL) as default and "end workflow" (-1) as explicit choice
             $branchOptions = [WorkflowStep::END_WORKFLOW => '— end workflow —'] + $stepOptions;
@@ -221,9 +296,12 @@ foreach ($steps as $s) {
             <div id="ws-routing-explainer" class="form-text small mb-1">
                 <span id="ws-routing-help-job" class="d-none">
                     <strong>Job step:</strong> success = exit code 0. Failure = any non-zero exit, timeout, or unreachable host. <em>Always</em> overrides both.
+                    If the job template has an approval rule and the approval is rejected, times out or is canceled, the job does not run:
+                    then only <em>On Failure</em> is followed (left empty, the run ends as failed), and <em>Always</em> is not.
                 </span>
                 <span id="ws-routing-help-approval" class="d-none">
-                    <strong>Approval step:</strong> success = approved, failure = rejected. <em>Always</em> overrides both (rarely useful here — skips the decision).
+                    <strong>Approval step:</strong> success = approved; failure = rejected, timed out or canceled.
+                    After a failure the run ends as failed unless <em>On Failure</em> names a step. An approval step has no <em>Always</em> route: it would continue past a rejection.
                 </span>
                 <span id="ws-routing-help-pause" class="d-none">
                     <strong>Pause step:</strong> pauses only resume via the operator clicking <em>Resume</em>, which counts as success — so only the "Next step" (on-success) field applies. <em>On Failure</em> and <em>Always</em> are ignored for pause.
@@ -236,7 +314,7 @@ foreach ($steps as $s) {
                         ['prompt' => '— next step (default) —']
                     )->label('On Success → go to') ?>
                 </div>
-                <div class="col-md-4" id="ws-route-failure">
+                <div class="col-md-4" id="ws-route-failure" data-prompt-default="— next step (default) —" data-prompt-approval="— end workflow as failed (default) —">
                     <?= $form->field($step, 'on_failure_step_id')->dropDownList(
                         $branchOptions,
                         ['prompt' => '— next step (default) —']
@@ -255,17 +333,41 @@ foreach ($steps as $s) {
             <?php ActiveForm::end(); ?>
             <script>
             (function () {
+                // Hide a routing field, and disable its select so a value chosen
+                // before the type changed is not posted.
+                function showRoute(id, visible) {
+                    var col = document.getElementById(id);
+                    if (!col) { return; }
+                    col.style.display = visible ? '' : 'none';
+                    var select = col.querySelector('select');
+                    if (select) { select.disabled = !visible; }
+                }
+
                 function syncTargets() {
                     var type = document.getElementById('ws-step-type').value;
                     var isPause = type === 'pause';
-                    document.getElementById('ws-target-job').style.display = type === 'job' ? '' : 'none';
-                    document.getElementById('ws-target-approval').style.display = type === 'approval' ? '' : 'none';
+                    var isApproval = type === 'approval';
+                    // The target of another step type is disabled as well as
+                    // hidden: the browser neither validates nor posts it. A
+                    // hidden but enabled select kept Add Step from submitting
+                    // with its own required error, which nobody could see.
+                    showRoute('ws-target-job', type === 'job');
+                    // Only rendered for users who may add approval steps.
+                    showRoute('ws-target-approval', isApproval);
 
                     // Pause steps only advance via on_success (resume counts as success).
                     // on_failure and on_always are dead code for pauses — hide them to
-                    // keep the form honest.
-                    document.getElementById('ws-route-failure').style.display = isPause ? 'none' : '';
-                    document.getElementById('ws-route-always').style.display = isPause ? 'none' : '';
+                    // keep the form honest. An approval step has no Always route: the
+                    // server refuses one.
+                    showRoute('ws-route-failure', !isPause);
+                    showRoute('ws-route-always', !isPause && !isApproval);
+
+                    // An approval step without an On Failure route ends the run as failed.
+                    var failureCol = document.getElementById('ws-route-failure');
+                    var failurePrompt = failureCol ? failureCol.querySelector('option[value=""]') : null;
+                    if (failurePrompt) {
+                        failurePrompt.textContent = failureCol.getAttribute(isApproval ? 'data-prompt-approval' : 'data-prompt-default');
+                    }
 
                     // When pause is active, expand the remaining field to full width
                     // and swap the label from "On Success → go to" to "Next step →".
@@ -346,6 +448,10 @@ foreach ($steps as $s) {
                         // reaches job templates, so a workflow token there is a 404.
                         'deprecatedUrlForms' => ['?token=…'],
                     ]) ?>
+                    <p class="mt-2 mb-0 small text-muted" id="wf-trigger-extra-vars-note">
+                        The body's <code>extra_vars</code> reach every job step of the run: they win over a job template's own
+                        extra vars, and a step's variable mapping wins over them.
+                    </p>
                 <?php else : ?>
                     <p class="mb-0 text-muted">No trigger token configured. Generate one to allow external systems to launch this workflow via HTTP POST.</p>
                 <?php endif; ?>

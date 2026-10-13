@@ -8,6 +8,7 @@ use app\commands\E2eTeardownHelper;
 use app\commands\E2eVaultEdgeSeeder;
 use app\commands\E2eVaultScanSeeder;
 use app\models\ApprovalRequest;
+use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Inventory;
 use app\models\Job;
@@ -18,6 +19,7 @@ use app\models\RunnerGroup;
 use app\models\Schedule;
 use app\models\User;
 use app\models\WorkflowJob;
+use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\tests\integration\DbTestCase;
 use yii\base\Event;
@@ -177,6 +179,71 @@ class E2eTeardownHelperTest extends DbTestCase
         $this->assertNotNull(User::findOne($owner->id), 'users without the prefix stay');
         $this->assertNotNull(JobTemplate::findOne($ownTemplate->id), 'rows of other users stay');
         $this->assertNotNull(Project::findOne($ownTemplate->project_id));
+    }
+
+    /**
+     * Regression: approval rules went before the job templates and workflow
+     * steps that use them. Since m000083 those references RESTRICT the
+     * delete of a rule, so a rule an e2e template used stayed, and with it
+     * the e2e user who created it.
+     */
+    public function testDeletesApprovalRulesAfterTheTemplatesAndStepsThatUseThem(): void
+    {
+        $admin = $this->e2eUser('admin', 'admin');
+        $rule = $this->createApprovalRule((int)$admin->id);
+        $rule->name = $this->prefix . 'approval-rule';
+        $rule->save(false);
+        $template = $this->templateOf((int)$admin->id);
+        $template->name = $this->prefix . 'gated-template';
+        $template->approval_rule_id = (int)$rule->id;
+        $template->save(false);
+        $workflow = $this->createWorkflowTemplate((int)$admin->id);
+        $workflow->name = $this->prefix . 'approval-workflow';
+        $workflow->save(false);
+        $step = $this->createWorkflowStep((int)$workflow->id, 0, WorkflowStep::TYPE_APPROVAL, null, (int)$rule->id);
+        // Created in specs under other names: they go with the rows of their creator.
+        $unnamedRule = $this->createApprovalRule((int)$admin->id);
+        $unnamedTemplate = $this->templateOf((int)$admin->id);
+        $unnamedTemplate->approval_rule_id = (int)$unnamedRule->id;
+        $unnamedTemplate->save(false);
+        $softDeleted = $this->templateOf((int)$admin->id);
+        $softDeleted->approval_rule_id = (int)$unnamedRule->id;
+        $softDeleted->save(false);
+        $softDeleted->softDelete();
+
+        $this->assertSame([], $this->runTeardown());
+
+        $this->assertNull(ApprovalRule::findOne($rule->id));
+        $this->assertNull(ApprovalRule::findOne($unnamedRule->id));
+        $this->assertNull(WorkflowStep::findOne($step->id));
+        foreach ([$template, $unnamedTemplate, $softDeleted] as $gated) {
+            $this->assertNull(JobTemplate::findWithDeleted()->where(['id' => $gated->id])->one());
+        }
+        $this->assertNull(User::findOne($admin->id));
+    }
+
+    /**
+     * A rule that a template of another user still uses cannot go, and
+     * neither can its creator: reported, not hidden.
+     */
+    public function testReportsARuleThatATemplateOfAnotherUserStillUses(): void
+    {
+        $owner = $this->createUser('owner');
+        $admin = $this->e2eUser('admin', 'admin');
+        $rule = $this->createApprovalRule((int)$admin->id);
+        $rule->name = $this->prefix . 'approval-rule';
+        $rule->save(false);
+        $template = $this->templateOf((int)$owner->id);
+        $template->approval_rule_id = (int)$rule->id;
+        $template->save(false);
+
+        $problems = $this->runTeardown();
+
+        $this->assertNotNull(ApprovalRule::findOne($rule->id));
+        $this->assertNotNull(User::findOne($admin->id));
+        $this->assertContainsMatching("/^Failed deleting approval_rule '{$this->prefix}approval-rule': .*1451/", $problems);
+        $this->assertContainsMatching('/^Failed deleting the approval_rule rows of e2e users: .*1451/', $problems);
+        $this->assertContains("1 approval_rule row(s) named like '{$this->prefix}' are left.", $problems);
     }
 
     public function testHandsSharedRunnerGroupsOverToAnotherSuperadmin(): void

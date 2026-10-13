@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace app\services;
 
-use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobLog;
@@ -18,12 +17,57 @@ use yii\base\Component;
 /**
  * Handles job completion transitions, audit logging, webhooks, and notifications.
  * Shared by the runner API and any other execution path.
+ *
+ * complete(), completeTimedOut() and failBeforeExecution() end a job with
+ * one conditional UPDATE, only from a status that has not finished (pending,
+ * queued, running, pending_approval), and never from the caller's model:
+ * the runner API and the claim load the job before they report, and a
+ * cancel (by an operator, a template delete or a workflow cancel) or the
+ * stale-job reclaim can commit in between. The first writer wins. When the job had finished already the report changes
+ * nothing: no audit entry, webhook, notification or workflow advance, only a
+ * "... ignored." line in the job log (none for a failure before execution).
+ * The line that explains a failure (no host matched, the reason a claimed
+ * job cannot run) is written in the same transaction as the status, so the
+ * two show together.
  */
 class JobCompletionService extends Component
 {
+    /**
+     * Job log line for a runner's completion report that came after the job
+     * had finished. sprintf(): the reported exit code, the job's status.
+     */
+    public const LATE_COMPLETION = 'Runner reported completion (exit_code=%d) after job was already '
+        . 'in terminal status "%s" — ignored.';
+
+    /**
+     * Job log line for a runner's timeout report that came after the job had
+     * finished. sprintf(): the job's status.
+     */
+    public const LATE_TIMEOUT = 'Runner reported timeout after job was already in terminal status "%s" — ignored.';
+
+    /** Job log line for a playbook that exited 0 without running against any host. */
+    public const NO_HOST_MATCHED = "Job did not execute against any host.\n"
+        . "The playbook's `hosts:` pattern did not match any entries in the inventory.\n"
+        . 'Check that the inventory contains the hosts/groups the playbook targets.';
+
     public function complete(Job $job, int $exitCode, bool $hasChanges = false): void
     {
-        if ($job->isFinished()) {
+        // ansible-playbook exits 0 when the playbook's `hosts:` pattern
+        // matches nothing in the inventory — it prints a "Could not match
+        // supplied host pattern" warning, produces an empty PLAY RECAP,
+        // and returns cleanly. From an operator's perspective this is a
+        // misconfiguration, not a success: nothing ran. Surface it as a
+        // failure so the UI doesn't silently lie about what happened.
+        $noHostMatched = $exitCode === 0 && $this->didNothing($job);
+        $outcome = [
+            'exit_code' => $exitCode,
+            'status' => $exitCode === 0 && !$noHostMatched ? Job::STATUS_SUCCEEDED : Job::STATUS_FAILED,
+        ];
+        if ($hasChanges) {
+            $outcome['has_changes'] = 1;
+        }
+
+        if (!$this->transition($job, $outcome, $noHostMatched ? self::NO_HOST_MATCHED : null)) {
             // Runner races with an earlier terminal decision — operator cancel,
             // server-side timeout, approval rejection. Honouring a late
             // complete() would overwrite that decision (e.g. resurrect a
@@ -31,56 +75,12 @@ class JobCompletionService extends Component
             // webhooks/notifications that the cancel path already fired.
             // Keep the prior status/finished_at/audit; leave a forensic log
             // line so operators can see the runner eventually reported back.
-            $this->appendSystemLog(
-                $job,
-                "Runner reported completion (exit_code={$exitCode}) after job "
-                    . "was already in terminal status \"{$job->status}\" — ignored.",
-            );
+            $this->appendSystemLog($job, sprintf(self::LATE_COMPLETION, $exitCode, $job->status));
             return;
         }
 
-        $job->exit_code = $exitCode;
-        $job->finished_at = time();
-        $job->status = $exitCode === 0 ? Job::STATUS_SUCCEEDED : Job::STATUS_FAILED;
-        if ($hasChanges) {
-            $job->has_changes = 1;
-        }
-
-        // ansible-playbook exits 0 when the playbook's `hosts:` pattern
-        // matches nothing in the inventory — it prints a "Could not match
-        // supplied host pattern" warning, produces an empty PLAY RECAP,
-        // and returns cleanly. From an operator's perspective this is a
-        // misconfiguration, not a success: nothing ran. Surface it as a
-        // failure so the UI doesn't silently lie about what happened.
-        if ($job->status === Job::STATUS_SUCCEEDED && $this->didNothing($job)) {
-            $job->status = Job::STATUS_FAILED;
-            $this->appendSystemLog(
-                $job,
-                "Job did not execute against any host.\n"
-                    . "The playbook's `hosts:` pattern did not match any entries in the inventory.\n"
-                    . "Check that the inventory contains the hosts/groups the playbook targets."
-            );
-        }
         $this->appendVerbosityNote($job);
-        $job->save(false);
-
-        \Yii::$app->get('auditService')->log(
-            AuditService::ACTION_JOB_FINISHED,
-            'job',
-            $job->id,
-            null,
-            ['exit_code' => $exitCode, 'status' => $job->status]
-        );
-
-        /** @var WebhookService $ws */
-        $ws = \Yii::$app->get('webhookService');
-        $event = $job->status === Job::STATUS_SUCCEEDED
-            ? Webhook::EVENT_JOB_SUCCESS
-            : Webhook::EVENT_JOB_FAILURE;
-        $ws->dispatch($event, $job);
-
-        $this->dispatchNotifications($job);
-        $this->advanceWorkflow($job);
+        $this->announceFinished($job, ['exit_code' => $exitCode, 'status' => $job->status]);
     }
 
     /**
@@ -114,9 +114,10 @@ class JobCompletionService extends Component
     /**
      * When the claim lowered the job's verbosity for a runner that cannot
      * take encrypted survey answers ({@see JobClaimSecrets}), say so at the
-     * end of the log. Never at claim time: a line written then would sort
-     * among the runner's first chunks. A failure is logged and ignored, so
-     * the job still finishes.
+     * end of the log, once the job has finished. Never at claim time: a line
+     * written then would sort among the runner's first chunks. A failure is
+     * logged and ignored, so the job still finishes; for that it is written
+     * after the status, outside its transaction.
      */
     private function appendVerbosityNote(Job $job): void
     {
@@ -135,126 +136,126 @@ class JobCompletionService extends Component
 
     public function completeTimedOut(Job $job): void
     {
-        if ($job->isFinished()) {
+        if (!$this->transition($job, ['exit_code' => -1, 'status' => Job::STATUS_TIMED_OUT], null)) {
             // Same race-guard as complete(): an operator cancel / approval
             // rejection must not be overwritten by the runner's belated
             // timeout report.
-            $this->appendSystemLog(
-                $job,
-                "Runner reported timeout after job was already in terminal status "
-                    . "\"{$job->status}\" — ignored.",
-            );
+            $this->appendSystemLog($job, sprintf(self::LATE_TIMEOUT, $job->status));
             return;
         }
 
         $this->appendVerbosityNote($job);
-        $this->finishUnsuccessfully($job, Job::STATUS_TIMED_OUT, []);
+        $this->announceFinished($job, ['exit_code' => -1, 'status' => Job::STATUS_TIMED_OUT]);
     }
 
     /**
      * The job was claimed but cannot run, for example because one of its
      * credentials was deleted or cannot be decrypted. Ends it as failed,
      * with the reason in the job log, so it never stays "running" and
-     * workflows, webhooks and notifications see the failure.
+     * workflows, webhooks and notifications see the failure. A job that
+     * finished meanwhile (a cancel came first) keeps its outcome, and
+     * nothing is written.
      */
     public function failBeforeExecution(Job $job, string $reason): void
     {
-        if ($job->isFinished()) {
+        if (!$this->transition($job, ['exit_code' => -1, 'status' => Job::STATUS_FAILED], $reason)) {
             return;
         }
 
-        $this->appendSystemLog($job, $reason);
-        $this->finishUnsuccessfully($job, Job::STATUS_FAILED, ['reason' => 'pre_execution_failure']);
+        $this->announceFinished($job, [
+            'exit_code' => -1,
+            'status' => Job::STATUS_FAILED,
+            'reason' => 'pre_execution_failure',
+        ]);
     }
 
     /**
-     * Terminal transition for jobs that end without the runner's exit code:
-     * exit code -1, audit, failure webhook, notifications, workflow advance.
+     * The terminal transition: one conditional UPDATE that writes $outcome
+     * (status, exit_code, optionally has_changes) with finished_at, only
+     * while the job has not finished, and in the same transaction the job
+     * log line $explanation (null: none). $job is refreshed either way, so
+     * it shows the status the job has now.
      *
-     * @param array<string, mixed> $auditExtra
+     * @param array<string, int|string> $outcome
+     * @return bool whether this call ended the job; false when it had
+     *     finished already, and nothing was written
      */
-    private function finishUnsuccessfully(Job $job, string $status, array $auditExtra): void
+    protected function transition(Job $job, array $outcome, ?string $explanation): bool
     {
-        $job->exit_code = -1;
-        $job->finished_at = time();
-        $job->status = $status;
-        $job->save(false);
+        $jobId = (int)$job->id;
+        $now = time();
+        /** @var bool $ended */
+        $ended = Job::getDb()->transaction(function () use ($job, $jobId, $outcome, $explanation, $now): bool {
+            $rows = Job::updateAll(
+                $outcome + ['finished_at' => $now, 'updated_at' => $now],
+                ['id' => $jobId, 'status' => [...Job::waitingStatuses(), Job::STATUS_RUNNING]]
+            );
+            if ($rows !== 1) {
+                return false;
+            }
+            if ($explanation !== null) {
+                $this->appendSystemLog($job, $explanation);
+            }
 
+            return true;
+        });
+        $job->refresh();
+
+        return $ended;
+    }
+
+    /**
+     * After this call ended the job: the job.finished audit entry, the
+     * success or failure webhook, the notification, and for the job of a
+     * workflow step the workflow advance.
+     *
+     * @param array<string, int|string> $auditContext
+     */
+    private function announceFinished(Job $job, array $auditContext): void
+    {
         \Yii::$app->get('auditService')->log(
             AuditService::ACTION_JOB_FINISHED,
             'job',
             $job->id,
             null,
-            ['exit_code' => -1, 'status' => $status] + $auditExtra
+            $auditContext
         );
 
         /** @var WebhookService $ws */
         $ws = \Yii::$app->get('webhookService');
-        $ws->dispatch(Webhook::EVENT_JOB_FAILURE, $job);
+        $ws->dispatch(
+            $job->status === Job::STATUS_SUCCEEDED ? Webhook::EVENT_JOB_SUCCESS : Webhook::EVENT_JOB_FAILURE,
+            $job
+        );
 
         $this->dispatchNotifications($job);
-        $this->advanceWorkflow($job);
+
+        if (WorkflowJobStep::find()->where(['job_id' => $job->id])->exists()) {
+            /** @var WorkflowExecutionService $wes */
+            $wes = \Yii::$app->get('workflowExecutionService');
+            $wes->onChildJobCompleted($job);
+        }
     }
 
     /**
-     * Operator-initiated cancel. Single source of truth shared by the web
-     * controller and the API controller — both used to flip Job.status by
-     * hand and skip the workflow-advance hook, which left WorkflowJobSteps
-     * stuck on STATUS_RUNNING when their child job was canceled by hand.
+     * Operator-initiated cancel, kept for its callers: it is
+     * JobCancellationService::cancel() with REASON_OPERATOR, which the web
+     * and API controllers call themselves.
      *
-     * Treats canceled child jobs as "failed" for workflow routing — the
-     * step's on_failure target picks up next; if there's no on_failure
-     * route the workflow itself completes as failed/canceled. Mirrors what
-     * complete()/completeTimedOut() already do for the runner-side paths.
+     * The cancel is a conditional transition, so a job that finished
+     * meanwhile keeps its outcome even when $job is stale (first writer
+     * wins), and it closes the job's pending approval request in the same
+     * transaction. A canceled child job still moves its workflow step out
+     * of running: the step fails and the run follows its route.
+     *
+     * @return bool whether this call canceled the job; false when it had finished already
      */
-    public function cancel(Job $job, ?int $cancelerUserId = null): void
+    public function cancel(Job $job, ?int $cancelerUserId = null): bool
     {
-        if ($job->isFinished()) {
-            // Defensive: a double-cancel race or a cancel-after-success
-            // shouldn't tear down the previous terminal decision. The
-            // first writer wins.
-            return;
-        }
+        /** @var JobCancellationService $cancellation */
+        $cancellation = \Yii::$app->get('jobCancellationService');
 
-        $job->status = Job::STATUS_CANCELED;
-        $job->finished_at = time();
-        $job->save(false);
-
-        \Yii::$app->get('auditService')->log(
-            AuditLog::ACTION_JOB_CANCELED,
-            'job',
-            $job->id,
-            $cancelerUserId,
-        );
-
-        /** @var NotificationDispatcher $dispatcher */
-        $dispatcher = \Yii::$app->get('notificationDispatcher');
-        $dispatcher->dispatch(
-            NotificationTemplate::EVENT_JOB_CANCELED,
-            JobPayloadBuilder::build($job),
-        );
-
-        // Critical: a canceled child job must move its WorkflowJobStep out
-        // of RUNNING. Without this the workflow-job view shows the parent
-        // workflow stuck on "running" while the actual child job is
-        // canceled — the regression that prompted this method to exist.
-        $this->advanceWorkflow($job);
-    }
-
-    /**
-     * If this job belongs to a workflow step, advance the workflow.
-     */
-    private function advanceWorkflow(Job $job): void
-    {
-        /** @var WorkflowJobStep|null $wjs */
-        $wjs = WorkflowJobStep::findOne(['job_id' => $job->id]);
-        if ($wjs === null) {
-            return;
-        }
-
-        /** @var WorkflowExecutionService $wes */
-        $wes = \Yii::$app->get('workflowExecutionService');
-        $wes->onChildJobCompleted($job);
+        return $cancellation->cancel($job, $cancelerUserId, JobCancellationService::REASON_OPERATOR);
     }
 
     private function dispatchNotifications(Job $job): void

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openJobTemplate } from '../../lib/triggers';
 
 // Fixtures from commands/E2eCredentialUsageSeeder.php
 const TEMPLATE = 'e2e-cred-usage-template';
@@ -8,8 +9,9 @@ const REMOVED = 'e2e-cred-removed-key';
 
 test.describe('Job credentials', () => {
   test('the job page lists the credentials as launched, including deleted ones', async ({ page }) => {
-    await page.goto('/job-template/index?sort=-id');
-    await page.locator('#template-table tbody tr', { hasText: TEMPLATE }).first().locator('a', { hasText: TEMPLATE }).click();
+    // Pages through the template list: templates created after the fixture
+    // push it off the first page of the list sorted newest first.
+    await openJobTemplate(page, TEMPLATE);
     await page.locator('a[href*="/job/view"]').first().click();
 
     const items = page.locator('#job-credentials li');

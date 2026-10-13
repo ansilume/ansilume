@@ -6,24 +6,53 @@ namespace app\controllers;
 
 use app\components\JobTemplateWarnings;
 use app\components\WebLaunchOverrides;
-use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Inventory;
+use app\models\Job;
 use app\models\JobTemplate;
 use app\models\Project;
 use app\models\RunnerGroup;
 use app\models\User;
+use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\GatedJobTemplateLock;
+use app\services\JobLaunchInput;
 use app\services\JobLaunchService;
+use app\services\JobTemplateDeletionService;
+use app\services\JobTemplateRuleAssignment;
 use app\services\LintService;
 use app\services\TriggerTokenService;
 use app\controllers\traits\TeamScopingTrait;
 use yii\data\ActiveDataProvider;
+use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 class JobTemplateController extends BaseController
 {
     use TeamScopingTrait;
+
+    /** sprintf(): the job ID. */
+    public const FLASH_QUEUED = 'Job #%d queued.';
+
+    /** A launch of a template with an approval rule; sprintf(): the job ID. */
+    public const FLASH_WAITING_FOR_APPROVAL = 'Job #%d is waiting for approval.';
+
+    /**
+     * sprintf(): why the launch was refused or failed, as
+     * JobLaunchService::failureReason() says it (without the
+     * "Job launch failed: " of JobLaunchService's own failures).
+     */
+    public const FLASH_LAUNCH_FAILED = 'Launch failed: %s';
+
+    /** sprintf(): the template's name, the waiting jobs canceled, the schedules disabled. */
+    public const FLASH_DELETED = 'Template "%s" deleted: %d waiting job(s) canceled, %d schedule(s) disabled.';
+
+    /**
+     * Posted by an edit form that did not offer the additional credentials
+     * (a gated template, GatedJobTemplateLock): without credential_ids, the
+     * stored ones stay. Without this field, no credential_ids means none.
+     */
+    public const KEEP_CREDENTIALS = 'keep_credentials';
 
     /**
      * @return array<int, array<string, mixed>>
@@ -117,28 +146,43 @@ class JobTemplateController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildView($model->project_id);
+        $canChange = $this->mayChange($model);
         return $this->render('view', [
             'model' => $model,
             'attachedCredentials' => $this->credentialService()->describe($model),
             'warnings' => JobTemplateWarnings::forTemplate($model),
             // Only users who may change the template see its trigger card
             // and whom the trigger runs as.
-            'canChange' => $this->mayChange($model),
+            'canChange' => $canChange,
+            // Users who may change the template, but not what it runs (a
+            // gated template, no approval-rule.update), are told so.
+            'changeLocked' => $canChange && (new GatedJobTemplateLock())->appliesTo((int)$this->currentUserId(), $model),
+            // Everyone sees the template's approval rule; a link to it only
+            // for users who may open rules.
+            'canViewRules' => $this->userCan('approval-rule.view'),
         ]);
     }
 
     /**
      * Whether the user may change the template, as generating or revoking
-     * its trigger token needs: job-template.update (superadmins hold every
-     * permission, as in the access rules) and operator access to its project.
+     * its trigger token needs: job-template.update and operator access to
+     * its project.
      */
     private function mayChange(JobTemplate $model): bool
     {
-        $identity = \Yii::$app->user->identity;
-        $superadmin = $identity instanceof User && (bool)$identity->is_superadmin;
-
-        return ($superadmin || \Yii::$app->user->can('job-template.update'))
+        return $this->userCan('job-template.update')
             && $this->checker()->canOperateChildResource((int)$this->currentUserId(), $model->project_id);
+    }
+
+    /**
+     * Whether the signed-in user holds $permission; superadmins hold every
+     * permission, as in the access rules.
+     */
+    private function userCan(string $permission): bool
+    {
+        $identity = \Yii::$app->user->identity;
+
+        return ($identity instanceof User && (bool)$identity->is_superadmin) || \Yii::$app->user->can($permission);
     }
 
     public function actionCreate(?int $project_id = null, ?string $playbook = null): Response|string
@@ -160,18 +204,28 @@ class JobTemplateController extends BaseController
             $this->requireChildOperate($model->project_id);
             $this->restrictInventories($model);
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
-            if ($this->credentialService()->saveWithCredentials($model, $this->postedCredentialIds())) {
+            $ruleAudit = $this->applySubmittedRule($model, null);
+            $credentialIds = $this->postedCredentialIds();
+            if ($this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId())) {
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
                 $lintService->runForTemplate($model);
                 $this->session()->setFlash('success', "Template \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
-            return $this->render('form', $this->formData($model, $this->postedCredentialIds()));
+            return $this->render('form', $this->formData($model, $credentialIds));
         }
         return $this->render('form', $this->formData($model));
     }
 
+    /**
+     * Only admins (approval-rule.update) change the approval rule, and what
+     * a gated template runs (GatedJobTemplateLock): for everyone else a
+     * change of the rule (ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED) or
+     * of a gated template's columns other than name and description, or of
+     * its credential list (GatedJobTemplateLock::CHANGE_REFUSED), is a 403,
+     * and nothing is saved.
+     */
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
@@ -180,27 +234,59 @@ class JobTemplateController extends BaseController
             // The project it moves to as well, not only the one it comes from.
             $this->requireChildOperate($model->project_id);
             $this->restrictInventories($model);
-            if ($this->credentialService()->saveWithCredentials($model, $this->postedCredentialIds())) {
+            $ruleAudit = $this->applySubmittedRule($model, ApprovalRuleAssignmentPolicy::storedRuleId($model));
+            $credentialIds = $this->postedCredentialIds();
+            if ($this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId())) {
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
                 $lintService->runForTemplate($model);
                 $this->session()->setFlash('success', "Template \"{$model->name}\" updated.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
-            return $this->render('form', $this->formData($model, $this->postedCredentialIds()));
+            if (GatedJobTemplateLock::refused($model)) {
+                throw new ForbiddenHttpException(GatedJobTemplateLock::CHANGE_REFUSED);
+            }
+            return $this->render('form', $this->formData($model, $credentialIds));
         }
         return $this->render('form', $this->formData($model));
     }
 
     /**
-     * Checked additional credentials, in form order. No checkbox checked
-     * means no additional credentials.
+     * Apply the submitted approval rule (JobTemplate[approval_rule_id]) to
+     * $model, when the form submitted one: only users who may assign rules
+     * (approval-rule.update) may change it, also on a new template.
+     * $baseline is the rule the template has (null for a new one).
      *
-     * @return list<mixed>
+     * @return array<string, mixed> the audit context of the rule change, if any
+     * @throws ForbiddenHttpException with the refusal, before anything is saved
      */
-    private function postedCredentialIds(): array
+    private function applySubmittedRule(JobTemplate $model, ?int $baseline): array
     {
-        return array_values((array)\Yii::$app->request->post('credential_ids', []));
+        $posted = \Yii::$app->request->post($model->formName(), []);
+        $assignment = new JobTemplateRuleAssignment();
+        $refusal = $assignment->apply($model, is_array($posted) ? $posted : [], (int)$this->currentUserId(), $baseline);
+        if ($refusal !== null) {
+            throw new ForbiddenHttpException($refusal);
+        }
+
+        return $assignment->auditContext($model, $baseline);
+    }
+
+    /**
+     * Checked additional credentials, in form order. No checkbox checked
+     * means no additional credentials; null (keep the stored ones) when the
+     * form did not offer them (KEEP_CREDENTIALS) and none were posted.
+     *
+     * @return list<mixed>|null
+     */
+    private function postedCredentialIds(): ?array
+    {
+        $posted = \Yii::$app->request->post('credential_ids');
+        if ($posted === null && \Yii::$app->request->post(self::KEEP_CREDENTIALS) !== null) {
+            return null;
+        }
+
+        return array_values((array)($posted ?? []));
     }
 
     /**
@@ -232,14 +318,26 @@ class JobTemplateController extends BaseController
         return $service;
     }
 
+    /**
+     * Soft-delete the template (JobTemplateDeletionService): its enabled
+     * schedules are disabled and its waiting jobs canceled; the flash
+     * reports both counts.
+     */
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        $name = $model->name;
-        $model->softDelete();
-        \Yii::$app->get('auditService')->log(AuditLog::ACTION_TEMPLATE_DELETED, 'job_template', $id, null, ['name' => $name]);
-        $this->session()->setFlash('success', "Template \"{$name}\" deleted.");
+        /** @var JobTemplateDeletionService $deletion */
+        $deletion = \Yii::$app->get('jobTemplateDeletionService');
+        $result = $deletion->delete($model, $this->currentUserId(), JobTemplateDeletionService::SOURCE_WEB);
+        if (!$result['deleted']) {
+            // Another request deleted it first.
+            throw new NotFoundHttpException("Job template #{$id} not found.");
+        }
+        $this->session()->setFlash(
+            'success',
+            sprintf(self::FLASH_DELETED, $model->name, $result['canceled_jobs'], $result['disabled_schedules'])
+        );
         return $this->redirect(['index']);
     }
 
@@ -258,6 +356,10 @@ class JobTemplateController extends BaseController
      * Audit: emits a plain ACTION_TEMPLATE_CREATED event with
      * meta.cloned_from pointing at the source template's id and name,
      * so lineage stays discoverable without a dedicated event type.
+     *
+     * The clone keeps the source's approval rule, for every user who may
+     * clone: copying is not assigning, and dropping the rule would create
+     * an ungated twin. The audit entry names the rule (approval_rule).
      */
     public function actionClone(int $id): Response
     {
@@ -295,7 +397,7 @@ class JobTemplateController extends BaseController
         $cloned = $this->credentialService()->copyWithCredentials($clone, $source, [
             'cloned_from' => $source->id,
             'cloned_from_name' => $source->name,
-        ]);
+        ] + (new JobTemplateRuleAssignment())->auditContext($clone, null));
         if (!$cloned) {
             $this->session()->setFlash('danger', 'Clone failed: ' . implode(' ', $clone->getFirstErrors()) . ' Fix the source template first.');
             return $this->redirect(['view', 'id' => $source->id]);
@@ -329,10 +431,12 @@ class JobTemplateController extends BaseController
     }
 
     /**
-     * Duplicate every job_template_credential row from $sourceId onto
-     * $cloneId, preserving sort_order. The primary credential_id on the
-     * clone was already set via the attribute copy — these are the
-     * additional attachments.
+     * GET shows the launch form; POST launches. A job of a template with an
+     * approval rule waits for approval (an info flash says so); a refused
+     * launch (JobLaunchRejectedException, such as too few eligible
+     * approvers or a template deleted meanwhile, or a limit or verbosity
+     * the job record would refuse, JobLaunchInput) shows the form again
+     * with the reason.
      */
     public function actionLaunch(): Response|string
     {
@@ -344,14 +448,20 @@ class JobTemplateController extends BaseController
 
         if (\Yii::$app->request->isPost) {
             try {
+                JobLaunchInput::check($overrides);
                 /** @var JobLaunchService $svc */
                 $svc = \Yii::$app->get('jobLaunchService');
                 $job = $svc->launch($template, (int)(\Yii::$app->user->id ?? 0), $overrides);
-                $this->session()->setFlash('success', "Job #{$job->id} queued.");
+                if ($job->status === Job::STATUS_PENDING_APPROVAL) {
+                    $this->session()->setFlash('info', sprintf(self::FLASH_WAITING_FOR_APPROVAL, $job->id));
+                } else {
+                    $this->session()->setFlash('success', sprintf(self::FLASH_QUEUED, $job->id));
+                }
                 $this->flashTemplateWarnings($template);
                 return $this->redirect(['/job/view', 'id' => $job->id]);
             } catch (\RuntimeException $e) {
-                $this->session()->setFlash('danger', 'Launch failed: ' . $e->getMessage());
+                // ErrorText words it: a PDOException is a RuntimeException, and its message can carry SQL with values.
+                $this->session()->setFlash('danger', sprintf(self::FLASH_LAUNCH_FAILED, JobLaunchService::failureReason($e)));
             }
         }
         return $this->render('launch', [
@@ -405,8 +515,15 @@ class JobTemplateController extends BaseController
         if ($inventoryFilter !== null) {
             $inventoryQuery->andWhere($inventoryFilter);
         }
+        // The rule select only for users who may assign rules; the others see the rule as text.
+        $ruleAssignment = new JobTemplateRuleAssignment();
+        $canAssignRule = $ruleAssignment->mayAssign((int)$userId);
 
         return [
+            'canAssignRule' => $canAssignRule,
+            'approvalRuleOptions' => $canAssignRule ? $ruleAssignment->options() : [],
+            // A gated template, for a user who may not assign rules: only name and description are enabled.
+            'changeLocked' => !$canAssignRule && (new GatedJobTemplateLock())->appliesTo((int)$userId, $model),
             'model' => $model,
             'projects' => $projectQuery->all(),
             'inventories' => $inventoryQuery->all(),

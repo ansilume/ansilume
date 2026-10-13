@@ -9,6 +9,8 @@ use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\models\User;
+use app\services\ScheduleEnablement;
+use app\services\ScheduleRunAs;
 use app\services\ScheduleService;
 use app\tests\integration\TeamScopeFixtures;
 use yii\data\ActiveDataProvider;
@@ -225,11 +227,17 @@ class ScheduleControllerActionTest extends WebControllerTestCase
         $this->assertSame((int)$scope['own']->id, $this->storedTemplateId($schedule));
     }
 
-    public function testUpdateSwitchesToAnOpenTemplateAndKeepsTheCreator(): void
+    /**
+     * Regression: editing another user's schedule let the editor approve its
+     * job. An update that points the schedule at another template makes it
+     * run as the user who saves it (it kept its creator before); whom it runs
+     * as is still no form field.
+     */
+    public function testUpdateSwitchesToAnOpenTemplateAndRunsAsTheEditor(): void
     {
         $scope = $this->loggedInScope();
         $schedule = $this->createSchedule((int)$scope['own']->id, (int)$scope['outsider']->id);
-        $this->setPost(['Schedule' => ['job_template_id' => (string)$scope['open']->id, 'created_by' => (string)$scope['member']->id]]);
+        $this->setPost(['Schedule' => ['job_template_id' => (string)$scope['open']->id, 'created_by' => (string)$scope['admin']->id]]);
 
         $ctrl = $this->makeController();
         $ctrl->actionUpdate((int)$schedule->id);
@@ -237,8 +245,12 @@ class ScheduleControllerActionTest extends WebControllerTestCase
         $this->assertSame(['view', 'id' => $schedule->id], $ctrl->capturedRedirect);
         $schedule->refresh();
         $this->assertSame((int)$scope['open']->id, (int)$schedule->job_template_id);
-        $this->assertSame((int)$scope['outsider']->id, (int)$schedule->created_by, 'whom the schedule runs as is not a form field');
-        $this->assertNotNull(AuditLog::findOne(['action' => AuditLog::ACTION_SCHEDULE_UPDATED, 'object_id' => $schedule->id]));
+        $this->assertSame((int)$scope['member']->id, (int)$schedule->created_by, 'the editor, not the posted user');
+        $audit = AuditLog::findOne(['action' => AuditLog::ACTION_SCHEDULE_UPDATED, 'object_id' => $schedule->id]);
+        $this->assertNotNull($audit);
+        $context = json_decode((string)$audit->metadata, true);
+        $this->assertIsArray($context);
+        $this->assertSame(['from' => (int)$scope['outsider']->id, 'to' => (int)$scope['member']->id], $context['run_as'] ?? null);
     }
 
     public function testUpdateKeepsAnUnchangedTemplate(): void
@@ -536,6 +548,78 @@ class ScheduleControllerActionTest extends WebControllerTestCase
     }
 
     /**
+     * Regression: a schedule of a deleted template stayed enabled and could
+     * be re-enabled: the toggle did not look at the template, and the
+     * schedule then failed to launch on every due time.
+     */
+    public function testEnablingAScheduleOfADeletedTemplateIsRefused(): void
+    {
+        $scope = $this->loggedInScope();
+        $schedule = $this->createSchedule((int)$scope['own']->id, (int)$scope['member']->id);
+        $schedule->enabled = false;
+        $schedule->save(false);
+        $scope['own']->softDelete();
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionToggle((int)$schedule->id);
+
+        $this->assertInstanceOf(Response::class, $result);
+        $this->assertSame(['index'], $ctrl->capturedRedirect);
+        /** @var \yii\web\Session $session */
+        $session = \Yii::$app->session;
+        $this->assertSame(
+            ['danger' => sprintf(ScheduleEnablement::ENABLE_REFUSED, $schedule->name, $scope['own']->id)],
+            $session->getAllFlashes()
+        );
+        $schedule->refresh();
+        $this->assertFalse((bool)$schedule->enabled);
+        $this->assertNull($schedule->next_run_at);
+        $this->assertSame(0, (int)AuditLog::find()->where(['action' => AuditLog::ACTION_SCHEDULE_TOGGLED, 'object_id' => $schedule->id])->count());
+    }
+
+    /**
+     * Disabling stays possible, whatever happened to the template.
+     */
+    public function testAScheduleOfADeletedTemplateCanStillBeDisabled(): void
+    {
+        $scope = $this->loggedInScope();
+        $schedule = $this->createSchedule((int)$scope['own']->id, (int)$scope['member']->id);
+        $scope['own']->softDelete();
+
+        $this->makeController()->actionToggle((int)$schedule->id);
+
+        $schedule->refresh();
+        $this->assertFalse((bool)$schedule->enabled);
+        /** @var \yii\web\Session $session */
+        $session = \Yii::$app->session;
+        $this->assertSame(['success' => "Schedule \"{$schedule->name}\" disabled."], $session->getAllFlashes());
+    }
+
+    /**
+     * Enabling through the edit form is refused too: the form keeps the
+     * schedule's deleted template, which counts as one that does not exist.
+     */
+    public function testAnUpdateThatEnablesAScheduleOfADeletedTemplateIsRefused(): void
+    {
+        $scope = $this->loggedInScope();
+        $schedule = $this->createSchedule((int)$scope['own']->id, (int)$scope['member']->id);
+        $schedule->enabled = false;
+        $schedule->save(false);
+        $scope['own']->softDelete();
+        $this->setPost(['Schedule' => ['enabled' => '1', 'job_template_id' => (string)$scope['own']->id] + $this->formData('enable', null)]);
+
+        $ctrl = $this->makeController();
+        $result = $ctrl->actionUpdate((int)$schedule->id);
+
+        $this->assertSame('rendered:form', $result);
+        $model = $ctrl->capturedParams['model'] ?? null;
+        $this->assertInstanceOf(Schedule::class, $model);
+        $this->assertSame([ScheduleService::TEMPLATE_MISSING_MESSAGE], $model->getErrors('job_template_id'));
+        $schedule->refresh();
+        $this->assertFalse((bool)$schedule->enabled);
+    }
+
+    /**
      * @return array<string, array{0: string}>
      */
     public static function operateActionProvider(): array
@@ -594,29 +678,81 @@ class ScheduleControllerActionTest extends WebControllerTestCase
 
     // ── Views ────────────────────────────────────────────────────────────────
 
+    /**
+     * The form says whom the schedule runs as, and, for another user's
+     * schedule, that saving a change to what or when it runs, or enabling
+     * it, makes it run as the user who saves it.
+     */
     public function testTheFormSaysWhomTheScheduleRunsAs(): void
     {
         $scope = $this->loggedInScope();
         $creator = $this->createUser('<b>creator</b>');
         $schedule = $this->createSchedule((int)$scope['own']->id, (int)$creator->id);
+        $own = $this->createSchedule((int)$scope['own']->id, (int)$scope['member']->id);
 
         $new = $this->renderPage('form', ['model' => new Schedule(), 'templates' => []]);
         $existing = $this->renderPage('form', ['model' => $schedule, 'templates' => []]);
+        $ownForm = $this->renderPage('form', ['model' => $own, 'templates' => []]);
 
-        $this->assertStringContainsString('Lists the job templates you may launch. Scheduled jobs run as you.', $new);
-        $this->assertStringContainsString('Scheduled jobs run as ' . htmlspecialchars((string)$creator->username) . '.', $existing);
+        $this->assertStringContainsString('Lists the job templates you may launch. ' . ScheduleRunAs::FORM_RUNS_AS_YOU, $new);
+        $this->assertStringContainsString(
+            htmlspecialchars('Lists the job templates you may launch. ' . sprintf(ScheduleRunAs::FORM_RUNS_AS_OTHER, (string)$creator->username) . ScheduleRunAs::FORM_NOTE),
+            $existing
+        );
         $this->assertStringNotContainsString('<b>creator</b>', $existing);
+        $this->assertStringContainsString('Lists the job templates you may launch. ' . ScheduleRunAs::FORM_RUNS_AS_YOU, $ownForm);
+        $this->assertStringNotContainsString(htmlspecialchars(ScheduleRunAs::FORM_NOTE), $ownForm . $new);
+        // The E2E specs (tests/e2e/lib/schedules.ts) quote the hint as the form shows it.
+        $this->assertSame('Scheduled jobs run as you.', ScheduleRunAs::FORM_RUNS_AS_YOU);
+        $this->assertSame('Scheduled jobs run as <b>creator</b>. ', sprintf(ScheduleRunAs::FORM_RUNS_AS_OTHER, '<b>creator</b>'));
     }
 
-    public function testTheViewSaysThatScheduledJobsRunAsTheCreator(): void
+    /**
+     * A user record that cannot be read is named by its ID.
+     */
+    public function testTheFormNamesAnUnreadableUserByItsId(): void
     {
         $scope = $this->loggedInScope();
         $schedule = $this->createSchedule((int)$scope['own']->id, (int)$scope['member']->id);
+        $schedule->created_by = 999999999;
+
+        $html = $this->renderPage('form', ['model' => $schedule, 'templates' => []]);
+
+        $this->assertStringContainsString(htmlspecialchars(sprintf(ScheduleRunAs::FORM_RUNS_AS_OTHER, 'user #999999999') . ScheduleRunAs::FORM_NOTE), $html);
+    }
+
+    /**
+     * The schedule page names the user it runs as under "Runs as" (it said
+     * "Created by", which an edit may no longer keep).
+     */
+    public function testTheViewSaysWhomTheScheduleRunsAs(): void
+    {
+        $scope = $this->loggedInScope();
+        $runsAs = $this->createUser('<i>runs-as</i>');
+        $schedule = $this->createSchedule((int)$scope['own']->id, (int)$runsAs->id);
 
         $html = $this->renderPage('view', ['model' => $schedule]);
 
-        $this->assertMatchesRegularExpression('/data-testid="schedule-runs-as">Scheduled jobs run as this user/', $html);
-        $this->assertStringContainsString(htmlspecialchars((string)$scope['member']->username), $html);
+        $this->assertStringContainsString('<dt class="col-sm-4">Runs as</dt>', $html);
+        $this->assertStringNotContainsString('Created by', $html);
+        $this->assertStringContainsString('<span id="schedule-runs-as">' . htmlspecialchars((string)$runsAs->username) . '</span>', $html);
+        $this->assertStringNotContainsString('<i>runs-as</i>', $html);
+        $this->assertStringContainsString('data-testid="schedule-runs-as">' . htmlspecialchars(ScheduleRunAs::VIEW_NOTE) . '</div>', $html);
+        $this->assertStringStartsWith('Scheduled jobs run as this user', ScheduleRunAs::VIEW_NOTE);
+    }
+
+    public function testTheListShowsWhomEachScheduleRunsAs(): void
+    {
+        $scope = $this->loggedInScope();
+        $runsAs = $this->createUser('<i>listed</i>');
+        $schedule = $this->createSchedule((int)$scope['own']->id, (int)$runsAs->id);
+        $provider = new ActiveDataProvider(['query' => Schedule::find()->with(['jobTemplate', 'creator'])->where(['id' => $schedule->id])]);
+
+        $html = $this->renderPage('index', ['dataProvider' => $provider]);
+
+        $this->assertMatchesRegularExpression('~<th>Status</th>\s*<th>Runs as</th>~', $html);
+        $this->assertStringContainsString('<td>' . htmlspecialchars((string)$runsAs->username) . '</td>', $html);
+        $this->assertStringNotContainsString('<i>listed</i>', $html);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

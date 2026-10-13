@@ -66,6 +66,9 @@ final class E2eSurveySecretSeeder
     /** The task the legacy runner reports; the job finishes as succeeded, not as "matched no host". */
     public const LEGACY_TASK = 'Connect with the database password';
 
+    /** Before the claims, only jobs of the group's templates named with this prefix are deleted. */
+    private const FIXTURE_PREFIX = 'e2e-';
+
     /** No host a runner could reach: no runner serves the group anyway. */
     private const INVENTORY_CONTENT = "all:\n  hosts:\n    e2e-secret-host.example.test:\n";
 
@@ -104,7 +107,7 @@ final class E2eSurveySecretSeeder
         $workflow = $this->workflow((int)$template->id, $userId);
         // First of the sealed answers: without a usable APP_SECRET_KEY it stops the seed with the reason.
         $this->schedule((int)$template->id, $userId);
-        $this->deleteJobs((int)$template->id);
+        $this->deleteJobs((int)$group->id);
 
         $current = $this->claimedJob($template, $group, $this->runner($group, self::CURRENT_RUNNER, Runner::CAPABILITIES, $userId), $userId);
         $legacy = $this->claimedJob($template, $group, $this->runner($group, self::LEGACY_RUNNER, [Runner::CAPABILITY_VAULT_PASSWORD_SOURCE], $userId), $userId);
@@ -217,13 +220,21 @@ final class E2eSurveySecretSeeder
     }
 
     /**
-     * Every job of the template: the seeded ones and those the specs
-     * launched, triggered or re-launched.
+     * Every job of the group's e2e- templates: the seeded ones, those the
+     * specs launched, triggered or re-launched, and those of the group's
+     * other e2e- templates (job-templates/extra-vars-editor.spec.ts launches
+     * e2e-extra-vars-bigint-template here). The claims below take the
+     * group's oldest queued job, so one left over would stop the seed. A job
+     * of a template not named e2e- is never deleted: the claim then stops
+     * the seed with the reason.
      */
-    private function deleteJobs(int $templateId): void
+    private function deleteJobs(int $runnerGroupId): void
     {
         $db = \Yii::$app->db;
-        $ids = (new Query())->select('id')->from('{{%job}}')->where(['job_template_id' => $templateId])->column($db);
+        $templates = (new Query())->select('id')->from('{{%job_template}}')
+            ->where(['runner_group_id' => $runnerGroupId])
+            ->andWhere(['like', 'name', self::FIXTURE_PREFIX . '%', false]);
+        $ids = (new Query())->select('id')->from('{{%job}}')->where(['job_template_id' => $templates])->column($db);
         if ($ids === []) {
             return;
         }

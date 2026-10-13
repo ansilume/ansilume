@@ -21,6 +21,7 @@ The core platform is functional. The following capabilities are implemented and 
 - Job launch, execution, and real-time log streaming
 - Runner groups with token-based runner registration
 - Cron-based schedules for automated job execution
+- Workflows (job, approval and pause steps with success/failure/always branches) and approval rules: admins manage and assign rules, change what a gated job template runs, and change the steps of workflows with an approval step or a gated job step, nobody approves their own launch (a schedule runs as the user who last changed what or when it runs, or enabled it), the maintenance run applies approval timeouts, and a closed approval gate ends a run as failed unless its On Failure branch continues it
 - Email notifications on job success/failure
 - Inbound triggers (a template's trigger token, sent in a header) and outbound webhooks
 - REST API (v1) for projects, inventories, credentials, templates, jobs, schedules
@@ -109,13 +110,18 @@ Use consistent naming in code and UI.
 - **Job**: one concrete execution of a template
 - **Runner**: background process that claims and executes jobs
 - **Runner Group**: logical grouping of runners with shared token authentication
-- **Schedule**: cron-based automatic execution of a job template
+- **Schedule**: cron-based automatic execution of a job template; runs as the user who last changed what or when it runs, or enabled it ("Runs as", `created_by`)
 - **Trigger**: inbound endpoint (`/trigger/...`) that launches a job or workflow template with the template's trigger token, sent in the `X-Trigger-Token` header
 - **Webhook**: outbound HTTP delivery of job events to an external URL
 - **Artifact**: output produced by a job (host summaries, structured data)
 - **Audit Log**: immutable record of meaningful user/system actions
 - **Notification**: email alert triggered by job completion (success/failure)
 - **Survey Field**: configurable launch-time parameter on a job template
+- **Workflow Template**: ordered job, approval and pause steps with success/failure/always branches
+- **Workflow Job**: one run of a workflow template; each step it executes is a workflow job step
+- **Approval Rule**: who must approve a launch (approver list, required approvals, timeout); gates a job template or a workflow approval step; managed and assigned by admins (`approval-rule.update`)
+- **Gated Job Template**: a job template with an approval rule; only admins (`approval-rule.update`) change what it runs, every field but its name and description (`GatedJobTemplateLock`); a job step that uses one is a gated job step
+- **Approval Request**: the pending decision on one job that waits for approval (`pending_approval`); never decided by the user who launched the job
 
 Do not invent multiple names for the same concept.
 
@@ -215,6 +221,7 @@ These are mandatory.
 9. When shell execution is required, escape arguments safely and keep commands auditable.
 10. Runner processes must execute with the least privilege practical.
 11. Mark every parameter that carries a plaintext secret, a token, credentials, survey answers, the runner's claim payload or job output with `#[\SensitiveParameter]`, so stack traces in logs and error pages leave its value out. `tests/unit/SensitiveParametersTest.php` lists every mark (`MARKED`) and requires them per class (`MUST_BE_MARKED`): extend both when you add such a parameter.
+12. Approval gates fail closed: only admins (`approval-rule.update`) manage and assign approval rules, change what a gated job template (a job template with a rule) runs, every field but its name and description, and change the steps of a workflow with an approval step or a gated job step (a job step whose job template has a rule); the user who launched a job never decides on its approval (`ApproverEligibility`). The launcher is the user who chose what runs as far as Ansilume controls it: a schedule runs as the user who last changed what or when it runs, or enabled it, and only admins change a gated job template or the steps of a workflow with an approval step or a gated job step. The inventory, project (repository, branch) and credentials a gated job template uses keep their own permissions, so whoever changes them is not the launcher and may approve: a documented limit until inventory-level approvals (`docs/updating.md`, "What an approval rule does not stop") that new code must not widen. A launch whose approval could never be granted is refused before anything is written.
 
 If a proposed implementation is convenient but weakens security, reject it and choose the safer path.
 
@@ -227,7 +234,7 @@ If a proposed implementation is convenient but weakens security, reject it and c
 - Build a deterministic runner payload from project + inventory + credential + template + launch vars.
 - Store stdout/stderr incrementally via the callback plugin.
 - Record start time, end time, exit code, final status, and launcher identity.
-- Job statuses: `pending`, `waiting`, `running`, `successful`, `failed`, `error`, `canceled`.
+- Job statuses: `pending`, `queued`, `running`, `succeeded`, `failed`, `canceled`, `timed_out`, `pending_approval`, `rejected` (`Job::statuses()`).
 - Keep runner implementation replaceable for future containerized or remote execution.
 
 ---
@@ -247,6 +254,8 @@ Core entities (all backed by ActiveRecord models and migrations):
 - `job_artifact`, `job_host_summary`, `job_task` — structured execution results
 - `runner_group`, `runner` — execution infrastructure
 - `schedule` — cron-based automation
+- `workflow_template`, `workflow_step` — workflow definitions; `workflow_job`, `workflow_job_step` — workflow runs and their step executions, which keep the step's name and type when the step is removed
+- `approval_rule`, `approval_request`, `approval_decision` — approval gates, their requests and the votes on them
 - `webhook` — outbound event deliveries (inbound triggers use `trigger_token` on `job_template` and `workflow_template`)
 - `audit_log` — immutable action trail
 - `api_token` — API authentication
@@ -455,6 +464,8 @@ Never push without all green test suites. Never skip asking about the release ty
 - Job execution is inspectable from the UI (logs, artifacts, host summaries)
 - Errors include operator-usable context
 - Sensitive values are redacted
+- Rule for all code, old and new: a database error (`yii\db\Exception`, or a `PDOException` that escaped Yii's wrapping) is logged with its class, SQLSTATE and driver error code only (`app\components\DbErrorSummary`), never with its message, which carries the SQL statement with its values. The same holds wherever an error is kept or shown: audit entries (such as the error of `notification.failed`), notifications and answers. Other exceptions may keep their message where it carries no SQL: `app\components\ErrorText` gives the message of any other error and the summary of a database error. When you touch code that logs `$e->getMessage()` of an exception that can be a database error, convert it. Errors that nothing catches are logged by `app\components\WebErrorHandler` (`config/web.php`) and `app\components\ConsoleErrorHandler` (`config/console.php`, `config/test.php`), and failed queue jobs by `app\components\QueueLogBehavior` (the queue's `as log` in `config/console.php`): for a chain that holds a database error they write what `app\components\ExceptionLogText` gives, never a message that can carry SQL or a Redis command with its values. Every log target is `app\components\RedactingFileTarget` (`config/web.php`, `config/console.php`, `config/test.php`), which writes an exception logged as an object whose chain holds a database error as `ExceptionLogText` gives it, so that the framework's own `Yii::error($e)` (such as `yii\db\Connection`'s failed rollback) cannot write its message; a log target of another kind needs the same redaction. Keep them wired in every config, and never log an exception that can be a database error as an object or as its string form yourself (`Yii::error($e)`, `(string)$e`): both carry its message and those of the exceptions it wraps, and no target can redact the string form; `ExceptionLogText::of()` gives its chain without them.
+- User-facing and logged messages live in class constants (sprintf patterns), so the docs and tests can quote them
 - Metrics endpoint available for monitoring
 - Selftest playbook verifies runner health
 
@@ -592,13 +603,14 @@ composer install               # Install PHP dependencies
 3. ~~**First-run reliability**~~ — quickstart pre-flight checks, diagnostics, health checks (v2.0.25)
 4. ~~**API CRUD endpoints**~~ — all resources (Projects, Job Templates, Schedules, Runner Groups, Teams, Users, Webhooks, Audit Logs) have full REST API with tests and OpenAPI spec
 5. ~~**Runner group assignment**~~ — runners can be moved between groups via web UI and REST API, with active-job guards and audit logging (v2.0.26)
-6. ~~**Team scoping**~~ — multi-tenant resource isolation: projects assigned to teams with viewer/operator roles; all child resources (templates, inventories, jobs, schedules, approval requests) inherit access transitively; workflows belong to the projects of their job steps (seeing needs view, changing/launching/resuming/canceling operator access to every one; steps with a missing job template fail closed) via `WorkflowAccessChecker`; analytics and the dashboard are scoped; schedules (run as their creator), triggers (run as the user who generated the token) and workflow job steps re-check that user at launch time; enforced across web UI and REST API
+6. ~~**Team scoping**~~ — multi-tenant resource isolation: projects assigned to teams with viewer/operator roles; all child resources (templates, inventories, jobs, schedules, approval requests) inherit access transitively; workflows belong to the projects of their job steps (seeing needs view, changing/launching/resuming/canceling operator access to every one; steps with a missing job template fail closed) via `WorkflowAccessChecker`; analytics and the dashboard are scoped; schedules (run as the user who last changed what or when they run, or enabled them), triggers (run as the user who generated the token) and workflow job steps re-check that user at launch time; enforced across web UI and REST API
 7. ~~**LDAP/AD integration**~~ — optional Active Directory / OpenLDAP authentication as addon (local users remain alongside; password ops disabled for LDAP users; group-to-role mapping; auto-provisioning; `ldap/sync` console command for lifecycle reconciliation; admin diagnose endpoint). See `docs/ldap.md`.
 
 ### Next
 
 1. **HA / scaling** — multi-worker, runner failover, queue reliability
 2. **Advanced features** — artifact management
+3. **Inventory-level approvals** — approval rules at the level of an inventory, so that an ungated twin of a gated job template, and changes to the inventory, project or credentials it uses, no longer get past an approval; until then a documented limit (security rule 12, `docs/updating.md` "What an approval rule does not stop")
 
 ### Completed (Advanced Features)
 

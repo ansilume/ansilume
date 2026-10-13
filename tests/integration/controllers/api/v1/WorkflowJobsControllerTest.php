@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers\api\v1;
 
+use app\components\SurveySecrets;
+use app\components\WorkflowRunOperationFailure;
 use app\controllers\api\v1\WorkflowJobsController;
 use app\models\ApiToken;
 use app\models\User;
@@ -13,6 +15,8 @@ use app\models\WorkflowStep;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
 use app\tests\integration\controllers\WebControllerTestCase;
+use app\tests\integration\controllers\WorkflowRunDbErrorFixtures;
+use app\tests\integration\services\FailingWorkflowCancellation;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\NotFoundHttpException;
 
@@ -27,9 +31,13 @@ use yii\web\NotFoundHttpException;
 class WorkflowJobsControllerTest extends WebControllerTestCase
 {
     use TeamScopeFixtures;
+    use WorkflowRunDbErrorFixtures;
 
     private WorkflowJobsController $ctrl;
     private ?object $originalService = null;
+
+    /** @var array<string, object|null> components swapped by swap(), restored in tearDown() */
+    private array $swapped = [];
 
     protected function setUp(): void
     {
@@ -43,6 +51,10 @@ class WorkflowJobsControllerTest extends WebControllerTestCase
             \Yii::$app->set('workflowExecutionService', $this->originalService);
             $this->originalService = null;
         }
+        foreach ($this->swapped as $id => $original) {
+            \Yii::$app->set($id, $original);
+        }
+        $this->swapped = [];
         parent::tearDown();
     }
 
@@ -122,6 +134,80 @@ class WorkflowJobsControllerTest extends WebControllerTestCase
 
         $this->assertSame(200, \Yii::$app->response->statusCode);
         $this->assertSame([$failed->error_message], array_column($data['steps'], 'error'));
+    }
+
+    /**
+     * Regression: a step's name and type came from the live step only, and
+     * workflow_step_id was a required link: once a step was removed, its
+     * executions said nothing about what ran.
+     */
+    public function testViewNamesEachStepAsItRanAlsoOnceItWasRemoved(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowTemplate($s['admin']->id);
+        $pause = $this->createWorkflowStep((int)$workflow->id, 0, WorkflowStep::TYPE_PAUSE);
+        $job = $this->createWorkflowStep((int)$workflow->id, 1, WorkflowStep::TYPE_JOB, $s['own']->id);
+        $run = $this->createWorkflowJob((int)$workflow->id, $s['admin']->id, WorkflowJob::STATUS_SUCCEEDED);
+        foreach ([$pause, $job] as $step) {
+            $execution = new WorkflowJobStep();
+            $execution->workflow_job_id = (int)$run->id;
+            $execution->workflow_step_id = (int)$step->id;
+            $execution->status = WorkflowJobStep::STATUS_SUCCEEDED;
+            $execution->save(false);
+        }
+        $this->assertSame(1, $pause->delete());
+        $this->authenticate($s['member']);
+
+        /** @var list<array<string, mixed>> $steps */
+        $steps = $this->data($this->ctrl->actionView($run->id))['steps'];
+
+        $this->assertSame([null, (int)$job->id], array_column($steps, 'workflow_step_id'));
+        $this->assertSame(['step-0', 'step-1'], array_column($steps, 'step_name'));
+        $this->assertSame([WorkflowStep::TYPE_PAUSE, WorkflowStep::TYPE_JOB], array_column($steps, 'step_type'));
+    }
+
+    /**
+     * The extra vars the run was launched with, which every job step
+     * received: a password answer as $encrypted$, the sealed answers never.
+     */
+    public function testViewShowsTheLaunchExtraVarsButNeverTheSealedAnswers(): void
+    {
+        $s = $this->teamScope();
+        $run = $this->runOf($s['admin']->id, $s['own']->id);
+        $run->setLaunchExtraVars(['env' => 'prod', self::SURVEY_PASSWORD_FIELD => SurveySecrets::PLACEHOLDER]);
+        $run->setSealedSecretExtraVars(SurveySecrets::seal([self::SURVEY_PASSWORD_FIELD => self::SURVEY_PASSWORD_ANSWER]));
+        $run->save(false);
+        $this->authenticate($s['member']);
+
+        $result = $this->ctrl->actionView($run->id);
+
+        $this->assertEquals(
+            (object)['env' => 'prod', self::SURVEY_PASSWORD_FIELD => SurveySecrets::PLACEHOLDER],
+            $this->data($result)['extra_vars']
+        );
+        $json = (string)json_encode($result);
+        $this->assertStringNotContainsString(self::SURVEY_PASSWORD_ANSWER, $json);
+        $this->assertStringNotContainsString('secret_extra_vars', $json);
+    }
+
+    /**
+     * Vars whose keys are 0, 1, ... stay a JSON object; a run without vars
+     * has none (null).
+     */
+    public function testViewReturnsTheExtraVarsAsAnObjectOrNull(): void
+    {
+        $s = $this->teamScope();
+        $plain = $this->runOf($s['admin']->id, $s['own']->id);
+        $numbered = $this->runOf($s['admin']->id, $s['own']->id);
+        $numbered->setLaunchExtraVars(['first', 'second']);
+        $numbered->save(false);
+        $this->authenticate($s['member']);
+
+        $this->assertNull($this->data($this->ctrl->actionView($plain->id))['extra_vars']);
+        $this->assertSame(
+            '{"0":"first","1":"second"}',
+            json_encode($this->data($this->ctrl->actionView($numbered->id))['extra_vars'])
+        );
     }
 
     public function testViewRefusesGuestsAndLetsAdminsSeeEveryRun(): void
@@ -309,7 +395,112 @@ class WorkflowJobsControllerTest extends WebControllerTestCase
         $this->assertForbiddenResponse($this->ctrl->actionCancel($run->id));
     }
 
+    // -- Database errors (regression) ----------------------------------------
+
+    /**
+     * regression: a database error while a run was canceled answered 500
+     * with the framework's error. It is a 500 with a message that says what
+     * to do, and the log line names the error's class, SQLSTATE and driver
+     * code, never its message.
+     */
+    public function testRegressionADatabaseErrorWhileCancelingIs500WithAMessage(): void
+    {
+        $s = $this->teamScope();
+        $run = $this->runOf($s['admin']->id, $s['own']->id);
+        $this->authenticate($s['member']);
+        $this->swap('workflowCancellationService', new FailingWorkflowCancellation((int)$run->id));
+
+        $result = [];
+        $logged = $this->failuresLoggedBy(function () use ($run, &$result): void {
+            $result = $this->ctrl->actionCancel($run->id);
+        }, FailingWorkflowCancellation::SECRET_VALUE);
+
+        $this->assertSame(500, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => sprintf(WorkflowRunOperationFailure::CANCEL_FAILED, $run->id)]], $result);
+        $this->assertSame(
+            [sprintf(WorkflowRunOperationFailure::LOG, $run->id, WorkflowRunOperationFailure::CANCEL, \yii\db\Exception::class, '40001', '1213')],
+            $logged
+        );
+        $run->refresh();
+        $this->assertSame(WorkflowJob::STATUS_RUNNING, $run->status);
+    }
+
+    /**
+     * regression: a database error while a run was resumed answered 500 with
+     * the framework's error.
+     */
+    public function testRegressionADatabaseErrorWhileResumingIs500WithAMessage(): void
+    {
+        $s = $this->teamScope();
+        [$run, $pause] = $this->pausedRun($s['admin']->id, $s['own']->id, $s['member']->id);
+        $this->authenticate($s['member']);
+        $this->swap('workflowStepRouter', $this->failingRouter());
+
+        $result = [];
+        $logged = $this->failuresLoggedBy(function () use ($run, &$result): void {
+            $result = $this->ctrl->actionResume($run->id);
+        });
+
+        $this->assertSame(500, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => sprintf(WorkflowRunOperationFailure::RESUME_FAILED, $run->id)]], $result);
+        $this->assertSame(
+            [sprintf(WorkflowRunOperationFailure::LOG, $run->id, WorkflowRunOperationFailure::RESUME, \yii\db\Exception::class, 'HY000', '2006')],
+            $logged
+        );
+        $pause->refresh();
+        $this->assertSame(WorkflowJobStep::STATUS_SUCCEEDED, $pause->status);
+    }
+
+    /**
+     * regression: a PDOException (a RuntimeException, which a commit can
+     * throw) was answered 422 with its own message. It is a database error
+     * too: 500 with the message.
+     */
+    public function testRegressionAPdoExceptionIsADatabaseErrorToo(): void
+    {
+        $s = $this->teamScope();
+        $run = $this->runOf($s['admin']->id, $s['own']->id);
+        $this->authenticate($s['member']);
+        $error = new \PDOException('SQLSTATE[HY000]: General error: ' . self::DB_ERROR_SECRET);
+        $this->swap('workflowExecutionService', new class ($error) extends WorkflowExecutionService {
+            public function __construct(private readonly \PDOException $error)
+            {
+                parent::__construct();
+            }
+
+            public function cancel(WorkflowJob $wfJob, int $userId): void
+            {
+                throw $this->error;
+            }
+
+            public function resume(WorkflowJob $wfJob, int $userId): void
+            {
+                throw $this->error;
+            }
+        });
+
+        $logged = $this->failuresLoggedBy(function () use ($run): void {
+            $this->assertSame(['error' => ['message' => sprintf(WorkflowRunOperationFailure::CANCEL_FAILED, $run->id)]], $this->ctrl->actionCancel($run->id));
+            $this->assertSame(500, \Yii::$app->response->statusCode);
+            $this->assertSame(['error' => ['message' => sprintf(WorkflowRunOperationFailure::RESUME_FAILED, $run->id)]], $this->ctrl->actionResume($run->id));
+            $this->assertSame(500, \Yii::$app->response->statusCode);
+        });
+
+        $this->assertSame([
+            sprintf(WorkflowRunOperationFailure::LOG, $run->id, WorkflowRunOperationFailure::CANCEL, \PDOException::class, '-', '-'),
+            sprintf(WorkflowRunOperationFailure::LOG, $run->id, WorkflowRunOperationFailure::RESUME, \PDOException::class, '-', '-'),
+        ], $logged);
+    }
+
     // -- Helpers --------------------------------------------------------------
+
+    private function swap(string $id, object $replacement): void
+    {
+        if (!array_key_exists($id, $this->swapped)) {
+            $this->swapped[$id] = \Yii::$app->getComponents(true)[$id] ?? null;
+        }
+        \Yii::$app->set($id, $replacement);
+    }
 
     /**
      * A running run of a new workflow with one job step per template.

@@ -7,6 +7,7 @@ namespace app\controllers;
 use app\models\AuditLog;
 use app\models\Runner;
 use app\models\RunnerGroup;
+use app\services\RunnerGroupDeletionService;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
@@ -118,11 +119,22 @@ class RunnerGroupController extends BaseController
         return $this->render('form', ['model' => $model]);
     }
 
+    /**
+     * POST /runner-group/delete?id=<id>
+     *
+     * A group that runners belong to or job templates run on stays: the
+     * refusal is shown on its page (RunnerGroupDeletionService), as the API
+     * answers it with 422.
+     */
     public function actionDelete(int $id): Response
     {
         $model = $this->findModel($id);
         $name = $model->name;
-        $model->delete();
+        $refusal = (new RunnerGroupDeletionService())->delete($model);
+        if ($refusal !== null) {
+            $this->session()->setFlash('danger', $refusal);
+            return $this->redirect(['view', 'id' => $id]);
+        }
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_RUNNER_GROUP_DELETED, 'runner_group', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', 'Runner group deleted.');
         return $this->redirect(['index']);

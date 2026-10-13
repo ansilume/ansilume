@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { expectFlash, fillForm, submitForm, getTableRowCount, deleteByRowText } from '../../lib/helpers';
-import { PAGE_TITLE, CONFIRM_OK } from '../../lib/selectors';
+import { expectFlash, fillForm, submitForm, getTableRowCount } from '../../lib/helpers';
+import { PAGE_TITLE } from '../../lib/selectors';
+import { TEMPLATE_DELETE_CONFIRM, deleteOpenTemplate, templateDeleted } from '../../lib/job-templates';
 
 test.describe('Job Templates CRUD', () => {
   test('index page lists templates', async ({ page }) => {
@@ -66,7 +67,12 @@ test.describe('Job Templates CRUD', () => {
   });
 
   test('delete job template', async ({ page }) => {
-    await deleteByRowText(page, '/job-template/index?sort=-id', 'e2e-crud-template');
-    await expectFlash(page, 'success');
+    // The newest e2e-crud-template, the one this file created.
+    await page.goto('/job-template/index?sort=-id');
+    await page.locator('table.table tbody tr', { hasText: 'e2e-crud-template' }).first()
+      .locator('a', { hasText: /^e2e-crud-template$/ }).click();
+    // The confirm names what the delete does besides; this template has neither.
+    expect(await deleteOpenTemplate(page)).toBe(TEMPLATE_DELETE_CONFIRM);
+    await expectFlash(page, 'success', templateDeleted('e2e-crud-template', 0, 0));
   });
 });

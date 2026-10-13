@@ -16,13 +16,21 @@ return [
         'log' => [
             'targets' => [
                 [
-                    'class' => 'yii\log\FileTarget',
+                    // As config/web.php and config/console.php: an exception
+                    // logged as such with a database error in its chain is
+                    // written without its message.
+                    'class' => \app\components\RedactingFileTarget::class,
                     'levels' => ['error', 'warning'],
                     // Never dump request/environment context ($_SERVER contains
                     // APP_SECRET_KEY, DB_PASSWORD, ...) into the log file.
                     'logVars' => [],
                 ],
             ],
+        ],
+        // The console's error handler, as config/console.php: the tests run
+        // a console application.
+        'errorHandler' => [
+            'class' => \app\components\ConsoleErrorHandler::class,
         ],
         'db' => $db,
         'cache' => ['class' => 'yii\caching\ArrayCache'],
@@ -152,6 +160,45 @@ return [
         'maintenanceService' => [
             'class' => 'app\services\MaintenanceService',
             'artifactCleanupIntervalSeconds' => 86400,
+        ],
+        'approverEligibility' => [
+            'class' => 'app\services\ApproverEligibility',
+        ],
+        'approvalSettlement' => [
+            'class' => 'app\services\ApprovalSettlement',
+        ],
+        'approvalRuleAssignmentPolicy' => [
+            'class' => 'app\services\ApprovalRuleAssignmentPolicy',
+        ],
+        'approvalRuleUsageService' => [
+            'class' => 'app\services\ApprovalRuleUsageService',
+        ],
+        'approvalRuleWriteService' => [
+            'class' => 'app\services\ApprovalRuleWriteService',
+        ],
+        'jobCancellationService' => [
+            'class' => 'app\services\JobCancellationService',
+        ],
+        'jobTemplateDeletionService' => [
+            'class' => 'app\services\JobTemplateDeletionService',
+        ],
+        'workflowCancellationService' => [
+            'class' => 'app\services\WorkflowCancellationService',
+        ],
+        'workflowRunVars' => [
+            'class' => 'app\services\WorkflowRunVars',
+        ],
+        'workflowStepChangeGuard' => [
+            'class' => 'app\services\WorkflowStepChangeGuard',
+        ],
+        'workflowStepRouter' => [
+            'class' => 'app\services\WorkflowStepRouter',
+        ],
+        'workflowTemplateDeletionService' => [
+            'class' => 'app\services\WorkflowTemplateDeletionService',
+        ],
+        'strandedJobSweep' => [
+            'class' => 'app\services\StrandedJobSweep',
         ],
         'ldapService' => [
             'class' => 'app\services\ldap\LdapService',

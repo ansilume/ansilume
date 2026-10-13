@@ -15,6 +15,8 @@ use app\models\JobTemplate;
 use app\models\RunnerGroup;
 use app\models\User;
 use app\services\ArtifactService;
+use app\services\JobCancellationService;
+use app\services\JobLaunchService;
 use app\services\RelaunchRefusedException;
 use app\services\RelaunchService;
 use app\services\WorkflowAccessChecker;
@@ -26,6 +28,15 @@ use yii\web\Response;
 class JobController extends BaseController
 {
     use TeamScopingTrait;
+
+    /**
+     * The danger flash of a re-launch whose launch failed. sprintf():
+     * JobLaunchService::failureReason(): what may be said about the error
+     * (ErrorText: its message, but for a database error only its class,
+     * SQLSTATE and driver error code), without the "Job launch failed: " of
+     * JobLaunchService's own failures.
+     */
+    public const RELAUNCH_FAILED = 'Re-launch failed: %s';
 
     /**
      * @return array<int, array<string, mixed>>
@@ -123,9 +134,14 @@ class JobController extends BaseController
             return $this->redirect(['view', 'id' => $id]);
         }
 
-        /** @var \app\services\JobCompletionService $completion */
-        $completion = \Yii::$app->get('jobCompletionService');
-        $completion->cancel($job, (int)\Yii::$app->user->id);
+        // The cancel also closes the job's pending approval request. It
+        // changes nothing when the job finished after it was loaded here.
+        /** @var JobCancellationService $cancellation */
+        $cancellation = \Yii::$app->get('jobCancellationService');
+        if (!$cancellation->cancel($job, (int)\Yii::$app->user->id)) {
+            $this->session()->setFlash('warning', JobCancellationService::notCanceledMessage($job));
+            return $this->redirect(['view', 'id' => $id]);
+        }
 
         $this->session()->setFlash('success', "Job #{$job->id} canceled.");
         return $this->redirect(['view', 'id' => $id]);
@@ -148,7 +164,7 @@ class JobController extends BaseController
             $this->session()->setFlash('danger', $e->getMessage());
             return $this->redirect(['view', 'id' => $id]);
         } catch (\RuntimeException $e) {
-            $this->session()->setFlash('danger', 'Re-launch failed: ' . $e->getMessage());
+            $this->session()->setFlash('danger', sprintf(self::RELAUNCH_FAILED, JobLaunchService::failureReason($e)));
             return $this->redirect(['view', 'id' => $id]);
         }
 

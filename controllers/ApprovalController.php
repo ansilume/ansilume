@@ -7,6 +7,7 @@ namespace app\controllers;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\models\User;
+use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalService;
 use app\services\WorkflowAccessChecker;
 use yii\data\ActiveDataProvider;
@@ -63,10 +64,7 @@ class ApprovalController extends BaseController
     public function actionView(int $id): string
     {
         $model = $this->findVisibleModel($id);
-        return $this->render('view', [
-            'model' => $model,
-            'canDecide' => $this->mayDecide($model),
-        ]);
+        return $this->render('view', ['model' => $model] + $this->decisionState($model));
     }
 
     public function actionApprove(int $id): Response
@@ -80,30 +78,27 @@ class ApprovalController extends BaseController
     }
 
     /**
-     * Visibility first (403), then a request someone already resolved
-     * (flash), then eligibility (403). A decision the service refuses, e.g. a
-     * second vote, is flashed instead of surfacing as a server error.
+     * Visibility first (403). The service then checks the vote under the
+     * request's lock; a refusal is shown as ApprovalDecisionRefusedException
+     * classifies it: the request's state (resolved, expired, its job no
+     * longer waiting) as a warning, the voter (the launcher, no eligible
+     * approver) as 403, and the vote itself (a second vote, a comment that
+     * is too long, or one that is no text, which only a forged form sends)
+     * as a danger flash, never as a server error.
      */
     private function decide(int $id, string $decision): Response
     {
         $model = $this->findVisibleModel($id);
-        if ($model->isResolved()) {
-            $this->session()->setFlash('warning', "Approval request #{$id} is already resolved.");
-            return $this->redirect(['view', 'id' => $id]);
-        }
-
-        $userId = (int)\Yii::$app->user->id;
-        $service = $this->approvals();
-        if (!$service->canUserApprove($model, $userId)) {
-            throw new ForbiddenHttpException('You are not eligible to decide on this request.');
-        }
-
-        $comment = (string)(\Yii::$app->request->post('comment') ?? '');
         try {
-            $service->recordDecision($model, $userId, $decision, $comment !== '' ? $comment : null);
-        } catch (\RuntimeException $e) {
-            $this->session()->setFlash('danger', 'Your decision was not recorded: ' . $e->getMessage());
-            return $this->redirect(['view', 'id' => $id]);
+            $comment = ApprovalService::commentOf($model, \Yii::$app->request->post('comment'));
+            $this->approvals()->recordDecision(
+                $model,
+                (int)\Yii::$app->user->id,
+                $decision,
+                $comment !== '' ? $comment : null
+            );
+        } catch (ApprovalDecisionRefusedException $e) {
+            return $this->refused($e, $id);
         }
 
         $recorded = $decision === ApprovalDecision::DECISION_APPROVED ? 'Approval recorded.' : 'Rejection recorded.';
@@ -112,19 +107,50 @@ class ApprovalController extends BaseController
     }
 
     /**
-     * Whether the view offers Approve and Reject: the user holds
-     * approval.decide and is an eligible approver of the pending request.
+     * @throws ForbiddenHttpException
+     * @throws NotFoundHttpException
      */
-    private function mayDecide(ApprovalRequest $model): bool
+    private function refused(ApprovalDecisionRefusedException $e, int $id): Response
+    {
+        $status = $e->httpStatus();
+        if ($status === 403) {
+            throw new ForbiddenHttpException($e->getMessage());
+        }
+        if ($status === 404) {
+            throw new NotFoundHttpException($e->getMessage());
+        }
+        if ($status === 409) {
+            $this->session()->setFlash('warning', $e->getMessage());
+        } else {
+            $this->session()->setFlash('danger', 'Your decision was not recorded: ' . $e->getMessage());
+        }
+        return $this->redirect(['view', 'id' => $id]);
+    }
+
+    /**
+     * Whether the view offers Approve and Reject, and if not, why. Only for
+     * users who hold approval.decide (or are superadmins): the buttons show
+     * when their vote would be recorded now; otherwise the note says why,
+     * unless they are simply no approver of the request.
+     *
+     * @return array{canDecide: bool, decisionNote: string|null}
+     */
+    private function decisionState(ApprovalRequest $model): array
     {
         $user = \Yii::$app->user;
         $identity = $user->identity;
         $superadmin = $identity instanceof User && (bool)$identity->is_superadmin;
         if (!$superadmin && !$user->can('approval.decide')) {
-            return false;
+            return ['canDecide' => false, 'decisionNote' => null];
         }
 
-        return $this->approvals()->canUserApprove($model, (int)$user->id);
+        $refusal = $this->approvals()->decisionRefusal($model, (int)$user->id);
+        if ($refusal === null) {
+            return ['canDecide' => true, 'decisionNote' => null];
+        }
+        $silent = $refusal->reason() === ApprovalDecisionRefusedException::REASON_NOT_ELIGIBLE;
+
+        return ['canDecide' => false, 'decisionNote' => $silent ? null : $refusal->getMessage()];
     }
 
     /**

@@ -65,6 +65,25 @@ class WorkflowTemplate extends ActiveRecord
         return $this->deleted_at !== null;
     }
 
+    /**
+     * Lock the template's row until the current transaction ends (SELECT ...
+     * FOR UPDATE) and tell whether it is a live template: false when the row
+     * does not exist or is soft-deleted. A step change and the delete lock
+     * this row first, as a launch does, so a run cannot start between a step
+     * change's checks and its write, and a launch cannot slip in between a
+     * delete and the cancelation of the template's runs. Call it inside a
+     * transaction: on its own, the lock ends with the statement.
+     */
+    public static function lockLive(int $id): bool
+    {
+        $row = \Yii::$app->db->createCommand(
+            'SELECT [[deleted_at]] FROM {{%workflow_template}} WHERE [[id]] = :id FOR UPDATE',
+            [':id' => $id]
+        )->queryOne();
+
+        return is_array($row) && $row['deleted_at'] === null;
+    }
+
     public function behaviors(): array
     {
         return [\yii\behaviors\TimestampBehavior::class];

@@ -111,6 +111,7 @@ class AuditLog extends ActiveRecord
     public const ACTION_APPROVAL_REQUESTED = 'approval.requested';
     public const ACTION_APPROVAL_DECIDED = 'approval.decided';
     public const ACTION_APPROVAL_TIMED_OUT = 'approval.timed_out';
+    public const ACTION_APPROVAL_CANCELED = 'approval.canceled';
 
     // -- Workflow actions ------------------------------------------------------
     public const ACTION_WORKFLOW_TEMPLATE_CREATED = 'workflow-template.created';

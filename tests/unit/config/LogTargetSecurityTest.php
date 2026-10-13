@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\config;
 
+use app\components\RedactingFileTarget;
 use PHPUnit\Framework\TestCase;
 use yii\base\Application;
 use yii\log\FileTarget;
@@ -24,6 +25,10 @@ use yii\web\User;
  *
  * The console target keeps SQL statements out of the log, and the web target
  * keeps session IDs out of it.
+ *
+ * Every log target is a RedactingFileTarget, which writes an exception logged
+ * as such with a database error in its chain without its message
+ * (tests/integration/components/VendorLoggedDatabaseErrorTest).
  */
 class LogTargetSecurityTest extends TestCase
 {
@@ -82,6 +87,42 @@ class LogTargetSecurityTest extends TestCase
                 $target['logVars'],
                 "{$file}: log target #{$index} must set logVars to an empty array"
             );
+        }
+    }
+
+    /**
+     * Guard: every log target writes an exception that code logs itself
+     * (\Yii::error($e), as yii\db\Connection does) without the message of a
+     * database error in its chain. Yii's FileTarget, or any other target
+     * class, would write it as PHP prints it, the SQL statement with its
+     * values included.
+     *
+     * @dataProvider configFileProvider
+     */
+    public function testEveryLogTargetWritesDatabaseErrorsWithoutTheirMessages(string $file): void
+    {
+        foreach ($this->logTargets($file) as $index => $target) {
+            $class = $target['class'] ?? null;
+            $this->assertIsString($class, "{$file}: log target #{$index} names its class");
+            $this->assertTrue(
+                is_a($class, RedactingFileTarget::class, true),
+                "{$file}: log target #{$index} is {$class}, not " . RedactingFileTarget::class . ' or a subclass of it'
+            );
+        }
+    }
+
+    /**
+     * The tests' application logs through the target of config/test.php.
+     */
+    public function testTheTestApplicationLogsThroughTheRedactingTarget(): void
+    {
+        $app = \Yii::$app;
+        $this->assertInstanceOf(Application::class, $app);
+        $targets = $app->getLog()->targets;
+
+        $this->assertNotEmpty($targets);
+        foreach ($targets as $name => $target) {
+            $this->assertInstanceOf(RedactingFileTarget::class, $target, "log target {$name}");
         }
     }
 
@@ -193,7 +234,10 @@ class LogTargetSecurityTest extends TestCase
         $this->assertIsString($logFile);
         unlink($logFile);
         $this->logFile = $logFile;
-        $target = \Yii::createObject(['logFile' => $logFile] + $targets[0]);
+        $definition = ['logFile' => $logFile] + $targets[0];
+        $this->assertIsString($definition['class'] ?? null, "{$file}: the log target names its class");
+        /** @var array{class: class-string} $definition */
+        $target = \Yii::createObject($definition);
         $this->assertInstanceOf(FileTarget::class, $target);
 
         return $target;
@@ -230,7 +274,7 @@ class LogTargetSecurityTest extends TestCase
                 return $this->canary;
             }
 
-            public function close()
+            public function close(): void
             {
             }
         };

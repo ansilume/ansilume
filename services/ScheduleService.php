@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ErrorText;
 use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\NotificationTemplate;
@@ -14,12 +15,20 @@ use yii\base\Component;
 /**
  * Team scoping and execution of schedules.
  *
- * A schedule launches its job template as the user who created it, and it is
- * scoped like that template: seeing a schedule needs view access to the
- * template's project, changing it or pointing it at a template needs operator
- * access. At launch time the creator must still be an active user with
- * job.launch and operator access to the project; otherwise the schedule does
- * not launch.
+ * A schedule launches its job template as the user it runs as (created_by):
+ * its creator, or the user who last changed what or when it runs, or enabled
+ * it (ScheduleRunAs). It is scoped like that template: seeing a schedule
+ * needs view access to the template's project, changing it or pointing it at
+ * a template needs operator access. At launch time the user it runs as must
+ * still be an active user with job.launch and operator access to the
+ * project; otherwise the schedule does not launch.
+ *
+ * A schedule whose due check, claim or launch fails is logged and skipped,
+ * and a failed launch is reported (schedule.failed_to_launch). The error is
+ * described as ErrorText describes it: its message, but a database error
+ * only by its class, SQLSTATE and driver error code
+ * (ErrorText::DATABASE_ERROR), never by its message, which carries the SQL
+ * statement with its values.
  *
  * runDue() is called from the `schedule/run` console command, typically every
  * minute by an OS-level cron job:
@@ -42,11 +51,33 @@ class ScheduleService extends Component
 
     public const TEMPLATE_MISSING_MESSAGE = 'The selected job template does not exist.';
 
-    /** Audit reason: the creator is not an active user with job.launch. */
+    /** Audit reason: the user the schedule runs as is not an active user with job.launch. */
     public const DENIED_NOT_PERMITTED = 'not_permitted';
 
-    /** Audit reason: the creator may not operate the template's project. */
+    /** Audit reason: the user the schedule runs as may not operate the template's project. */
     public const DENIED_NO_PROJECT_ACCESS = 'no_project_access';
+
+    /**
+     * The failed-to-launch report of a due schedule whose job template was
+     * deleted; the run disables the schedule. sprintf(): the template ID.
+     */
+    public const TEMPLATE_DELETED_DISABLED = 'Job template #%d was deleted; the schedule was disabled.';
+
+    /**
+     * Logged when a schedule's due check or claim failed; the schedule is
+     * skipped until the next run. sprintf(): the schedule's ID and name, then
+     * the error (ErrorText: its message, or ErrorText::DATABASE_ERROR).
+     */
+    public const SKIPPED = 'Schedule #%d (%s) skipped: %s';
+
+    /**
+     * Logged when a due schedule failed to launch; the error is also the
+     * error of its schedule.failed_to_launch notification. sprintf(): the
+     * schedule's ID and name, then the error as JobLaunchService::failureReason()
+     * gives it (ErrorText: its message, or ErrorText::DATABASE_ERROR, without
+     * JobLaunchService's own "Job launch failed: " in front).
+     */
+    public const LAUNCH_FAILED = 'Schedule #%d (%s) failed to launch: %s';
 
     /**
      * Check all enabled schedules and launch jobs for those that are due.
@@ -73,11 +104,9 @@ class ScheduleService extends Component
                     $launched++;
                 }
             } catch (\Throwable $e) {
-                \Yii::error(
-                    "Schedule #{$schedule->id} ({$schedule->name}) failed to launch: " . $e->getMessage(),
-                    __CLASS__
-                );
-                $this->notifyFailedLaunch($schedule, $e->getMessage());
+                $error = JobLaunchService::failureReason($e);
+                \Yii::error(sprintf(self::LAUNCH_FAILED, (int)$schedule->id, $schedule->name, $error), __CLASS__);
+                $this->notifyFailedLaunch($schedule, $error);
             }
         }
 
@@ -133,10 +162,7 @@ class ScheduleService extends Component
         try {
             return $this->isDue($schedule) && $this->claimSchedule($schedule);
         } catch (\Throwable $e) {
-            \Yii::error(
-                "Schedule #{$schedule->id} ({$schedule->name}) skipped: " . $e->getMessage(),
-                __CLASS__
-            );
+            \Yii::error(sprintf(self::SKIPPED, (int)$schedule->id, $schedule->name, ErrorText::of($e)), __CLASS__);
             return false;
         }
     }
@@ -166,20 +192,23 @@ class ScheduleService extends Component
     }
 
     /**
-     * Launch the schedule's job template as the schedule's creator, with its
-     * extra vars and stored password answers (see ScheduleLaunchSecrets).
-     * Returns false when the creator may no longer launch it; the refusal is
-     * audited and reported like a failed launch.
+     * Launch the schedule's job template as the user the schedule runs as
+     * (created_by), with its extra vars and stored password answers (see
+     * ScheduleLaunchSecrets). Returns false when that user may no longer
+     * launch it; the refusal is audited and reported like a failed launch.
+     * Also false for a schedule whose job template was deleted, which is
+     * disabled instead.
      *
-     * @throws \RuntimeException when the template is gone, the stored answers
-     *     cannot be decrypted, the schedule moved to another template or was
-     *     deleted while its plain answers were sealed, or the launch fails
+     * @throws \RuntimeException when the stored answers cannot be decrypted,
+     *     the schedule moved to another template or was deleted while its
+     *     plain answers were sealed, or the launch fails
      */
     private function launchSchedule(Schedule $schedule): bool
     {
         $template = $schedule->jobTemplate;
         if ($template === null) {
-            throw new \RuntimeException("Job template not found for schedule #{$schedule->id}");
+            $this->disableForDeletedTemplate($schedule);
+            return false;
         }
 
         $launchedBy = (int)$schedule->created_by;
@@ -249,6 +278,21 @@ class ScheduleService extends Component
         );
         \Yii::warning($message, __CLASS__);
         $this->notifyFailedLaunch($schedule, $message);
+    }
+
+    /**
+     * A due schedule whose job template was deleted never launches again:
+     * it is disabled (audited as schedule.toggled with the reason), logged
+     * and reported once as failed to launch. Nothing happens when another
+     * process disabled it first.
+     */
+    private function disableForDeletedTemplate(Schedule $schedule): void
+    {
+        if ((new ScheduleEnablement())->disableForDeletedTemplate($schedule)) {
+            $message = sprintf(self::TEMPLATE_DELETED_DISABLED, (int)$schedule->job_template_id);
+            \Yii::warning("Schedule #{$schedule->id} ({$schedule->name}) not launched: {$message}", __CLASS__);
+            $this->notifyFailedLaunch($schedule, $message);
+        }
     }
 
     private function notifyFailedLaunch(Schedule $schedule, string $error): void

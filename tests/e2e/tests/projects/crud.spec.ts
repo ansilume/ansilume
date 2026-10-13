@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { expectFlash, fillForm, submitForm, getTableRowCount, deleteByRowText } from '../../lib/helpers';
+import { jobTemplateDetail, queuedJobOf } from '../../lib/jobs';
 import { PAGE_TITLE, CONFIRM_OK } from '../../lib/selectors';
 
 test.describe('Projects CRUD', () => {
@@ -86,13 +87,30 @@ test.describe('Projects CRUD', () => {
     await expectFlash(page, 'success');
   });
 
-  test('delete project whose templates were soft-deleted (integrity violation regression)', async ({ page }) => {
+  test('delete project whose templates were soft-deleted (integrity violation regression)', async ({ page, request, baseURL }) => {
     // Seeded e2e-softdel-project has one template that was deleted in the UI
     // (soft-deleted row still references the project). Deleting the project
     // used to hit the RESTRICT foreign key and render a 500 error page.
+    //
+    // Regression: deleting the project left a waiting job of its deleted
+    // template queued for good: the purge of the template cleared the job's
+    // template, and no runner claims a job without one. The delete cancels
+    // such jobs first (services/ProjectDeletionService.php). The job is made
+    // right before the delete, as one that waited when its template was
+    // deleted: the maintenance run cancels a seeded one long before this spec.
+    const jobId = await queuedJobOf(request, baseURL, 'e2e-softdel-template');
+    await page.goto(`/job/view?id=${jobId}`);
+    await expect(page.locator('#status-badge')).toHaveText('Queued');
+    await expect(jobTemplateDetail(page)).toHaveText('e2e-softdel-template (deleted)');
+
     await deleteByRowText(page, '/project/index', 'e2e-softdel-project');
     await expectFlash(page, 'success');
     await page.goto('/project/index');
     await expect(page.locator('table.table tbody tr', { hasText: 'e2e-softdel-project' })).toHaveCount(0);
+
+    await page.goto(`/job/view?id=${jobId}`);
+    await expect(page.locator('#status-badge')).toHaveText('Canceled');
+    await expect(page.locator('#detail-status')).toHaveText('Canceled');
+    await expect(jobTemplateDetail(page), 'the template was purged').toHaveText('—');
   });
 });

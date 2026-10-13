@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ErrorText;
 use app\components\VaultCheckOutcome;
 use app\components\VaultCheckRun;
 use app\components\VaultCredentialRule;
@@ -38,6 +39,21 @@ class VaultCheckService extends Component
 {
     /** Entries stored per template; unopened_count holds the full number. */
     public const STORED_UNOPENED = 40;
+
+    /**
+     * Logged (warning) when a template's check failed; its stored check is
+     * removed. sprintf(): the job template's ID, then what may be said about
+     * the error (ErrorText): its message, but for a database error only its
+     * class, SQLSTATE and driver error code.
+     */
+    public const CHECK_FAILED = 'Vault check for job template #%d failed: %s';
+
+    /**
+     * Logged (warning) when the stored check of a template whose check
+     * failed could not be removed. sprintf(): the job template's ID, then
+     * what may be said about the error (ErrorText), as for CHECK_FAILED.
+     */
+    public const CHECK_NOT_REMOVED = 'Vault check for job template #%d could not be removed: %s';
 
     /**
      * Seconds one run of checks may take. Templates the run does not finish
@@ -102,7 +118,7 @@ class VaultCheckService extends Component
             try {
                 $this->runCheck($template);
             } catch (\Throwable $e) {
-                \Yii::warning("Vault check for job template #{$template->id} failed: " . $e->getMessage(), __CLASS__);
+                \Yii::warning(sprintf(self::CHECK_FAILED, (int)$template->id, ErrorText::of($e)), __CLASS__);
                 $this->forget($template);
             }
         });
@@ -140,7 +156,7 @@ class VaultCheckService extends Component
         try {
             JobTemplateVaultCheck::deleteAll(['job_template_id' => $template->id]);
         } catch (\Throwable $e) {
-            \Yii::warning("Vault check for job template #{$template->id} could not be removed: " . $e->getMessage(), __CLASS__);
+            \Yii::warning(sprintf(self::CHECK_NOT_REMOVED, (int)$template->id, ErrorText::of($e)), __CLASS__);
         }
     }
 

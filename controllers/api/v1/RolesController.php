@@ -34,7 +34,7 @@ class RolesController extends BaseApiController
      */
     public function actionIndex(): array
     {
-        if (!$this->requirePermission('role.view')) {
+        if (!$this->userCan('role.view')) {
             return $this->forbidden();
         }
 
@@ -48,7 +48,7 @@ class RolesController extends BaseApiController
      */
     public function actionView(string $name): array
     {
-        if (!$this->requirePermission('role.view')) {
+        if (!$this->userCan('role.view')) {
             return $this->forbidden();
         }
 
@@ -64,7 +64,7 @@ class RolesController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        if (!$this->requirePermission('role.create')) {
+        if (!$this->userCan('role.create')) {
             return $this->forbidden();
         }
 
@@ -88,7 +88,7 @@ class RolesController extends BaseApiController
      */
     public function actionUpdate(string $name): array
     {
-        if (!$this->requirePermission('role.update')) {
+        if (!$this->userCan('role.update')) {
             return $this->forbidden();
         }
 
@@ -115,7 +115,7 @@ class RolesController extends BaseApiController
      */
     public function actionDelete(string $name): array
     {
-        if (!$this->requirePermission('role.delete')) {
+        if (!$this->userCan('role.delete')) {
             return $this->forbidden();
         }
 
@@ -138,7 +138,7 @@ class RolesController extends BaseApiController
      */
     public function actionPermissions(): array
     {
-        if (!$this->requirePermission('role.view')) {
+        if (!$this->userCan('role.view')) {
             return $this->forbidden();
         }
 
@@ -152,13 +152,6 @@ class RolesController extends BaseApiController
         /** @var RoleService $svc */
         $svc = \Yii::$app->get('roleService');
         return $svc;
-    }
-
-    private function requirePermission(string $permission): bool
-    {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        return $user->can($permission);
     }
 
     /**

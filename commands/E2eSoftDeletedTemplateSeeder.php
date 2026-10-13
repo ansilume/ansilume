@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\models\Job;
 use app\models\JobTemplate;
 use app\models\Project;
+use yii\db\Query;
 
 /**
  * Seeds a project whose only job template has been soft-deleted.
@@ -15,11 +17,18 @@ use app\models\Project;
  * templates while the RESTRICT foreign key still saw the soft-deleted row.
  * projects/crud.spec.ts deletes this project through the UI and expects a
  * success flash. Re-seeded from scratch on every run so the spec can delete it.
+ *
+ * The same spec gives the deleted template a job that still waits (queued)
+ * right before the delete, through the YII_DEBUG hook
+ * /e2e/create-cancelable-job, and expects the delete to cancel it. Such a job
+ * is made on demand: the maintenance run cancels the waiting jobs of deleted
+ * templates, so a seeded one would not last until the spec runs. Every seed
+ * removes the jobs of the template, so it starts without any.
  */
 class E2eSoftDeletedTemplateSeeder
 {
-    private const PROJECT_NAME = 'e2e-softdel-project';
-    private const TEMPLATE_NAME = 'e2e-softdel-template';
+    public const PROJECT_NAME = 'e2e-softdel-project';
+    public const TEMPLATE_NAME = 'e2e-softdel-template';
 
     /** @var callable(string): void */
     private $logger;
@@ -62,8 +71,30 @@ class E2eSoftDeletedTemplateSeeder
 
     private function deleteExisting(): void
     {
-        // deleteAll() bypasses the deleted_at scope — remove hidden rows too.
+        // findWithDeleted() and deleteAll() bypass the deleted_at scope — remove hidden rows too.
+        $templateIds = JobTemplate::findWithDeleted()->select('id')->where(['name' => self::TEMPLATE_NAME])->column();
+        $this->deleteJobs(array_values(array_map('intval', $templateIds)));
         JobTemplate::deleteAll(['name' => self::TEMPLATE_NAME]);
         Project::deleteAll(['name' => self::PROJECT_NAME]);
+    }
+
+    /**
+     * Deletes the jobs of the templates: logs, artifacts, host summaries and
+     * approval requests go with them (foreign keys), tasks do not. Without
+     * this, deleting a template would leave its jobs without one.
+     *
+     * @param list<int> $templateIds
+     */
+    private function deleteJobs(array $templateIds): void
+    {
+        if ($templateIds === []) {
+            return;
+        }
+        $db = \Yii::$app->db;
+        $jobIds = (new Query())->select('id')->from('{{%job}}')->where(['job_template_id' => $templateIds])->column($db);
+        if ($jobIds !== []) {
+            $db->createCommand()->delete('{{%job_task}}', ['job_id' => $jobIds])->execute();
+            Job::deleteAll(['id' => $jobIds]);
+        }
     }
 }

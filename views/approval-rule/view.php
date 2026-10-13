@@ -4,9 +4,15 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\ApprovalRule $model */
+/** @var app\components\ApprovalRuleUsage $usage */
+/** @var bool $canUpdate */
+/** @var bool $canDelete */
 
+use app\components\ApprovalRuleUsage;
+use app\helpers\ConfirmHelper;
 use app\models\ApprovalRule;
 use yii\helpers\Html;
+use yii\helpers\Url;
 
 $this->title = $model->name;
 ?>
@@ -14,18 +20,25 @@ $this->title = $model->name;
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2><?= Html::encode($this->title) ?></h2>
     <div>
-        <?php if (Yii::$app->user->can('approval-rule.update')) : ?>
-            <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm']) ?>
+        <?php if ($canUpdate) : ?>
+            <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-primary btn-sm', 'id' => 'approval-rule-edit']) ?>
         <?php endif; ?>
-        <?php if (Yii::$app->user->can('approval-rule.delete')) : ?>
-            <form action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" method="post" style="display:inline"
-                  onsubmit="return confirm('Delete this approval rule?')">
-                <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">
+        <?php if ($canDelete && !$usage->isInUse()) : ?>
+            <form action="<?= Html::encode(Url::to(['delete', 'id' => $model->id])) ?>" method="post" style="display:inline" id="approval-rule-delete-form"
+                  onsubmit="<?= ConfirmHelper::attribute('Delete approval rule "' . $model->name . '"?') ?>">
+                <input type="hidden" name="<?= Html::encode(Yii::$app->request->csrfParam) ?>" value="<?= Html::encode(Yii::$app->request->getCsrfToken()) ?>">
                 <button type="submit" class="btn btn-outline-danger btn-sm ms-1">Delete</button>
             </form>
+        <?php elseif ($canDelete) : ?>
+            <button type="button" class="btn btn-outline-danger btn-sm ms-1" id="approval-rule-delete-blocked" disabled
+                    title="<?= Html::encode(ApprovalRuleUsage::DELETE_BLOCKED) ?>">Delete</button>
         <?php endif; ?>
     </div>
 </div>
+
+<?php if ($canDelete && $usage->isInUse()) : ?>
+    <p class="text-muted small" id="approval-rule-delete-blocked-reason"><?= Html::encode(ApprovalRuleUsage::DELETE_BLOCKED) ?></p>
+<?php endif; ?>
 
 <div class="row">
     <div class="col-lg-8">
@@ -87,5 +100,7 @@ $this->title = $model->name;
                 <td><?= Html::encode(date('Y-m-d H:i', (int)$model->created_at)) ?> by <?= Html::encode($model->creator?->username ?? '—') ?></td>
             </tr>
         </table>
+
+        <?= $this->render('_usage', ['usage' => $usage]) ?>
     </div>
 </div>

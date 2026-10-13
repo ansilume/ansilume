@@ -12,6 +12,8 @@ use app\models\ApprovalRule;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
+use app\services\ApprovalDecisionRefusedException;
+use app\services\JobCancellationService;
 use app\tests\integration\controllers\WebControllerTestCase;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\NotFoundHttpException;
@@ -43,6 +45,11 @@ class ApprovalsControllerTest extends WebControllerTestCase
         $this->assertContains($requests['open'], $ids);
         $this->assertNotContains($requests['foreign'], $ids);
         $this->assertSame(count($ids), $result['meta']['total']);
+        foreach ($result['data'] as $row) {
+            $request = ApprovalRequest::findOne($row['id']);
+            $this->assertNotNull($request);
+            $this->assertSame($request->launcherId(), $row['launched_by']);
+        }
     }
 
     public function testIndexListsEveryRequestForAnAdmin(): void
@@ -85,6 +92,11 @@ class ApprovalsControllerTest extends WebControllerTestCase
         $this->assertArrayHasKey('data', $result);
         $this->assertSame($request->id, $result['data']['id']);
         $this->assertSame(ApprovalRequest::STATUS_PENDING, $result['data']['status']);
+        $this->assertSame($request->launcherId(), $result['data']['launched_by']);
+        $this->assertSame(
+            ['id', 'job_id', 'launched_by', 'approval_rule_id', 'status', 'requested_at', 'resolved_at', 'expires_at', 'approval_count', 'rejection_count'],
+            array_keys($result['data'])
+        );
     }
 
     public function testViewOfAMissingRequestIs404(): void
@@ -176,6 +188,195 @@ class ApprovalsControllerTest extends WebControllerTestCase
         $this->assertSame(ApprovalRequest::STATUS_APPROVED, $result['data']['status']);
     }
 
+    /**
+     * Regression: the launcher could approve their own job through the API.
+     */
+    public function testRegressionTheLauncherCouldApproveTheirOwnJob(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member'], $s['outsider']], 1, $s['member']);
+        $this->authenticate($s['member']);
+
+        $result = $this->controller()->actionApprove((int)$request->id);
+
+        $this->assertSame(['error' => ['message' => ApprovalDecisionRefusedException::LAUNCHER_REFUSED]], $result);
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+        $this->assertSame(0, $this->decisionCount($request));
+    }
+
+    /**
+     * A vote on a request that is no longer pending answers 409 with the
+     * request's status, also for a caller who is no approver (the state is
+     * checked first; the caller may see the request anyway).
+     *
+     * Regression: a resolved request answered 403 "not eligible", as if the
+     * approver were none.
+     */
+    public function testAVoteOnAResolvedRequestIs409WithItsStatus(): void
+    {
+        $s = $this->teamScope();
+        // An open project: the outsider, who is no approver, may see the request.
+        $request = $this->request($s['open'], [$s['member'], $s['admin']]);
+        $this->authenticate($s['admin']);
+        $this->controller()->actionApprove((int)$request->id);
+
+        foreach ([$s['member'], $s['outsider']] as $voter) {
+            $this->authenticate($voter);
+            $result = $this->controller()->actionReject((int)$request->id);
+
+            $this->assertSame(['error' => [
+                'message' => sprintf(ApprovalDecisionRefusedException::RESOLVED, (int)$request->id, 'approved'),
+                'status' => ApprovalRequest::STATUS_APPROVED,
+            ]], $result);
+            $this->assertSame(409, \Yii::$app->response->statusCode);
+        }
+        $this->assertSame(1, $this->decisionCount($request));
+    }
+
+    public function testAVoteOnAnExpiredRequestIs409(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $request->expires_at = time() - 60;
+        $request->save(false);
+        $this->authenticate($s['member']);
+
+        $result = $this->controller()->actionApprove((int)$request->id);
+
+        $this->assertSame(['error' => [
+            'message' => sprintf(ApprovalDecisionRefusedException::EXPIRED, (int)$request->id),
+            'status' => ApprovalRequest::STATUS_PENDING,
+        ]], $result);
+        $this->assertSame(409, \Yii::$app->response->statusCode);
+        $this->assertSame(0, $this->decisionCount($request));
+    }
+
+    public function testAVoteAfterTheJobWasCanceledIs409Canceled(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $job = Job::findOne($request->job_id);
+        $this->assertNotNull($job);
+        /** @var JobCancellationService $cancellation */
+        $cancellation = \Yii::$app->get('jobCancellationService');
+        $this->assertTrue($cancellation->cancel($job, (int)$s['admin']->id));
+        $this->authenticate($s['member']);
+
+        $result = $this->controller()->actionApprove((int)$request->id);
+
+        $this->assertSame(['error' => [
+            'message' => sprintf(ApprovalDecisionRefusedException::RESOLVED, (int)$request->id, 'canceled'),
+            'status' => ApprovalRequest::STATUS_CANCELED,
+        ]], $result);
+        $this->assertSame(409, \Yii::$app->response->statusCode);
+    }
+
+    public function testAVoteOnARequestWhoseJobNoLongerWaitsIs409AndClosesIt(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        Job::updateAll(['status' => Job::STATUS_FAILED], ['id' => $request->job_id]);
+        $this->authenticate($s['member']);
+
+        $result = $this->controller()->actionApprove((int)$request->id);
+
+        $this->assertSame(['error' => [
+            'message' => sprintf(ApprovalDecisionRefusedException::JOB_NOT_WAITING, (int)$request->id, (int)$request->job_id),
+            'status' => ApprovalRequest::STATUS_CANCELED,
+        ]], $result);
+        $this->assertSame(409, \Yii::$app->response->statusCode);
+        $request->refresh();
+        $this->assertSame(ApprovalRequest::STATUS_CANCELED, $request->status);
+    }
+
+    public function testACommentThatIsTooLongIs422(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $this->authenticate($s['member']);
+        $this->setBody(['comment' => str_repeat('x', 1001)]);
+
+        $result = $this->controller()->actionReject((int)$request->id);
+
+        $this->assertSame(['error' => ['message' => sprintf(
+            ApprovalDecisionRefusedException::INVALID_DECISION,
+            'Comment should contain at most 1,000 characters.'
+        )]], $result);
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(0, $this->decisionCount($request));
+    }
+
+    /**
+     * Regression: a comment that is no text ({"comment": ["x"]}) ended in a
+     * server error ("Array to string conversion"), and a number or a
+     * boolean was stored as text. They answer 422 now, and nothing is
+     * recorded.
+     *
+     * @return array<string, array{0: string, 1: mixed}>
+     */
+    public static function commentThatIsNoTextProvider(): array
+    {
+        return [
+            'approve with a list' => ['approve', ['x']],
+            'reject with an object' => ['reject', ['text' => 'x']],
+            'approve with a number' => ['approve', 5],
+            'reject with a boolean' => ['reject', true],
+        ];
+    }
+
+    /**
+     * @dataProvider commentThatIsNoTextProvider
+     */
+    public function testRegressionACommentThatIsNoTextEndedInAServerError(string $action, mixed $comment): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $this->authenticate($s['member']);
+        $this->setBody(['comment' => $comment]);
+
+        $ctrl = $this->controller();
+        $result = $action === 'approve' ? $ctrl->actionApprove((int)$request->id) : $ctrl->actionReject((int)$request->id);
+
+        $this->assertSame(['error' => ['message' => 'The decision cannot be recorded: Comment must be a string.']], $result);
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(0, $this->decisionCount($request));
+        $request->refresh();
+        $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
+    }
+
+    public function testANullCommentIsNone(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $this->authenticate($s['member']);
+        $this->setBody(['comment' => null]);
+
+        $result = $this->controller()->actionApprove((int)$request->id);
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertSame(ApprovalRequest::STATUS_APPROVED, $result['data']['status']);
+        $decision = ApprovalDecision::findOne(['approval_request_id' => $request->id]);
+        $this->assertNotNull($decision);
+        $this->assertNull($decision->comment);
+    }
+
+    /**
+     * Visibility comes first: a caller who may not see the request learns
+     * nothing about the comment check.
+     */
+    public function testACommentThatIsNoTextOnARequestOfAnotherTeamIs403(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['foreign'], [$s['member']]);
+        $this->authenticate($s['member']);
+        $this->setBody(['comment' => ['x']]);
+
+        $result = $this->controller()->actionApprove((int)$request->id);
+
+        $this->assertSame(['error' => ['message' => 'Forbidden.']], $result);
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+    }
+
     public function testASecondVoteIs422(): void
     {
         $s = $this->teamScope();
@@ -231,11 +432,14 @@ class ApprovalsControllerTest extends WebControllerTestCase
 
     /**
      * @param list<User> $approvers
+     * @param User|null $launcher who launched the job; by default a user who is no approver
      */
-    private function request(JobTemplate $template, array $approvers, int $required = 1): ApprovalRequest
+    private function request(JobTemplate $template, array $approvers, int $required = 1, ?User $launcher = null): ApprovalRequest
     {
         $createdBy = (int)$template->created_by;
-        $job = $this->createJob((int)$template->id, $createdBy, Job::STATUS_PENDING_APPROVAL);
+        // Launched by a user who is no approver: the launcher's own decisions never count.
+        $launcher = (int)($launcher ?? $this->createUser('launcher'))->id;
+        $job = $this->createJob((int)$template->id, $launcher, Job::STATUS_PENDING_APPROVAL);
         $rule = $this->createApprovalRule(
             $createdBy,
             ApprovalRule::APPROVER_TYPE_USERS,

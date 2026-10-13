@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectFlash, submitForm } from '../../lib/helpers';
+import { openJobTemplate } from '../../lib/triggers';
 
 // Fixtures from commands/E2eVaultAssignmentSeeder.php
 const PROJECT = 'e2e-vault-assign-project';
@@ -10,10 +11,10 @@ const VAULT_A = 'e2e-vault-assign-a';
 const VAULT_B = 'e2e-vault-assign-b';
 const VAULT_WARNING = '[data-testid="template-warning"][data-code="multiple_vault_credentials"]';
 
+// Pages through the template list: templates created after the fixtures
+// push them off the first page of the list sorted newest first.
 async function openTemplate(page: Page, name: string) {
-  await page.goto('/job-template/index?sort=-id');
-  await page.locator('#template-table tbody tr', { hasText: name }).first()
-    .locator('a', { hasText: new RegExp(`^${name}$`) }).click();
+  await openJobTemplate(page, name);
   await expect(page.locator('h2').first()).toHaveText(name);
 }
 

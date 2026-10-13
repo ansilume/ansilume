@@ -5,12 +5,18 @@ declare(strict_types=1);
 namespace app\tests\integration\services;
 
 use app\models\ApprovalRequest;
+use app\models\ApprovalRule;
+use app\models\AuditLog;
 use app\models\Job;
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
 use app\services\ApprovalService;
+use app\services\JobCancellationService;
+use app\services\WorkflowCancellationService;
 use app\services\WorkflowExecutionService;
+use app\services\WorkflowLaunchRejectedException;
+use app\services\WorkflowStepDispatcher;
 use app\tests\integration\DbTestCase;
 use app\tests\integration\TeamScopeFixtures;
 
@@ -57,8 +63,8 @@ class WorkflowExecutionServiceTest extends DbTestCase
         $user = $this->createUserWithRole('wf_empty', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('no steps');
+        $this->expectException(WorkflowLaunchRejectedException::class);
+        $this->expectExceptionMessage(sprintf(WorkflowExecutionService::NO_STEPS, $wt->id));
         $this->service()->launch($wt, $user->id);
     }
 
@@ -338,6 +344,71 @@ class WorkflowExecutionServiceTest extends DbTestCase
 
         $wjs->refresh();
         $this->assertSame(WorkflowJobStep::STATUS_FAILED, $wjs->status);
+        $this->assertSame(WorkflowCancellationService::STEP_RUN_CANCELED, $wjs->error_message);
+        /** @var AuditLog|null $canceled */
+        $canceled = AuditLog::findOne(['action' => AuditLog::ACTION_JOB_CANCELED, 'object_type' => 'job', 'object_id' => $childJob->id]);
+        $this->assertNotNull($canceled);
+        $this->assertSame((int)$user->id, (int)$canceled->user_id);
+        $this->assertSame(
+            ['reason' => JobCancellationService::REASON_WORKFLOW_CANCELED, 'workflow_job_id' => (int)$wfJob->id],
+            json_decode((string)$canceled->metadata, true)
+        );
+    }
+
+    /**
+     * Regression: canceling a run that waited at an approval step left the
+     * step's approval request pending: approvers could still decide it, and
+     * it stayed on the dashboard. The engine's cancel goes through
+     * WorkflowCancellationService now: the request is canceled with the
+     * placeholder, and the run has one workflow.canceled entry and no stray
+     * workflow.failed one.
+     */
+    public function testRegressionCancelingARunAtAnApprovalStepClosesItsRequest(): void
+    {
+        $user = $this->createUserWithRole('wf_cancel_gate', 'operator');
+        $approver = $this->createUserWithRole('wf_cancel_gate_approver', 'operator');
+        $wt = $this->createWorkflowTemplate($user->id);
+        $rule = $this->operatorRule($user->id, $approver->id);
+        $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_APPROVAL, null, $rule->id);
+        $wfJob = $this->service()->launch($wt, $user->id);
+        /** @var ApprovalRequest $request */
+        $request = ApprovalRequest::findOne(['approval_rule_id' => $rule->id]);
+
+        $this->service()->cancel($wfJob, $user->id);
+
+        $request->refresh();
+        $this->assertSame(ApprovalRequest::STATUS_CANCELED, $request->status);
+        $this->assertNotNull($request->resolved_at);
+        $this->assertSame(Job::STATUS_CANCELED, Job::findOne($request->job_id)?->status);
+        $wfJob->refresh();
+        $this->assertSame(WorkflowJob::STATUS_CANCELED, $wfJob->status);
+        $canceled = AuditLog::find()->where(['action' => AuditLog::ACTION_WORKFLOW_CANCELED, 'object_id' => $wfJob->id])->all();
+        $this->assertCount(1, $canceled);
+        $this->assertSame(['reason' => JobCancellationService::REASON_OPERATOR], json_decode((string)$canceled[0]->metadata, true));
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_WORKFLOW_FAILED, 'object_id' => $wfJob->id])->exists());
+    }
+
+    /**
+     * A run that ended after the caller loaded it is not canceled again: the
+     * cancel answers that it is finished and writes nothing.
+     */
+    public function testCancelOfARunThatEndedMeanwhileIsRefused(): void
+    {
+        $user = $this->createUserWithRole('wf_cancel_stale', 'operator');
+        $wt = $this->createWorkflowTemplate($user->id);
+        $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_PAUSE);
+        $wfJob = $this->service()->launch($wt, $user->id);
+        WorkflowJob::updateAll(['status' => WorkflowJob::STATUS_SUCCEEDED, 'finished_at' => time()], ['id' => $wfJob->id]);
+
+        try {
+            $this->service()->cancel($wfJob, $user->id);
+            $this->fail('expected a refusal');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(WorkflowExecutionService::RUN_FINISHED, $e->getMessage());
+        }
+
+        $this->assertSame(WorkflowJob::STATUS_SUCCEEDED, $wfJob->status, 'the model is refreshed');
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_WORKFLOW_CANCELED, 'object_id' => $wfJob->id])->exists());
     }
 
     public function testVariablePassingBetweenSteps(): void
@@ -406,14 +477,23 @@ class WorkflowExecutionServiceTest extends DbTestCase
         $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
     }
 
+    /**
+     * A launch refuses an approval step without a rule up front
+     * (WorkflowExecutionLaunchTest). A step whose rule is gone by the time
+     * the run reaches it fails there, without a placeholder job or request.
+     */
     public function testApprovalStepWithMissingRuleFailsStep(): void
     {
         $user = $this->createUserWithRole('wf_approval', 'operator');
+        $approver = $this->createUserWithRole('wf_approval_approver', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
-        // Approval step with no approval_rule_id
-        $step = $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_APPROVAL);
+        $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_PAUSE);
+        $rule = $this->operatorRule($user->id, $approver->id);
+        $step = $this->createWorkflowStep($wt->id, 1, WorkflowStep::TYPE_APPROVAL, null, $rule->id);
 
         $wfJob = $this->service()->launch($wt, $user->id);
+        WorkflowStep::updateAll(['approval_rule_id' => null], ['id' => $step->id]);
+        $this->service()->resume($wfJob, $user->id);
 
         $wjs = WorkflowJobStep::findOne([
             'workflow_job_id' => $wfJob->id,
@@ -421,6 +501,11 @@ class WorkflowExecutionServiceTest extends DbTestCase
         ]);
         $this->assertNotNull($wjs);
         $this->assertSame(WorkflowJobStep::STATUS_FAILED, $wjs->status);
+        $this->assertSame(WorkflowStepDispatcher::RULE_GONE, $wjs->error_message);
+        $this->assertNull($wjs->job_id, 'no placeholder job');
+        $this->assertFalse(ApprovalRequest::find()->where(['approval_rule_id' => $rule->id])->exists());
+        $wfJob->refresh();
+        $this->assertSame(WorkflowJob::STATUS_FAILED, $wfJob->status);
     }
 
     // ── Resume (pause step) ────────────────────────────────────────────────
@@ -590,8 +675,10 @@ class WorkflowExecutionServiceTest extends DbTestCase
     public function testApprovalStepCreatesApprovalRequest(): void
     {
         $user = $this->createUserWithRole('wf_approval_req', 'operator');
+        $approver = $this->createUserWithRole('wf_approval_req_approver', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
-        $rule = $this->createApprovalRule($user->id);
+        // An approver besides the launcher, who may decide: else the launch is refused.
+        $rule = $this->operatorRule($user->id, $approver->id);
         $step = $this->createWorkflowStep(
             $wt->id,
             0,
@@ -629,14 +716,10 @@ class WorkflowExecutionServiceTest extends DbTestCase
     public function testApprovalResolutionAdvancesWorkflow(): void
     {
         [$user, $jt] = $this->scaffoldTemplate();
-        $approver = $this->createUser('wf_approver');
+        // An operator: approvers need approval.decide.
+        $approver = $this->createUserWithRole('wf_approver', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
-        $rule = $this->createApprovalRule(
-            $user->id,
-            \app\models\ApprovalRule::APPROVER_TYPE_USERS,
-            json_encode(['user_ids' => [$approver->id]]) ?: '{}',
-            1
-        );
+        $rule = $this->operatorRule($user->id, $approver->id);
 
         $approvalStep = $this->createWorkflowStep(
             $wt->id,
@@ -696,14 +779,9 @@ class WorkflowExecutionServiceTest extends DbTestCase
     public function testApprovalRejectionFailsWorkflowStep(): void
     {
         $user = $this->createUserWithRole('wf_reject', 'operator');
-        $approver = $this->createUser('wf_rejector');
+        $approver = $this->createUserWithRole('wf_rejector', 'operator');
         $wt = $this->createWorkflowTemplate($user->id);
-        $rule = $this->createApprovalRule(
-            $user->id,
-            \app\models\ApprovalRule::APPROVER_TYPE_USERS,
-            json_encode(['user_ids' => [$approver->id]]) ?: '{}',
-            1
-        );
+        $rule = $this->operatorRule($user->id, $approver->id);
 
         $approvalStep = $this->createWorkflowStep(
             $wt->id,
@@ -735,9 +813,23 @@ class WorkflowExecutionServiceTest extends DbTestCase
             $wjs->status,
             'Approval step should be marked failed after rejection'
         );
+        $this->assertSame("Approval request #{$request->id} was rejected.", $wjs->error_message);
 
         // Workflow should be failed (no failure branch defined)
         $wfJob->refresh();
         $this->assertSame(WorkflowJob::STATUS_FAILED, $wfJob->status);
+    }
+
+    /**
+     * A rule whose approvers are $approverIds, users who may decide.
+     */
+    private function operatorRule(int $createdBy, int ...$approverIds): ApprovalRule
+    {
+        return $this->createApprovalRule(
+            $createdBy,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            (string)json_encode(['user_ids' => array_values($approverIds)]),
+            1
+        );
     }
 }

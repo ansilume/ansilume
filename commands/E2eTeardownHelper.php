@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\ErrorText;
 use app\models\User;
 use yii\db\Query;
 
@@ -24,18 +25,20 @@ class E2eTeardownHelper
      * Tables whose rows carry the prefix in a name column, children before
      * the rows they refer to. Teams take their members and project grants
      * along; workflow templates their steps and runs; runner groups their
-     * runners (foreign keys with ON DELETE CASCADE).
+     * runners (foreign keys with ON DELETE CASCADE). Approval rules go after
+     * the job templates and workflow steps that use them: those references
+     * restrict the delete of a rule.
      *
      * @var array<string, string> table => name column
      */
     private const NAMED = [
         'workflow_step' => 'name',
         'workflow_template' => 'name',
-        'approval_rule' => 'name',
         'schedule' => 'name',
         'webhook' => 'name',
         'notification_template' => 'name',
         'job_template' => 'name',
+        'approval_rule' => 'name',
         'credential' => 'name',
         'inventory' => 'name',
         'project' => 'name',
@@ -53,11 +56,11 @@ class E2eTeardownHelper
      */
     private const CREATED_BY = [
         'workflow_template',
-        'approval_rule',
         'schedule',
         'webhook',
         'notification_template',
         'job_template',
+        'approval_rule',
         'credential',
         'inventory',
         'project',
@@ -354,8 +357,13 @@ class E2eTeardownHelper
         ($this->logger)($msg);
     }
 
+    /**
+     * The first line of what ErrorText says about $e: a database error only
+     * as its class, SQLSTATE and driver error code (1451: a foreign key
+     * refused the delete), never its message, which quotes the statement.
+     */
     private static function firstLine(\Exception $e): string
     {
-        return strtok($e->getMessage(), "\n") ?: get_class($e);
+        return strtok(ErrorText::of($e), "\n") ?: get_class($e);
     }
 }

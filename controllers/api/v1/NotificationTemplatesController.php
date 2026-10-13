@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\ErrorText;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\services\NotificationDispatcher;
@@ -22,6 +23,15 @@ use yii\web\NotFoundHttpException;
  */
 class NotificationTemplatesController extends BaseApiController
 {
+    /**
+     * The error of a test notification that was not sent: 502 when the
+     * channel did not accept it, 500 for an error outside the delivery.
+     * sprintf(): the channel's error as NotificationDispatcher::sendSingle()
+     * returns it, or what may be said about the other error (ErrorText:
+     * never the message of a database error).
+     */
+    public const TEST_FAILED = 'Test failed: %s';
+
     protected function apiAccessRules(): array
     {
         return [
@@ -131,7 +141,10 @@ class NotificationTemplatesController extends BaseApiController
     }
 
     /**
-     * Send a test notification using sample variables.
+     * Send a test notification using sample variables: {sent: true} when
+     * the channel accepted it; 502 with the channel's error (TEST_FAILED)
+     * when it did not, which its notification.failed audit entry carries
+     * too; 500 for an error outside the delivery.
      *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
@@ -154,11 +167,15 @@ class NotificationTemplatesController extends BaseApiController
         try {
             /** @var NotificationDispatcher $dispatcher */
             $dispatcher = \Yii::$app->get('notificationDispatcher');
-            $dispatcher->sendSingle($model, $variables);
-            return $this->success(['sent' => true]);
+            $error = $dispatcher->sendSingle($model, $variables);
         } catch (\Throwable $e) {
-            return $this->error('Test failed: ' . $e->getMessage(), 500);
+            return $this->error(sprintf(self::TEST_FAILED, ErrorText::of($e)), 500);
         }
+        if ($error !== null) {
+            return $this->error(sprintf(self::TEST_FAILED, $error), 502);
+        }
+
+        return $this->success(['sent' => true]);
     }
 
     /**

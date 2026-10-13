@@ -6,6 +6,11 @@ namespace app\tests\integration\controllers\api\v1;
 
 use app\controllers\api\v1\RunnerGroupsController;
 use app\models\ApiToken;
+use app\models\AuditLog;
+use app\models\JobTemplate;
+use app\models\Runner;
+use app\models\RunnerGroup;
+use app\services\RunnerGroupDeletionService;
 use app\tests\integration\controllers\WebControllerTestCase;
 
 /**
@@ -138,10 +143,19 @@ class RunnerGroupsControllerTest extends WebControllerTestCase
         $this->authenticateWithAdmin();
         $userId = (int)\Yii::$app->user->id;
         $group = $this->createRunnerGroup($userId);
-        $this->createRunner($group->id, $userId);
+        $runner = $this->createRunner($group->id, $userId);
 
-        $this->ctrl->actionDelete($group->id);
+        $result = $this->ctrl->actionDelete($group->id);
+
         $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(
+            ['error' => ['message' => "Cannot delete \"{$group->name}\": 1 runner(s) still belong to this group."]],
+            $result
+        );
+        $this->assertSame(['error' => ['message' => sprintf(RunnerGroupDeletionService::RUNNERS_REFUSED, $group->name, 1)]], $result);
+        $this->assertNotNull(RunnerGroup::findOne($group->id));
+        $this->assertNotNull(Runner::findOne($runner->id));
+        $this->assertFalse($this->deletionAudited((int)$group->id));
     }
 
     public function testDeleteRefusesWhenTemplatesExist(): void
@@ -151,13 +165,46 @@ class RunnerGroupsControllerTest extends WebControllerTestCase
         $group = $this->createRunnerGroup($userId);
         $project = $this->createProject($userId);
         $inventory = $this->createInventory($userId);
-        $this->createJobTemplate($project->id, $inventory->id, $group->id, $userId);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $userId);
 
-        $this->ctrl->actionDelete($group->id);
+        $result = $this->ctrl->actionDelete($group->id);
+
         $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(
+            ['error' => ['message' => "Cannot delete \"{$group->name}\": 1 job template(s) reference this group."]],
+            $result
+        );
+        $this->assertSame(['error' => ['message' => sprintf(RunnerGroupDeletionService::TEMPLATES_REFUSED, $group->name, 1)]], $result);
+        $this->assertNotNull(RunnerGroup::findOne($group->id));
+        $this->assertSame((int)$group->id, (int)JobTemplate::findOne($template->id)?->runner_group_id);
+        $this->assertFalse($this->deletionAudited((int)$group->id));
+    }
+
+    /**
+     * Deleted templates do not keep a group: they never run again.
+     */
+    public function testDeleteSucceedsWhenOnlyDeletedTemplatesReferenceTheGroup(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $group = $this->createRunnerGroup($userId);
+        $template = $this->createJobTemplate($this->createProject($userId)->id, $this->createInventory($userId)->id, $group->id, $userId);
+        $this->assertTrue($template->softDelete());
+
+        $this->assertSame(['data' => ['deleted' => true]], $this->ctrl->actionDelete($group->id));
+
+        $this->assertNull(RunnerGroup::findOne($group->id));
+        $this->assertTrue($this->deletionAudited((int)$group->id));
     }
 
     // -- Helpers --------------------------------------------------------------
+
+    private function deletionAudited(int $groupId): bool
+    {
+        return AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_RUNNER_GROUP_DELETED, 'object_type' => 'runner_group', 'object_id' => $groupId])
+            ->exists();
+    }
 
     /**
      * Extract the data payload from a success response.

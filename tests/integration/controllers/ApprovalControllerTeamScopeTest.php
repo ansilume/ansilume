@@ -11,6 +11,7 @@ use app\models\ApprovalRule;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
+use app\services\ApprovalDecisionRefusedException;
 use app\tests\integration\TeamScopeFixtures;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
@@ -162,22 +163,139 @@ class ApprovalControllerTeamScopeTest extends WebControllerTestCase
     {
         $s = $this->teamScope();
         $request = $this->request($s['own'], [$s['member']]);
-        $previous = \Yii::$app->controller;
-        // The view's form actions are routes relative to the active controller.
-        \Yii::$app->controller = $this->makeController();
 
-        try {
-            foreach ([true, false] as $canDecide) {
-                $html = \Yii::$app->view->renderFile(
-                    '@app/views/approval/view.php',
-                    ['model' => $request, 'canDecide' => $canDecide]
-                );
-                $this->assertSame($canDecide, str_contains($html, '>Approve</button>'));
-                $this->assertSame($canDecide, str_contains($html, '>Reject</button>'));
-            }
-        } finally {
-            \Yii::$app->controller = $previous;
+        foreach ([true, false] as $canDecide) {
+            $html = $this->renderView($request, ['canDecide' => $canDecide]);
+            $this->assertSame($canDecide, str_contains($html, '>Approve</button>'));
+            $this->assertSame($canDecide, str_contains($html, '>Reject</button>'));
         }
+    }
+
+    /**
+     * Regression: the Reject form had no comment field, so a rejection could
+     * not carry its reason in the web UI (the API took one).
+     */
+    public function testRegressionTheRejectFormHadNoCommentField(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+
+        $html = $this->renderView($request, ['canDecide' => true]);
+
+        $this->assertMatchesRegularExpression('~<form[^>]*id="approval-reject-form"[^>]*>.*name="comment".*>Reject</button>~s', $html);
+        $this->assertMatchesRegularExpression('~<form[^>]*id="approval-approve-form"[^>]*>.*name="comment".*>Approve</button>~s', $html);
+    }
+
+    public function testTheViewShowsWhoLaunchedTheJob(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $launcher = User::findOne($request->launcherId());
+        $this->assertNotNull($launcher);
+
+        $html = $this->renderView($request, ['canDecide' => false]);
+
+        $this->assertStringContainsString('<td id="approval-launched-by">' . $launcher->username . '</td>', $html);
+    }
+
+    public function testTheViewShowsTheNoteInsteadOfTheButtons(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+
+        $html = $this->renderView($request, ['canDecide' => false, 'decisionNote' => 'You launched <this> job.']);
+
+        $this->assertStringContainsString('<div class="alert alert-info" id="approval-decision-note">You launched &lt;this&gt; job.</div>', $html);
+        $this->assertStringNotContainsString('>Approve</button>', $html);
+        $this->assertStringNotContainsString('id="approval-decision-note"', $this->renderView($request, ['canDecide' => false]));
+    }
+
+    /**
+     * Regression: the page of a request whose rule was deleted linked to the
+     * rule page without an ID.
+     */
+    public function testRegressionTheRuleOfADeletedRuleWasLinkedWithoutAnId(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $rule = $request->approvalRule;
+        $this->assertNotNull($rule);
+        $this->assertStringContainsString('/approval-rule/view?id=' . $rule->id . '">', $this->renderView($request, ['canDecide' => false]));
+
+        ApprovalRequest::updateAll(['approval_rule_id' => null], ['id' => $request->id]);
+        $request->refresh();
+        $html = $this->renderView($request, ['canDecide' => false]);
+
+        $this->assertStringContainsString('<td id="approval-rule">deleted rule</td>', $html);
+        $this->assertStringNotContainsString('/approval-rule/view', $html);
+    }
+
+    /**
+     * Votes the launcher cast before self-approval was refused stay in the
+     * history, marked as not counted.
+     */
+    public function testTheLaunchersEarlierVoteIsMarkedNotCounted(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        foreach ([$request->launcherId() => ApprovalDecision::DECISION_APPROVED, (int)$s['member']->id => ApprovalDecision::DECISION_REJECTED] as $userId => $decision) {
+            $vote = new ApprovalDecision();
+            $vote->approval_request_id = (int)$request->id;
+            $vote->user_id = $userId;
+            $vote->decision = $decision;
+            $vote->created_at = time();
+            $vote->save(false);
+        }
+
+        $html = $this->renderView($request, ['canDecide' => false]);
+
+        $this->assertSame(1, substr_count($html, 'approval-launcher-decision'), 'only the launcher\'s vote is marked');
+        $this->assertStringContainsString('launcher, not counted', $html);
+        $this->assertMatchesRegularExpression('~<th>Approvals</th>\s*<td>0 / 1</td>~', $html, 'the launcher\'s approval does not count');
+    }
+
+    // -- the view's decision state, with the real services -----------------------------
+
+    public function testTheLauncherSeesWhyTheyCannotDecide(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member'], $s['outsider']], 1, $s['member']);
+        $this->loginAs($s['member']);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$request->id);
+
+        $this->assertFalse($ctrl->capturedParams['canDecide']);
+        $this->assertSame(ApprovalDecisionRefusedException::LAUNCHER_REFUSED, $ctrl->capturedParams['decisionNote']);
+    }
+
+    public function testAnExpiredRequestOffersNoDecisionAndSaysWhy(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $request->expires_at = time() - 60;
+        $request->save(false);
+        $this->loginAs($s['member']);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$request->id);
+
+        $this->assertFalse($ctrl->capturedParams['canDecide']);
+        $this->assertSame(sprintf(ApprovalDecisionRefusedException::EXPIRED, (int)$request->id), $ctrl->capturedParams['decisionNote']);
+    }
+
+    public function testAnApproverWhoVotedSeesNoButtons(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member'], $s['admin']], 2);
+        $this->decide($request, $s['member'], ApprovalDecision::DECISION_APPROVED);
+        $this->loginAs($s['member']);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$request->id);
+
+        $this->assertFalse($ctrl->capturedParams['canDecide']);
+        $this->assertSame(ApprovalDecisionRefusedException::ALREADY_VOTED, $ctrl->capturedParams['decisionNote']);
     }
 
     // ── approve / reject ─────────────────────────────────────────────────────
@@ -309,7 +427,7 @@ class ApprovalControllerTeamScopeTest extends WebControllerTestCase
 
         $this->assertInstanceOf(Response::class, $result);
         $this->assertSame(
-            "Approval request #{$request->id} is already resolved.",
+            sprintf(ApprovalDecisionRefusedException::RESOLVED, (int)$request->id, 'approved'),
             \Yii::$app->session->getFlash('warning')
         );
         $this->assertSame(1, $this->decisionCount($request));
@@ -339,6 +457,41 @@ class ApprovalControllerTeamScopeTest extends WebControllerTestCase
         $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
     }
 
+    /**
+     * Regression: the launcher could approve their own job, in the web UI:
+     * a forged POST of a listed launcher is 403 and records nothing.
+     */
+    public function testRegressionTheLauncherCouldApproveTheirOwnJob(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member'], $s['outsider']], 1, $s['member']);
+        $this->loginAs($s['member']);
+
+        try {
+            $this->makeController()->actionApprove((int)$request->id);
+            $this->fail('Expected 403');
+        } catch (ForbiddenHttpException $e) {
+            $this->assertSame(ApprovalDecisionRefusedException::LAUNCHER_REFUSED, $e->getMessage());
+        }
+        $this->assertSame(0, $this->decisionCount($request));
+        $request->refresh();
+        $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
+    }
+
+    public function testAVoteOnAnExpiredRequestIsAWarningAndRecordsNothing(): void
+    {
+        $s = $this->teamScope();
+        $request = $this->request($s['own'], [$s['member']]);
+        $request->expires_at = time() - 60;
+        $request->save(false);
+        $this->loginAs($s['member']);
+
+        $this->makeController()->actionApprove((int)$request->id);
+
+        $this->assertSame(sprintf(ApprovalDecisionRefusedException::EXPIRED, (int)$request->id), \Yii::$app->session->getFlash('warning'));
+        $this->assertSame(0, $this->decisionCount($request));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /**
@@ -356,11 +509,14 @@ class ApprovalControllerTeamScopeTest extends WebControllerTestCase
 
     /**
      * @param list<User> $approvers
+     * @param User|null $launcher who launched the job; by default a user who is no approver
      */
-    private function request(JobTemplate $template, array $approvers, int $required = 1): ApprovalRequest
+    private function request(JobTemplate $template, array $approvers, int $required = 1, ?User $launcher = null): ApprovalRequest
     {
         $createdBy = (int)$template->created_by;
-        $job = $this->createJob((int)$template->id, $createdBy, Job::STATUS_PENDING_APPROVAL);
+        // Launched by a user who is no approver: the launcher's own decisions never count.
+        $launcher = (int)($launcher ?? $this->createUser('launcher'))->id;
+        $job = $this->createJob((int)$template->id, $launcher, Job::STATUS_PENDING_APPROVAL);
         $rule = $this->createApprovalRule(
             $createdBy,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -375,6 +531,23 @@ class ApprovalControllerTeamScopeTest extends WebControllerTestCase
         $request->requested_at = time();
         $request->save(false);
         return $request;
+    }
+
+    /**
+     * The request page as the view renders it, for $params on top of the model.
+     *
+     * @param array<string, mixed> $params
+     */
+    private function renderView(ApprovalRequest $request, array $params): string
+    {
+        $previous = \Yii::$app->controller;
+        // The view's form actions are routes relative to the active controller.
+        \Yii::$app->controller = $this->makeController();
+        try {
+            return \Yii::$app->view->renderFile('@app/views/approval/view.php', ['model' => $request] + $params);
+        } finally {
+            \Yii::$app->controller = $previous;
+        }
     }
 
     private function decide(ApprovalRequest $request, User $user, string $decision): void

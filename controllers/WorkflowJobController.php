@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\WorkflowRunOperationFailure;
 use app\controllers\traits\TeamScopingTrait;
 use app\models\WorkflowJob;
+use app\models\WorkflowJobStep;
+use app\models\WorkflowStep;
 use app\services\WorkflowAccessDeniedException;
 use yii\data\ActiveDataProvider;
+use yii\db\Exception as DbException;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
@@ -19,6 +23,17 @@ use yii\web\Response;
  * workflow_template_id (deleted templates included): seeing a run needs view
  * access to the project of every job step, canceling or resuming it operator
  * access to every one.
+ *
+ * A run keeps the history of its steps: an execution shows the name and type
+ * its step had when it ran (WorkflowJobStep::stepName(), stepType()), also
+ * once the step was removed from the workflow (workflow_step_id is then
+ * null). Rows are keyed by the execution's own ID, as a step can run more
+ * than once in a run.
+ *
+ * Cancel and resume answer a refusal of the service (the run finished, no
+ * pause step waits) with a danger flash, and a database error with one too
+ * (WorkflowRunOperationFailure, logged without values) instead of an error
+ * page.
  */
 class WorkflowJobController extends BaseController
 {
@@ -73,6 +88,7 @@ class WorkflowJobController extends BaseController
                 (int)$this->currentUserId(),
                 (int)$model->workflow_template_id
             ),
+            'currentExecutionId' => $this->currentExecutionId($model),
         ]);
     }
 
@@ -113,24 +129,32 @@ class WorkflowJobController extends BaseController
     private function serializeSteps(WorkflowJob $model): array
     {
         $out = [];
-        $currentStepId = $model->current_step_id !== null ? (int)$model->current_step_id : null;
+        $currentExecutionId = $this->currentExecutionId($model);
         $now = time();
         $index = 1;
         foreach ($model->stepExecutions as $wjs) {
             $duration = $this->stepDurationSeconds($wjs, $now);
+            $stepType = $wjs->stepType();
             $out[] = [
-                'workflow_step_id' => (int)$wjs->workflow_step_id,
+                // The execution's own ID keys the row: a step can run more
+                // than once in a run, and workflow_step_id is null once the
+                // step was removed from the workflow.
+                'id' => (int)$wjs->id,
+                'workflow_step_id' => $wjs->workflow_step_id !== null ? (int)$wjs->workflow_step_id : null,
                 // step_name + step_index let the polling JS build a brand-new
                 // row when a workflow advances and a previously-unrendered
                 // step starts running. Without these the client could only
-                // update existing rows and operators had to reload.
-                'step_name' => (string)($wjs->workflowStep?->name ?? '—'),
+                // update existing rows and operators had to reload. Name and
+                // type are what the step was when it ran.
+                'step_name' => $wjs->stepName(),
+                'step_type' => $stepType,
+                'step_type_label' => $stepType === null ? '—' : (WorkflowStep::typeLabels()[$stepType] ?? $stepType),
                 'step_index' => $index++,
                 'job_id' => $wjs->job_id !== null ? (int)$wjs->job_id : null,
-                'is_current' => $currentStepId === (int)$wjs->workflow_step_id,
+                'is_current' => (int)$wjs->id === $currentExecutionId,
                 'status' => (string)$wjs->status,
-                'status_label' => \app\models\WorkflowJobStep::statusLabel($wjs->status),
-                'status_css' => \app\models\WorkflowJobStep::statusCssClass($wjs->status),
+                'status_label' => WorkflowJobStep::statusLabel($wjs->status),
+                'status_css' => WorkflowJobStep::statusCssClass($wjs->status),
                 'started_at' => $wjs->started_at !== null ? (int)$wjs->started_at : null,
                 'started_label' => $this->tsLabel($wjs->started_at, 'H:i:s'),
                 'finished_at' => $wjs->finished_at !== null ? (int)$wjs->finished_at : null,
@@ -144,6 +168,24 @@ class WorkflowJobController extends BaseController
         return $out;
     }
 
+    /**
+     * The execution the page highlights: the newest one of the run's current
+     * step; null when no execution has that step (it was removed, or the run
+     * has not started one).
+     */
+    private function currentExecutionId(WorkflowJob $model): ?int
+    {
+        $currentStepId = $model->current_step_id !== null ? (int)$model->current_step_id : null;
+        $current = null;
+        foreach ($model->stepExecutions as $wjs) {
+            if ($currentStepId !== null && $wjs->workflow_step_id !== null && (int)$wjs->workflow_step_id === $currentStepId) {
+                $current = (int)$wjs->id;
+            }
+        }
+
+        return $current;
+    }
+
     private function tsLabel(?int $ts, string $fmt): ?string
     {
         return $ts !== null ? date($fmt, $ts) : null;
@@ -154,7 +196,7 @@ class WorkflowJobController extends BaseController
      * steps return now-started so the UI shows a live-updating duration.
      * Steps that never started return null.
      */
-    private function stepDurationSeconds(\app\models\WorkflowJobStep $wjs, int $now): ?int
+    private function stepDurationSeconds(WorkflowJobStep $wjs, int $now): ?int
     {
         if ($wjs->started_at === null) {
             return null;
@@ -188,6 +230,10 @@ class WorkflowJobController extends BaseController
         $service = \Yii::$app->get('workflowExecutionService');
         try {
             $service->cancel($model, (int)\Yii::$app->user->id);
+        } catch (DbException | \PDOException $e) {
+            $failure = WorkflowRunOperationFailure::report(WorkflowRunOperationFailure::CANCEL, $id, $e);
+            $this->session()->setFlash('danger', $failure);
+            return $this->redirect(['view', 'id' => $id]);
         } catch (\RuntimeException $e) {
             $this->rethrowDenied($e);
             // e.g. the run finished meanwhile: a message, not a server error.
@@ -209,6 +255,9 @@ class WorkflowJobController extends BaseController
         try {
             $service->resume($model, (int)\Yii::$app->user->id);
             $this->session()->setFlash('success', 'Paused step resumed.');
+        } catch (DbException | \PDOException $e) {
+            $failure = WorkflowRunOperationFailure::report(WorkflowRunOperationFailure::RESUME, $id, $e);
+            $this->session()->setFlash('danger', $failure);
         } catch (\RuntimeException $e) {
             $this->rethrowDenied($e);
             $this->session()->setFlash('danger', $e->getMessage());

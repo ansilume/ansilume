@@ -18,6 +18,7 @@ use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\services\JobLaunchService;
+use app\services\WorkflowExecutionService;
 use app\tests\integration\services\RecordingNotificationDispatcher;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\NotFoundHttpException;
@@ -220,7 +221,7 @@ class TriggerControllerTeamScopeTest extends WebControllerTestCase
     {
         $scope = $this->teamScope();
         $raw = $scope['own']->generateTriggerToken((int)$scope['member']->id);
-        $this->swap('jobLaunchService', new class extends JobLaunchService {
+        $this->swap('jobLaunchService', new class () extends JobLaunchService {
             public function launch(JobTemplate $template, int $launchedBy, array $overrides = []): Job
             {
                 throw new \RuntimeException('test-launch-failure');
@@ -334,7 +335,12 @@ class TriggerControllerTeamScopeTest extends WebControllerTestCase
         $this->assertSame($outsider, (int)$this->launchedWorkflowJob($result)->launched_by);
     }
 
-    public function testFireWorkflowAnswers500ForAWorkflowWithoutSteps(): void
+    /**
+     * Regression: a trigger of a workflow without steps answered 500 "Launch
+     * failed." although the caller can fix it; it is a refusal with the
+     * reason (422), and nothing is launched or recorded as fired.
+     */
+    public function testRegressionAFireOfAWorkflowWithoutStepsAnswers422WithTheReason(): void
     {
         $scope = $this->teamScope();
         $wt = $this->createWorkflowTemplate((int)$scope['admin']->id);
@@ -342,8 +348,14 @@ class TriggerControllerTeamScopeTest extends WebControllerTestCase
 
         $result = $this->fireWorkflow($raw);
 
-        $this->assertSame(500, $result->statusCode);
-        $this->assertSame(['error' => 'Launch failed.'], $result->data);
+        $this->assertSame(422, $result->statusCode);
+        $this->assertSame(['error' => sprintf(WorkflowExecutionService::NO_STEPS, $wt->id)], $result->data);
+        $this->assertSame(['error' => "Workflow template #{$wt->id} has no steps."], $result->data);
+        $this->assertFalse(WorkflowJob::find()->where(['workflow_template_id' => $wt->id])->exists(), 'no run');
+        $this->assertFalse(
+            AuditLog::find()->where(['action' => AuditLog::ACTION_TRIGGER_FIRED, 'object_type' => 'workflow_template', 'object_id' => $wt->id])->exists(),
+            'a refused trigger fired nothing'
+        );
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { expectNotInPage } from '../../lib/survey-secrets';
-import { TRIGGER_HEADER, curlExample, generateTriggerToken, lastCopied, recordCopies } from '../../lib/triggers';
+import { TRIGGER_HEADER, curlExample, generateTriggerToken, lastCopied, openWorkflowTemplate, recordCopies } from '../../lib/triggers';
 
 // Inbound-trigger spec for workflow templates. Mirrors the job-template
 // trigger flow:
@@ -18,11 +18,9 @@ import { TRIGGER_HEADER, curlExample, generateTriggerToken, lastCopied, recordCo
 test.describe('Workflow template inbound trigger', () => {
   test('generate token, fire workflow via /trigger/fire-workflow with the header, revoke', async ({ page, request, baseURL }) => {
     await recordCopies(page);
-    // Navigate to the seeded workflow template's view page. Use the
-    // exact-match link to avoid matching e2e-paused-workflow / e2e-approval-workflow.
-    await page.goto('/workflow-template/index?sort=-id');
-    await page.getByRole('link', { name: 'e2e-workflow', exact: true }).first().click();
-    await page.waitForLoadState('domcontentloaded');
+    // The seeded workflow template's page, found by its exact name on any
+    // page of the index: more fixtures push it off the first one.
+    await openWorkflowTemplate(page, 'e2e-workflow');
 
     // The "Inbound Trigger" card must be visible.
     const card = page.locator('.card', { hasText: 'Inbound Trigger' });
@@ -50,6 +48,12 @@ test.describe('Workflow template inbound trigger', () => {
     await page.locator('#btn-copy-wf-curl').click();
     await expect(page.locator('#btn-copy-wf-curl')).toHaveText('Copied!');
     expect(await lastCopied(page)).toBe(curl);
+    // The body's extra vars reach every job step of the run, not only the
+    // first (trigger/workflow-extra-vars.spec.ts fires with them).
+    await expect(page.locator('#wf-trigger-extra-vars-note')).toHaveText(
+      'The body\'s extra_vars reach every job step of the run: they win over a job template\'s own extra vars, '
+        + 'and a step\'s variable mapping wins over them.',
+    );
 
     // Fire the workflow through the public trigger endpoint. The token is
     // the credential here; the request fixture's session cookies don't

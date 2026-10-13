@@ -11,6 +11,7 @@ use app\models\NotificationTemplate;
 use app\models\Schedule;
 use app\models\User;
 use app\services\NotificationDispatcher;
+use app\services\ScheduleEnablement;
 use app\services\ScheduleService;
 use app\tests\integration\DbTestCase;
 use app\tests\integration\TeamScopeFixtures;
@@ -523,7 +524,12 @@ class ScheduleServiceTest extends DbTestCase
         $this->assertCount(1, $this->failedLaunches());
     }
 
-    public function testAScheduleOfADeletedTemplateIsReportedAsFailedToLaunch(): void
+    /**
+     * Regression: a schedule of a deleted template stayed enabled and could
+     * be re-enabled. Its run reported a failed launch on every due time,
+     * for good; now the run disables it and reports it once.
+     */
+    public function testAScheduleOfADeletedTemplateIsDisabledAndReportedOnceAsFailedToLaunch(): void
     {
         [$template, $user] = $this->makeFixtures();
         $schedule = $this->createSchedule($template->id, $user->id, true, time() - 60);
@@ -533,11 +539,31 @@ class ScheduleServiceTest extends DbTestCase
 
         $this->assertSame(0, $launched);
         $this->assertSame(0, $this->countJobsForTemplate($template->id));
-        $this->assertSame(0, $this->countDenials($schedule), 'a missing template is a failure, not a denial');
+        $schedule->refresh();
+        $this->assertFalse((bool)$schedule->enabled, 'the run disables the schedule');
+        $this->assertNull($schedule->next_run_at);
+        $this->assertSame(0, $this->countDenials($schedule), 'a deleted template is a failure, not a denial');
         $failures = $this->failedLaunches();
         $this->assertCount(1, $failures);
         $this->assertSame((string)$schedule->id, $failures[0]['id']);
-        $this->assertSame("Job template not found for schedule #{$schedule->id}", $failures[0]['error']);
+        $this->assertSame(sprintf(ScheduleService::TEMPLATE_DELETED_DISABLED, $template->id), $failures[0]['error']);
+        /** @var AuditLog[] $toggles */
+        $toggles = AuditLog::find()->where([
+            'action' => AuditLog::ACTION_SCHEDULE_TOGGLED,
+            'object_type' => 'schedule',
+            'object_id' => $schedule->id,
+        ])->all();
+        $this->assertCount(1, $toggles);
+        $this->assertNull($toggles[0]->user_id, 'the system disabled it');
+        $this->assertSame(
+            ['name' => $schedule->name, 'enabled' => false, 'reason' => ScheduleEnablement::REASON_TEMPLATE_DELETED, 'job_template_id' => (int)$template->id],
+            json_decode((string)$toggles[0]->metadata, true)
+        );
+
+        // Due again (next_run_at edited by hand): a disabled schedule is not run at all.
+        Schedule::updateAll(['next_run_at' => time() - 60], ['id' => $schedule->id]);
+        $this->assertSame(0, $this->service->runDue());
+        $this->assertCount(1, $this->failedLaunches(), 'reported once');
     }
 
     // -------------------------------------------------------------------------

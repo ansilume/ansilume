@@ -4,16 +4,25 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobLog;
 use app\models\JobTask;
+use app\models\WorkflowJob;
+use app\models\WorkflowJobStep;
+use app\models\WorkflowStep;
+use app\services\JobCancellationService;
 use app\services\JobCompletionService;
+use app\services\NotificationDispatcher;
+use app\services\WorkflowExecutionService;
 use app\tests\integration\DbTestCase;
 
 /**
  * Integration tests for JobCompletionService using a real database.
- * Tests complete(), appendLog(), and saveTasks() against actual DB rows.
+ * Tests complete(), completeTimedOut(), failBeforeExecution(), appendLog(),
+ * and saveTasks() against actual DB rows, including reports that lose the
+ * race against a cancel that committed after the job was loaded.
  */
 class JobCompletionServiceIntegrationTest extends DbTestCase
 {
@@ -22,13 +31,17 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->service = \Yii::$app->get('jobCompletionService');
+        /** @var JobCompletionService $service */
+        $service = \Yii::$app->get('jobCompletionService');
+        $this->service = $service;
     }
 
-    /** Some tests swap in a webhook recorder; restore the real service. */
+    /** Some tests swap in recorders; restore the real services. */
     protected function tearDown(): void
     {
         \Yii::$app->set('webhookService', ['class' => \app\services\WebhookService::class]);
+        \Yii::$app->set('notificationDispatcher', ['class' => NotificationDispatcher::class]);
+        \Yii::$app->set('workflowExecutionService', ['class' => WorkflowExecutionService::class]);
         parent::tearDown();
     }
 
@@ -183,8 +196,10 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
             ->orderBy(['sequence' => SORT_DESC])
             ->one();
         $this->assertNotNull($log);
-        $this->assertStringContainsString('terminal status', (string)$log->content);
-        $this->assertStringContainsString('canceled', (string)$log->content);
+        $this->assertSame(
+            'Runner reported completion (exit_code=0) after job was already in terminal status "canceled" — ignored.',
+            (string)$log->content
+        );
     }
 
     public function testCompleteOnCanceledJobDoesNotWriteFinishedAudit(): void
@@ -212,6 +227,231 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $job->refresh();
         $this->assertSame(Job::STATUS_CANCELED, $job->status);
         $this->assertSame($originalFinishedAt, (int)$job->finished_at);
+    }
+
+    // -------------------------------------------------------------------------
+    // A cancel that commits after the runner API (or the claim) loaded the job
+    // -------------------------------------------------------------------------
+
+    /**
+     * @return array<string, array{0: int, 1: bool}>
+     */
+    public static function staleCompletionProvider(): array
+    {
+        return [
+            'success report' => [0, true],
+            'failure report' => [2, true],
+            'success report of a run against no host' => [0, false],
+        ];
+    }
+
+    /**
+     * Regression: a runner's completion overwrote a cancel that committed
+     * after the runner had loaded the job. complete() checked the loaded
+     * model, which still said running, and saved over the canceled job, so
+     * it ended as succeeded or failed although the cancel had succeeded,
+     * with a job.finished audit entry, a webhook and a notification on top.
+     *
+     * @dataProvider staleCompletionProvider
+     */
+    public function testACompletionDoesNotOverwriteACancelThatCommittedAfterTheLoad(int $exitCode, bool $withTaskResults): void
+    {
+        $job = $this->makeRunningJob();
+        if ($withTaskResults) {
+            $this->seedTaskFor($job, 'ok');
+        }
+        $canceledAt = $this->cancelMeanwhile($job);
+        $webhooks = $this->captureWebhooks();
+        $notifications = $this->captureNotifications();
+
+        $this->service->complete($job, $exitCode, hasChanges: true);
+
+        $this->assertStillCanceled($job, $canceledAt);
+        $this->assertSame(Job::STATUS_CANCELED, $job->status, 'the model shows the status the job has now');
+        $this->assertSame(
+            [sprintf(JobCompletionService::LATE_COMPLETION, $exitCode, Job::STATUS_CANCELED)],
+            $this->logLinesOf($job),
+            'only the line that says the report was ignored, no line about hosts'
+        );
+        $this->assertSame([], $webhooks->events);
+        $this->assertSame([], $notifications->events);
+    }
+
+    /**
+     * Regression: a runner's timeout report overwrote a cancel that
+     * committed after the runner had loaded the job.
+     */
+    public function testATimeoutReportDoesNotOverwriteACancelThatCommittedAfterTheLoad(): void
+    {
+        $job = $this->makeRunningJob();
+        $canceledAt = $this->cancelMeanwhile($job);
+        $webhooks = $this->captureWebhooks();
+        $notifications = $this->captureNotifications();
+
+        $this->service->completeTimedOut($job);
+
+        $this->assertStillCanceled($job, $canceledAt);
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
+        $this->assertSame(
+            ['Runner reported timeout after job was already in terminal status "canceled" — ignored.'],
+            $this->logLinesOf($job)
+        );
+        $this->assertSame([], $webhooks->events);
+        $this->assertSame([], $notifications->events);
+    }
+
+    /**
+     * Regression: a failure before execution (a credential of the claimed
+     * job cannot be used) overwrote a cancel that committed after the claim
+     * had loaded the job. The reason is not written either: the job never
+     * failed.
+     */
+    public function testAFailureBeforeExecutionDoesNotOverwriteACancelThatCommittedAfterTheLoad(): void
+    {
+        $job = $this->makeRunningJob();
+        $canceledAt = $this->cancelMeanwhile($job);
+        $webhooks = $this->captureWebhooks();
+        $notifications = $this->captureNotifications();
+
+        $this->service->failBeforeExecution($job, 'Job aborted before execution: 1 credential(s) could not be used.');
+
+        $this->assertStillCanceled($job, $canceledAt);
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
+        $this->assertSame([], $this->logLinesOf($job));
+        $this->assertSame([], $webhooks->events);
+        $this->assertSame([], $notifications->events);
+    }
+
+    /**
+     * Regression: the late completion of a canceled workflow step's job
+     * advanced the run a second time. The cancel had failed the step and
+     * the run had taken its failure route; the completion overwrote the job
+     * as succeeded and moved the step on again, into its success route.
+     */
+    public function testALateCompletionDoesNotAdvanceTheWorkflowOfACanceledJobAgain(): void
+    {
+        $user = $this->createUser();
+        $template = $this->createJobTemplate(
+            (int)$this->createProject((int)$user->id)->id,
+            (int)$this->createInventory((int)$user->id)->id,
+            (int)$this->createRunnerGroup((int)$user->id)->id,
+            (int)$user->id
+        );
+        $workflow = $this->createWorkflowTemplate((int)$user->id);
+        $first = $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_JOB, (int)$template->id);
+        $onSuccess = $this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_JOB, (int)$template->id);
+        $onFailure = $this->createWorkflowStep((int)$workflow->id, 30, WorkflowStep::TYPE_PAUSE);
+        $first->on_success_step_id = $onSuccess->id;
+        $first->on_failure_step_id = $onFailure->id;
+        $first->save(false);
+        $job = $this->createJob((int)$template->id, (int)$user->id, Job::STATUS_RUNNING);
+        $run = $this->runningRunAt($first, $job);
+        $this->seedTaskFor($job, 'ok');
+        $this->cancelMeanwhile($job);
+        $executions = $this->executionsOf($run);
+        $engine = $this->recordWorkflowAdvances();
+
+        $this->service->complete($job, 0);
+
+        $this->assertSame([], $engine->advancedJobIds, 'the late report does not move the run');
+        $this->assertSame($executions, $this->executionsOf($run), 'no execution changed and none started');
+        $this->assertFalse(
+            WorkflowJobStep::find()->where(['workflow_job_id' => $run->id, 'workflow_step_id' => $onSuccess->id])->exists(),
+            'the success route never ran'
+        );
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
+    }
+
+    /**
+     * @return array<string, array{0: \Closure(JobCompletionService, Job): void}>
+     */
+    public static function reportProvider(): array
+    {
+        return [
+            'completion' => [static fn (JobCompletionService $service, Job $job) => $service->complete($job, 0)],
+            'timeout' => [static fn (JobCompletionService $service, Job $job) => $service->completeTimedOut($job)],
+            'failure before execution' => [
+                static fn (JobCompletionService $service, Job $job) => $service->failBeforeExecution($job, 'Job aborted before execution.'),
+            ],
+        ];
+    }
+
+    /**
+     * A report that ends the job of a workflow step moves the run on, once:
+     * the engine ends the step and follows its route.
+     *
+     * @dataProvider reportProvider
+     * @param \Closure(JobCompletionService, Job): void $report
+     */
+    public function testAReportThatEndsTheJobOfAWorkflowStepMovesTheRunOn(\Closure $report): void
+    {
+        $user = $this->createUser();
+        $template = $this->createJobTemplate(
+            (int)$this->createProject((int)$user->id)->id,
+            (int)$this->createInventory((int)$user->id)->id,
+            (int)$this->createRunnerGroup((int)$user->id)->id,
+            (int)$user->id
+        );
+        $step = $this->createWorkflowStep((int)$this->createWorkflowTemplate((int)$user->id)->id, 10, WorkflowStep::TYPE_JOB, (int)$template->id);
+        $job = $this->createJob((int)$template->id, (int)$user->id, Job::STATUS_RUNNING);
+        $this->seedTaskFor($job, 'ok');
+        $run = $this->runningRunAt($step, $job);
+        $engine = $this->recordWorkflowAdvances();
+
+        $report($this->service, $job);
+
+        $this->assertSame([(int)$job->id], $engine->advancedJobIds);
+        $execution = WorkflowJobStep::findOne(['workflow_job_id' => $run->id, 'job_id' => $job->id]);
+        $this->assertNotNull($execution);
+        $this->assertNotSame(WorkflowJobStep::STATUS_RUNNING, $execution->status, 'the step ended with its job');
+    }
+
+    /**
+     * The line that explains a failure is written in the same transaction
+     * as the status: a failed job without its reason is never committed.
+     */
+    public function testAJobWhoseExplanationCannotBeWrittenIsNotEnded(): void
+    {
+        $job = $this->makeRunningJob();
+        $service = new class extends JobCompletionService {
+            public function appendLog(Job $job, string $stream, string $content, int $sequence): void
+            {
+                throw new \yii\db\Exception('SQLSTATE[HY000]: General error: 1030 Got error 28 "No space left on device" from storage engine');
+            }
+        };
+
+        try {
+            $service->failBeforeExecution($job, 'Job aborted before execution.');
+            $this->fail('expected the failed log write to end the call');
+        } catch (\yii\db\Exception $e) {
+            $this->assertStringContainsString('1030', $e->getMessage());
+        }
+
+        $stored = Job::findOne($job->id);
+        $this->assertNotNull($stored);
+        $this->assertSame(Job::STATUS_RUNNING, $stored->status, 'rolled back with the line');
+        $this->assertNull($stored->finished_at);
+        $this->assertNull($stored->exit_code);
+    }
+
+    /**
+     * The runner API answers with the job's status from the model: after
+     * the transition it shows what was stored.
+     */
+    public function testTheModelShowsTheStoredOutcome(): void
+    {
+        $job = $this->makeRunningJob();
+        $this->seedTaskFor($job, 'ok');
+        $before = time();
+
+        $this->service->complete($job, 0, hasChanges: true);
+
+        $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
+        $this->assertSame(0, $job->exit_code);
+        $this->assertSame(1, (int)$job->has_changes);
+        $this->assertGreaterThanOrEqual($before, (int)$job->finished_at);
+        $this->assertGreaterThanOrEqual($before, (int)$job->updated_at);
+        $this->assertSame([], $job->getDirtyAttributes(), 'nothing left for a later save() to write again');
     }
 
     // -------------------------------------------------------------------------
@@ -407,7 +647,7 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $job = $this->makeRunningJob();
         $before = time();
 
-        $this->service->cancel($job, $job->launched_by);
+        $this->assertTrue($this->service->cancel($job, $job->launched_by));
 
         $job->refresh();
         $this->assertSame(Job::STATUS_CANCELED, $job->status);
@@ -437,7 +677,7 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $job = $this->makeCanceledJob();
         $originalFinishedAt = (int)$job->finished_at;
 
-        $this->service->cancel($job, $job->launched_by);
+        $this->assertFalse($this->service->cancel($job, $job->launched_by));
 
         $job->refresh();
         $this->assertSame(Job::STATUS_CANCELED, $job->status);
@@ -543,11 +783,14 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $job = $this->makeRunningJob();
         $webhooks = $this->captureWebhooks();
 
+        $before = time();
+
         $this->service->completeTimedOut($job);
 
         $job->refresh();
         $this->assertSame(Job::STATUS_TIMED_OUT, $job->status);
         $this->assertSame(-1, (int)$job->exit_code);
+        $this->assertGreaterThanOrEqual($before, (int)$job->finished_at);
         $this->assertSame([\app\models\Webhook::EVENT_JOB_FAILURE], $webhooks->events);
     }
 
@@ -572,9 +815,144 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         return $recorder;
     }
 
+    /**
+     * Replaces notificationDispatcher with a recorder for the rest of the test.
+     *
+     * @return object{events: list<string>}
+     */
+    private function captureNotifications(): object
+    {
+        $recorder = new class extends NotificationDispatcher {
+            /** @var list<string> */
+            public array $events = [];
+
+            public function dispatch(string $event, array $payload = []): void
+            {
+                $this->events[] = $event;
+            }
+        };
+        \Yii::$app->set('notificationDispatcher', $recorder);
+
+        return $recorder;
+    }
+
+    /**
+     * Replaces workflowExecutionService with one that records the jobs it
+     * is told have completed, then does what the real one does.
+     *
+     * @return object{advancedJobIds: list<int>}
+     */
+    private function recordWorkflowAdvances(): object
+    {
+        $engine = new class extends WorkflowExecutionService {
+            /** @var list<int> */
+            public array $advancedJobIds = [];
+
+            public function onChildJobCompleted(Job $job): void
+            {
+                $this->advancedJobIds[] = (int)$job->id;
+                parent::onChildJobCompleted($job);
+            }
+        };
+        \Yii::$app->set('workflowExecutionService', $engine);
+
+        return $engine;
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * An operator cancels the job through its own copy of it, as a web or
+     * API request does while the runner holds $job: the cancel commits
+     * after $job was loaded, and $job still says running.
+     *
+     * @return int the finished_at the cancel wrote
+     */
+    private function cancelMeanwhile(Job $job): int
+    {
+        $copy = Job::findOne($job->id);
+        $this->assertNotNull($copy);
+        /** @var JobCancellationService $cancellation */
+        $cancellation = \Yii::$app->get('jobCancellationService');
+        $this->assertTrue($cancellation->cancel($copy, (int)$job->launched_by));
+        $this->assertSame(Job::STATUS_RUNNING, $job->status, 'the runner\'s model is stale');
+
+        return (int)$copy->finished_at;
+    }
+
+    /**
+     * The job is as the cancel left it: canceled at $canceledAt, without an
+     * exit code, changes or a job.finished audit entry.
+     */
+    private function assertStillCanceled(Job $job, int $canceledAt): void
+    {
+        $stored = Job::findOne($job->id);
+        $this->assertNotNull($stored);
+        $this->assertSame(Job::STATUS_CANCELED, $stored->status, 'the cancel stays');
+        $this->assertSame($canceledAt, (int)$stored->finished_at, 'finished_at is the cancel\'s');
+        $this->assertNull($stored->exit_code, 'no exit code from the late report');
+        $this->assertSame(0, (int)$stored->has_changes);
+        $this->assertFalse(
+            AuditLog::find()->where(['action' => AuditLog::ACTION_JOB_FINISHED, 'object_type' => 'job', 'object_id' => $job->id])->exists(),
+            'no job.finished audit entry'
+        );
+    }
+
+    /**
+     * @return list<string> the job's log lines, in order
+     */
+    private function logLinesOf(Job $job): array
+    {
+        /** @var list<JobLog> $logs */
+        $logs = JobLog::find()->where(['job_id' => $job->id])->orderBy(['sequence' => SORT_ASC, 'id' => SORT_ASC])->all();
+
+        return array_map(static fn (JobLog $log): string => (string)$log->content, $logs);
+    }
+
+    /**
+     * A running run of $step's workflow whose step $step runs $job.
+     */
+    private function runningRunAt(WorkflowStep $step, Job $job): WorkflowJob
+    {
+        $run = new WorkflowJob();
+        $run->workflow_template_id = $step->workflow_template_id;
+        $run->launched_by = $job->launched_by;
+        $run->status = WorkflowJob::STATUS_RUNNING;
+        $run->started_at = time();
+        $run->current_step_id = $step->id;
+        $run->created_at = time();
+        $run->updated_at = time();
+        $run->save(false);
+        $execution = new WorkflowJobStep();
+        $execution->workflow_job_id = $run->id;
+        $execution->workflow_step_id = $step->id;
+        $execution->job_id = $job->id;
+        $execution->status = WorkflowJobStep::STATUS_RUNNING;
+        $execution->started_at = time();
+        $execution->save(false);
+
+        return $run;
+    }
+
+    /**
+     * @return array<int, array{step: int|null, status: string, job: int|null}> the run's step executions by ID
+     */
+    private function executionsOf(WorkflowJob $run): array
+    {
+        $executions = [];
+        /** @var WorkflowJobStep $execution */
+        foreach (WorkflowJobStep::find()->where(['workflow_job_id' => $run->id])->orderBy(['id' => SORT_ASC])->all() as $execution) {
+            $executions[(int)$execution->id] = [
+                'step' => $execution->workflow_step_id === null ? null : (int)$execution->workflow_step_id,
+                'status' => (string)$execution->status,
+                'job' => $execution->job_id === null ? null : (int)$execution->job_id,
+            ];
+        }
+
+        return $executions;
+    }
 
     private function makeRunningJob(): Job
     {
@@ -587,18 +965,18 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
     }
 
     /**
-     * Build a job that has already been canceled through the normal
-     * JobController::actionCancel flow — status + finished_at set, but no
+     * Build a job that has already been canceled through the cancel the
+     * web and API controllers use — status + finished_at set, but no
      * exit_code. The race-guard tests use this to simulate a runner that
      * finishes the playbook after the operator already pulled the plug.
      */
     private function makeCanceledJob(): Job
     {
         $job = $this->makeRunningJob();
-        $job->status = Job::STATUS_CANCELED;
-        $job->finished_at = time();
-        $job->save(false);
-        $job->refresh();
+        /** @var JobCancellationService $cancellation */
+        $cancellation = \Yii::$app->get('jobCancellationService');
+        $this->assertTrue($cancellation->cancel($job, (int)$job->launched_by));
+        $this->assertSame(Job::STATUS_CANCELED, $job->status);
         return $job;
     }
 

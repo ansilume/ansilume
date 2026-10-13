@@ -94,6 +94,37 @@ class JobTemplateTest extends DbTestCase
     }
 
     /**
+     * Regression: approval_rule_id was a safe attribute, so every form or
+     * request body that reached load() could set or remove the rule that
+     * gates the template's launches. Only code sets it now, after the
+     * check of who may assign rules.
+     */
+    public function testTheApprovalRuleIsNotMassAssignable(): void
+    {
+        $tpl = $this->validTemplate();
+        $rule = $this->createApprovalRule((int)$tpl->created_by);
+
+        $this->assertTrue($tpl->load(['JobTemplate' => ['approval_rule_id' => (string)$rule->id, 'name' => 'loaded']]));
+        $tpl->setAttributes(['approval_rule_id' => (int)$rule->id]);
+
+        $this->assertSame('loaded', $tpl->name, 'the other fields load');
+        $this->assertNull($tpl->approval_rule_id);
+        $this->assertNotContains('approval_rule_id', $tpl->safeAttributes());
+    }
+
+    public function testAnApprovalRuleSetInCodeIsStillValidated(): void
+    {
+        $tpl = $this->validTemplate();
+        $tpl->setAttribute('approval_rule_id', 'abc');
+
+        $this->assertFalse($tpl->validate());
+        $this->assertSame(['approval_rule_id' => ['Approval rule must be an integer.']], $tpl->getErrors());
+
+        $tpl->approval_rule_id = (int)$this->createApprovalRule((int)$tpl->created_by)->id;
+        $this->assertTrue($tpl->validate());
+    }
+
+    /**
      * Without a valid project the inventory cannot belong to "another"
      * project, so only the project error is shown.
      */

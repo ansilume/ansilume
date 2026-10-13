@@ -6,6 +6,7 @@ namespace app\tests\integration\controllers\api\v1;
 
 use app\controllers\api\v1\WorkflowTemplatesController;
 use app\models\ApiToken;
+use app\models\ApprovalRule;
 use app\models\User;
 use app\models\WorkflowJob;
 use app\models\WorkflowStep;
@@ -28,8 +29,11 @@ class WorkflowTemplatesLegacyStepTest extends WebControllerTestCase
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowTemplate($s['admin']->id);
+        // The admin may decide on the member's run: a launch is refused when
+        // no approver besides the launcher may.
+        $rule = $this->createApprovalRule($s['admin']->id, ApprovalRule::APPROVER_TYPE_USERS, (string)json_encode(['user_ids' => [$s['admin']->id]]));
         $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_PAUSE, $s['foreign']->id);
-        $this->createWorkflowStep($workflow->id, 1, WorkflowStep::TYPE_APPROVAL, 987654321, $this->createApprovalRule($s['admin']->id)->id);
+        $this->createWorkflowStep($workflow->id, 1, WorkflowStep::TYPE_APPROVAL, 987654321, $rule->id);
         $this->createWorkflowStep($workflow->id, 2, WorkflowStep::TYPE_JOB, $s['own']->id);
         $this->authenticate($s['member']);
         $ctrl = new WorkflowTemplatesController('api/v1/workflow-templates', \Yii::$app);

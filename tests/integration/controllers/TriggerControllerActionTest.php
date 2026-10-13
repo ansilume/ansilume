@@ -6,10 +6,13 @@ namespace app\tests\integration\controllers;
 
 use app\components\TriggerTokenResolver;
 use app\controllers\TriggerController;
+use app\models\AuditLog;
 use app\models\WorkflowJob;
 use app\models\WorkflowTemplate;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
+use app\services\WorkflowLaunchRejectedException;
+use app\services\WorkflowRunVars;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
@@ -37,7 +40,7 @@ class TriggerControllerActionTest extends WebControllerTestCase
         // Stub WorkflowExecutionService so launch() doesn't actually push into
         // the queue or persist child WorkflowJobSteps. Keeps the test
         // hermetic — we only verify the controller's wiring.
-        $this->swapService('workflowExecutionService', new class extends WorkflowExecutionService {
+        $this->swapService('workflowExecutionService', new class () extends WorkflowExecutionService {
             public int $launchCalls = 0;
             /** @var array<string, mixed>|null */
             public ?array $lastOverrides = null;
@@ -45,6 +48,7 @@ class TriggerControllerActionTest extends WebControllerTestCase
             public ?string $lastSource = null;
             public bool $throwOnLaunch = false;
             public bool $denyLaunch = false;
+            public ?string $rejectWith = null;
             public function launch(WorkflowTemplate $template, int $launchedBy, array $overrides = [], string $source = 'web'): WorkflowJob
             {
                 $this->launchCalls++;
@@ -54,8 +58,12 @@ class TriggerControllerActionTest extends WebControllerTestCase
                 if ($this->denyLaunch) {
                     throw new WorkflowAccessDeniedException('You may not launch job template(s) #1 of this workflow.', [1]);
                 }
+                if ($this->rejectWith !== null) {
+                    throw new WorkflowLaunchRejectedException($this->rejectWith);
+                }
                 if ($this->throwOnLaunch) {
-                    throw new \RuntimeException('Workflow has no steps.');
+                    // A server-side failure, not a refusal the caller can fix.
+                    throw new \RuntimeException('Failed to create workflow job: []');
                 }
                 $j = new WorkflowJob();
                 $j->workflow_template_id = $template->id;
@@ -129,6 +137,70 @@ class TriggerControllerActionTest extends WebControllerTestCase
         $this->assertSame(['extra_vars' => ['env' => 'staging']], $svc->lastOverrides);
     }
 
+    /**
+     * @return array<string, array{0: string, 1: array<string, mixed>}>
+     */
+    public static function workflowBodyProvider(): array
+    {
+        return [
+            'an object' => ['{"extra_vars": {"env": "prod"}}', ['extra_vars' => ['env' => 'prod']]],
+            'null' => ['{"extra_vars": null}', ['extra_vars' => null]],
+            'false' => ['{"extra_vars": false}', ['extra_vars' => false]],
+            'an empty list' => ['{"extra_vars": []}', ['extra_vars' => []]],
+            'a text' => ['{"extra_vars": "env=prod"}', ['extra_vars' => 'env=prod']],
+            'no extra_vars' => ['{"limit": "web1"}', []],
+            'no JSON object' => ['["extra_vars"]', []],
+            'no JSON' => ['extra_vars=1', []],
+            'no body' => ['', []],
+        ];
+    }
+
+    /**
+     * The body's extra_vars reach the launch as sent whenever the body has
+     * the key, also when they are empty or no object: the launch refuses
+     * what it cannot take (422) instead of the trigger dropping it.
+     *
+     * @dataProvider workflowBodyProvider
+     * @param array<string, mixed> $expected
+     */
+    public function testFireWorkflowForwardsTheExtraVarsOfTheBodyAsSent(string $body, array $expected): void
+    {
+        $owner = $this->createUserWithRole('wf_owner', 'operator');
+        $template = $this->createWorkflowTemplate($owner->id);
+        $raw = $template->generateTriggerToken((int)$template->created_by);
+        /** @var \yii\web\Request $request */
+        $request = \Yii::$app->request;
+        $request->setRawBody($body);
+        $this->presentTriggerToken($raw);
+
+        $this->makeController()->actionFireWorkflow();
+
+        /** @var object{lastOverrides: array<string, mixed>} $svc */
+        $svc = \Yii::$app->get('workflowExecutionService');
+        $this->assertSame($expected, $svc->lastOverrides);
+    }
+
+    /**
+     * A launch refused for a reason the caller can fix answers 422 with the
+     * reason, as a job trigger does, and records no trigger.fired entry.
+     */
+    public function testFireWorkflowAnswers422WithTheReasonWhenTheLaunchIsRejected(): void
+    {
+        $owner = $this->createUserWithRole('wf_owner', 'operator');
+        $template = $this->createWorkflowTemplate($owner->id);
+        $raw = $template->generateTriggerToken((int)$template->created_by);
+        /** @var object{rejectWith: string|null} $svc */
+        $svc = \Yii::$app->get('workflowExecutionService');
+        $svc->rejectWith = WorkflowRunVars::NOT_AN_OBJECT;
+
+        $this->presentTriggerToken($raw);
+        $result = $this->makeController()->actionFireWorkflow();
+
+        $this->assertSame(422, $result->statusCode);
+        $this->assertSame(['error' => WorkflowRunVars::NOT_AN_OBJECT], $this->decodeJson($result));
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_TRIGGER_FIRED, 'object_id' => $template->id])->exists());
+    }
+
     public function testFireWorkflowThrowsNotFoundForUnknownToken(): void
     {
         $this->setQueryParams(['token' => 'this-token-does-not-exist']);
@@ -158,7 +230,7 @@ class TriggerControllerActionTest extends WebControllerTestCase
         $this->assertInstanceOf(Response::class, $result);
         $this->assertSame(500, $result->statusCode);
         $body = $this->decodeJson($result);
-        $this->assertArrayHasKey('error', $body);
+        $this->assertSame(['error' => 'Launch failed.'], $body, 'a server error keeps its details in the log');
     }
 
     public function testFireWorkflowRunsAsTheUserWhoGeneratedTheToken(): void

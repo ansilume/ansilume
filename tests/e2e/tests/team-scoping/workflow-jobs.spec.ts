@@ -144,10 +144,16 @@ test.describe('Team Scoping — Workflow Jobs', () => {
         { ...pause, is_current: false, status: 'succeeded', status_label: 'Succeeded', status_css: 'success' },
         {
           ...pause,
+          // Rows are keyed by the execution's own ID: a new execution has
+          // another one, or the page would update the pause row instead.
+          id: pause.id + 1000000,
           workflow_step_id: pause.workflow_step_id + 1,
           step_name: 'e2e-alpha-viewed-wf-job',
+          step_type: 'job',
+          step_type_label: 'Job',
           step_index: 2,
           job_id: null,
+          is_current: false,
           status: 'failed',
           status_label: 'Failed',
           status_css: 'danger',
@@ -163,7 +169,13 @@ test.describe('Team Scoping — Workflow Jobs', () => {
     await expect(refused.locator('[data-wjs-error]')).toHaveText(reason);
     await expect(page.locator('img[src="x"]')).toHaveCount(0);
     await expect(refused.locator('[data-wjs-status-cell] .badge')).toHaveText('Failed');
-    await expect(stepRow(page, 'e2e-alpha-viewed-wf-pause').locator('[data-wjs-error]')).toHaveCount(0);
+    await expect(refused.locator('[data-wjs-type-cell]')).toHaveText('Job');
+    await expect(refused).toHaveAttribute('data-wjs-id', /^\d+$/);
+    await expect(page.locator('#wj-steps-table tbody tr')).toHaveCount(2);
+    const pauseRow = stepRow(page, 'e2e-alpha-viewed-wf-pause');
+    await expect(pauseRow.locator('[data-wjs-error]')).toHaveCount(0);
+    await expect(pauseRow.locator('[data-wjs-type-cell]')).toHaveText('Pause');
+    await expect(pauseRow.locator('[data-wjs-status-cell] .badge')).toHaveText('Succeeded');
     // The whole answer was applied: the run is shown failed and polling stopped.
     await expect(page.locator('#wj-status')).toHaveText('Failed');
     await expect(page.locator('#wj-live')).toHaveCount(0);

@@ -1,10 +1,12 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
 import { asAdmin, idWhere, indexRows, optionLabels } from '../../lib/scoping';
+import { RUNS_AS_YOU } from '../../lib/schedules';
 
 /**
- * A schedule launches its jobs as its creator, so its job template must be
- * one the user may operate: the form lists only those, a template the user
+ * A schedule launches its jobs as the user it runs as (who created it, or
+ * last changed what or when it runs, or enabled it), so its job template must
+ * be one the user may operate: the form lists only those, a template the user
  * cannot see is reported as not existing, and one they see but may not
  * operate is refused.
  *
@@ -57,7 +59,7 @@ test.describe('Team Scoping — Schedules', () => {
     expect(labels).toContain('e2e-template');
     expect(labels).not.toContain('e2e-beta-tmpl');
     expect(labels).not.toContain('e2e-alpha-viewed-tmpl');
-    await expect(page.locator('#page-content')).toContainText('Scheduled jobs run as you.');
+    await expect(page.locator('#page-content')).toContainText(RUNS_AS_YOU);
   });
 
   test('operator cannot schedule a job template they may not operate', async ({ page, browser }, testInfo) => {

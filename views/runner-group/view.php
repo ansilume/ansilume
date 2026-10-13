@@ -19,8 +19,9 @@ $this->title = $group->name;
 
 $apiUrl = \Yii::$app->request->hostInfo;
 
-// Show token flash (only displayed once after creation or regen)
-$tokenFlash = \Yii::$app->session?->getFlash('runner_token');
+// The token of a new runner, or a regenerated one: shown once, on this page
+// only. Read with delete, so the flash is gone before the layout runs.
+$tokenFlash = \Yii::$app->session?->getFlash('runner_token', null, true);
 ?>
 
 <nav aria-label="breadcrumb">

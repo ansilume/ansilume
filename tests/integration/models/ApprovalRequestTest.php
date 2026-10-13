@@ -45,11 +45,12 @@ class ApprovalRequestTest extends DbTestCase
     public function testStatuses(): void
     {
         $statuses = ApprovalRequest::statuses();
-        $this->assertCount(4, $statuses);
+        $this->assertCount(5, $statuses);
         $this->assertContains(ApprovalRequest::STATUS_PENDING, $statuses);
         $this->assertContains(ApprovalRequest::STATUS_APPROVED, $statuses);
         $this->assertContains(ApprovalRequest::STATUS_REJECTED, $statuses);
         $this->assertContains(ApprovalRequest::STATUS_TIMED_OUT, $statuses);
+        $this->assertContains(ApprovalRequest::STATUS_CANCELED, $statuses);
     }
 
     public function testIsResolvedWhenPending(): void
@@ -73,6 +74,12 @@ class ApprovalRequestTest extends DbTestCase
     public function testIsResolvedWhenTimedOut(): void
     {
         $request = $this->createApprovalRequest(ApprovalRequest::STATUS_TIMED_OUT);
+        $this->assertTrue($request->isResolved());
+    }
+
+    public function testIsResolvedWhenCanceled(): void
+    {
+        $request = $this->createApprovalRequest(ApprovalRequest::STATUS_CANCELED);
         $this->assertTrue($request->isResolved());
     }
 
@@ -106,6 +113,23 @@ class ApprovalRequestTest extends DbTestCase
         $this->assertSame(1, $request->rejectionCount());
     }
 
+    public function testHasDecisionByTellsWhetherTheUserVoted(): void
+    {
+        $voter = $this->createUser('has-voted');
+        $other = $this->createUser('has-not-voted');
+        $request = $this->createApprovalRequest(ApprovalRequest::STATUS_PENDING);
+        $decision = new ApprovalDecision();
+        $decision->approval_request_id = $request->id;
+        $decision->user_id = $voter->id;
+        $decision->decision = ApprovalDecision::DECISION_REJECTED;
+        $decision->created_at = time();
+        $decision->save(false);
+
+        $this->assertTrue($request->hasDecisionBy((int)$voter->id));
+        $this->assertFalse($request->hasDecisionBy((int)$other->id));
+        $this->assertFalse($this->createApprovalRequest(ApprovalRequest::STATUS_PENDING)->hasDecisionBy((int)$voter->id));
+    }
+
     public function testApprovalCountZero(): void
     {
         $request = $this->createApprovalRequest(ApprovalRequest::STATUS_PENDING);
@@ -118,6 +142,7 @@ class ApprovalRequestTest extends DbTestCase
         $this->assertSame('Approved', ApprovalRequest::statusLabel(ApprovalRequest::STATUS_APPROVED));
         $this->assertSame('Rejected', ApprovalRequest::statusLabel(ApprovalRequest::STATUS_REJECTED));
         $this->assertSame('Timed Out', ApprovalRequest::statusLabel(ApprovalRequest::STATUS_TIMED_OUT));
+        $this->assertSame('Canceled', ApprovalRequest::statusLabel(ApprovalRequest::STATUS_CANCELED));
         $this->assertSame('unknown_status', ApprovalRequest::statusLabel('unknown_status'));
     }
 
@@ -127,6 +152,7 @@ class ApprovalRequestTest extends DbTestCase
         $this->assertSame('success', ApprovalRequest::statusCssClass(ApprovalRequest::STATUS_APPROVED));
         $this->assertSame('danger', ApprovalRequest::statusCssClass(ApprovalRequest::STATUS_REJECTED));
         $this->assertSame('secondary', ApprovalRequest::statusCssClass(ApprovalRequest::STATUS_TIMED_OUT));
+        $this->assertSame('dark', ApprovalRequest::statusCssClass(ApprovalRequest::STATUS_CANCELED));
         $this->assertSame('secondary', ApprovalRequest::statusCssClass('unknown_status'));
     }
 

@@ -130,6 +130,1461 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.9.0 or older: approvals and workflows
+
+Approval rules are managed by admins, and nobody approves their own
+launch, admins included: a schedule now runs as the user who last changed
+what or when it runs, and only admins change what a job template with an
+approval rule runs, and the steps of a workflow with an approval step or a
+job step whose job template has an approval rule.
+Approval timeouts are applied on every installation now, every minute. A
+workflow whose approval is rejected ends as failed unless the step has an
+On Failure branch, runs keep their history when the steps change, and the
+extra vars a run is launched with reach every job step. Deleting a job or workflow template cancels what waits for it,
+canceling a job closes its approval request, no job of a canceled workflow
+run starts any more, and an approval rule that is in use can no longer be
+deleted. What to do:
+
+1. Before the update, run the read-only queries under **Check before the
+   update** and act on what they list: the first maintenance run after the
+   update applies the timeouts of expired approval requests, launches of
+   templates whose rule has too few approvers besides the launcher are
+   refused, and workflow runs follow new routes.
+2. After the update, restart the queue-worker and the schedule-runner once
+   the app container has run the migrations, and read what the migrations
+   printed (see **Database and deployment**).
+3. Give users who are not admins and should keep managing approval rules a
+   custom role with `approval-rule.create` and `approval-rule.update` (see
+   **Approval rules are managed by admins**).
+4. Add approvers to rules that have no approver besides the users who
+   launch their jobs (see **Nobody approves their own launch**).
+5. Give approval steps, and job steps whose job template has an approval
+   rule, an On Failure branch where the workflow should go on after a
+   rejection; their Always branch is no longer taken then (see **A closed
+   approval gate ends the run as failed**).
+6. Tell the systems that launch workflows through a trigger or the API that
+   their extra vars now reach every job step, and that a refused launch
+   answers `422` (see **Launch extra vars reach every job step**).
+7. Check the schedules that the query under **Schedules run as the user who
+   last changed what or when they run** lists, and tell the users who
+   change other users' schedules that a schedule runs as them afterwards,
+   so they no longer approve its jobs.
+8. Tell the users who are not admins that only admins change the steps of
+   a workflow with a job step whose job template has an approval rule (see
+   **Gated job steps are for admins too**).
+9. Tell them that only admins change what a job template with an approval
+   rule runs, every field but its name and description; review what other
+   users set on these templates before they got their rule, and the
+   workflows that use them, and decide who may change the inventories,
+   projects and credentials they use, and who may delete credentials (see
+   **Only admins change what a gated job template runs** and **What an
+   approval rule does not stop**).
+
+**Check before the update.** Run these read-only queries with the database
+client of the `db` container, or with your own client for an external
+database, before you update:
+
+```bash
+docker compose exec db sh -c 'mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"'
+```
+
+The first lists the pending approval requests whose timeout has passed.
+Earlier releases never applied timeouts on the stock deployments; the first
+maintenance run after the update applies them all, and `after_the_update`
+says what that does. A rule whose timeout action is `approve` approves a
+job only within 60 minutes after its request expired, so such a job runs
+without a review; cancel the jobs that must not run before you update.
+
+```sql
+-- Pending approval requests whose timeout has passed
+SELECT r.id, r.job_id, j.status AS job_status, ru.name AS rule,
+  ru.timeout_action, FROM_UNIXTIME(r.expires_at) AS expired_at,
+  CASE
+    WHEN j.status IS NULL OR j.status <> 'pending_approval' THEN 'closed as canceled'
+    WHEN ru.timeout_action = 'approve' AND UNIX_TIMESTAMP() - r.expires_at <= 3600 THEN 'approved: the job runs'
+    ELSE 'rejected'
+  END AS after_the_update
+FROM approval_request r
+LEFT JOIN job j ON j.id = r.job_id
+LEFT JOIN approval_rule ru ON ru.id = r.approval_rule_id
+WHERE r.status = 'pending' AND r.expires_at IS NOT NULL
+  AND r.expires_at <= UNIX_TIMESTAMP()
+ORDER BY r.expires_at, r.id;
+```
+
+The second lists the pending requests whose job no longer waits for
+approval, mostly of jobs and workflow runs that were canceled. The update
+closes them as canceled (see **Canceling closes the approval request**):
+
+```sql
+-- Pending approval requests whose job no longer waits for approval
+SELECT r.id, r.job_id, j.status AS job_status
+FROM approval_request r
+JOIN job j ON j.id = r.job_id
+WHERE r.status = 'pending' AND j.status <> 'pending_approval'
+ORDER BY r.id;
+```
+
+The third lists every approval rule with the number of active users on its
+approver list and what uses it. Where `active_approvers` is not higher than
+`required_approvals`, a launch by one of these approvers is refused, and
+where it is lower, every launch is (see **Nobody approves their own
+launch**); such a rule's `pending_requests` may never be decided. The query
+cannot check `approval.decide` or team access, which count too, so a rule
+can have fewer eligible approvers than it shows. A rule with
+`job_templates`, `workflow_steps` or `pending_requests` above 0 is in use
+and cannot be deleted after the update. A rule whose approver list is
+empty or no valid JSON counts no approvers; the query reads such a list as
+`{}`, so that MySQL 8 does not stop at it with an error:
+
+```sql
+-- Approval rules: active approvers and what uses them
+SELECT r.id, r.name, r.approver_type, r.required_approvals,
+  (SELECT COUNT(*) FROM user u
+    WHERE u.status = 10 AND (
+      (r.approver_type = 'users'
+        AND (JSON_CONTAINS(JSON_EXTRACT(r.config, '$.user_ids'), CAST(u.id AS CHAR))
+          OR JSON_CONTAINS(JSON_EXTRACT(r.config, '$.user_ids'), JSON_QUOTE(CAST(u.id AS CHAR)))))
+      OR (r.approver_type = 'role' AND EXISTS (
+        SELECT 1 FROM auth_assignment a
+        WHERE a.user_id = u.id
+          AND a.item_name = JSON_UNQUOTE(JSON_EXTRACT(r.config, '$.role'))))
+      OR (r.approver_type = 'team' AND EXISTS (
+        SELECT 1 FROM team_member m
+        WHERE m.user_id = u.id
+          AND m.team_id = JSON_UNQUOTE(JSON_EXTRACT(r.config, '$.team_id'))))
+    )) AS active_approvers,
+  (SELECT COUNT(*) FROM job_template t
+    WHERE t.approval_rule_id = r.id AND t.deleted_at IS NULL) AS job_templates,
+  (SELECT COUNT(*) FROM workflow_step s
+    JOIN workflow_template w ON w.id = s.workflow_template_id
+    WHERE s.approval_rule_id = r.id AND w.deleted_at IS NULL) AS workflow_steps,
+  (SELECT COUNT(*) FROM approval_request q
+    JOIN job j ON j.id = q.job_id
+    WHERE q.approval_rule_id = r.id AND q.status = 'pending'
+      AND j.status = 'pending_approval') AS pending_requests
+FROM (SELECT x.*,
+    IF(JSON_VALID(x.approver_config), x.approver_config, '{}') AS config
+  FROM approval_rule x) r
+ORDER BY r.id;
+```
+
+The fourth lists the users who create or change approval rules only as
+operators today: through the operator role, or a custom role that includes
+it. They lose that with the update (see **Approval rules are managed by
+admins**):
+
+```sql
+-- Users who create or change approval rules only as operators
+SELECT u.id, u.username, a.item_name AS role
+FROM user u
+JOIN auth_assignment a ON a.user_id = u.id
+WHERE (a.item_name = 'operator'
+       OR a.item_name IN (SELECT c.parent FROM auth_item_child c
+                          WHERE c.child = 'operator'))
+  AND u.is_superadmin = 0
+  AND NOT EXISTS (
+    SELECT 1 FROM auth_assignment x
+    WHERE x.user_id = u.id
+      AND (x.item_name = 'admin' OR x.item_name IN (
+        SELECT g.parent FROM auth_item_child g
+        WHERE g.parent <> 'operator'
+          AND g.child IN ('approval-rule.create', 'approval-rule.update'))))
+ORDER BY u.id;
+```
+
+The fifth lists the workflow steps whose route changes: approval steps,
+and job steps whose job template has an approval rule, without an On
+Failure branch or with an Always branch. After a rejection, a timeout or a
+cancel, such a step no longer takes its Always branch, and without an On
+Failure branch it ends the run as failed instead of going on (see **A
+closed approval gate ends the run as failed**):
+
+```sql
+-- Approval gates without an On Failure branch or with an Always branch
+SELECT w.id AS workflow_id, w.name AS workflow, s.id AS step_id,
+  s.step_order, s.name AS step, s.step_type,
+  s.on_failure_step_id, s.on_always_step_id
+FROM workflow_step s
+JOIN workflow_template w ON w.id = s.workflow_template_id
+LEFT JOIN job_template t ON t.id = s.job_template_id
+WHERE w.deleted_at IS NULL
+  AND (CAST(s.step_type AS BINARY) = 'approval'
+    OR (CAST(s.step_type AS BINARY) = 'job' AND t.approval_rule_id IS NOT NULL))
+  AND (s.on_failure_step_id IS NULL OR s.on_always_step_id IS NOT NULL)
+ORDER BY w.id, s.step_order, s.id;
+```
+
+The sixth lists the branches to steps that no longer exist, which used to
+end a run as succeeded and fail it now (see **Branches to removed steps
+fail the run**). Remove such a step and add it again with its routes:
+
+```sql
+-- Branches to steps that no longer exist
+SELECT w.id AS workflow_id, w.name AS workflow, s.id AS step_id,
+  s.name AS step, s.on_success_step_id, s.on_failure_step_id,
+  s.on_always_step_id
+FROM workflow_step s
+JOIN workflow_template w ON w.id = s.workflow_template_id
+WHERE w.deleted_at IS NULL AND (
+  (s.on_success_step_id IS NOT NULL AND s.on_success_step_id <> 0
+    AND NOT EXISTS (SELECT 1 FROM workflow_step x
+      WHERE x.id = s.on_success_step_id
+        AND x.workflow_template_id = s.workflow_template_id))
+  OR (s.on_failure_step_id IS NOT NULL AND s.on_failure_step_id <> 0
+    AND NOT EXISTS (SELECT 1 FROM workflow_step x
+      WHERE x.id = s.on_failure_step_id
+        AND x.workflow_template_id = s.workflow_template_id))
+  OR (s.on_always_step_id IS NOT NULL AND s.on_always_step_id <> 0
+    AND NOT EXISTS (SELECT 1 FROM workflow_step x
+      WHERE x.id = s.on_always_step_id
+        AND x.workflow_template_id = s.workflow_template_id))
+)
+ORDER BY w.id, s.step_order, s.id;
+```
+
+The seventh lists the enabled schedules and the waiting jobs of job
+templates that were deleted, and the waiting jobs whose job template is
+gone, as deleting a project removes its deleted job templates for good
+(`job without template`; the job of a workflow approval step has no job
+template and is not listed). The update disables the schedules, and the
+maintenance run starts canceling the jobs within ten minutes, with a
+`job.canceled` notification for each (see **Deleting a job template cancels
+its waiting jobs and disables its schedules**):
+
+```sql
+-- Enabled schedules and waiting jobs of deleted job templates
+SELECT 'schedule' AS kind, s.id, s.name AS detail, s.job_template_id
+FROM schedule s
+JOIN job_template t ON t.id = s.job_template_id
+WHERE s.enabled <> 0 AND t.deleted_at IS NOT NULL
+UNION ALL
+SELECT 'job', j.id, j.status, j.job_template_id
+FROM job j
+JOIN job_template t ON t.id = j.job_template_id
+WHERE t.deleted_at IS NOT NULL
+  AND j.status IN ('pending', 'queued', 'pending_approval')
+UNION ALL
+SELECT 'job without template', j.id, j.status, j.job_template_id
+FROM job j
+WHERE j.job_template_id IS NULL
+  AND j.status IN ('pending', 'queued', 'pending_approval')
+  AND NOT EXISTS (SELECT 1 FROM workflow_job_step e
+    JOIN workflow_step ws ON ws.id = e.workflow_step_id
+    WHERE e.job_id = j.id AND CAST(ws.step_type AS BINARY) = 'approval')
+ORDER BY kind, id;
+```
+
+The eighth lists the running workflow runs. The steps of a workflow cannot
+change while a run of it is running (see **Workflow steps keep their
+history and wait for active runs**). A run with `stranded` 1 has no running
+step and will never finish, for example because an earlier release deleted
+its step records when the steps changed: cancel it on its page.
+
+```sql
+-- Running workflow runs; stranded: no step is running
+SELECT r.id, r.workflow_template_id, w.name AS workflow,
+  FROM_UNIXTIME(r.started_at) AS started,
+  NOT EXISTS (SELECT 1 FROM workflow_job_step e
+    WHERE e.workflow_job_id = r.id AND e.status = 'running') AS stranded
+FROM workflow_job r
+JOIN workflow_template w ON w.id = r.workflow_template_id
+WHERE r.status = 'running'
+ORDER BY r.id;
+```
+
+The ninth lists the approval steps without an approval rule that exists:
+earlier releases saved approval steps without a rule, and deleting a rule
+left its steps pointing to nothing. Such a workflow ran its first steps and
+failed at that step; after the update its launch is refused before the run
+exists, by the launch form, the API and its trigger (`422`, see
+**Database and deployment**). An admin removes the step and adds it again
+with a rule:
+
+```sql
+-- Approval steps without an approval rule that exists
+SELECT w.id AS workflow_id, w.name AS workflow, s.id AS step_id,
+  s.step_order, s.name AS step, s.approval_rule_id
+FROM workflow_step s
+JOIN workflow_template w ON w.id = s.workflow_template_id
+WHERE w.deleted_at IS NULL
+  AND CAST(s.step_type AS BINARY) = 'approval'
+  AND NOT EXISTS (SELECT 1 FROM approval_rule r WHERE r.id = s.approval_rule_id)
+ORDER BY w.id, s.step_order, s.id;
+```
+
+The tenth lists the jobs that wait for approval without an approval
+request. Earlier releases left them when a rule was deleted while it had
+pending requests, which deleted the requests, or when the request was not
+created after the job had been saved. Nobody can decide them and they never
+time out; the maintenance run cancels them after the update (see **Jobs of
+ended workflow runs never start**). `workflow_run` is the workflow run that
+waits for such a job:
+
+```sql
+-- Jobs that wait for approval without an approval request
+SELECT j.id, j.job_template_id, j.launched_by,
+  FROM_UNIXTIME(j.created_at) AS launched,
+  (SELECT e.workflow_job_id FROM workflow_job_step e
+    WHERE e.job_id = j.id LIMIT 1) AS workflow_run
+FROM job j
+WHERE j.status = 'pending_approval'
+  AND NOT EXISTS (SELECT 1 FROM approval_request r WHERE r.job_id = j.id)
+ORDER BY j.id;
+```
+
+The eleventh lists the approval rules whose approver list an older version
+stored as a JSON list or a single value instead of an object. Such a rule
+names no approvers, so every launch it gates is refused after the update,
+and the API returns its `approver_config` as `{}`. Until it gets a JSON
+object, `PUT /api/v1/approval-rules/{id}` answers `422`
+`Approver Config must be a JSON object.` for it, also when the body leaves
+`approver_config` out. An admin saves the rule in its web form, which
+stores the approvers the form shows, or sends an `approver_config` object
+with `PUT`:
+
+```sql
+-- Approval rules whose approver list is no JSON object
+SELECT id, name, approver_type, approver_config
+FROM approval_rule
+WHERE CASE WHEN JSON_VALID(approver_config)
+  THEN JSON_TYPE(approver_config) <> 'OBJECT' ELSE 0 END
+ORDER BY id;
+```
+
+**Approval rules are managed by admins.** Whoever may change a rule's
+approvers can open every gate that uses it, so creating and changing rules
+is for admins now: migration `m000082_000000_restrict_approval_rule_management`
+takes `approval-rule.create` and `approval-rule.update` from the operator
+role, and so from custom roles that include it. Deleting rules was for
+admins already. Operators keep viewing rules and deciding requests. To let
+other users manage rules, give them a custom role with both permissions.
+Choosing which rule gates what is for the same admins, users with
+`approval-rule.update` (and superadmins):
+
+- Setting, changing or removing the approval rule of a job template. The
+  job template form offers the rule only to them; everyone else sees it as
+  text with `Only admins may assign or remove an approval rule: that needs approval-rule.update.`,
+  and a forged form or `POST`/`PUT /api/v1/job-templates` with another
+  `approval_rule_id` is refused with that message (`403`) and saves
+  nothing. Sending the stored rule again, or leaving the field out, is
+  allowed. A clone keeps the rule of the template it copies, for everyone:
+  copying is no assigning, and a clone without the rule would be an ungated
+  twin. The template page shows the rule to everyone who may see the
+  template, and `job-template.created`, `job-template.updated` and the
+  clone's audit entry record `approval_rule` with `from` and `to` when the
+  rule changes.
+- Adding an approval step to a workflow, and adding, removing, moving or
+  replacing any step of a workflow that has one (see **Approval steps are
+  for admins**).
+- Changing what a job template with an approval rule runs, which would
+  change what its rule gates: every field but its name and description
+  (see **Only admins change what a gated job template runs**).
+
+Rule audit entries now record the source (`web` or `api`) and the settings;
+`approval-rule.updated` records each changed field as `from` and `to` under
+`changes`, and `approval-rule.deleted` the job templates and workflow steps
+the delete detached. A rule's creator cannot be changed by a form any more.
+
+**Nobody approves their own launch.** The user who launched a job never
+decides on its approval request, admins and superadmins included: their
+votes are refused with
+`You launched this job; another approver must decide.` (`403`), the request
+page shows them why instead of Approve and Reject, and votes they cast
+before the update count neither as approvals nor as rejections (the page
+marks them `launcher, not counted`; `approval_count` and `rejection_count`
+of the API leave them out). The launcher is the user the job was launched
+as: whoever launched it in the web UI or the API, the user a schedule runs
+as (see **Schedules run as the user who last changed what or when they
+run**), the user a trigger runs as, the user who started a workflow run
+(for its approval steps and job steps), and the user who re-launched a job.
+A trigger runs as the user who generated its token; a token generated
+before Ansilume recorded that user runs as the template's creator, who
+therefore counts as the launcher of its jobs, and never approves them,
+until the token is generated again (see
+[Review trigger tokens, schedules and workflow steps](#after-updating-from-280-or-older-team-scoping-for-workflows-approvals-and-triggers)
+in the notes of 2.8.1).
+
+An eligible approver is on the rule's approver list (a role rule counts the
+users assigned that role directly), has an active account, is a superadmin
+or holds `approval.decide`, may see the request (team scoping), and is not
+the launcher. Disabled users, users without `approval.decide`, such as
+viewers, and users who may not see the request used to count toward a
+rule's threshold; they no longer do. Console commands, which apply the
+timeouts, now give every user the RBAC default role `viewer`, as the web UI
+always did, so both count the same users.
+
+Requests that are pending at the update are decided by the same rules. One
+whose remaining approvers are only its launcher, disabled users, users
+without `approval.decide` or users who may not see it can no longer be
+decided: it holds its job, and a workflow run that waits for it, whose
+steps cannot change meanwhile. Add an approver to its rule, as who may
+decide is checked at every vote, or cancel its job; a rule's timeout still
+resolves it. The third query under **Check before the update** shows the
+rules with such requests.
+
+A launch is refused before anything is written when fewer eligible
+approvers than the rule requires remain besides the launcher, as such a
+request could never be approved:
+`Approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide on this job. An admin can add approvers to the rule.`
+The launch form shows it after `Launch failed: `, `POST /api/v1/jobs` and
+job triggers answer `422`, a scheduled run fails to launch with it, and a
+workflow job step fails with it. A workflow launch checks every approval
+step and every job step whose job template has a rule, in step order, and
+is refused (launch form, `422` from the API and triggers) with
+`Step "Release approval": approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide. An admin can add approvers to the rule.`,
+or for an approval step whose rule no longer exists with
+`Step "Release approval": its approval rule no longer exists. An admin can choose another rule.`
+An approval step that a run reaches with too few eligible approvers, for
+example because one was disabled meanwhile, fails without a request:
+`Not run: approval rule "deploy-prod" needs 1 approval(s) from users other than user #7, who launched this workflow, but only 0 of its approvers may decide.`
+The approval rule form notes that the launcher never approves when a rule
+requires as many approvals as it has approvers. A rule's timeout is no
+vote: a rule whose timeout action is `approve` still runs the launcher's
+job when nobody decides in time.
+
+**Schedules run as the user who last changed what or when they run.** A
+schedule launches its jobs as one user, the launcher of these jobs, who
+never approves them. Until now that was always the schedule's creator,
+also after other users had changed the schedule: an operator could point
+an admin's schedule at a job template with an approval rule, with extra
+vars and a time of the operator's choosing, and then approve alone the job
+that the schedule launched as the admin. Now a schedule runs as the user
+who last saved a change of what or when it runs, or enabled it:
+
+- a change of its job template, cron expression, timezone or extra vars,
+  in the schedule form or with `PUT /api/v1/schedules/{id}`; a password
+  answer entered anew or removed counts, `$encrypted$` sent back for a
+  stored answer does not, and neither do extra vars that write the same
+  values differently, such as with other spaces or line breaks;
+- enabling a disabled schedule, with **Enable** on the schedule list or
+  page, with the form's Enabled box, with `PUT` and `"enabled": true`, or
+  with `POST /api/v1/schedules/{id}/toggle`.
+
+Renaming a schedule, disabling it, and a save that changes none of these
+keep the user it runs as. The schedule page and the schedule list show
+that user as **Runs as**, the page with the note
+`Scheduled jobs run as this user, and only while they may launch the job template. Whoever saves a change to the job template, cron expression, timezone or extra vars, or enables the schedule, becomes the user it runs as.`,
+and the edit form of a schedule that runs as someone else says
+`Saving a change to the job template, cron expression, timezone or extra vars, or enabling the schedule, makes it run as you.`;
+the API keeps the field `created_by` for it. The `schedule.updated` and
+`schedule.toggled` audit entries record `run_as` with `from` and `to` when
+the user changes. This replaces the rule of 2.8.1 that editing a schedule
+keeps its creator (see
+[After updating from 2.8.0 or older](#after-updating-from-280-or-older-team-scoping-for-workflows-approvals-and-triggers)):
+a schedule whose user may no longer launch its job template starts again
+once a user who may launch it saves such a change, or disables and enables
+it; it no longer has to be recreated. After someone else changed your
+schedule, its jobs are theirs: they can no longer approve them, and you
+can.
+
+The update changes no schedule's user. A schedule that another user
+changed before the update still runs as the user it ran as, so the user
+who changed it may still approve its jobs, until someone saves such a
+change or enables it again. This read-only query, before or after the
+update, lists the schedules of job templates with an approval rule that
+users other than the one they run as changed or toggled, with these users
+(`changed_by`). Check the job template, extra vars and times of each on its
+page; whoever changes one of them, or disables and enables the schedule,
+becomes the user it runs as:
+
+```sql
+-- Schedules of gated job templates that users other than the one they
+-- run as changed or toggled
+SELECT * FROM (
+  SELECT s.id, s.name, s.enabled, s.job_template_id,
+    s.created_by AS runs_as,
+    (SELECT GROUP_CONCAT(DISTINCT a.user_id ORDER BY a.user_id)
+       FROM audit_log a
+      WHERE a.action IN ('schedule.updated', 'schedule.toggled')
+        AND a.object_type = 'schedule' AND a.object_id = s.id
+        AND a.user_id <> s.created_by) AS changed_by
+  FROM schedule s
+  JOIN job_template t ON t.id = s.job_template_id
+  WHERE t.approval_rule_id IS NOT NULL AND t.deleted_at IS NULL
+) r
+WHERE r.changed_by IS NOT NULL
+ORDER BY r.id;
+```
+
+**Only admins change what a gated job template runs.** A gated job
+template is a job template with an approval rule. A schedule, a trigger or
+a workflow launches its jobs as the user it runs as, who never approves
+them. So a user who changed another user's gated job template, its
+playbook or extra vars for example, chose what that user's schedule,
+trigger or workflow launched next, and could approve it alone. Now only
+users with `approval-rule.update` (admins and superadmins) change what a
+gated job template runs: every field but its name and description, that
+is its project, inventory, playbook, credentials and their order, extra
+vars, survey, runner group, timeout and Ansible settings such as limit,
+tags, verbosity, forks and become. Everyone else gets `403` with
+`This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.`,
+in the web UI and from `PUT /api/v1/job-templates/{id}`, and nothing is
+saved. A field sent with the value it has is no change. Values are
+compared as their field's type (`"5"` and `5` are the same), the extra vars
+and the survey as JSON, where spacing does not count, but another order of
+keys does, and the credentials as the list in its order. So a client that
+sends back what `GET /api/v1/job-templates/{id}` returned, with a new name,
+is not refused. A request that also changes the approval rule is refused
+for that first, with the message under **Approval rules are managed by
+admins**. The save locks the template and decides in the same transaction,
+so a rule that an admin assigns at the same moment counts. The template
+page and its edit form show users who may change the template, but not
+what it runs,
+`This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may still change its name and description, launch it and manage its trigger token.`,
+and the form disables every field but the name and the description, the
+credentials, the extra vars and the survey editor included; saving it
+changes only these two. They still launch the template, generate and
+revoke its trigger token and clone it, and delete it where they hold
+`job-template.delete`, which the operator role does not grant. A clone
+keeps the rule, so they may rename the clone, but not change what it runs.
+Admins see no notice and change everything as before.
+
+Assigning a rule leaves alone what was set before. When an admin gives a
+job template an approval rule, its playbook, extra vars, survey, inventory
+and credentials stay as whoever changed them last left them, and so do the
+job steps that workflows got for the template while it had no rule. From
+then on, users without `approval-rule.update` change neither the template
+nor the steps of these workflows (see **Gated job steps are for admins
+too**), but the job of such a step runs as the user who starts the run, or
+as the user its trigger runs as, and the user who added the step may
+approve it. So review the template and its workflows when you assign a
+rule. Who changed the template is in its `job-template.updated` audit
+entries (see the query under **What an approval rule does not stop**).
+This read-only query, before or after the update, lists the job steps of
+live workflows whose job template has an approval rule, with the user the
+workflow's trigger runs as (`trigger_runs_as`, empty without a token) and
+the users of the workflow's `workflow-template.created`,
+`workflow-template.updated` and `workflow-template.step.added` entries
+(`changed_by`), among them whoever added the step. Remove a step that
+should not be there:
+
+```sql
+-- Job steps of live workflows whose job template has an approval rule
+SELECT w.id AS workflow_id, w.name AS workflow, s.id AS step_id,
+  s.name AS step, t.id AS job_template_id, t.name AS job_template,
+  t.approval_rule_id,
+  IF(w.trigger_token IS NULL, NULL,
+    COALESCE(w.trigger_token_created_by, w.created_by)) AS trigger_runs_as,
+  (SELECT GROUP_CONCAT(DISTINCT a.user_id ORDER BY a.user_id)
+     FROM audit_log a
+    WHERE a.action IN ('workflow-template.created',
+                       'workflow-template.updated',
+                       'workflow-template.step.added')
+      AND a.object_type = 'workflow_template'
+      AND a.object_id = w.id) AS changed_by
+FROM workflow_step s
+JOIN workflow_template w ON w.id = s.workflow_template_id
+JOIN job_template t ON t.id = s.job_template_id
+WHERE w.deleted_at IS NULL AND t.deleted_at IS NULL
+  AND t.approval_rule_id IS NOT NULL
+  AND CAST(s.step_type AS BINARY) = 'job'
+ORDER BY w.id, s.step_order, s.id;
+```
+
+**What an approval rule does not stop.** An approval rule gates a job
+template, not a playbook or an inventory. A user who may create job
+templates in a project, as operators may, can create a template without a
+rule that runs the same playbook on the same inventory, and launch it
+without an approval; team scoping limits this to the projects the user may
+operate. Only admins assign and remove rules, but they cannot stop such a
+twin. An approval step gates the runs of its workflow, not the job
+templates in it: users who may launch those templates can launch them
+directly, or from another workflow without the step. To gate a job template
+wherever it runs, give the template an approval rule. An approval approves
+a launch, not what the job reads later: a runner gets the playbook from the
+project's repository, and the job's inventory, when it claims the job,
+after the approval, so whoever may change the inventory, or push to the
+repository, can change what an approved job does. An approval at the level
+of an inventory is planned.
+
+Only admins change a gated job template itself (see **Only admins change
+what a gated job template runs**), but not what it refers to: its
+inventory, its project and its credentials keep their own permissions. By
+default every operator holds them: `inventory.update` and `project.update`
+for the projects they may operate and their inventories (with teams, those
+where they have operator access; an inventory without a project for all of
+them), and `credential.update` for every credential. Users who may change
+these change what the template's next jobs run, such as the hosts, the
+repository and branch, or a secret, and so do users who may push to the
+repository, and users who delete a credential that the template uses:
+deleting a credential that is in use, with **Delete anyway** on its page or
+`DELETE /api/v1/credentials/{id}?force=1`, detaches it from every job
+template that uses it, gated ones included, whose next jobs then run
+without it; that needs `credential.delete`, which only admins hold by
+default. Such a change does not make them the launcher of these jobs,
+so they may approve them when they are on the rule's approver list. This
+stays so until approvals at the level of an inventory come. Until then,
+choose the approvers of a rule among admins and users who may not change
+the inventory, project and credentials of its templates, such as users of
+a custom role that holds `approval.decide` but no update permission; keep
+`credential.delete` with the admins; keep the projects of gated job
+templates in teams with few operators; and check what changed before you
+approve. This read-only query lists the changes of the last 30 days to job
+templates with an approval rule and to the inventories, projects and
+credentials they use, newest first, with the user who made them. A forced
+delete of a credential is not among them: its
+`credential.deleted` audit entry records `forced` and the number of job
+templates it was detached from (`job_templates`), not which. Pushes to a
+repository happen outside Ansilume and are not in its audit log:
+
+```sql
+-- Changes of the last 30 days to gated job templates and to the
+-- inventories, projects and credentials they use, newest first
+SELECT a.id, FROM_UNIXTIME(a.created_at) AS changed_at, a.user_id,
+  a.action, a.object_id, t.id AS job_template_id, t.name AS job_template
+FROM audit_log a
+JOIN job_template t
+  ON t.approval_rule_id IS NOT NULL AND t.deleted_at IS NULL
+  AND ((a.object_type = 'job_template' AND a.object_id = t.id)
+    OR (a.object_type = 'project' AND a.object_id = t.project_id)
+    OR (a.object_type = 'inventory' AND a.object_id = t.inventory_id)
+    OR (a.object_type = 'credential' AND (a.object_id = t.credential_id
+      OR a.object_id IN (SELECT c.credential_id
+                           FROM job_template_credential c
+                          WHERE c.job_template_id = t.id))))
+WHERE a.action IN ('job-template.updated', 'project.updated',
+                   'inventory.updated', 'credential.updated')
+  AND a.created_at >= UNIX_TIMESTAMP() - 30 * 86400
+ORDER BY a.id DESC;
+```
+
+**Votes are checked under a lock.** A vote locks its request and checks, in
+this order, that the request is still pending, that it has not expired,
+that its job still waits for approval, that the voter did not launch the
+job, that the voter is an eligible approver, and that the voter has not
+voted yet. Votes and timeouts of one request run one after the other, and
+the first that decides it wins, so a request is decided exactly once. A
+vote that loses a race, or comes late, is refused and records nothing:
+
+- `Approval request #12 is already resolved: approved.` (or `rejected`,
+  `timed out`, `canceled`): `409` with `error.status`;
+- `Approval request #12 has expired and takes no more votes; its timeout is applied by the next maintenance run.`:
+  `409`; a vote at or after `expires_at` no longer counts;
+- `Approval request #12 can no longer be decided: its job #34 no longer waits for approval.`:
+  `409`, and the request is closed as canceled; also when the job still
+  waits but can never run: its workflow step no longer runs, or its run has
+  ended, for example because canceling the run failed part way, or its job
+  template was deleted. Then the job is canceled too (see **Canceling
+  closes the approval request**);
+- `You launched this job; another approver must decide.`: `403`;
+- `You are not eligible to decide on this request.`: `403`, no longer for
+  a resolved request;
+- `User has already voted on this request.`: `422`, also for a second vote
+  sent at the same moment;
+- `The decision cannot be recorded: Comment should contain at most 1,000 characters.`:
+  `422`, which replaces `Failed to save approval decision: ...`; a comment
+  that is not a string, which answered `500` before, gets
+  `The decision cannot be recorded: Comment must be a string.`
+
+The web UI shows a refused vote as a warning (`409`), as an error page
+(`403`), or as `Your decision was not recorded: ...` (`422`). A vote that
+was recorded is answered as recorded, also when an effect after it, such as
+a notification or the next workflow step, fails; the application log then
+has `Approval request #12: the audit entry, notification or workflow advance after the vote of user #7 failed: ...`,
+without values. The
+request page names the user who launched the job (**Launched by**), says
+when the request was resolved, explains why it offers no Approve or Reject
+to a user who holds `approval.decide`, takes a comment with a rejection,
+and shows a deleted rule as `deleted rule`.
+
+**Approval timeouts run every minute.** The maintenance run of the
+schedule-runner (`php yii maintenance/run`) now applies the timeouts of
+expired approval requests, at most 100 per minute, the longest expired
+first, and prints `[maintenance] ran: approval-timeouts (resolved=N)` when it
+resolved some. It waits while database migrations are pending. The
+timeouts and the sweep of deleted templates below share a time budget of
+45 seconds per run: once it is used up, for example because a notification
+endpoint answers slowly, the run starts no further timeout or cancel, so
+that it does not hold up the schedules, and the rest follows at the next
+run. Until now nothing ran `php yii approval/check-timeouts` on the stock
+deployments, so no timeout ever applied; that command stays for
+installations with their own cron setup, applies every expired request at
+once, and prints
+`Approval timeouts not applied: N database migration(s) pending; they are applied once the update has finished.`
+during an update. A timeout whose action is `approve` approves only within
+60 minutes after the request expired, counted when the timeout is applied;
+a timeout applied later rejects, so that nothing runs that nobody reviewed
+in time. The `approval.timed_out` audit entry records `applied_action`, and
+`reason: grace_period_exceeded` when an approve came too late and rejected
+instead.
+
+When applying a timeout fails, nothing of it is kept: the application log
+has `Approval timeout of request #12 failed: ...` with the class of the
+error, and the next run tries again, before the other requests. When the
+timeout was applied but what follows it failed, such as its audit entry, a
+notification or the next step of a workflow, the log has
+`Approval request #12 was settled by its timeout, but the audit entry, notification or workflow advance after it failed: ...`
+instead. That is not tried again: a workflow run that waited for the
+request stays at its step; cancel it and launch it again (see
+[Approval timeouts or the deleted-template sweep keep failing](troubleshooting.md#approval-timeouts-or-the-deleted-template-sweep-keep-failing)).
+
+**Canceling closes the approval request.** Approval requests have a new
+status, `canceled` ("Canceled"). Canceling a job that waits for approval,
+canceling a workflow run that waits at an approval step or at a job step
+whose job waits for approval, and deleting the job template or the workflow
+template of such a job, cancel its pending request in the same transaction;
+it takes no more votes. Until now the request stayed pending, could still
+be decided, and stayed on the dashboard and in the pending list. Each such
+request gets an `approval.canceled` audit entry with `job_id`, `rule_id`
+and `reason`: `operator`, `template_deleted`, `workflow_canceled` or
+`workflow_template_deleted`, as the `job.canceled` entry of its job. A vote
+or timeout that finds a pending request whose job no longer waits closes it
+the same way, with `reason: job_not_waiting`, and the voter, or nobody for a
+timeout, as the user. One whose job still waits for approval but can never
+run is closed, and the job canceled, with the same user, as the cancel the
+vote or timeout stands in for would have done it:
+
+- the job's workflow step no longer runs, or its run has ended, whatever
+  became of its job template: the request gets
+  `reason: workflow_step_ended`, and the job a `job.canceled` entry with
+  `workflow_job_id` and the reason the run was canceled for (see **Jobs of
+  ended workflow runs never start**);
+- the job's job template was deleted, and the vote or timeout came before
+  the delete's own cancel of the job, or that cancel failed: the request
+  and the job get `reason: template_deleted`, the job its `job.canceled`
+  notification, and a workflow step that waits for the job fails with it.
+  The same holds for a job whose job template is gone, removed with its
+  project, unless it is the job of a workflow approval step, which has no
+  job template by design.
+
+Migration `m000085_000000_close_orphaned_approval_requests` closes the
+pending requests whose job no longer waits for approval that earlier
+releases left. The Approvals tab of Analytics counts canceled requests in
+their own card. The average decision time leaves them out, and
+counts a timed-out request until it expired, also when its timeout was
+applied later, as the first maintenance runs after the update do for the
+requests that expired before.
+
+A cancel changes a job only while it has not finished. When the job
+finished between the click and the cancel, the web UI shows the warning
+`Job #42 was not canceled: it is already succeeded.` (with the status in
+words) and `POST /api/v1/jobs/{id}/cancel` answers `409` with that message
+and the job's status in `error.status`; before, the cancel overwrote the
+outcome.
+
+**Deleting a job template cancels its waiting jobs and disables its
+schedules.** A deleted template can never run them: its queued jobs used to
+stay queued for good, and its schedules failed at every due time. Deleting a
+template now disables its enabled schedules and cancels its jobs that wait:
+`pending`, `queued` and `pending_approval`, each with a `job.canceled` audit
+entry (`reason: template_deleted`) and notification, and with its pending
+approval request. A workflow step that waits for such a job fails with it.
+Running jobs finish. The confirmation says so, the web UI reports
+`Template "Deploy web" deleted: 2 waiting job(s) canceled, 1 schedule(s) disabled.`,
+`DELETE /api/v1/job-templates/{id}` answers with `canceled_jobs` and
+`disabled_schedules`, and the `job-template.deleted` audit entry records
+both counts and the source. Each schedule it disables gets a
+`schedule.toggled` entry with `reason: template_deleted`, with no user when
+the system disabled it. A job whose cancel fails, for example on a database
+error, keeps waiting and is not counted in `canceled_jobs`: the application
+log names it, and the maintenance run cancels it (see
+[Approval timeouts or the deleted-template sweep keep failing](troubleshooting.md#approval-timeouts-or-the-deleted-template-sweep-keep-failing)).
+No runner claims it meanwhile, as runners never claim jobs of deleted
+templates, and a vote or a timeout on its approval request cancels it (see
+**Canceling closes the approval request**).
+
+- Enabling a schedule whose job template was deleted is refused:
+  `Schedule "Nightly deploy" was not enabled: its job template #15 was deleted. Edit the schedule to choose another job template, or delete it.`
+  (`422` from `POST /api/v1/schedules/{id}/toggle`).
+- A due schedule of a deleted template disables itself and reports once
+  `Job template #15 was deleted; the schedule was disabled.` in the
+  `schedule.failed_to_launch` notification, instead of
+  `Job template not found for schedule #N` at every due time.
+- A launch of the template at the moment it is deleted is refused with
+  `Job template #15 was deleted.`
+- Deleting a project removes its deleted job templates for good, which
+  took their jobs off them: such a job stayed queued or waiting for
+  approval, no runner took it, and an approval could still be granted that
+  never ran it. Now the project's delete first cancels these waiting jobs
+  as the delete of their template does, with `reason: template_deleted`
+  and their pending approval requests; running jobs finish. A waiting job
+  that an earlier release left without its job template can never run: a
+  vote or a timeout on its approval request cancels it (see **Canceling
+  closes the approval request**), and the sweep below cancels it once it
+  is five minutes old. The job of a workflow approval step has no job
+  template by design and is not one of them.
+- The maintenance run sweeps deleted job and workflow templates every ten
+  minutes, for templates deleted before the update, or by a delete that
+  stopped half way: it disables their schedules, cancels up to 100 of their
+  waiting jobs and up to 100 of their running workflow runs per run, the
+  oldest first, and, in the same sweep, up to 100 jobs that ended workflow
+  runs left waiting (see **Jobs of ended workflow runs never start**) or
+  that lost their job template with its project. It goes on at the next
+  run while some remain, also when the run's time budget was used up (see
+  **Approval timeouts run every minute**). It prints
+  `[maintenance] ran: deleted-template-sweep (canceled_jobs=N, disabled_schedules=N, remaining_jobs=N, canceled_runs=N, failed_runs=N, remaining_runs=N, stranded_jobs_canceled=N, stranded_jobs_failed=N, stranded_jobs_remaining=N)`.
+  When the approval timeouts used up the time budget, a sweep that is due
+  starts no cancel, and its line shows zero cancels next to what remains,
+  for example `canceled_jobs=0` and `remaining_jobs=3`; the next run goes
+  on.
+  The first runs after the update can cancel old jobs that waited for good,
+  and send their notifications (see **Check before the update**). A job or
+  run whose cancel failed is tried again at the next run; an error that
+  stops the whole sweep, such as a lost database connection, waits for its
+  next turn, ten minutes later.
+
+**Deleting a workflow template cancels its running runs.** Their running
+steps fail with
+`Not finished: the run was canceled because its workflow template was deleted.`,
+the jobs of these steps are canceled together with their pending approval
+requests, and each run gets one `workflow.canceled` audit entry and
+notification. The confirmation names the running runs, the web UI reports
+`Workflow template "Release web" deleted. 1 running run(s) were canceled.`,
+and `DELETE /api/v1/workflow-templates/{id}` answers with `canceled_runs`
+and `failed_runs`. A run whose cancel fails does not stop the others: the
+web UI warns
+`Workflow template "Release web" deleted. 1 running run(s) were canceled; 1 could not be canceled, the maintenance run retries them (see the application log).`,
+and the maintenance run cancels it later, or, when it shows canceled
+already, the jobs it left (see **Jobs of ended workflow runs never
+start**). The `workflow-template.deleted` audit entry now has the user who
+deleted it and records `canceled_runs`, `failed_runs` and the source.
+
+**Jobs of ended workflow runs never start.** Canceling a workflow run, or
+deleting its workflow template, cancels the jobs of its running steps one
+after the other. When one of these cancels failed, for example on a
+database error, the run was canceled all the same, but its job stayed
+queued, and a runner ran it, or stayed waiting for approval, and an
+approval queued it. Now:
+
+- the cancel goes on with the other steps, and the run gets its
+  `workflow.canceled` audit entry and notification all the same; the
+  application log names the step whose job was not canceled;
+- runners never claim a job of a workflow run that is no longer running;
+- a vote or timeout on the approval request of such a job closes the
+  request and cancels the job (see **Votes are checked under a lock**);
+- the maintenance run cancels such jobs with the sweep of deleted templates
+  (`stranded_jobs_canceled`), each with a `job.canceled` audit entry with
+  the reason the run was canceled for, and with no user:
+  `workflow_template_deleted` when the run was canceled because its
+  workflow template was deleted (its newest `workflow.canceled` entry says
+  so, or, without such an entry, the template is deleted), otherwise
+  `workflow_canceled`. A run that a user canceled before its template was
+  deleted keeps `workflow_canceled`. The sweep also ends the steps that
+  still show as running in ended runs, with the message of the run's
+  cancel, or `Not finished: the run had ended.` for a run that was not
+  canceled.
+
+The same sweep cancels the jobs that have waited for approval for five
+minutes or more without an approval request, which earlier releases left
+(the tenth query under **Check before the update**): `job.canceled` with
+`reason: approval_request_missing`, and its notification. A workflow step
+that waits for such a job fails as after a rejection, with
+`Not run: the approval request of its job no longer exists.`, or
+`Not approved: the approval request of this step no longer exists.` for an
+approval step: only an On Failure branch that names a step continues the
+run (see **A closed approval gate ends the run as failed**).
+
+A step that starts at the moment its run is canceled is canceled with the
+reason and the user of that cancel: after a template delete, its error is
+`Not finished: the run was canceled because its workflow template was deleted.`,
+and its job's `job.canceled` entry names the user who deleted the
+template. A database error while a job step launches its job fails the step
+with `The job could not be launched; see the application log.`, and one
+while a step's record is written ends the run as failed: the run no longer
+stays running for good, which locked the steps of its workflow.
+
+**Approval rules in use cannot be deleted.** A rule is in use while live
+job templates, steps of live workflows, or pending requests whose job still
+waits for approval refer to it. Deleting such a rule silently removed it
+from its job templates, which then ran without an approval, deleted its
+requests with their votes, and left its workflow steps to fail. Now the
+delete is refused, in the web UI and with `409` from
+`DELETE /api/v1/approval-rules/{id}`, which names the uses in
+`error.used_by`:
+`Approval rule "deploy-prod" is in use by 2 job template(s) and 1 workflow step(s). Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.`
+There is no force option. The rule page has a **Used by** card and offers
+Delete only for an unused rule. Deleting an unused rule removes it from
+deleted job templates and from steps of deleted workflows, and keeps the
+history of its resolved requests. Migration
+`m000083_000000_protect_approval_rule_references` lets the database refuse
+such deletes too, and makes `approval_rule_id` of approval requests
+nullable (see **Database and deployment**). A rule's name is not unique,
+and a change to a rule in use applies to its pending requests at their
+next vote or timeout.
+
+**A closed approval gate ends the run as failed.** An approval step that is
+rejected, times out with a rejection or is canceled, and a job step whose
+job is rejected or canceled while it waits for approval, used to go on with
+the next step when its On Failure branch was empty, as if nothing had
+happened, and the Always branch of an approval step, or of such a job step,
+was followed after a rejection, a timeout or a cancel. Now an empty On
+Failure branch ends the run as failed there, the Always branch is not taken
+(a job step still takes it after a job that ran), and only an On Failure
+branch that names a step continues the run, as the old flow did. The fifth
+query under **Check before the update** lists the steps this changes. The
+step's error says why:
+`Approval request #12 was rejected.`, `Approval request #12 timed out.` or
+`Approval request #12 was canceled.` for an approval step, and
+`Not run: approval request #12 was rejected.`, `... timed out.` or
+`... was canceled.` for a job step. Approval steps cannot have an Always
+branch any more: saving one is refused with
+`An approval step cannot have an Always branch: a rejection would continue past it.`;
+on an approval step saved before, it is followed only after an approval,
+and the workflow page marks it `(only on approval)`. Steps written through
+`POST` and `PUT /api/v1/workflow-templates` have no branches, so a
+rejected approval step written there, or a job step there whose job's
+approval is refused, now ends its run as failed. To keep a workflow going
+after a rejection, set the step's On Failure branch to the step that should
+follow. Other failed steps follow their branches as before. A closed gate
+reached by a vote or a timeout now writes the `workflow.step.completed`
+audit entry and sends the `workflow.step_failed` notification, as one
+reached by a cancel did, and an approval step that is approved writes
+`workflow.step.completed` with `status: succeeded`; neither wrote an entry
+before.
+
+**A job step whose template needs approval waits for its job.** When the
+job template of a workflow job step has an approval rule, the step waits
+for the approval and then for its job: an approval queues the job, and the
+step ends with the job's outcome. Until now an approval, or a timeout that
+approved, marked the step and its job succeeded at once: the job never ran,
+and the run went on. These jobs still show Succeeded. This read-only query
+lists them, before or after the update; `workflow_job_id` is empty where an
+earlier release deleted the step's record when the steps changed:
+
+```sql
+-- Jobs of gated workflow job steps that were marked succeeded without running
+SELECT j.id AS job_id, j.job_template_id, e.workflow_job_id,
+  r.id AS request_id, r.status AS request_status,
+  FROM_UNIXTIME(j.finished_at) AS marked_succeeded
+FROM job j
+JOIN approval_request r ON r.job_id = j.id
+  AND r.status IN ('approved', 'timed_out')
+LEFT JOIN workflow_job_step e ON e.job_id = j.id
+WHERE j.status = 'succeeded' AND j.job_template_id IS NOT NULL
+  AND j.started_at IS NULL
+ORDER BY j.id;
+```
+
+**Workflow steps keep their history and wait for active runs.** Replacing
+the steps of a workflow (`PUT /api/v1/workflow-templates/{id}` with
+`steps`), or removing a step on its page, deleted the step records of every
+earlier and running run, and a running run then stopped for good. Migration
+`m000084_000000_keep_workflow_run_history` keeps these records: each one
+keeps the name and type the step had when it ran, also after the step is
+removed. The run page, its live status and the API show them, the run page
+has a Type column, and the API returns `step_name` and `step_type` with a
+`workflow_step_id` that is null once the step is gone.
+
+- The steps of a workflow cannot change while a run of it is running: adding,
+  removing, moving and replacing steps is refused with
+  `Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.`
+  (`409` from the API, with every such run in `error.workflow_job_ids`;
+  the web UI shows it, after `Step not added: ` for a new step). The
+  workflow page names the running runs and hides the step controls while
+  there are any. A run reads the steps at every step it reaches, so a
+  change could send it elsewhere than it started, or strand it. To find the
+  runs that block a workflow, use the eighth query above with
+  `AND r.workflow_template_id = <id>`, and cancel a stranded run on its page.
+- Removing a step that other steps route to is refused:
+  `Step "Build" was not removed: other steps route to it (#10 "Retry"). Remove those steps first, and add them again with other routes if you still need them.`
+- Name and description of a workflow can change at any time, and so can its
+  trigger token; `PUT` without `steps`, or with `steps: null`, changes no
+  steps.
+
+**Approval steps are for admins.** Adding an approval step needs
+`approval-rule.update`, and so does every change of the steps of a workflow
+that has one: adding, removing, moving or replacing any step. Others get
+`403` with `Only admins may add approval steps: that needs approval-rule.update.`
+or
+`This workflow has an approval step: only admins may change its steps (approval-rule.update).`,
+in the web UI and from `POST`/`PUT /api/v1/workflow-templates`, for any
+`steps` list on such a workflow, the same steps included. The workflow page
+offers the Approval type only to them, and shows everyone else a notice
+instead of the step controls of a workflow with an approval step; they may
+still rename it, launch it and manage its trigger token. An approval step
+gates the runs of its workflow, not the job templates in it (see **What an
+approval rule does not stop**). A step's On Failure branch on an approval
+step offers "end workflow as failed" as its default. The steps table shows
+each step's Always branch in a column of its own,
+`end workflow (failed)` for an approval step without an On Failure branch,
+and `→ next step; end workflow (failed) after a refused approval` for a job
+step whose job template has an approval rule and no On Failure branch: a
+job that ran and failed goes on with the next step, and a job that never
+ran because its approval was refused ends the run as failed. The Always
+branch of such a job step is marked
+`(not after a rejected, timed-out or canceled approval)`, and the routing
+help of job steps says that only On Failure is followed after one.
+The add-step form no longer sends a
+branch that the chosen step type hides, such as the Always branch of an
+approval step, and it
+refuses with `Step not added: ` and
+`An approval step needs an approval rule.`,
+`The selected approval rule does not exist.`, the Always message above, or
+`The selected step is not part of this workflow.` for a branch to a step of
+another workflow.
+
+**Gated job steps are for admins too.** A gated job step is a job step whose
+job template has an approval rule. A workflow run launches its jobs as the
+user who started it, or as the user its trigger runs as, and that user never
+approves them. So a user who added a gated job step to another user's
+workflow chose a job that ran as that user, through the workflow's trigger
+or its next run, and could approve it alone. Now a gated job step counts
+like an approval step: adding one needs `approval-rule.update`, and so does
+every change of the steps of a workflow that has one: adding, removing,
+moving or replacing any step. Others get `403` with
+`Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.`
+or
+`This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).`,
+in the web UI and from `POST`/`PUT /api/v1/workflow-templates`, for any
+`steps` list on such a workflow, the same steps included. The add-step form
+offers them only job templates without an approval rule, and a workflow
+with a gated job step shows them the notice instead of the step controls;
+they may still rename it, launch it and manage its trigger token. Whether a
+job step is gated is read from its job template whenever the steps change:
+a job template that gets an approval rule later locks the steps of the
+workflows that use it.
+
+**The add-step form adds pause and approval steps again.** Since 2.8.1 the
+add-step form could not add a pause or an approval step: the browser checked
+the hidden job template field, which those steps leave empty, and Add Step
+did nothing, without an error you could see. The fields of the step types
+you did not choose are now disabled as well as hidden, so the browser
+neither checks nor sends them. The API was not affected.
+
+**Branches to removed steps fail the run.** A branch (On Success, On
+Failure or Always) to a step that no longer exists ended the run as
+succeeded, as if the workflow were done. Now it fails the run, and the step
+whose branch it was gets `The next step #7 of this workflow no longer exists.`
+added to its error, also when the step itself succeeded. The sixth query
+above lists such branches.
+
+**Launch extra vars reach every job step.** The extra vars a workflow run
+is launched with, by a trigger (`/trigger/fire-workflow`) or by
+`POST /api/v1/workflow-templates/{id}/launch`, which takes `extra_vars`
+now, are stored on the run and reach every job step of it, not only the
+start step. A job step gets its job template's extra vars, then the run's
+launch extra vars over them, then its own mapping of the previous step's
+output over both. A value whose key is a password field of the job template
+of any job step is a password answer: the run stores it only encrypted and
+shows `$encrypted$` (the run page and `extra_vars` of
+`GET /api/v1/workflow-jobs/{id}`), and every step's job gets it encrypted,
+also a job of a template without that field; its `job.launched` audit entry
+names the run (`workflow_job_id`) and the keys of these answers
+(`carried_secret_keys`), never their values. This changes what a playbook of
+a later step receives: callers that relied on the vars reaching the start
+step only must check their workflows.
+
+A workflow launch is now checked before its run exists, and refused with
+`422` (web UI: `Launch failed: ...`) instead of a run that fails at its
+start step:
+
+- extra vars that are not a JSON object:
+  `The extra vars must be a JSON object, such as {"env": "prod"}.`; `null`,
+  an empty text and `{}` mean none;
+- extra vars that JSON cannot hold, as for jobs (`The extra vars cannot be stored: ...`,
+  `The password answers cannot be stored: ...`), or more than a run stores:
+  `The extra vars are too large: a run stores at most 65535 bytes of them as JSON.`;
+- `$encrypted$` as a password answer of any job step's template:
+  `The value of "db_password" is the placeholder $encrypted$; send the real value.`;
+- a workflow without steps: `Workflow template #5 has no steps.`, which a
+  trigger answered with `500` `Launch failed.` before;
+- a workflow deleted while it was being launched:
+  `Workflow template #5 was deleted.`;
+- an approval that could never be granted (see **Nobody approves their own
+  launch**).
+
+`/trigger/fire-workflow` used to answer `201` for most of these and start
+the run anyway.
+
+**Runner reports after a cancel are ignored.** A report that arrives after
+the job finished, such as a completion for a job that was canceled while
+the runner ran it, no longer overwrites the job, also when the cancel or a
+reclaim committed while the runner's report was on its way. The job keeps
+its status, its log gets
+`Runner reported completion (exit_code=0) after job was already in terminal status "canceled" — ignored.`
+or `Runner reported timeout after job was already in terminal status "canceled" — ignored.`,
+and no `job.finished` audit entry, webhook, notification or workflow
+advance follows. A failure before execution writes nothing then.
+`POST /api/runner/v1/jobs/{id}/complete` answers with the status the job
+has after the report, `canceled` in this case. Runners need no update.
+
+**Known limits.** These stay as they are in this release:
+
+- The runner is not told about a cancel: it runs the playbook of a canceled
+  job to its end, and its report is ignored.
+- A job that `php yii job/reclaim-stale` marks failed because its runner
+  stopped reporting does not move its workflow run on; cancel the run.
+- Re-launch is in the web UI only; the API has no endpoint for it.
+- A request whose timeout keeps failing is retried first at every
+  maintenance run, and logged each time.
+- A workflow run whose next step could not start after a vote or a
+  timeout, because what follows the decision failed (logged), stays at its
+  step: nothing tries again. Cancel the run and launch it again.
+- Saving a schedule checks its job template without waiting for a delete of
+  the template that runs at the same moment; such a schedule never launches
+  and is disabled at its next due time or by the next sweep.
+- Deleting a job template cancels all of its waiting jobs during the
+  request; with very many, the request can run into the web server's
+  timeout, and the maintenance run cancels the rest.
+- `POST /api/v1/workflow-jobs/{id}/cancel` of a run that has finished,
+  also while it was being canceled, answers `422`
+  `Workflow is already finished.`, and the web UI shows it as an error.
+- Users who may change the inventory, the project or the credentials of a
+  gated job template, or push to its repository, change what its next jobs
+  run without becoming their launcher, and may approve them (see **What an
+  approval rule does not stop**). So may users who delete one of its
+  credentials with force (`credential.delete`, admins by default), which
+  detaches it from the template.
+- A job step that a workflow got for a job template before the template
+  got its approval rule stays: its job runs as the user who starts the
+  run, and the user who added the step may approve it (see **Only admins
+  change what a gated job template runs**).
+- A migration that fails can print its database error with the message,
+  and so with the SQL statement and its values, and its stack trace to
+  the output of the app container (`docker compose logs app`): the
+  framework's migration runner prints it there, not to the application
+  log, which leaves such a message out. Read that output before you share
+  it, also as part of what `bin/diagnose` prints, which includes the last
+  lines of each container's output; recreating the container drops its
+  Docker log, as **Purge old logs** in
+  [the notes of 2.8.1](#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets)
+  describes.
+
+**Fixes that change behaviour:**
+
+- A launch of a job template whose approval rule no longer exists is
+  refused rather than run without the approval:
+  `The approval rule of job template #7 no longer exists. An admin can choose another rule.`
+  A launch whose template's rule changed while the job was being launched
+  is refused with
+  `The approval rule of job template #7 changed while the job was being launched. Launch it again.`
+- A launch with an approval writes the job and its approval request in one
+  transaction, so a job never waits for a request that was not created.
+- A launch whose audit entry, approval request announcement or
+  notification fails after the job was saved is answered as launched, as
+  the job runs or waits for approval all the same; the application log has
+  `Job #42 was launched, but its audit entry, approval request announcement or notification failed: ...`.
+  Before, such a launch was answered with an error although its job had
+  been saved, and a workflow step could fail next to a job that ran. An
+  approval step whose request was written, but whose announcement failed,
+  likewise waits for the decision (logged as
+  `Workflow job #12: approval request #34 of step #31 was created, but its audit entry or notification failed: ...`).
+- A runner's report can no longer overwrite a cancel (see **Runner reports
+  after a cancel are ignored**), and a cancel can no longer overwrite a
+  finished job or run a workflow route twice.
+- A job completion that arrives twice, a second decision or a second resume
+  moves a workflow step on only once.
+- A workflow cancel writes one `workflow.canceled` audit entry with the
+  reason, instead of `workflow.failed` and `workflow.canceled`.
+- The `approval.requested` audit entry names the user who launched the job.
+  It named whoever's request opened the approval, such as the approver
+  whose vote started the next step of a workflow, or nobody for schedules
+  and triggers.
+- The live status of a job page shows every status in words and colours,
+  as the page does when it loads: `Awaiting Approval`, `Timed Out` and
+  `Rejected` turned into `Pending_approval`, `Timed_out` and a grey
+  `Rejected` as soon as the page updated itself.
+- `approval_rule.created_by` can no longer be changed by a form, and
+  `approval_rule.job_template_id`, which never gated anything, no longer by
+  a form or the API.
+- A database error while a workflow run is canceled or resumed no longer
+  answers a bare server error. The web UI shows
+  `Canceling workflow run #12 failed with a database error; see the application log. ...`
+  or `Resuming workflow run #12 failed with a database error; see the application log. ...`
+  as an error, with what to do, `POST /api/v1/workflow-jobs/{id}/cancel`
+  and `/resume` answer `500` with that message, and the application log has
+  `Workflow run #12: the cancel failed with a database error: ...` (see
+  [Canceling or resuming a workflow run fails with a database error](troubleshooting.md#canceling-or-resuming-a-workflow-run-fails-with-a-database-error)).
+- Workflow notifications are sent after the run's state is written, and one
+  that fails, for example on a database error while its notification
+  templates are read, no longer stops the run: the application log has
+  `Workflow job #12: the workflow.step_failed notification failed: ...`.
+- A database error is no longer written with its message, which carries the
+  SQL statement with its values, but as its class, SQLSTATE and driver
+  error code, also by older code: in the `error` of a `notification.failed`
+  audit entry and in the log line of a failing notification channel
+  (`NotificationDispatcher: failed to send notification #3 (webhook) for job.failed: ...`),
+  in the log line of a failing audit target
+  (`AuditService: target ... failed: ...`), and in the log lines and the
+  `schedule.failed_to_launch` notification of a schedule that could not be
+  checked or launched
+  (`Schedule #12 (Nightly deploy) skipped: yii\db\Exception (SQLSTATE 40001, driver error 1213)`).
+  The same holds for the sync error of a project, which its page and the
+  `project.sync_failed` notification show, and the log lines of project
+  syncs, vault checks and vault scans, for the output of
+  `php yii health/check` (except for Redis, whose error keeps its message),
+  for the message of a job or workflow launch that failed on such an error,
+  such as `Launch failed: PDOException (SQLSTATE HY000, driver error 2006)`
+  on the page of a workflow, and for the answer to **Send Test** of a
+  notification template.
+  Other errors, such as the status a webhook endpoint answered, keep their
+  message (see [A notification was not sent](troubleshooting.md#a-notification-was-not-sent)).
+- A database error that escaped Yii's wrapping (`PDOException`), such as a
+  failed `BEGIN` or `COMMIT`, now shows its SQLSTATE and driver error code
+  wherever a database error is named, for example
+  `PDOException (SQLSTATE HY000, driver error 2006)`; it read
+  `PDOException (SQLSTATE -, driver error -)` before. One that PDO raised
+  itself, such as a transaction that is already active, has no codes and
+  still reads so.
+- Errors that nothing in Ansilume catches are written to the application
+  log by the framework: by its error handler in the web UI, the API and the
+  console commands, and by the queue-worker for a queue job that failed,
+  such as a project sync. A database error among them, also as the previous
+  error of another, was written with its message, and so with the SQL
+  statement and its values. Now an error whose chain holds a database error
+  is written innermost first, then each error that wraps it after `Next`,
+  each with its file, line and stack trace, without the arguments of the
+  calls: the database error by
+  its class, SQLSTATE and driver error code, such as
+  `yii\db\Exception (SQLSTATE 40001, driver error 1213)`, and for a
+  connection that failed or was lost also by the driver's text, such as
+  `yii\db\Exception (SQLSTATE HY000, driver error 2002): Connection refused`;
+  an error that wraps it by its class and
+  `(message withheld: it wraps a database error)`; any other error with its
+  message. Errors of Redis, which the framework reports as database errors
+  too, are written by their class, with no codes, such as
+  `yii\redis\SocketException (SQLSTATE -, driver error -)`: the command and
+  its values are left out. Without debug mode (`YII_DEBUG`), the console
+  commands print such an error as `Error: ` and one line, for example
+  `Error: RuntimeException (message withheld: it wraps a database error); caused by yii\db\Exception (SQLSTATE 40001, driver error 1213)`,
+  which ends up in `docker compose logs` of the container that ran the
+  command, such as the schedule-runner; with debug mode they print the
+  whole error as before, its message with the statement and its values
+  included, while the application log leaves the message out in both
+  modes. Errors without
+  a database error are written as before, and without debug mode the
+  error page and the API's answer show no message of
+  such an error, as before. Log files written before the update can still
+  hold such statements; to remove them, truncate the files as
+  [the notes of 2.8.1](#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets)
+  describe under **Purge old logs** (see
+  [A page or an API call fails with a server error](troubleshooting.md#a-page-or-an-api-call-fails-with-a-server-error)).
+- An error that the framework writes to the application log itself, such
+  as a rollback that failed while another error was handled, is written
+  the same way when its chain holds a database error: by the error's
+  class, SQLSTATE and driver error code, never with a message that can
+  hold a statement or a Redis command with its values. Such an entry had
+  the error's message, for a failed rollback the `ROLLBACK` statement or
+  the driver's text. Every other entry is written as before.
+- **Send Test** on the page of a notification template reports a channel
+  that did not take the test message: the page shows
+  `Test notification failed: ` and the channel's error as an error, and
+  `POST /api/v1/notification-templates/{id}/test` answers `502` with
+  `Test failed: ` and the error. Both said the test was sent whatever the
+  channel answered (`Test notification sent successfully.`,
+  `{"data": {"sent": true}}`), as the error went only to the audit entry and
+  the log.
+- Deleting a runner group in the web UI is refused while runners belong to
+  it or job templates use it, as `DELETE /api/v1/runner-groups/{id}`
+  refused it already:
+  `Cannot delete "eu-west": 2 runner(s) still belong to this group.` or
+  `Cannot delete "eu-west": 3 job template(s) reference this group.`,
+  shown as an error, and the group stays. The web UI deleted such a group
+  with its runners, and took it off every job template that used it, those
+  with an approval rule included, whose jobs then waited for good, as no
+  runner claims the jobs of a template without a runner group. Move the
+  runners or delete them, and give the templates another runner group,
+  first (see
+  [Deleting a runner group is refused](troubleshooting.md#deleting-a-runner-group-is-refused)).
+- A job template created in a project, or moved into it, while the project
+  was being deleted was deleted together with the project. Now the delete
+  is refused as when the template existed before, with the templates
+  counted again:
+  `Cannot delete "web": 1 job template(s) still reference this project. Remove or reassign them first.`
+  (an error in the web UI, `422` from `DELETE /api/v1/projects/{id}`), and
+  the project and its templates stay (see
+  [Deleting a project is refused](troubleshooting.md#deleting-a-project-is-refused)).
+- A launch with a `limit` longer than 255 characters or a `verbosity`
+  below 0 or above 5 is refused before anything is written, with the job
+  record's message, such as `Verbosity must be no greater than 5.` or
+  `Limit should contain at most 255 characters.`: the launch form shows it
+  after `Launch failed: `, and `POST /api/v1/jobs` and job triggers answer
+  `422` with it, also for a list or an object as either (see
+  [Launch refused: the limit or the verbosity](troubleshooting.md#launch-refused-the-limit-or-the-verbosity)).
+  Such a launch failed with a server error: `POST /api/v1/jobs` and job
+  triggers answered `500`, and the launch form showed the record's errors
+  as JSON; a list or an object as the verbosity was taken for a number.
+- The message of a job launch that failed names the failure once: the
+  launch form shows, for example,
+  `Launch failed: the job could not be saved.`, a re-launch
+  `Re-launch failed: the job could not be saved.`, and the application log
+  has `Job launch failed: the job could not be saved.` for
+  `POST /api/v1/jobs` and
+  `Trigger for template #7 failed: the job could not be saved.` for a job
+  trigger. They said `Launch failed: Job launch failed: ...`,
+  `Re-launch failed: Job launch failed: ...`,
+  `Job launch failed: Job launch failed: ...` and
+  `Trigger for template #7 failed: Job launch failed: ...`. A due schedule
+  whose launch failed so logs
+  `Schedule #12 (Nightly deploy) failed to launch: the job could not be saved.`,
+  and its `schedule.failed_to_launch` notification carries
+  `the job could not be saved.` as the error; both said
+  `Job launch failed: the job could not be saved.` there.
+- A raw token shows once now, in its card. The token of a runner added on
+  its runner group's page, or regenerated with **Regen Token**, and a new
+  token on **API Tokens** appeared a second time on that page, in unstyled
+  boxes at its top (for a runner: its ID, its name and the token). The top
+  of a page shows only alerts now. On installations that run with
+  `YII_ENV=dev`, the debug toolbar's data in `runtime/debug/` kept these
+  tokens and the TOTP secret of a two-factor setup in clear; it stores
+  `****` for them now. Drop the data it kept as **Purge old logs** in
+  [the notes of 2.8.1](#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets)
+  describes; where others could read it, regenerate the runner tokens,
+  replace the API tokens and set up two-factor authentication again.
+
+**API contract change:**
+
+- `approval-rule.create` and `approval-rule.update` are admin permissions:
+  `POST` and `PUT /api/v1/approval-rules` answer `403` `Forbidden.` for
+  operators. `GET /api/v1/approval-rules/{id}` has `used_by`;
+  `DELETE` answers `409` with `error.used_by` for a rule in use. `POST` and
+  `PUT` answer `422` for a `job_template_id` other than null
+  (`job_template_id is not used by approval rules: set approval_rule_id on the job template (admins only).`)
+  and for invalid fields, for example `Approver Config cannot be blank.`,
+  `Approver Config must be valid JSON.`,
+  `Approver Config must be a JSON object.` for a list or a single value,
+  or `Name must be a string.`, and return the
+  rule as stored. `approver_config` is always a JSON object: `{}` for a rule
+  without approvers, which the API returned as the list `[]`, and for a
+  rule whose approver list an older version stored as a list or a single
+  value. A `PUT` of such a rule answers `422`
+  `Approver Config must be a JSON object.` until it sends an
+  `approver_config` object, also when it leaves the field out (see the
+  eleventh query under **Check before the update**). The spec documents
+  approval rules with named schemas now.
+- Job templates return `approval_rule_id` and `approval_rule_name`.
+  `POST` and `PUT /api/v1/job-templates` answer `403` for an
+  `approval_rule_id` the caller may not set (see **Approval rules are
+  managed by admins**). `PUT /api/v1/job-templates/{id}` of a job template
+  with an approval rule answers `403` for a change of any field but `name`
+  and `description` without `approval-rule.update` (see **Only admins
+  change what a gated job template runs**).
+  `DELETE /api/v1/job-templates/{id}` answers
+  `{"data": {"deleted": true, "canceled_jobs": 2, "disabled_schedules": 1}}`;
+  a job whose cancel failed is not counted, and the maintenance run cancels
+  it.
+- Approval requests return `launched_by`, the status `canceled`, and an
+  `approval_rule_id` that is null once its rule was deleted;
+  `approval_count` and `rejection_count` leave out the launcher's votes.
+  `POST /api/v1/approvals/{id}/approve` and `/reject` answer `409` with
+  `error.status` for a request that is resolved, expired or whose job no
+  longer waits, `403` for the launcher, and `404` for a request deleted
+  during the vote (see **Votes are checked under a lock**).
+- `GET /api/v1/analytics/approval-summary` returns `canceled`, also as a CSV
+  column after `timed_out`; `avg_decision_seconds` leaves canceled requests
+  out, and counts a timed-out request until its `expires_at`.
+- `POST /api/v1/jobs` and job triggers answer `422` for the new launch
+  refusals. `POST /api/v1/jobs/{id}/cancel` answers `409` with
+  `error.status` when the job finished while it was being canceled.
+- `POST /api/v1/jobs` answers `422` for a `limit` or a `verbosity` that
+  the job record does not take, with its messages in `error.message` and
+  each such field with its message in `error.fields`, for example
+  `{"error": {"message": "Verbosity must be no greater than 5.", "fields": {"verbosity": "Verbosity must be no greater than 5."}}}`;
+  job triggers answer `422` with the message. Both answered `500`, or
+  took a list or an object as the verbosity for a number (see **Fixes that
+  change behaviour**).
+- `POST /api/v1/schedules/{id}/toggle` answers `422` for a schedule whose
+  job template was deleted. Enabling a schedule with the toggle, or a
+  `PUT /api/v1/schedules/{id}` that changes `job_template_id`,
+  `cron_expression`, `timezone` or `extra_vars`, or sends `enabled: true`
+  for a disabled schedule, makes the caller its `created_by`, the user its
+  jobs run as (see **Schedules run as the user who last changed what or
+  when they run**).
+- `POST` and `PUT /api/v1/workflow-templates` answer `403` for approval
+  steps and gated job steps without `approval-rule.update` (see **Gated job
+  steps are for admins too**), and `PUT` answers `409` with
+  `error.workflow_job_ids` while a run is active. `DELETE` answers
+  `{"data": {"deleted": true, "canceled_runs": 1, "failed_runs": 0}}`.
+  `POST /api/v1/workflow-templates/{id}/launch` takes `extra_vars` and
+  answers `422` for a refused launch, as `/trigger/fire-workflow` does now.
+  A database error is no refusal: the launch answers it with `500` and the
+  error's class, SQLSTATE and driver error code, such as
+  `yii\db\Exception (SQLSTATE 40001, driver error 1213)`, and the
+  application log has
+  `Launch of workflow template #5 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213)`.
+  It answered `422` with the error's message for one that escaped Yii's
+  wrapping, and a bare server error for any other. No run was created,
+  unless the error struck while the run's first step started: then the run
+  exists and has ended as failed. Launch again.
+- `GET /api/v1/workflow-jobs/{id}` returns `extra_vars`, and
+  `steps[].step_name` and `steps[].step_type`; `steps[].workflow_step_id`
+  can be null. `POST /api/v1/workflow-jobs/{id}/cancel` and `/resume`
+  answer `500` with a message that says what to do for a database error.
+- A superadmin without any role is now treated as holding every permission
+  by every endpoint, as the spec said; some endpoints answered `403`.
+- `POST /api/v1/notification-templates/{id}/test` answers `502` with
+  `Test failed: ` and the channel's error when the channel did not take the
+  test message, and `500` with `Test failed: ` and the error when something
+  else failed; it answered `{"data": {"sent": true}}` for a failed delivery
+  before.
+- Audit: the new action `approval.canceled`, whose `reason` can also be
+  `workflow_step_ended`; the reason `approval_request_missing` in
+  `job.canceled`; the launcher as the user of `approval.requested`;
+  `applied_action` and `reason` in `approval.timed_out`; `source`,
+  `canceled_jobs` and
+  `disabled_schedules` in `job-template.deleted`; `approval_rule` in the job
+  template entries; `reason` and `job_template_id` in `schedule.toggled`
+  when a delete disabled the schedule; `canceled_runs`, `failed_runs` and
+  `source` in `workflow-template.deleted`; `approval_rule_id` in
+  `workflow-template.step.added`, `.removed` and `.moved`, and
+  `approval_rule_ids` in `workflow-template.created` and `.updated` from
+  the API when steps are given; `reason` in `workflow.canceled`;
+  `workflow_job_id` and `carried_secret_keys` in `job.launched` of workflow
+  job steps; `run_as` with `from` and `to` in `schedule.updated` and
+  `schedule.toggled` when the user a schedule runs as changes; the `error`
+  of `notification.failed` without the message of a database error.
+- For code that calls Ansilume's services: `JobCompletionService::cancel()`
+  and `WorkflowExecutionService::completeWorkflow()` return whether they
+  changed anything, and the third parameter of
+  `WorkflowExecutionService::executeStep()` is the step's mapping of the
+  previous step's output.
+
+**Database and deployment.** Four migrations run when the app container
+starts. Each checks what is there first and does only what is missing, so a
+run that failed half way finishes at the next start.
+
+- `m000082_000000_restrict_approval_rule_management` takes
+  `approval-rule.create` and `approval-rule.update` from the operator role,
+  and grants them to the admin role directly where it held them only
+  through operator. It prints what it changed, for example
+  `> Removed approval-rule.create from the operator role.` and
+  `> Operators no longer create or change approval rules. To let other users manage them, grant approval-rule.create and approval-rule.update to a custom role.`
+- `m000083_000000_protect_approval_rule_references` lets the database refuse
+  to delete a rule that job templates or workflow steps use, and keeps the
+  approval requests of a deleted rule with `approval_rule_id` null instead of
+  deleting them with their votes. Rule IDs of workflow steps that point to
+  no rule are cleared first, one line each, for example
+  `> Cleared approval rule #9, which does not exist, from workflow step #31.`;
+  a workflow with such an approval step is refused at launch with
+  `Step "Release approval": its approval rule no longer exists. An admin can choose another rule.`,
+  and a run that reaches it fails with
+  `The approval rule of this step no longer exists.` An admin removes the
+  step and adds it again with a rule.
+- `m000084_000000_keep_workflow_run_history` keeps the step records of runs
+  when steps are removed (`workflow_job_step.workflow_step_id` becomes
+  nullable), copies the name and type of each step into its records
+  (`step_name`, `step_type`), and adds `extra_vars` and `secret_extra_vars`
+  to `workflow_job`, for the launch extra vars of a run.
+- `m000085_000000_close_orphaned_approval_requests` closes the pending
+  approval requests whose job no longer waits for approval, and disables
+  the enabled schedules of deleted job templates. It prints
+  `> Closed N pending approval request(s) whose job no longer waits for approval.`
+  and `> Disabled N schedule(s) of deleted job templates.`
+
+Code of this release that runs before the migrations works with the old
+tables: the maintenance run and `php yii approval/check-timeouts` apply no
+timeouts and sweep nothing while migrations are pending, and a workflow
+launch with extra vars fails (the web UI and the API show
+`The database update has not finished; run the migrations.`). The queue-worker
+runs as one long process and keeps the table schema it read when it
+started: once the app container has run the migrations, restart it and the
+schedule-runner with `docker compose restart queue-worker schedule-runner`.
+No new setting is needed in `.env`, and runners need no update.
+
+- Prebuilt images and quickstart: `docker compose pull && docker compose
+  up -d`, or quickstart `--update`, then the restart above.
+- Git checkout: right after `git pull`, run
+  `docker compose up -d --build --force-recreate`, as for 2.9.0, then the
+  restart above.
+- Ansible deploy role: run the playbook again, then the restart above.
+
+To roll back to 2.9.0, restore the database backup taken before the update
+(see [Rollback](#rollback)). Running these migrations down instead gives the
+operator role its rule permissions back, but deletes the step records of
+removed workflow steps and the approval requests of deleted rules, which the
+old schema cannot hold, and prints how many.
+
 ## After updating from 2.8.1 or older: encrypted password answers, trigger tokens in a header, logs without secrets
 
 Answers to password fields of job template surveys are now stored only
@@ -372,14 +1827,14 @@ SELECT id FROM job
 WHERE job_template_id = <template id>
   AND JSON_VALID(extra_vars)
   AND JSON_CONTAINS_PATH(extra_vars, 'one', '$."<field name>"')
-  AND BINARY JSON_UNQUOTE(JSON_EXTRACT(extra_vars, '$."<field name>"')) <> BINARY '$encrypted$';
+  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(extra_vars, '$."<field name>"')) AS BINARY) <> CAST('$encrypted$' AS BINARY);
 
 -- The same for schedules
 SELECT id FROM schedule
 WHERE job_template_id = <template id>
   AND JSON_VALID(extra_vars)
   AND JSON_CONTAINS_PATH(extra_vars, 'one', '$."<field name>"')
-  AND BINARY JSON_UNQUOTE(JSON_EXTRACT(extra_vars, '$."<field name>"')) <> BINARY '$encrypted$';
+  AND CAST(JSON_UNQUOTE(JSON_EXTRACT(extra_vars, '$."<field name>"')) AS BINARY) <> CAST('$encrypted$' AS BINARY);
 
 -- Job templates whose own extra vars hold <field name>
 SELECT id FROM job_template
@@ -387,9 +1842,13 @@ WHERE JSON_VALID(extra_vars)
   AND JSON_CONTAINS_PATH(extra_vars, 'one', '$."<field name>"');
 ```
 
-Keep the `BINARY JSON_UNQUOTE(...)` form: on MariaDB, comparing
-`JSON_EXTRACT(...)` with `JSON_QUOTE('$encrypted$')` also matches rows that
-hold the placeholder.
+Keep the `CAST(JSON_UNQUOTE(...) AS BINARY)` form: it compares the answer
+with the placeholder byte for byte, as Ansilume does, so `$ENCRYPTED$` or
+the placeholder with a trailing space count as answers, and on MariaDB,
+comparing `JSON_EXTRACT(...)` with `JSON_QUOTE('$encrypted$')` also matches
+rows that hold the placeholder. Earlier versions of these notes used the
+`BINARY` operator, which lists the same rows but which MySQL 8 reports as
+deprecated.
 
 **Update the runners.** Runners of this release report the capability
 `secret_extra_vars`. They get the password answers of a job apart from its
@@ -1068,10 +2527,10 @@ SELECT t.id, t.name, t.created_by AS runs_as,
     ORDER BY c.id LIMIT 1) AS created_entry_by,
   (SELECT IF(g.action = 'job-template.trigger-token.generated', g.user_id, NULL)
      FROM audit_log g
-    WHERE g.action IN ('job-template.trigger-token.generated',
-                       'job-template.trigger-token.revoked')
-      AND g.object_type = 'job_template' AND g.object_id = t.id
-    ORDER BY g.id DESC LIMIT 1) AS token_generated_by,
+    WHERE g.id = (SELECT MAX(h.id) FROM audit_log h
+      WHERE h.action IN ('job-template.trigger-token.generated',
+                         'job-template.trigger-token.revoked')
+        AND h.object_type = 'job_template' AND h.object_id = t.id)) AS token_generated_by,
   (SELECT COUNT(*) FROM audit_log u
     WHERE u.action = 'job-template.updated' AND u.object_type = 'job_template'
       AND u.object_id = t.id AND u.user_id <> t.created_by) AS edits_by_others
@@ -1088,10 +2547,10 @@ SELECT t.id, t.name, t.created_by AS runs_as,
     ORDER BY c.id LIMIT 1) AS created_entry_by,
   (SELECT IF(g.action = 'workflow-template.trigger-token.generated', g.user_id, NULL)
      FROM audit_log g
-    WHERE g.action IN ('workflow-template.trigger-token.generated',
-                       'workflow-template.trigger-token.revoked')
-      AND g.object_type = 'workflow_template' AND g.object_id = t.id
-    ORDER BY g.id DESC LIMIT 1) AS token_generated_by,
+    WHERE g.id = (SELECT MAX(h.id) FROM audit_log h
+      WHERE h.action IN ('workflow-template.trigger-token.generated',
+                         'workflow-template.trigger-token.revoked')
+        AND h.object_type = 'workflow_template' AND h.object_id = t.id)) AS token_generated_by,
   (SELECT COUNT(*) FROM audit_log u
     WHERE u.action = 'workflow-template.updated'
       AND u.object_type = 'workflow_template'
@@ -1111,7 +2570,11 @@ ORDER BY t.id;
   `job-template.trigger-token.generated` or
   `workflow-template.trigger-token.generated` entry, unless a
   `*.trigger-token.revoked` entry follows it. Empty when there is no such
-  entry: the token was not generated on the template page.
+  entry: the token was not generated on the template page. The query finds
+  the newest entry with `MAX(h.id)` because MariaDB can answer the earlier
+  form of these notes, `ORDER BY g.id DESC LIMIT 1`, with an empty value
+  although the entry exists, which made such a token look like one to
+  revoke.
 - `edits_by_others`: the number of `job-template.updated` or
   `workflow-template.updated` entries by users other than `runs_as`.
 
@@ -1729,6 +3192,11 @@ A backup taken after the update to encrypted survey password answers
 restore and `php yii maintenance/reset-survey-secret-scrub` afterwards, see
 **Finished jobs are encrypted in the background** under
 [After updating from 2.8.1 or older](#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets).
+
+To roll back from the update to approvals and workflows (migrations
+`m000082` to `m000085`), restore the backup taken before it, see
+**Database and deployment** under
+[After updating from 2.9.0 or older](#after-updating-from-290-or-older-approvals-and-workflows).
 
 ---
 

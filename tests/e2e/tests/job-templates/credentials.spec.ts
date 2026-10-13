@@ -1,13 +1,15 @@
 import { test, expect, Page } from '@playwright/test';
+import { openJobTemplate } from '../../lib/triggers';
 
 // Fixtures from commands/E2eCredentialUsageSeeder.php
 const TEMPLATE = 'e2e-cred-usage-template';
 const PRIMARY = 'e2e-cred-usage-primary';
 const TOKEN = 'e2e-cred-usage-token';
 
+// Pages through the template list: templates created after the fixture
+// push it off the first page of the list sorted newest first.
 async function openTemplate(page: Page) {
-  await page.goto('/job-template/index?sort=-id');
-  await page.locator('#template-table tbody tr', { hasText: TEMPLATE }).first().locator('a', { hasText: TEMPLATE }).click();
+  await openJobTemplate(page, TEMPLATE);
   await expect(page.locator('h2').first()).toHaveText(TEMPLATE);
 }
 

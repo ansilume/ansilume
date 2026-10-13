@@ -47,6 +47,11 @@ class WorkflowStep extends ActiveRecord
      */
     public const END_WORKFLOW = 0;
 
+    public const APPROVAL_RULE_REQUIRED = 'An approval step needs an approval rule.';
+    public const APPROVAL_RULE_NOT_FOUND = 'The selected approval rule does not exist.';
+    public const APPROVAL_ALWAYS_REFUSED = 'An approval step cannot have an Always branch: a rejection would continue past it.';
+    public const ROUTE_TARGET_OUTSIDE = 'The selected step is not part of this workflow.';
+
     public static function tableName(): string
     {
         return '{{%workflow_step}}';
@@ -92,10 +97,58 @@ class WorkflowStep extends ActiveRecord
                 'targetAttribute' => ['job_template_id' => 'id'],
                 'message' => 'The selected job template does not exist.',
             ],
+            // A run that reaches an approval step without a rule fails there.
+            [
+                ['approval_rule_id'],
+                'required',
+                'when' => static fn (self $step): bool => $step->step_type === self::TYPE_APPROVAL,
+                'message' => self::APPROVAL_RULE_REQUIRED,
+            ],
+            [
+                ['approval_rule_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => ApprovalRule::class,
+                'targetAttribute' => ['approval_rule_id' => 'id'],
+                'message' => self::APPROVAL_RULE_NOT_FOUND,
+            ],
             [['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'], 'integer', 'min' => 0],
+            [['on_always_step_id'], 'validateNoAlwaysBranch'],
+            [['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'], 'validateRouteTarget'],
             [['extra_vars_template'], 'string', 'max' => 65535],
             [['extra_vars_template'], 'validateJson'],
         ];
+    }
+
+    /**
+     * An approval step has no Always branch: it would be taken after a
+     * rejection too, so the run would continue past the gate. Any value,
+     * END_WORKFLOW included, is refused; an empty one never gets here.
+     */
+    public function validateNoAlwaysBranch(string $attribute): void
+    {
+        if ($this->step_type === self::TYPE_APPROVAL) {
+            $this->addError($attribute, self::APPROVAL_ALWAYS_REFUSED);
+        }
+    }
+
+    /**
+     * A branch leads to END_WORKFLOW or to a step of this workflow. A run
+     * that reached a target outside it used to end there as if the workflow
+     * were done.
+     */
+    public function validateRouteTarget(string $attribute): void
+    {
+        $target = (int)$this->$attribute;
+        if ($target === self::END_WORKFLOW) {
+            return;
+        }
+        $inWorkflow = self::find()
+            ->where(['id' => $target, 'workflow_template_id' => $this->workflow_template_id])
+            ->exists();
+        if (!$inWorkflow) {
+            $this->addError($attribute, self::ROUTE_TARGET_OUTSIDE);
+        }
     }
 
     /**

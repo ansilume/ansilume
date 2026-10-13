@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace app\tests\integration\commands;
 
 use app\commands\MaintenanceController;
+use app\models\ApprovalRequest;
 use app\models\Job;
 use app\services\ArtifactService;
 use app\services\JobLaunchService;
 use app\services\MaintenanceService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\services\CancellationFixtures;
+use app\tests\integration\TeamScopeFixtures;
 use yii\console\ExitCode;
 
 /**
@@ -17,6 +20,9 @@ use yii\console\ExitCode;
  */
 class MaintenanceControllerTest extends DbTestCase
 {
+    use TeamScopeFixtures;
+    use CancellationFixtures;
+
     private string $tempDir;
 
     private mixed $originalKey;
@@ -228,6 +234,36 @@ class MaintenanceControllerTest extends DbTestCase
         );
         $this->assertStringNotContainsString($answer, (string)$job->extra_vars);
         $this->assertStringNotContainsString($answer, (string)$job->runner_payload);
+    }
+
+    /**
+     * The approval timeouts run on every tick and print how many requests
+     * they timed out, like the other tasks.
+     */
+    public function testRunPrintsTheApprovalTimeoutsItApplied(): void
+    {
+        $launcher = $this->createUserWithRole('console-timeout-launcher', 'operator');
+        $approver = $this->createUserWithRole('console-timeout-approver', 'operator');
+        $this->recordNotifications();
+        try {
+            ['request' => $request] = $this->jobWaitingForApproval(
+                $this->cancelFixtureTemplate((int)$launcher->id),
+                (int)$launcher->id,
+                (int)$approver->id
+            );
+            ApprovalRequest::updateAll(['expires_at' => time() - 60], ['id' => $request->id]);
+            $this->useMaintenanceWithoutArtifactCleanup();
+
+            $ctrl = $this->makeController();
+            $exit = $ctrl->actionRun();
+        } finally {
+            $this->restoreNotifications();
+        }
+
+        $this->assertSame(ExitCode::OK, $exit);
+        $this->assertSame("[maintenance] ran: approval-timeouts (resolved=1)\n", $ctrl->captured);
+        $request->refresh();
+        $this->assertSame(ApprovalRequest::STATUS_TIMED_OUT, $request->status);
     }
 
     /**

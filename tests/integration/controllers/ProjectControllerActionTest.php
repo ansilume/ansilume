@@ -317,8 +317,11 @@ class ProjectControllerActionTest extends WebControllerTestCase
         // Project must still exist.
         $this->assertNotNull(Project::findOne($project->id));
         // Flash must contain the refusal message.
-        $flashes = \Yii::$app->session->getAllFlashes();
-        $this->assertArrayHasKey('danger', $flashes);
+        $this->assertSame(
+            ['danger' => "Cannot delete \"{$project->name}\": 1 job template(s) still reference this project. Remove or reassign them first."],
+            \Yii::$app->session->getAllFlashes()
+        );
+        $this->assertNull(AuditLog::findOne(['action' => AuditLog::ACTION_PROJECT_DELETED, 'object_id' => $project->id]));
     }
 
     /**

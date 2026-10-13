@@ -9,6 +9,7 @@ use app\models\ApiToken;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\models\User;
+use app\services\ScheduleEnablement;
 use app\services\ScheduleService;
 use app\tests\integration\controllers\WebControllerTestCase;
 use app\tests\integration\TeamScopeFixtures;
@@ -281,6 +282,62 @@ class SchedulesControllerTest extends WebControllerTestCase
         $this->assertNull($item['next_run_at'], 'next_run_at must be cleared when schedule is disabled');
     }
 
+    /**
+     * Regression: a schedule of a deleted template stayed enabled and could
+     * be re-enabled through POST /api/v1/schedules/{id}/toggle.
+     */
+    public function testEnablingAScheduleOfADeletedTemplateIs422(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $template = $this->createJobTemplate(
+            $this->createProject($userId)->id,
+            $this->createInventory($userId)->id,
+            $this->createRunnerGroup($userId)->id,
+            $userId
+        );
+        $schedule = $this->createSchedule($template->id, $userId);
+        $schedule->enabled = false;
+        $schedule->save(false);
+        $template->softDelete();
+
+        $result = $this->ctrl->actionToggle($schedule->id);
+
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => sprintf(ScheduleEnablement::ENABLE_REFUSED, $schedule->name, $template->id)]], $result);
+        $schedule->refresh();
+        $this->assertFalse((bool)$schedule->enabled);
+        $this->assertNull($schedule->next_run_at);
+    }
+
+    /**
+     * An update that enables a schedule of a deleted template is refused as
+     * well: its template counts as one that does not exist.
+     */
+    public function testAnUpdateThatEnablesAScheduleOfADeletedTemplateIs422(): void
+    {
+        $this->authenticateWithAdmin();
+        $userId = (int)\Yii::$app->user->id;
+        $template = $this->createJobTemplate(
+            $this->createProject($userId)->id,
+            $this->createInventory($userId)->id,
+            $this->createRunnerGroup($userId)->id,
+            $userId
+        );
+        $schedule = $this->createSchedule($template->id, $userId);
+        $schedule->enabled = false;
+        $schedule->save(false);
+        $template->softDelete();
+        $this->setBody(['enabled' => true]);
+
+        $result = $this->ctrl->actionUpdate($schedule->id);
+
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => ScheduleService::TEMPLATE_MISSING_MESSAGE]], $result);
+        $schedule->refresh();
+        $this->assertFalse((bool)$schedule->enabled);
+    }
+
     // -- Team scoping of the job template a schedule points at --------------
 
     /**
@@ -467,19 +524,26 @@ class SchedulesControllerTest extends WebControllerTestCase
         $this->assertSame((int)$scope['own']->id, $this->storedTemplateId($schedule));
     }
 
-    public function testUpdateSwitchesToAnOpenTemplateAndKeepsTheCreator(): void
+    /**
+     * Regression: editing another user's schedule let the editor approve its
+     * job. An update that points the schedule at another template makes it
+     * run as the caller (it kept its creator before); created_by in the body
+     * is still ignored.
+     */
+    public function testUpdateSwitchesToAnOpenTemplateAndRunsAsTheCaller(): void
     {
         $scope = $this->apiScope();
         $schedule = $this->createSchedule((int)$scope['own']->id, (int)$scope['outsider']->id);
-        $this->setBody(['job_template_id' => (int)$scope['open']->id, 'created_by' => (int)$scope['member']->id]);
+        $this->setBody(['job_template_id' => (int)$scope['open']->id, 'created_by' => (int)$scope['admin']->id]);
 
         $data = $this->callSuccess($this->ctrl->actionUpdate($schedule->id));
 
         $this->assertIsArray($data);
         $this->assertSame((int)$scope['open']->id, $data['job_template_id']);
+        $this->assertSame((int)$scope['member']->id, $data['created_by']);
         $schedule->refresh();
         $this->assertSame((int)$scope['open']->id, (int)$schedule->job_template_id);
-        $this->assertSame((int)$scope['outsider']->id, (int)$schedule->created_by);
+        $this->assertSame((int)$scope['member']->id, (int)$schedule->created_by, 'the caller, not the user in the body');
     }
 
     /**

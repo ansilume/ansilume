@@ -30,9 +30,7 @@ class SystemController extends BaseApiController
      */
     public function actionArtifactStats(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.view')) {
+        if (!$this->userCan('user.view')) {
             return $this->error('Forbidden.', 403);
         }
 

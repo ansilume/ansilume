@@ -167,6 +167,21 @@ class Job extends ActiveRecord
         ], true);
     }
 
+    /**
+     * The statuses of a job that has not started yet: a cancel stops it for
+     * good, as no runner has claimed it. A running job is not among them.
+     *
+     * @return list<string>
+     */
+    public static function waitingStatuses(): array
+    {
+        return [
+            self::STATUS_PENDING,
+            self::STATUS_QUEUED,
+            self::STATUS_PENDING_APPROVAL,
+        ];
+    }
+
     public static function statusLabel(string $status): string
     {
         return match ($status) {

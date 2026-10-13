@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
+/** @var bool $canCreate */
 
 use app\helpers\TimeHelper;
 use app\models\ApprovalRule;
@@ -14,7 +15,7 @@ $this->title = 'Approval Rules';
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2><?= Html::encode($this->title) ?></h2>
-    <?php if (Yii::$app->user->can('approval-rule.create')) : ?>
+    <?php if ($canCreate) : ?>
         <?= Html::a('New Approval Rule', ['create'], ['class' => 'btn btn-primary btn-sm']) ?>
     <?php endif; ?>
 </div>

@@ -40,6 +40,7 @@ $this->title = 'Schedules';
                     <th>Next Run</th>
                     <th>Last Run</th>
                     <th>Status</th>
+                    <th>Runs as</th>
                     <th></th>
                 </tr>
             </thead>
@@ -70,6 +71,7 @@ $this->title = 'Schedules';
                             <span class="badge text-bg-secondary">Disabled</span>
                         <?php endif; ?>
                     </td>
+                    <td><?= Html::encode($model->creator->username ?? '—') ?></td>
                     <td class="text-end text-nowrap">
                         <?= Html::a('View', ['view', 'id' => $model->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
                         <?php if (\Yii::$app->user?->can('job.launch')) : ?>

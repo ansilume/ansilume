@@ -100,6 +100,9 @@ $config = [
             'loginUrl' => ['site/login'],
         ],
         'errorHandler' => [
+            // Logs an uncaught database error without its message, which
+            // carries the SQL statement with its values.
+            'class' => \app\components\WebErrorHandler::class,
             'errorAction' => 'site/error',
         ],
         'mailer' => [
@@ -120,7 +123,11 @@ $config = [
             'traceLevel' => YII_DEBUG ? 3 : 0,
             'targets' => [
                 [
-                    'class' => 'yii\log\FileTarget',
+                    // Yii's FileTarget, except that an exception logged as such
+                    // (\Yii::error($e)) with a database error in its chain is
+                    // written without its message, which carries the SQL
+                    // statement with its values.
+                    'class' => \app\components\RedactingFileTarget::class,
                     'levels' => ['error', 'warning'],
                     // Never dump request/environment context ($_SERVER contains
                     // APP_SECRET_KEY, DB_PASSWORD, ...) into the log file.

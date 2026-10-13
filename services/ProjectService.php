@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ErrorText;
 use app\jobs\SyncProjectJob;
 use app\models\Credential;
 use app\models\NotificationTemplate;
@@ -139,8 +140,11 @@ class ProjectService extends Component
             // The previous narrower `catch (RuntimeException)` left the row
             // on STATUS_SYNCING for any other exception class, which made
             // the operator's project look "still working" forever.
+            // The stored error (shown on the project page, in the API and
+            // in the sync_failed notification) never holds the message of a
+            // database error, which carries the SQL statement with its values.
             $project->status = Project::STATUS_ERROR;
-            $project->last_sync_error = $e->getMessage();
+            $project->last_sync_error = ErrorText::of($e);
             $threw = $e;
         } finally {
             $project->sync_started_at = null;
@@ -153,11 +157,12 @@ class ProjectService extends Component
         if ($threw !== null) {
             // Re-throw as RuntimeException so the SyncProjectJob outer
             // try/catch (which already targets RuntimeException) handles
-            // every error class uniformly.
+            // every error class uniformly. A database error is passed on
+            // only as ErrorText words it, not as the previous exception.
             if ($threw instanceof \RuntimeException) {
                 throw $threw;
             }
-            throw new \RuntimeException($threw->getMessage(), 0, $threw);
+            throw new \RuntimeException(ErrorText::of($threw), 0, $threw instanceof \yii\db\Exception ? null : $threw);
         }
     }
 

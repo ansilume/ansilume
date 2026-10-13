@@ -430,48 +430,18 @@ class AnalyticsService extends Component
     }
 
     /**
-     * Approval request stats: counts by outcome and median time-to-decision.
+     * Approval request stats: counts by status, the approval rate and the
+     * average time to a decision (see ApprovalAnalytics).
      *
-     * @return array{total: int, approved: int, rejected: int, timed_out: int, pending: int, approval_rate: float, avg_decision_seconds: float}
+     * @return array{total: int, approved: int, rejected: int, timed_out: int, canceled: int, pending: int, approval_rate: float, avg_decision_seconds: float}
      */
     public function approvalSummary(AnalyticsQuery $query): array
     {
-        $db = $this->getDb();
         $params = [];
         $scope = $this->workflowAccess()->buildApprovalRequestFilter($query->scopeUserId, 'job_id');
         $conditions = $this->rangeConditions($query, 'requested_at', $scope, $params);
 
-        $row = $db->createCommand(
-            'SELECT COUNT(*) AS total,'
-            . ' SUM(CASE WHEN status = :approved THEN 1 ELSE 0 END) AS approved,'
-            . ' SUM(CASE WHEN status = :rejected THEN 1 ELSE 0 END) AS rejected,'
-            . ' SUM(CASE WHEN status = :timed_out THEN 1 ELSE 0 END) AS timed_out,'
-            . ' SUM(CASE WHEN status = :pending THEN 1 ELSE 0 END) AS pending,'
-            . ' AVG(CASE WHEN resolved_at IS NOT NULL'
-            . '   THEN resolved_at - requested_at ELSE NULL END) AS avg_decision'
-            . ' FROM {{%approval_request}}'
-            . ' WHERE ' . implode(' AND ', $conditions),
-            array_merge($params, [
-                ':approved' => 'approved',
-                ':rejected' => 'rejected',
-                ':timed_out' => 'timed_out',
-                ':pending' => 'pending',
-            ])
-        )->queryOne();
-
-        $approved = (int)($row['approved'] ?? 0);
-        $rejected = (int)($row['rejected'] ?? 0);
-        $decided = $approved + $rejected;
-
-        return [
-            'total' => (int)($row['total'] ?? 0),
-            'approved' => $approved,
-            'rejected' => $rejected,
-            'timed_out' => (int)($row['timed_out'] ?? 0),
-            'pending' => (int)($row['pending'] ?? 0),
-            'approval_rate' => $decided > 0 ? round($approved / $decided * 100, 2) : 0.0,
-            'avg_decision_seconds' => round((float)($row['avg_decision'] ?? 0), 1),
-        ];
+        return (new ApprovalAnalytics($this->getDb()))->summary($conditions, $params);
     }
 
     /**

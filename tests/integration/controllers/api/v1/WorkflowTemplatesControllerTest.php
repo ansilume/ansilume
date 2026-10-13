@@ -11,6 +11,7 @@ use app\models\User;
 use app\models\WorkflowJob;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\WorkflowExecutionService;
 use app\tests\integration\controllers\WebControllerTestCase;
 use app\tests\integration\TeamScopeFixtures;
 use yii\base\Event;
@@ -142,11 +143,14 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
 
     // -- Create ---------------------------------------------------------------
 
+    /**
+     * As an admin: only admins (approval-rule.update) write approval steps.
+     */
     public function testCreateSavesTheTemplateAndValidatedStepsInOrder(): void
     {
         $s = $this->teamScope();
         $rule = $this->createApprovalRule($s['admin']->id);
-        $this->authenticate($s['member']);
+        $this->authenticate($s['admin']);
         $this->setBody([
             'name' => 'api-wf-create',
             'description' => 'built through the API',
@@ -162,7 +166,7 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
 
         $this->assertSame(201, \Yii::$app->response->statusCode);
         $this->assertSame('api-wf-create', $data['name']);
-        $this->assertSame($s['member']->id, $data['created_by']);
+        $this->assertSame($s['admin']->id, $data['created_by']);
         $this->assertSame(['build', 'approve', 'wait', 'deploy'], array_column($data['steps'], 'name'));
         $this->assertSame(['job', 'approval', 'pause', 'job'], array_column($data['steps'], 'step_type'));
         $this->assertSame([0, 1, 2, 3], array_column($data['steps'], 'step_order'));
@@ -173,7 +177,12 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $audit = AuditLog::findOne(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_CREATED, 'object_id' => $data['id']]);
         $this->assertNotNull($audit);
         $this->assertSame(
-            ['name' => 'api-wf-create', 'source' => 'api', 'job_template_ids' => [$s['own']->id, $s['open']->id]],
+            [
+                'name' => 'api-wf-create',
+                'source' => 'api',
+                'job_template_ids' => [$s['own']->id, $s['open']->id],
+                'approval_rule_ids' => [$rule->id],
+            ],
             json_decode((string)$audit->metadata, true)
         );
     }
@@ -252,8 +261,9 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
             'template ID a float' => [[self::OWN_STEP, ['name' => 'b', 'job_template_id' => 1.0]], 'steps[1]: A job step needs job_template_id, the ID of a job template.'],
             'template ID zero' => [[self::OWN_STEP, ['name' => 'b', 'job_template_id' => 0]], 'steps[1]: A job step needs job_template_id, the ID of a job template.'],
             'template ID negative' => [[self::OWN_STEP, ['name' => 'b', 'job_template_id' => '-3']], 'steps[1]: A job step needs job_template_id, the ID of a job template.'],
+            // Before the approval-step rule (403): the steps cannot be read.
+            // An unknown rule: WorkflowTemplatesStepGuardTest.
             'approval step without rule' => [[self::OWN_STEP, ['name' => 'b', 'step_type' => 'approval']], 'steps[1]: An approval step needs approval_rule_id, the ID of an approval rule.'],
-            'unknown approval rule' => [[self::OWN_STEP, ['name' => 'b', 'step_type' => 'approval', 'approval_rule_id' => 987654321]], 'Approval rule(s) not found: #987654321.'],
             'extra vars not JSON' => [[self::OWN_STEP, ['name' => 'b', 'step_type' => 'pause', 'extra_vars_template' => '{nope']], 'steps[1]: Extra_vars_template must be valid JSON.'],
         ];
     }
@@ -333,13 +343,14 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
 
     /**
      * Only the target of a step's type is read, so a pause step cannot carry
-     * a job template that would decide who may see the workflow.
+     * a job template that would decide who may see the workflow. As an
+     * admin, who may write approval steps.
      */
     public function testCreateReadsOnlyTheTargetOfEachStepType(): void
     {
         $s = $this->teamScope();
         $rule = $this->createApprovalRule($s['admin']->id);
-        $this->authenticate($s['member']);
+        $this->authenticate($s['admin']);
         $this->setBody(['name' => 'api-wf-targets', 'steps' => [
             ['name' => 'pause', 'step_type' => 'pause', 'job_template_id' => $s['foreign']->id, 'approval_rule_id' => $rule->id],
             ['name' => 'approve', 'step_type' => 'approval', 'job_template_id' => $s['foreign']->id, 'approval_rule_id' => $rule->id],
@@ -394,6 +405,19 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $this->assertNothingNamed('api-wf-refused', ['never']);
     }
 
+    public function testCreateWithoutStepsReportsATemplateThatCannotBeSaved(): void
+    {
+        $s = $this->teamScope();
+        $this->authenticate($s['member']);
+        $this->setBody(['name' => 'api-wf-refused-alone']);
+
+        $result = $this->whileRefusingInsertOf(WorkflowTemplate::class, 'api-wf-refused-alone', fn () => $this->ctrl->actionCreate());
+
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => 'Validation failed.']], $result);
+        $this->assertFalse(WorkflowTemplate::findWithDeleted()->where(['name' => 'api-wf-refused-alone'])->exists());
+    }
+
     public function testCreateRollsBackWhenWritingAStepFails(): void
     {
         $s = $this->teamScope();
@@ -440,7 +464,7 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $audit = AuditLog::findOne(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_UPDATED, 'object_id' => $workflow->id]);
         $this->assertNotNull($audit);
         $this->assertSame(
-            ['name' => 'api-wf-updated', 'source' => 'api', 'job_template_ids' => [$s['open']->id]],
+            ['name' => 'api-wf-updated', 'source' => 'api', 'job_template_ids' => [$s['open']->id], 'approval_rule_ids' => []],
             json_decode((string)$audit->metadata, true)
         );
     }
@@ -564,7 +588,7 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
         $this->authenticate($s['member']);
 
-        $this->assertSame(['deleted' => true], $this->data($this->ctrl->actionDelete($workflow->id)));
+        $this->assertSame(['deleted' => true, 'canceled_runs' => 0, 'failed_runs' => 0], $this->data($this->ctrl->actionDelete($workflow->id)));
         $this->assertNull(WorkflowTemplate::findOne($workflow->id));
     }
 
@@ -645,7 +669,7 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $result = $this->ctrl->actionLaunch($workflow->id);
 
         $this->assertSame(422, \Yii::$app->response->statusCode);
-        $this->assertSame('Workflow template has no steps.', $result['error']['message']);
+        $this->assertSame(['error' => ['message' => sprintf(WorkflowExecutionService::NO_STEPS, $workflow->id)]], $result);
     }
 
     public function testAdminMayLaunchWorkflowOfAnotherTeam(): void

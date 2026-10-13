@@ -15,6 +15,7 @@ class ApprovalRequestTest extends TestCase
         $this->assertSame('approved', ApprovalRequest::STATUS_APPROVED);
         $this->assertSame('rejected', ApprovalRequest::STATUS_REJECTED);
         $this->assertSame('timed_out', ApprovalRequest::STATUS_TIMED_OUT);
+        $this->assertSame('canceled', ApprovalRequest::STATUS_CANCELED);
     }
 
     public function testStatusesReturnsAll(): void
@@ -24,6 +25,7 @@ class ApprovalRequestTest extends TestCase
         $this->assertContains('approved', $statuses);
         $this->assertContains('rejected', $statuses);
         $this->assertContains('timed_out', $statuses);
+        $this->assertContains('canceled', $statuses);
     }
 
     public function testIsResolvedForPending(): void
@@ -50,6 +52,27 @@ class ApprovalRequestTest extends TestCase
         $this->assertTrue($request->isResolved());
     }
 
+    public function testIsResolvedForCanceled(): void
+    {
+        $request = $this->makeRequest('canceled');
+        $this->assertTrue($request->isResolved());
+    }
+
+    /**
+     * A request expires at expires_at, not a second before; one without
+     * expires_at never does.
+     */
+    public function testHasExpiredAtItsExpiresAt(): void
+    {
+        $request = $this->makeRequest('pending');
+        $this->assertFalse($request->hasExpired(PHP_INT_MAX), 'no expires_at: never');
+
+        $request->expires_at = 1000;
+        $this->assertFalse($request->hasExpired(999));
+        $this->assertTrue($request->hasExpired(1000));
+        $this->assertTrue($request->hasExpired(1001));
+    }
+
     /** @return array<int, array{0: string, 1: string}> */
     public static function statusLabelData(): array
     {
@@ -58,6 +81,7 @@ class ApprovalRequestTest extends TestCase
             [ApprovalRequest::STATUS_APPROVED, 'Approved'],
             [ApprovalRequest::STATUS_REJECTED, 'Rejected'],
             [ApprovalRequest::STATUS_TIMED_OUT, 'Timed Out'],
+            [ApprovalRequest::STATUS_CANCELED, 'Canceled'],
         ];
     }
 
@@ -80,6 +104,7 @@ class ApprovalRequestTest extends TestCase
             [ApprovalRequest::STATUS_APPROVED, 'success'],
             [ApprovalRequest::STATUS_REJECTED, 'danger'],
             [ApprovalRequest::STATUS_TIMED_OUT, 'secondary'],
+            [ApprovalRequest::STATUS_CANCELED, 'dark'],
         ];
     }
 

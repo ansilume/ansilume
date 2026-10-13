@@ -8,6 +8,8 @@ use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\controllers\traits\TeamScopingTrait;
+use app\services\ScheduleEnablement;
+use app\services\ScheduleRunAs;
 use app\services\ScheduleSecrets;
 use app\services\ScheduleService;
 use yii\data\ActiveDataProvider;
@@ -91,6 +93,12 @@ class ScheduleController extends BaseController
         return $this->renderForm($model);
     }
 
+    /**
+     * Save the edit form. A change to what or when the schedule runs (job
+     * template, cron expression, timezone, extra vars, a password answer
+     * entered anew or dropped) or enabling it makes the user who saves it the
+     * user the schedule runs as (ScheduleRunAs), audited as run_as {from, to}.
+     */
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
@@ -103,13 +111,15 @@ class ScheduleController extends BaseController
             return $this->renderForm($model);
         }
         $secrets = new ScheduleSecrets();
-        if ($this->saveSchedule($model, $secrets)) {
+        // The stored values, before ScheduleSecrets::prepare() drops the stored extra vars from the old attributes.
+        $runAs = new ScheduleRunAs($model);
+        if ($this->saveSchedule($model, $secrets, $runAs)) {
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_SCHEDULE_UPDATED,
                 'schedule',
                 $model->id,
                 null,
-                ['name' => $model->name] + $secrets->auditContext()
+                ['name' => $model->name] + $secrets->auditContext() + $runAs->auditContext()
             );
             $this->session()->setFlash('success', "Schedule \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
@@ -136,19 +146,30 @@ class ScheduleController extends BaseController
         return $this->redirect(['index']);
     }
 
+    /**
+     * Enable a disabled schedule or disable an enabled one. Enabling a
+     * schedule whose job template was deleted is refused with a danger
+     * flash (ScheduleEnablement::ENABLE_REFUSED) and changes nothing.
+     * Enabling makes the user the schedule runs as (ScheduleRunAs).
+     */
     public function actionToggle(int $id): Response
     {
         $model = $this->findModel($id);
         $this->requireScheduleOperate($model);
-        $model->enabled = !$model->enabled;
-        if ($model->enabled) {
-            $model->computeNextRunAt();
-        } else {
-            $model->next_run_at = null;
+        $enablement = new ScheduleEnablement();
+        $refusal = $enablement->toggle($model, (int)$this->currentUserId());
+        if ($refusal !== null) {
+            $this->session()->setFlash('danger', $refusal);
+            return $this->redirect(['index']);
         }
-        $model->save(false, ['enabled', 'next_run_at', 'updated_at']);
         $state = $model->enabled ? 'enabled' : 'disabled';
-        \Yii::$app->get('auditService')->log(AuditLog::ACTION_SCHEDULE_TOGGLED, 'schedule', $model->id, null, ['name' => $model->name, 'enabled' => $model->enabled]);
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_SCHEDULE_TOGGLED,
+            'schedule',
+            $model->id,
+            null,
+            ['name' => $model->name, 'enabled' => $model->enabled] + $enablement->runAsContext()
+        );
         $this->session()->setFlash('success', "Schedule \"{$model->name}\" {$state}.");
         return $this->redirect(['index']);
     }
@@ -163,9 +184,13 @@ class ScheduleController extends BaseController
      * once the template is known to be one the user may use: their errors
      * name the template's password fields.
      *
+     * An update passes $runAs, taken before the change is prepared: when the
+     * change arms the schedule, the same save makes the user the schedule
+     * runs as.
+     *
      * @throws ForbiddenHttpException
      */
-    private function saveSchedule(Schedule $model, ScheduleSecrets $secrets): bool
+    private function saveSchedule(Schedule $model, ScheduleSecrets $secrets, ?ScheduleRunAs $runAs = null): bool
     {
         $access = $this->templateAccess($model);
         if ($access === ScheduleService::TEMPLATE_FORBIDDEN) {
@@ -189,6 +214,7 @@ class ScheduleController extends BaseController
             $model->addError('extra_vars', $error);
             return false;
         }
+        $runAs?->claim((int)$this->currentUserId(), $secrets->answersChanged());
 
         return $model->save(false);
     }

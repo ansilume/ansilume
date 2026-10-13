@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\WorkflowJob $model */
 /** @var bool $canOperate operator access to the project of every job step of the workflow */
+/** @var int|null $currentExecutionId the execution the page highlights: the newest one of the run's current step */
 
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
@@ -14,6 +15,9 @@ use yii\helpers\Json;
 
 $this->title = 'Workflow Job #' . $model->id;
 $steps = $model->stepExecutions;
+// The extra vars the run was launched with, a password answer as
+// $encrypted$: the sealed answers are never shown.
+$launchExtraVars = $model->launchExtraVars();
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -24,10 +28,8 @@ $steps = $model->stepExecutions;
         $hasPausedStep = false;
         if (!$model->isFinished()) {
             foreach ($steps as $wjs) {
-                if (
-                    $wjs->status === WorkflowJobStep::STATUS_RUNNING
-                    && $wjs->workflowStep?->step_type === WorkflowStep::TYPE_PAUSE
-                ) {
+                // The type the step had when it ran, also once it was removed.
+                if ($wjs->status === WorkflowJobStep::STATUS_RUNNING && $wjs->isPauseStep()) {
                     $hasPausedStep = true;
                     break;
                 }
@@ -81,6 +83,15 @@ $steps = $model->stepExecutions;
                 <th>Finished</th>
                 <td id="wj-finished"><?= $model->finished_at ? Html::encode(date('Y-m-d H:i:s', (int)$model->finished_at)) : '—' ?></td>
             </tr>
+            <?php if ($launchExtraVars !== []) : ?>
+            <tr>
+                <th>Extra Vars</th>
+                <td>
+                    <pre class="job-log m-0" id="wj-extra-vars" style="max-height:150px;overflow-y:auto;"><?= Html::encode((string)json_encode((object)$launchExtraVars, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)) ?></pre>
+                    <div class="form-text small">Every job step of the run received these. Password answers show as <code>$encrypted$</code>.</div>
+                </td>
+            </tr>
+            <?php endif; ?>
         </table>
 
         <h4>Steps</h4>
@@ -96,6 +107,7 @@ $steps = $model->stepExecutions;
                     <tr>
                         <th>#</th>
                         <th>Step</th>
+                        <th>Type</th>
                         <th>Status</th>
                         <th>Child Job</th>
                         <th>Started</th>
@@ -117,13 +129,16 @@ $steps = $model->stepExecutions;
                         return $wjs->finished_at !== null ? $core : 'running ' . $core;
                     };
                     foreach ($steps as $i => $wjs) :
-                        $isCurrent = $model->current_step_id === $wjs->workflow_step_id;
+                        $isCurrent = (int)$wjs->id === $currentExecutionId;
                         $cssClass = WorkflowJobStep::statusCssClass($wjs->status);
                         $label = WorkflowJobStep::statusLabel($wjs->status);
+                        // What the step was when it ran, also once it was removed.
+                        $stepType = $wjs->stepType();
                         ?>
-                        <tr data-wjs-step-id="<?= (int)$wjs->workflow_step_id // xss-ok: int?>" class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
+                        <tr data-wjs-id="<?= (int)$wjs->id // xss-ok: int?>" class="<?= Html::encode($isCurrent ? 'table-active' : '') ?>">
                             <td><?= Html::encode((string)($i + 1)) ?></td>
-                            <td><?= Html::encode($wjs->workflowStep?->name ?? '—') ?></td>
+                            <td data-wjs-name-cell><?= Html::encode($wjs->stepName()) ?></td>
+                            <td data-wjs-type-cell><?= Html::encode($stepType === null ? '—' : (WorkflowStep::typeLabels()[$stepType] ?? $stepType)) ?></td>
                             <td data-wjs-status-cell>
                                 <span class="badge text-bg-<?= Html::encode($cssClass) ?>">
                         <?= Html::encode($label) ?>
@@ -188,12 +203,14 @@ $steps = $model->stepExecutions;
         var hint = document.getElementById('wj-empty-hint');
         if (hint) { hint.remove(); }
         var tr = document.createElement('tr');
-        tr.setAttribute('data-wjs-step-id', String(step.workflow_step_id));
+        // Keyed by the execution: a step can run more than once in a run.
+        tr.setAttribute('data-wjs-id', String(step.id));
         if (step.is_current) { tr.classList.add('table-active'); }
 
         var cells = [
             { text: String(step.step_index || (tbody.children.length + 1)) },
-            { text: step.step_name || '—' },
+            { text: step.step_name || '—', attr: 'data-wjs-name-cell' },
+            { text: step.step_type_label || '—', attr: 'data-wjs-type-cell' },
             { html: '<span class="badge text-bg-' + (step.status_css || 'secondary') + '">'
                 + (step.status_label || step.status || '—') + '</span>',
               attr: 'data-wjs-status-cell' },
@@ -213,7 +230,7 @@ $steps = $model->stepExecutions;
     }
 
     function updateRow(step) {
-        var row = document.querySelector('tr[data-wjs-step-id="' + step.workflow_step_id + '"]');
+        var row = document.querySelector('#wj-steps-table tr[data-wjs-id="' + Number(step.id) + '"]');
         if (!row) {
             row = appendRow(step);
             if (!row) { return; }

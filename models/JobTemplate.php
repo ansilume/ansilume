@@ -134,7 +134,10 @@ class JobTemplate extends ActiveRecord
             // Set in code only: a form must not choose the token or whom the
             // template's trigger runs as.
             [['!trigger_token'], 'string', 'max' => 64],
-            [['project_id', 'inventory_id', 'credential_id', 'runner_group_id', 'approval_rule_id'], 'integer'],
+            [['project_id', 'inventory_id', 'credential_id', 'runner_group_id'], 'integer'],
+            // Set in code only: the rule that gates the template's launches is
+            // for admins to choose (JobTemplateRuleAssignment checks who may).
+            [['!approval_rule_id'], 'integer'],
             [['!created_by', '!trigger_token_created_by'], 'integer'],
             // Unknown ids would otherwise fail on the foreign keys with a server error.
             [
@@ -253,6 +256,7 @@ class JobTemplate extends ActiveRecord
     {
         return [
             'runner_group_id' => 'Runner',
+            'approval_rule_id' => 'Approval rule',
         ];
     }
 

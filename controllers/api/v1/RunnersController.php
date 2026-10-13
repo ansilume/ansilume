@@ -78,9 +78,7 @@ class RunnersController extends BaseApiController
      */
     public function actionMove(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('runner-group.update')) {
+        if (!$this->userCan('runner-group.update')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -136,9 +134,7 @@ class RunnersController extends BaseApiController
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('runner-group.update')) {
+        if (!$this->userCan('runner-group.update')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -163,9 +159,7 @@ class RunnersController extends BaseApiController
      */
     public function actionRegenerateToken(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('runner-group.update')) {
+        if (!$this->userCan('runner-group.update')) {
             return $this->error('Forbidden.', 403);
         }
 

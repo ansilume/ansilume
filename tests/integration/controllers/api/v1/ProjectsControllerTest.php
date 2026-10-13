@@ -178,8 +178,13 @@ class ProjectsControllerTest extends WebControllerTestCase
         $group = $this->createRunnerGroup($userId);
         $this->createJobTemplate($project->id, $inventory->id, $group->id, $userId);
 
-        $this->ctrl->actionDelete($project->id);
+        $result = $this->ctrl->actionDelete($project->id);
         $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame(
+            ['error' => ['message' => "Cannot delete \"{$project->name}\": 1 job template(s) still reference this project. Remove or reassign them first."]],
+            $result
+        );
+        $this->assertNotNull(Project::findOne($project->id));
     }
 
     /**

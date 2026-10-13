@@ -1,4 +1,5 @@
 import { test, expect, APIResponse, Browser, TestInfo } from '@playwright/test';
+import { LIMIT_TOO_LONG, VERBOSITY_TOO_HIGH } from '../../lib/job-templates';
 import { asUser, E2E_ADMIN } from '../../lib/session';
 import {
   PASSWORD_FIELD,
@@ -137,6 +138,20 @@ test.describe('Inbound triggers', () => {
     expect(await response.json()).toEqual({
       error: `The value of "${PASSWORD_FIELD}" is the placeholder ${PLACEHOLDER}; send the real value.`,
     });
+  });
+
+  // Regression: a verbosity or a limit the job record refuses failed the
+  // launch only when the record was saved, so the trigger answered 500
+  // "Launch failed." for input its caller can fix. It is refused before the
+  // launch: 422 with the record's message (services/JobLaunchInput.php).
+  test('a verbosity or a limit the job record refuses answers 422 with the reason', async ({ request }) => {
+    const verbosity = await request.post('/trigger/fire', { headers: { [TRIGGER_HEADER]: jobToken }, data: { verbosity: 9 } });
+    expect(verbosity.status()).toBe(422);
+    expect(await verbosity.json()).toEqual({ error: VERBOSITY_TOO_HIGH });
+
+    const limit = await request.post('/trigger/fire', { headers: { [TRIGGER_HEADER]: jobToken }, data: { limit: 'web:'.repeat(64) + 'x' } });
+    expect(limit.status()).toBe(422);
+    expect(await limit.json()).toEqual({ error: LIMIT_TOO_LONG });
   });
 
   test('a password answer sent to a trigger is stored encrypted', async ({ request, browser }, testInfo) => {

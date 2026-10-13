@@ -40,7 +40,13 @@ final class JobLaunchSecrets
 
     private const UNUSABLE_NAME = 'Survey field %s has a name that cannot be used for a password answer; '
         . 'rename it in the survey before launching.';
-    private const PLACEHOLDER_SENT = 'The value of %s is the placeholder %s; send the real value.';
+
+    /**
+     * A password answer sent as the placeholder, by a job launch or a
+     * workflow launch (WorkflowRunVars). sprintf(): the field name (quoted),
+     * the placeholder.
+     */
+    public const PLACEHOLDER_SENT = 'The value of %s is the placeholder %s; send the real value.';
 
     /**
      * The public extra vars, with the placeholder for every password answer,

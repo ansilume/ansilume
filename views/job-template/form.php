@@ -9,8 +9,15 @@ declare(strict_types=1);
 /** @var app\models\Credential[] $credentials */
 /** @var app\models\RunnerGroup[] $runnerGroups */
 /** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings */
+/** @var bool $canAssignRule approval-rule.update: the rule select, else the rule as text */
+/** @var array<int, string> $approvalRuleOptions the rules by ID, for the select */
+/** @var bool $changeLocked a gated template, a user without approval-rule.update: only name and description are enabled */
 
 use app\components\VersionedAssetUrl;
+use app\controllers\JobTemplateController;
+use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\GatedJobTemplateLock;
+use app\services\JobTemplateRuleAssignment;
 use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
@@ -31,12 +38,22 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
 <h2><?= Html::encode($this->title) ?></h2>
 
 <?= $this->render('_warnings', ['warnings' => $warnings]) ?>
+<?php if ($changeLocked) : ?>
+    <div class="alert alert-info" id="job-template-locked-notice"><?= Html::encode(GatedJobTemplateLock::NOTICE) ?></div>
+<?php endif; ?>
 
 <?php $form = ActiveForm::begin(['id' => 'jt-form']); ?>
 
     <h5 class="mt-3 text-muted">General</h5>
     <?= $form->field($model, 'name')->textInput(['maxlength' => 128, 'autofocus' => true]) ?>
     <?= $form->field($model, 'description')->textarea(['rows' => 2]) ?>
+
+    <?php if ($changeLocked) : ?>
+        <?php // The form does not offer the additional credentials: the stored ones stay.?>
+        <?= Html::hiddenInput(JobTemplateController::KEEP_CREDENTIALS, '1') ?>
+    <?php endif; ?>
+    <?php // What the template runs. Where the lock applies, every field in here is disabled, so none is posted.?>
+    <?= Html::beginTag('fieldset', ['id' => 'job-template-run-fields', 'disabled' => $changeLocked]) ?>
 
     <h5 class="mt-3 text-muted">Execution</h5>
     <div class="row g-2">
@@ -108,7 +125,8 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
         'rows' => 6,
         'class' => 'form-control font-monospace',
         'placeholder' => '{"env": "production", "version": "1.2.3"}',
-        'data-extra-vars-editor' => '1',
+        // A locked form keeps the plain field: the editor would take edits that are not posted.
+        'data-extra-vars-editor' => $changeLocked ? null : '1',
     ])->hint('Stored as JSON. Toggle to YAML for easier editing — the editor converts in-place. Overridable at launch time.') ?>
 
     <h5 class="mt-3 text-muted">Runner</h5>
@@ -125,6 +143,19 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
             ])->hint('Minutes before the job is killed (max 1440 = 24 h).') ?>
         </div>
     </div>
+
+    <h5 class="mt-3 text-muted">Approval</h5>
+    <?php if ($canAssignRule) : ?>
+        <?= $form->field($model, 'approval_rule_id')->dropDownList($approvalRuleOptions, ['prompt' => '— None —'])
+            ->hint(Html::encode(JobTemplateRuleAssignment::FORM_HINT)) ?>
+    <?php else : ?>
+        <?php $currentRule = $model->approval_rule_id === null ? null : $model->approvalRule; ?>
+        <div class="mb-3" id="job-template-approval-rule-readonly">
+            <span class="form-label d-block">Approval rule</span>
+            <span class="form-control-plaintext py-0"><?= Html::encode($currentRule === null ? 'None' : JobTemplateRuleAssignment::label($currentRule)) ?></span>
+            <div class="form-text"><?= Html::encode(ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED) ?></div>
+        </div>
+    <?php endif; ?>
 
     <h5 class="mt-3 text-muted">Options</h5>
     <div class="row g-2">
@@ -172,6 +203,8 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
 
     <h5 class="mt-3 text-muted">Survey Fields <span class="text-muted fw-normal small">(optional — prompts the user at launch time)</span></h5>
     <?= $this->render('_survey_editor', ['model' => $model]) ?>
+
+    <?= Html::endTag('fieldset') ?>
 
     <div class="mt-4">
         <?= Html::submitButton($model->isNewRecord ? 'Create Template' : 'Save Changes', ['class' => 'btn btn-primary']) ?>

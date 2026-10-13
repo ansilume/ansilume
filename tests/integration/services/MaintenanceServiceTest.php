@@ -89,9 +89,16 @@ class MaintenanceServiceTest extends DbTestCase
 
         $this->assertSame(['artifact-cleanup'], $report['ran']);
         // stale-sync-sweep skips on every tick when there's nothing to recover,
-        // and the survey password scrub when no finished job has answers.
+        // the approval timeouts when no request expired, the sweep of deleted
+        // job templates when it finds nothing, and the survey password scrub
+        // when no finished job has answers.
         $this->assertSame(
-            [['task' => 'stale-sync-sweep', 'reason' => 'none-stale'], ['task' => 'survey-secret-scrub', 'reason' => 'done']],
+            [
+                ['task' => 'stale-sync-sweep', 'reason' => 'none-stale'],
+                ['task' => MaintenanceService::TASK_APPROVAL_TIMEOUTS, 'reason' => MaintenanceService::SKIP_NONE_EXPIRED],
+                ['task' => MaintenanceService::TASK_DELETED_TEMPLATE_SWEEP, 'reason' => MaintenanceService::SKIP_NONE_FOUND],
+                ['task' => 'survey-secret-scrub', 'reason' => 'done'],
+            ],
             $report['skipped']
         );
         $this->assertSame(1, $report['results']['artifact-cleanup']['expired']);

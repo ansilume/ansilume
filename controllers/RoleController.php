@@ -107,7 +107,7 @@ class RoleController extends BaseController
     {
         $svc = $this->roleService();
         if ($svc->isSystemRole($name)) {
-            $this->session()->setFlash('error', "Cannot delete system role \"{$name}\".");
+            $this->session()->setFlash('danger', "Cannot delete system role \"{$name}\".");
             return $this->redirect(['view', 'name' => $name]);
         }
 

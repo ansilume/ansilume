@@ -37,9 +37,7 @@ class WebhooksController extends BaseApiController
      */
     public function actionIndex(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('admin')) {
+        if (!$this->userCan('admin')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -62,9 +60,7 @@ class WebhooksController extends BaseApiController
      */
     public function actionView(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('admin')) {
+        if (!$this->userCan('admin')) {
             return $this->error('Forbidden.', 403);
         }
         return $this->success($this->serialize($this->findModel($id)));
@@ -75,16 +71,14 @@ class WebhooksController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('admin')) {
+        if (!$this->userCan('admin')) {
             return $this->error('Forbidden.', 403);
         }
 
         $model = new Webhook();
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
-        $model->created_by = (int)$user->id;
+        $model->created_by = (int)\Yii::$app->user->id;
 
         if (!$model->validate()) {
             return $this->error($this->firstError($model), 422);
@@ -109,9 +103,7 @@ class WebhooksController extends BaseApiController
      */
     public function actionUpdate(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('admin')) {
+        if (!$this->userCan('admin')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -142,9 +134,7 @@ class WebhooksController extends BaseApiController
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('admin')) {
+        if (!$this->userCan('admin')) {
             return $this->error('Forbidden.', 403);
         }
 

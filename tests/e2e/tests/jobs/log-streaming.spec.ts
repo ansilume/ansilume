@@ -1,61 +1,33 @@
 import { test, expect } from '@playwright/test';
+import { LOGSTREAM_FINISHED_JOB, LOGSTREAM_RUNNING_JOB, seededJobId } from '../../lib/jobs';
 
+/**
+ * Job logs on the job page, on the jobs commands/E2eLogStreamSeeder.php seeds:
+ * a finished job with three log chunks and a running one with two.
+ *
+ * The tests used to look for those jobs by their execution command in the
+ * rows of the job list's first page, which shows no execution command, and
+ * skipped themselves when they did not find one: they never ran.
+ */
 test.describe('Job Log Streaming', () => {
-  async function gotoJobByExecutionCommand(
-    page: import('@playwright/test').Page,
-    execCmd: string,
-  ): Promise<boolean> {
-    await page.goto('/job/index');
-    const rows = page.locator('table.table tbody tr');
-    const count = await rows.count();
-    for (let i = 0; i < count; i++) {
-      const row = rows.nth(i);
-      const text = await row.innerText();
-      if (text.includes(execCmd)) {
-        const link = row.locator('a').first();
-        const href = await link.getAttribute('href');
-        if (href) {
-          await page.goto(href);
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
   test('finished job renders all log chunks', async ({ page }) => {
-    const found = await gotoJobByExecutionCommand(page, 'e2e-logstream-finished');
-    if (!found) {
-      test.skip(true, 'No e2e-logstream-finished job seeded');
-      return;
-    }
+    await page.goto(`/job/view?id=${await seededJobId(page, LOGSTREAM_FINISHED_JOB)}`);
 
     await expect(page.locator('#job-log')).toContainText('PLAY [localhost]', { timeout: 5_000 });
     await expect(page.locator('#job-log')).toContainText('TASK [Gathering Facts]', { timeout: 5_000 });
     await expect(page.locator('#job-log')).toContainText('PLAY RECAP', { timeout: 5_000 });
-    await expect(page.locator('#status-badge')).toContainText(/success/i, { timeout: 5_000 });
+    await expect(page.locator('#status-badge')).toHaveText('Succeeded');
   });
 
   test('running job polls and shows initial chunks', async ({ page }) => {
-    const pollRequests: string[] = [];
-    page.on('request', (req) => {
-      const url = req.url();
-      if (url.includes('/log-poll')) {
-        pollRequests.push(url);
-      }
-    });
-
-    const found = await gotoJobByExecutionCommand(page, 'e2e-logstream-running');
-    if (!found) {
-      test.skip(true, 'No e2e-logstream-running job seeded');
-      return;
-    }
+    const id = await seededJobId(page, LOGSTREAM_RUNNING_JOB);
+    const poll = page.waitForRequest((req) => req.url().includes(`/job/log-poll?id=${id}`), { timeout: 10_000 });
+    await page.goto(`/job/view?id=${id}`);
 
     await expect(page.locator('#job-log')).toContainText('PLAY [webservers]', { timeout: 5_000 });
     await expect(page.locator('#job-log')).toContainText('install package', { timeout: 5_000 });
 
-    // Give the polling JS time to fire at least once.
-    await page.waitForRequest((req) => req.url().includes('/log-poll'), { timeout: 10_000 });
-    expect(pollRequests.length).toBeGreaterThan(0);
+    // The page polls the log of a job that has not finished.
+    await poll;
   });
 });

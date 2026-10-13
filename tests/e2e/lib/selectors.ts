@@ -6,9 +6,11 @@ export const SIDEBAR_LINK = (text: string) => `#sidebar a:has-text("${text}")`;
 export const MAIN_CONTENT = '.main-content';
 export const PAGE_TITLE = 'h1, h2';
 
-// Flash messages
+// Flash messages. A danger flash renders as .alert-danger only: the flash type
+// "error" rendered as the unstyled class alert-error, a bug that must not pass
+// for a danger flash (roles/system-roles.spec.ts, analytics/export.spec.ts).
 export const FLASH_SUCCESS = '.alert-success';
-export const FLASH_DANGER = '.alert-danger, .alert-error';
+export const FLASH_DANGER = '.alert-danger';
 export const FLASH_WARNING = '.alert-warning';
 export const FLASH_INFO = '.alert-info';
 

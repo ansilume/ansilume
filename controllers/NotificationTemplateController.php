@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\ErrorText;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\services\NotificationDispatcher;
@@ -13,6 +14,17 @@ use yii\web\Response;
 
 class NotificationTemplateController extends BaseController
 {
+    /** The success flash of a test notification that the channel accepted. */
+    public const TEST_SENT = 'Test notification sent successfully.';
+
+    /**
+     * The danger flash of a test notification that was not sent.
+     * sprintf(): the channel's error as NotificationDispatcher::sendSingle()
+     * returns it, or what may be said about an error outside the delivery
+     * (ErrorText: never the message of a database error).
+     */
+    public const TEST_FAILED = 'Test notification failed: %s';
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -87,6 +99,12 @@ class NotificationTemplateController extends BaseController
         return $this->render('form', ['model' => $model]);
     }
 
+    /**
+     * Send the template once with sample values: a success flash when its
+     * channel accepted the message, else a danger flash with the channel's
+     * error (TEST_FAILED), which its notification.failed audit entry
+     * carries too.
+     */
     public function actionTest(int $id): Response
     {
         $model = $this->findModel($id);
@@ -98,10 +116,14 @@ class NotificationTemplateController extends BaseController
         try {
             /** @var NotificationDispatcher $dispatcher */
             $dispatcher = \Yii::$app->get('notificationDispatcher');
-            $dispatcher->sendSingle($model, $variables, $event);
-            $this->session()->setFlash('success', 'Test notification sent successfully.');
+            $error = $dispatcher->sendSingle($model, $variables, $event);
         } catch (\Throwable $e) {
-            $this->session()->setFlash('error', 'Test notification failed: ' . $e->getMessage());
+            $error = ErrorText::of($e);
+        }
+        if ($error === null) {
+            $this->session()->setFlash('success', self::TEST_SENT);
+        } else {
+            $this->session()->setFlash('danger', sprintf(self::TEST_FAILED, $error));
         }
 
         return $this->redirect(['view', 'id' => $model->id]);

@@ -80,6 +80,7 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
 
     <?= $form->field($model, 'required_approvals')->textInput(['type' => 'number', 'min' => 1, 'max' => 50, 'id' => 'required-approvals']) ?>
     <div id="approver-count-warning" class="alert alert-warning" style="display:none"></div>
+    <div id="approver-launcher-note" class="alert alert-info" style="display:none"><?= Html::encode(ApprovalRule::LAUNCHER_NOTE) ?></div>
     <?= $form->field($model, 'timeout_minutes')->textInput(['type' => 'number', 'min' => 1, 'max' => 10080])->hint('Leave empty for no timeout.') ?>
     <?= $form->field($model, 'timeout_action')->dropDownList(ApprovalRule::timeoutActions()) ?>
 
@@ -126,6 +127,7 @@ foreach (array_keys($teams) as $tid) {
     var configInput = document.getElementById('approver-config');
     var requiredInput = document.getElementById('required-approvals');
     var warningDiv = document.getElementById('approver-count-warning');
+    var launcherNote = document.getElementById('approver-launcher-note');
 
     var roleCounts = <?= Json::htmlEncode($roleCounts) ?>;
     var teamCounts = <?= Json::htmlEncode($teamCounts) ?>;
@@ -149,6 +151,9 @@ foreach (array_keys($teams) as $tid) {
         } else {
             warningDiv.style.display = 'none';
         }
+        // With as many required approvals as approvers, a launch by one of
+        // them is refused: the launcher never approves their own job.
+        launcherNote.style.display = count > 0 && required >= count ? '' : 'none';
     }
 
     function showPanel() {

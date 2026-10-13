@@ -80,16 +80,14 @@ class InventoriesController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('inventory.create')) {
+        if (!$this->userCan('inventory.create')) {
             return $this->error('Forbidden.', 403);
         }
 
         $model = new Inventory();
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
-        $model->created_by = (int)$user->id;
+        $model->created_by = (int)\Yii::$app->user->id;
 
         $userId = $this->currentUserId();
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
@@ -116,9 +114,7 @@ class InventoriesController extends BaseApiController
      */
     public function actionUpdate(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('inventory.update')) {
+        if (!$this->userCan('inventory.update')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -157,9 +153,7 @@ class InventoriesController extends BaseApiController
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('inventory.delete')) {
+        if (!$this->userCan('inventory.delete')) {
             return $this->error('Forbidden.', 403);
         }
 

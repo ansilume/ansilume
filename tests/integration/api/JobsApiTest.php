@@ -62,7 +62,7 @@ class JobsApiTest extends DbTestCase
     }
 
     // -------------------------------------------------------------------------
-    // Job Cancel (via direct model mutation, as controller does)
+    // Job Cancel (through JobCancellationService, as the controller does)
     // -------------------------------------------------------------------------
 
     public function testCancelRunningJobSetsCorrectState(): void
@@ -78,9 +78,7 @@ class JobsApiTest extends DbTestCase
 
         // Cancel
         $this->assertTrue($job->isCancelable());
-        $job->status      = Job::STATUS_CANCELED;
-        $job->finished_at = time();
-        $job->save(false);
+        $this->assertTrue($this->cancellation()->cancel($job, $user->id));
         $job->refresh();
 
         $this->assertSame(Job::STATUS_CANCELED, $job->status);
@@ -99,6 +97,18 @@ class JobsApiTest extends DbTestCase
         $job->save(false);
 
         $this->assertFalse($job->isCancelable());
+        $this->assertFalse($this->cancellation()->cancel($job, $user->id));
+        $job->refresh();
+        $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
+        $this->assertSame(0, (int)$job->exit_code);
+    }
+
+    private function cancellation(): \app\services\JobCancellationService
+    {
+        /** @var \app\services\JobCancellationService $service */
+        $service = \Yii::$app->get('jobCancellationService');
+
+        return $service;
     }
 
     // -------------------------------------------------------------------------

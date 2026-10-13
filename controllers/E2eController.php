@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\commands\E2eDeletedTemplateApprovalSeeder;
 use app\components\EnvFlag;
+use app\components\ErrorText;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\Project;
@@ -39,7 +41,12 @@ class E2eController extends BaseController
         // + prefix combination is the guard, not user identity).
         return [
             [
-                'actions' => ['fire-schedule', 'create-cancelable-job', 'seed-syncing-project'],
+                'actions' => [
+                    'fire-schedule',
+                    'create-cancelable-job',
+                    'seed-syncing-project',
+                    'create-deleted-template-request',
+                ],
                 'allow' => true,
                 'roles' => ['?', '@'],
             ],
@@ -55,6 +62,7 @@ class E2eController extends BaseController
             'fire-schedule' => ['POST'],
             'create-cancelable-job' => ['POST'],
             'seed-syncing-project' => ['POST'],
+            'create-deleted-template-request' => ['POST'],
         ];
     }
 
@@ -125,11 +133,18 @@ class E2eController extends BaseController
      * POST /e2e/create-cancelable-job?template=e2e-template
      *
      * Inserts a Job row in STATUS_QUEUED against the named e2e-* template
-     * without going through the full launch pipeline (no queue push, no
-     * runner pickup). The cancel-walk spec needs a guaranteed-cancelable
+     * without going through the full launch pipeline (no queue push). A
+     * runner of the template's group still claims it on its next poll: a
+     * spec that needs the job to stay queued puts the template in a group
+     * no runner serves. The cancel-walk spec needs a guaranteed-cancelable
      * target on every run — re-using the seeded running job would make
      * the test single-shot because the first cancel leaves the fixture in
      * STATUS_CANCELED forever.
+     *
+     * The lookup also finds a soft-deleted template: where() replaces the
+     * deleted_at condition of JobTemplate::find(). projects/crud.spec.ts
+     * relies on it to give the soft-deleted e2e-softdel-template a waiting
+     * job, which the project delete must cancel.
      */
     public function actionCreateCancelableJob(string $template = 'e2e-template'): Response
     {
@@ -157,6 +172,37 @@ class E2eController extends BaseController
         $job->save(false);
 
         return $this->asJson(['job_id' => (int)$job->id]);
+    }
+
+    /**
+     * POST /e2e/create-deleted-template-request?launcher=e2e-operator
+     *
+     * A job of the soft-deleted e2e-deleted-gate-template that the e2e-*
+     * user `launcher` launched and that waits for approval, with its pending
+     * request (E2eDeletedTemplateApprovalSeeder::waitingJob()): a vote must
+     * find that it no longer waits. Made on demand because the maintenance
+     * run cancels such jobs; the seeder holds that sweep off for a while.
+     * Answers {job_id, request_id}; 404 when the seed has not run.
+     */
+    public function actionCreateDeletedTemplateRequest(string $launcher = 'e2e-operator'): Response
+    {
+        \Yii::$app->response->format = Response::FORMAT_JSON;
+
+        if (!str_starts_with($launcher, self::PREFIX)) {
+            \Yii::$app->response->statusCode = 400;
+            return $this->asJson(['error' => 'non-e2e launcher name']);
+        }
+
+        try {
+            $ids = (new E2eDeletedTemplateApprovalSeeder(static function (string $msg): void {
+            }))->waitingJob($launcher);
+        } catch (\RuntimeException $e) {
+            // A PDOException of the seeder's transaction is a RuntimeException
+            // too: named by its class, SQLSTATE and driver error code only.
+            throw new NotFoundHttpException(ErrorText::of($e));
+        }
+
+        return $this->asJson($ids);
     }
 
     /**

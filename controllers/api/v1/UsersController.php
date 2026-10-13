@@ -40,9 +40,7 @@ class UsersController extends BaseApiController
      */
     public function actionIndex(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.view')) {
+        if (!$this->userCan('user.view')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -65,9 +63,7 @@ class UsersController extends BaseApiController
      */
     public function actionView(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.view')) {
+        if (!$this->userCan('user.view')) {
             return $this->error('Forbidden.', 403);
         }
         return $this->success($this->serialize($this->findModel($id)));
@@ -78,9 +74,7 @@ class UsersController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.create')) {
+        if (!$this->userCan('user.create')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -218,9 +212,7 @@ class UsersController extends BaseApiController
      */
     public function actionUpdate(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.update')) {
+        if (!$this->userCan('user.update')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -277,13 +269,11 @@ class UsersController extends BaseApiController
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.delete')) {
+        if (!$this->userCan('user.delete')) {
             return $this->error('Forbidden.', 403);
         }
 
-        if ((int)$user->id === $id) {
+        if ((int)\Yii::$app->user->id === $id) {
             return $this->error('Cannot delete your own account.', 422);
         }
 

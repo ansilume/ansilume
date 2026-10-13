@@ -1,4 +1,5 @@
 import { APIResponse, expect, Page } from '@playwright/test';
+import { idWhere, indexRows } from './scoping';
 import { FLASH_SUCCESS, FLASH_DANGER, FORM_SUBMIT } from './selectors';
 
 /**
@@ -74,6 +75,11 @@ export async function templateId(page: Page, name: string): Promise<string> {
   );
   expect(ids, `exactly one job template named ${name}`).toHaveLength(1);
   return ids[0];
+}
+
+/** The id of the user `username`, from the user list (columns: #, Username, ...); needs user.view. */
+export async function userId(page: Page, username: string): Promise<string> {
+  return idWhere(await indexRows(page, '/user/index'), 1, username);
 }
 
 /** The newest job of the template in `status`, from the job list. */

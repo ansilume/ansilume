@@ -273,6 +273,36 @@ class E2eSurveySecretSeederTest extends DbTestCase
         $this->assertSame(E2eSurveySecretSeeder::CURRENT_RUNNER, $foreign->runner?->name);
     }
 
+    /**
+     * Regression: a job a spec left queued or running on another e2e-
+     * template of the group (job-templates/extra-vars-editor.spec.ts launches
+     * e2e-extra-vars-bigint-template there) stopped every later seed, because
+     * the claim took it instead of the seeded job.
+     */
+    public function testRegressionALeftOverJobOfAnotherE2eTemplateOfTheGroupNoLongerStopsTheSeed(): void
+    {
+        $group = $this->createRunnerGroup($this->adminId);
+        $group->name = E2eSurveySecretSeeder::GROUP;
+        $group->save(false);
+        $other = $this->createJobTemplate(
+            (int)$this->createProject($this->adminId)->id,
+            (int)$this->createInventory($this->adminId)->id,
+            (int)$group->id,
+            $this->adminId
+        );
+        $other->name = 'e2e-extra-vars-bigint-template';
+        $other->save(false);
+        $queued = $this->createJob((int)$other->id, $this->adminId);
+        $running = $this->createJob((int)$other->id, $this->adminId, Job::STATUS_RUNNING);
+
+        $this->seed();
+
+        $this->assertNull(Job::findOne($queued->id), 'the queued job of the other e2e- template was deleted');
+        $this->assertNull(Job::findOne($running->id), 'the running job of the other e2e- template was deleted');
+        $this->assertSame(E2eSurveySecretSeeder::CURRENT_RUNNER, $this->job(Job::STATUS_RUNNING)->runner?->name);
+        $this->assertNotNull(JobTemplate::findOne($other->id), 'only the jobs go, not the template');
+    }
+
     public function testWithoutAUsableSecretKeyTheSeedStopsWithTheReasonAndLaunchesNothing(): void
     {
         $saved = $_ENV['APP_SECRET_KEY'] ?? null;

@@ -36,6 +36,10 @@ class InlineScriptJsonTest extends TestCase
             '? json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)' =>
                 'Pretty-prints the audit context into a <pre>, through Html::encode(); not in a script.',
         ],
+        'views/workflow-job/view.php' => [
+            'Html::encode((string)json_encode((object)$launchExtraVars, JSON_PRETTY_PRINT' =>
+                'Pretty-prints the run\'s public launch extra vars into a <pre>, through Html::encode(); not in a script.',
+        ],
         'views/profile/recovery-codes.php' => [
             'onclick="copyToClipboard(<?= Html::encode(json_encode(implode("\n", $recoveryCodes))) ?>)' =>
                 'A JS string in an onclick attribute: Html::encode() escapes it for the attribute, which the'

@@ -330,6 +330,16 @@ Because the cooldown is set with SETNX semantics, two `schedule-runner`
 instances launched accidentally in parallel cannot double-trigger a
 sweep — the second one observes the existing cooldown key and skips.
 
+The same run does the other maintenance tasks: every minute it recovers
+project syncs stuck in `syncing`, applies the timeouts of expired approval
+requests (`approval-timeouts`) and encrypts survey password answers that
+finished jobs stored before 2.9; every ten minutes it sweeps deleted job
+and workflow templates, and the jobs that ended workflow runs left
+waiting (`deleted-template-sweep`). The timeouts and the sweep share a
+time budget of 45 seconds per run, so that slow notification endpoints do
+not hold up the schedules; what is left goes on at the next run. See
+[updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows).
+
 ---
 
 ## Troubleshooting

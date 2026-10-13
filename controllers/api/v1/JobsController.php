@@ -11,6 +11,8 @@ use app\models\JobArtifact;
 use app\models\JobSearchForm;
 use app\models\JobTemplate;
 use app\services\ArtifactService;
+use app\services\JobCancellationService;
+use app\services\JobLaunchInput;
 use app\services\JobLaunchRejectedException;
 use app\services\JobLaunchService;
 use app\services\WorkflowAccessChecker;
@@ -29,6 +31,16 @@ use yii\web\NotFoundHttpException;
 class JobsController extends BaseApiController
 {
     use ApiTeamScopingTrait;
+
+    /**
+     * Logged when a launch failed for a reason the caller cannot fix (the
+     * answer is a bare 500). sprintf(): JobLaunchService::failureReason():
+     * what may be said about the error (ErrorText: its message, but for a
+     * database error only its class, SQLSTATE and driver error code),
+     * without the prefix of JobLaunchService's own failures, so the line
+     * says "Job launch failed: " once.
+     */
+    public const LAUNCH_FAILED_LOG = 'Job launch failed: %s';
 
     protected function apiAccessRules(): array
     {
@@ -85,12 +97,15 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * @return array{data: mixed, warnings: list<array{code: string, message: string, credential_ids: list<int>}>}|array{error: array{message: string}}
+     * Launch input the job record would refuse (a verbosity outside 0-5, a
+     * limit longer than 255 characters, a list where a value belongs)
+     * answers 422 before the launch, with the record's message for each
+     * field under "fields" (JobLaunchInput).
+     *
+     * @return array{data: mixed, warnings: list<array{code: string, message: string, credential_ids: list<int>}>}|array{error: array<string, mixed>}
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
         $body = (array)\Yii::$app->request->bodyParams;
 
         $templateId = $this->templateIdFrom($body);
@@ -104,7 +119,7 @@ class JobsController extends BaseApiController
             return $this->error("Job template #{$templateId} not found.", 404);
         }
 
-        if (!$user->can('job.launch')) {
+        if (!$this->userCan('job.launch')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -114,32 +129,34 @@ class JobsController extends BaseApiController
         }
 
         $overrides = $this->buildOverrides($body);
+        $invalid = JobLaunchInput::errors($overrides);
+        if ($invalid !== []) {
+            return $this->errorWithDetails(JobLaunchInput::refusal($invalid), 422, ['fields' => $invalid]);
+        }
 
         try {
             /** @var JobLaunchService $svc */
             $svc = \Yii::$app->get('jobLaunchService');
-            $job = $svc->launch($template, (int)($user->id ?? 0), $overrides);
+            $job = $svc->launch($template, $userId, $overrides);
             // The template's warnings, as the launch page shows them: jobs are never blocked by them.
             return $this->success($this->serializeJob($job, true), 201) + ['warnings' => JobTemplateWarnings::forTemplate($template)];
         } catch (JobLaunchRejectedException $e) {
             // The caller can fix it: a password answer sent as the placeholder, a survey field name to rename.
             return $this->error($e->getMessage(), 422);
         } catch (\RuntimeException $e) {
-            \Yii::error('Job launch failed: ' . $e->getMessage(), __CLASS__);
+            \Yii::error(sprintf(self::LAUNCH_FAILED_LOG, JobLaunchService::failureReason($e)), __CLASS__);
             return $this->error('Launch failed.', 500);
         }
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array<string, mixed>}
      */
     public function actionCancel(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
         $job = $this->findJob($id);
 
-        if (!$user->can('job.cancel')) {
+        if (!$this->userCan('job.cancel')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -154,15 +171,21 @@ class JobsController extends BaseApiController
             return $this->error("Job #{$id} cannot be canceled in status '{$job->status}'.", 409);
         }
 
-        // Single source of truth in JobCompletionService::cancel — flips
-        // status, audits, dispatches the JOB_CANCELED notification, AND
-        // advances the parent workflow if the job was a child step. The
-        // earlier inline implementation skipped the workflow-advance hook,
-        // which left WorkflowJobSteps stuck on RUNNING when their child
-        // job was canceled via the API.
-        /** @var \app\services\JobCompletionService $completion */
-        $completion = \Yii::$app->get('jobCompletionService');
-        $completion->cancel($job, $this->currentUserId());
+        // Single source of truth in JobCancellationService::cancel — the
+        // conditional status change, the closing of a pending approval
+        // request, the audit entries, the JOB_CANCELED notification AND the
+        // advance of the parent workflow if the job was a child step. A job
+        // that finished after it was loaded here is not canceled: 409, with
+        // the status it has now.
+        /** @var JobCancellationService $cancellation */
+        $cancellation = \Yii::$app->get('jobCancellationService');
+        if (!$cancellation->cancel($job, $this->currentUserId())) {
+            return $this->errorWithDetails(
+                JobCancellationService::notCanceledMessage($job),
+                409,
+                ['status' => $job->status]
+            );
+        }
 
         return $this->success($this->serializeJob($job, true));
     }
@@ -314,7 +337,9 @@ class JobsController extends BaseApiController
     /**
      * The launch overrides of the request body. extra_vars goes to the launch
      * as sent, a JSON object (decoded) or a JSON string: the launch refuses
-     * values JSON cannot hold (422) in either form.
+     * values JSON cannot hold (422) in either form. limit and verbosity go as
+     * sent too, for JobLaunchInput to check: the launch makes text and a
+     * number of them.
      *
      * @param array<string, mixed> $body
      * @return array<string, mixed>
@@ -329,7 +354,7 @@ class JobsController extends BaseApiController
             $overrides['limit'] = $body['limit'];
         }
         if (isset($body['verbosity'])) {
-            $overrides['verbosity'] = (int)$body['verbosity'];
+            $overrides['verbosity'] = $body['verbosity'];
         }
         if (!empty($body['check_mode'])) {
             $overrides['check_mode'] = 1;

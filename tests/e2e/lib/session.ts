@@ -10,8 +10,21 @@ export interface E2eUser {
 /** commands/E2eController.php (also in auth.setup.ts). */
 export const E2E_ADMIN: E2eUser = { username: 'e2e-admin', password: 'E2eAdminPass1!' };
 
+/**
+ * commands/E2eController.php (also in auth.setup.ts): the second approver of
+ * e2e-approval-rule, who decides on what e2e-admin launched.
+ */
+export const E2E_OPERATOR: E2eUser = { username: 'e2e-operator', password: 'E2eOperatorPass1!' };
+
 /** commands/E2eCancelOnlyUserSeeder.php: may view and cancel jobs, not launch them. */
 export const E2E_CANCELER: E2eUser = { username: 'e2e-canceler', password: 'E2eCancelerPass1!' };
+
+/**
+ * commands/E2eApprovalSeeder.php LAUNCHER: an operator in the team of
+ * e2e-template's project who approves on no rule, so both approvers of
+ * e2e-dual-approval-rule decide on what this user launches.
+ */
+export const E2E_APPROVAL_LAUNCHER: E2eUser = { username: 'e2e-approval-launcher', password: 'E2eApprovalLauncherPass1!' };
 
 /**
  * Runs `use` with a page signed in as `user` through the login form, in a

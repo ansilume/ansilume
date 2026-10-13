@@ -1,45 +1,58 @@
 import { test, expect } from '@playwright/test';
+import { expectFlash } from '../../lib/helpers';
+import { openWorkflowTemplate } from '../../lib/triggers';
+import { EMPTY_WORKFLOW, SOLO_GATE_REFUSAL, SOLO_GATE_WORKFLOW, runCount } from '../../lib/workflows';
+
+const LAUNCH_BUTTON = '#page-content form[action*="/workflow-template/launch"] button';
 
 test.describe('Workflow Launch', () => {
   test('launch button exists on workflow detail', async ({ page }) => {
-    await page.goto('/workflow-template/index');
-    const row = page.locator('table.table tbody tr', { hasText: 'e2e-workflow' });
-    if (await row.isVisible({ timeout: 3_000 }).catch(() => false)) {
-      await row.locator('a').first().click();
-      const launchBtn = page.locator('button:has-text("Launch")').first();
-      const exists = await launchBtn.isVisible({ timeout: 3_000 }).catch(() => false);
-      expect(exists).toBeTruthy();
-    }
+    await openWorkflowTemplate(page, 'e2e-workflow');
+    await expect(page.locator(LAUNCH_BUTTON)).toBeVisible();
   });
 
   test('launch from template detail page succeeds (regression #11)', async ({ page }) => {
-    await page.goto('/workflow-template/index');
-    const row = page.locator('table.table tbody tr', { hasText: 'e2e-workflow' });
-    if (!(await row.isVisible({ timeout: 3_000 }).catch(() => false))) {
-      test.skip(true, 'e2e-workflow template not seeded');
-      return;
-    }
+    await openWorkflowTemplate(page, 'e2e-workflow');
+    page.once('dialog', (dialog) => dialog.accept());
+    // The launch is a CSRF-protected form post: it must not answer 400 Bad
+    // Request. It opens the new run.
+    await Promise.all([
+      page.waitForURL(/\/workflow-job\/view\?id=\d+$/),
+      page.locator(LAUNCH_BUTTON).click(),
+    ]);
+    await expectFlash(page, 'success', 'Workflow "e2e-workflow" launched.');
+    await expect(page.locator('#wj-steps-table')).toContainText('e2e-step-run');
+  });
 
-    await row.locator('a').first().click();
-    await expect(page).toHaveURL(/workflow-template\/view/);
+  // The launcher never decides on their own launch. A workflow whose
+  // approval step only the launcher may decide could never go on: the
+  // launch is refused before a run is written, naming the step and the rule.
+  test('a launch whose approval only the launcher could give is refused, and the page says why', async ({ page }) => {
+    const before = await runCount(page, SOLO_GATE_WORKFLOW);
+    const id = await openWorkflowTemplate(page, SOLO_GATE_WORKFLOW);
 
-    // Accept the confirmation dialog
-    page.on('dialog', (dialog) => dialog.accept());
+    page.once('dialog', (dialog) => dialog.accept());
+    await Promise.all([
+      page.waitForURL(new RegExp(`/workflow-template/view\\?id=${id}$`)),
+      page.locator(LAUNCH_BUTTON).click(),
+    ]);
+    await expectFlash(page, 'danger', `Launch failed: ${SOLO_GATE_REFUSAL}`);
+    expect(await runCount(page, SOLO_GATE_WORKFLOW), 'no run was written').toBe(before);
+  });
 
-    // Click the Launch button (now a form submit button)
-    const launchBtn = page.locator('button:has-text("Launch")').first();
-    await expect(launchBtn).toBeVisible();
-    await launchBtn.click();
+  // A workflow without steps has nothing to run: the launch is refused
+  // before a run is written, with the reason.
+  test('a workflow without steps is not launched, and the page says why', async ({ page }) => {
+    const before = await runCount(page, EMPTY_WORKFLOW);
+    const id = await openWorkflowTemplate(page, EMPTY_WORKFLOW);
+    await expect(page.locator('#page-content')).toContainText('No steps defined yet.');
 
-    // Should NOT get a 400 Bad Request — should redirect to workflow job or
-    // show success. Don't match bare "400" in the URL: a workflow-job URL
-    // like /workflow-job/view?id=400 legitimately contains those digits.
-    await expect(page).not.toHaveURL(/\/error.*400|400\/bad-request|errorHandler/i);
-    const flash = page.locator('.alert-success, .alert-danger');
-    if (await flash.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      // Success flash or a meaningful error (like "no steps") — not a 400
-      const text = await flash.textContent();
-      expect(text).not.toContain('Bad Request');
-    }
+    page.once('dialog', (dialog) => dialog.accept());
+    await Promise.all([
+      page.waitForURL(new RegExp(`/workflow-template/view\\?id=${id}$`)),
+      page.locator(LAUNCH_BUTTON).click(),
+    ]);
+    await expectFlash(page, 'danger', `Launch failed: Workflow template #${id} has no steps.`);
+    expect(await runCount(page, EMPTY_WORKFLOW), 'no run was written').toBe(before);
   });
 });

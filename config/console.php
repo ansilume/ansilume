@@ -32,21 +32,39 @@ return [
         'log' => [
             'targets' => [
                 [
-                    'class' => 'yii\log\FileTarget',
+                    // Yii's FileTarget, except that an exception logged as such
+                    // (\Yii::error($e)) with a database error in its chain is
+                    // written without its message, which carries the SQL
+                    // statement with its values.
+                    'class' => \app\components\RedactingFileTarget::class,
                     'levels' => ['error', 'warning', 'info'],
                     // Never dump request/environment context ($_SERVER contains
                     // APP_SECRET_KEY, DB_PASSWORD, ...) into the log file.
                     'logVars' => [],
                     // yii\db\Command logs every SQL statement at info with its
                     // values filled in (job extra vars, password answers, tokens).
-                    // Database errors are still logged, under the exception class.
+                    // Database errors are still logged, under the exception class,
+                    // by the error handler and the queue's log behaviour below,
+                    // and under the category of the code that logs one itself
+                    // (such as a failed rollback): with class, SQLSTATE and
+                    // driver error code, not the message.
                     'except' => ['yii\db\Command::*'],
                 ],
             ],
         ],
+        'errorHandler' => [
+            // Logs and prints an uncaught database error without its
+            // message, which carries the SQL statement with its values.
+            'class' => \app\components\ConsoleErrorHandler::class,
+        ],
         'db' => $db,
+        // The same default roles as config/web.php: scheduled launches, approval
+        // timeouts and workflow steps advanced here must see the permissions a
+        // web request sees, or a launch and a vote could disagree on who may
+        // approve (app\services\ApproverEligibility).
         'authManager' => [
             'class' => 'yii\rbac\DbManager',
+            'defaultRoles' => ['viewer'],
         ],
         'mailer' => [
             'class' => 'yii\symfonymailer\Mailer',
@@ -70,7 +88,9 @@ return [
             'redis' => $redis,
             'channel' => 'ansilume-queue',
             'ttr' => 3600,
-            'as log' => 'yii\queue\LogBehavior',
+            // yii2-queue's LogBehavior, except that a job's database error is
+            // logged without its message (the SQL statement with its values).
+            'as log' => \app\components\QueueLogBehavior::class,
         ],
     ],
     'params' => $params,

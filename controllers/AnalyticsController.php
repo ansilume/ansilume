@@ -76,7 +76,7 @@ class AnalyticsController extends BaseController
         $query = $this->scopedQuery();
 
         if (!$query->validate()) {
-            \Yii::$app->session->setFlash('error', 'Invalid filter parameters.');
+            \Yii::$app->session->setFlash('danger', 'Invalid filter parameters.');
             return $this->redirect(['index']);
         }
 

@@ -8,11 +8,20 @@ use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\Job;
+use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\TeamScopeFixtures;
 
+/**
+ * ApprovalService end to end, with the real settlement and eligibility.
+ * Approvers hold the operator role (approval.decide); the launcher of each
+ * job is a separate plain user, who never decides.
+ */
 class ApprovalServiceTest extends DbTestCase
 {
+    use TeamScopeFixtures;
+
     private function service(): ApprovalService
     {
         /** @var ApprovalService $s */
@@ -59,7 +68,7 @@ class ApprovalServiceTest extends DbTestCase
     public function testRecordDecisionCreatesVote(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
+        $user = $this->createUserWithRole('approver', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -77,7 +86,7 @@ class ApprovalServiceTest extends DbTestCase
     public function testApprovalThresholdMetQueuesJob(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
+        $user = $this->createUserWithRole('approver', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -98,7 +107,7 @@ class ApprovalServiceTest extends DbTestCase
     public function testRejectionRejectsJob(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
+        $user = $this->createUserWithRole('approver', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -119,8 +128,8 @@ class ApprovalServiceTest extends DbTestCase
     public function testDuplicateVoteThrows(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
-        $user2 = $this->createUser('approver2b');
+        $user = $this->createUserWithRole('approver', 'operator');
+        $user2 = $this->createUserWithRole('approver2b', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -131,16 +140,16 @@ class ApprovalServiceTest extends DbTestCase
         $request = $this->service()->createRequest($job, $rule);
         $this->service()->recordDecision($request, $user->id, 'approved');
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('already voted');
+        $this->expectException(ApprovalDecisionRefusedException::class);
+        $this->expectExceptionMessage(ApprovalDecisionRefusedException::ALREADY_VOTED);
         $this->service()->recordDecision($request, $user->id, 'approved');
     }
 
     public function testVoteOnResolvedRequestThrows(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
-        $user2 = $this->createUser('approver2');
+        $user = $this->createUserWithRole('approver', 'operator');
+        $user2 = $this->createUserWithRole('approver2', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -154,15 +163,15 @@ class ApprovalServiceTest extends DbTestCase
         $request->refresh();
         $this->assertSame(ApprovalRequest::STATUS_APPROVED, $request->status);
 
-        $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('already resolved');
+        $this->expectException(ApprovalDecisionRefusedException::class);
+        $this->expectExceptionMessage(sprintf(ApprovalDecisionRefusedException::RESOLVED, (int)$request->id, 'approved'));
         $this->service()->recordDecision($request, $user2->id, 'approved');
     }
 
     public function testCanUserApproveReturnsTrueForEligible(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
+        $user = $this->createUserWithRole('approver', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -176,7 +185,7 @@ class ApprovalServiceTest extends DbTestCase
     public function testCanUserApproveReturnsFalseForIneligible(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
+        $user = $this->createUserWithRole('approver', 'operator');
         $outsider = $this->createUser('outsider');
         $rule = $this->createApprovalRule(
             $job->launched_by,
@@ -191,7 +200,7 @@ class ApprovalServiceTest extends DbTestCase
     public function testCanUserApproveReturnsFalseForResolved(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('approver');
+        $user = $this->createUserWithRole('approver', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -267,7 +276,7 @@ class ApprovalServiceTest extends DbTestCase
     public function testTeamBasedApproverResolution(): void
     {
         $user = $this->createUser('owner');
-        $approver = $this->createUser('team_member');
+        $approver = $this->createUserWithRole('team_member', 'operator');
         $team = $this->createTeam($user->id);
         $this->addTeamMember($team->id, $approver->id);
 
@@ -363,8 +372,8 @@ class ApprovalServiceTest extends DbTestCase
     public function testAutoRejectWhenRemainingApprovalsCannotMeetThreshold(): void
     {
         $job = $this->scaffoldJob();
-        $user1 = $this->createUser('voter1');
-        $user2 = $this->createUser('voter2');
+        $user1 = $this->createUserWithRole('voter1', 'operator');
+        $user2 = $this->createUserWithRole('voter2', 'operator');
         // Require 2 approvals but only 2 eligible users
         $rule = $this->createApprovalRule(
             $job->launched_by,
@@ -388,9 +397,9 @@ class ApprovalServiceTest extends DbTestCase
     public function testThresholdNotMetYetKeepsStatusPending(): void
     {
         $job = $this->scaffoldJob();
-        $user1 = $this->createUser('voter1b');
-        $user2 = $this->createUser('voter2b');
-        $user3 = $this->createUser('voter3b');
+        $user1 = $this->createUserWithRole('voter1b', 'operator');
+        $user2 = $this->createUserWithRole('voter2b', 'operator');
+        $user3 = $this->createUserWithRole('voter3b', 'operator');
         // Require 2 approvals, 3 eligible users
         $rule = $this->createApprovalRule(
             $job->launched_by,
@@ -441,8 +450,8 @@ class ApprovalServiceTest extends DbTestCase
     public function testRecordDecisionWritesAuditLog(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('audit-voter');
-        $user2 = $this->createUser('audit-voter2');
+        $user = $this->createUserWithRole('audit-voter', 'operator');
+        $user2 = $this->createUserWithRole('audit-voter2', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -467,8 +476,8 @@ class ApprovalServiceTest extends DbTestCase
     public function testRecordDecisionWithComment(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('comment-voter');
-        $user2 = $this->createUser('comment-voter2');
+        $user = $this->createUserWithRole('comment-voter', 'operator');
+        $user2 = $this->createUserWithRole('comment-voter2', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -486,8 +495,8 @@ class ApprovalServiceTest extends DbTestCase
     public function testRecordDecisionWithNullComment(): void
     {
         $job = $this->scaffoldJob();
-        $user = $this->createUser('null-comment');
-        $user2 = $this->createUser('null-comment2');
+        $user = $this->createUserWithRole('null-comment', 'operator');
+        $user2 = $this->createUserWithRole('null-comment2', 'operator');
         $rule = $this->createApprovalRule(
             $job->launched_by,
             ApprovalRule::APPROVER_TYPE_USERS,
@@ -499,5 +508,50 @@ class ApprovalServiceTest extends DbTestCase
         $decision = $this->service()->recordDecision($request, $user->id, 'approved');
 
         $this->assertNull($decision->comment);
+    }
+
+    // -- openRequest / announceRequest --------------------------------------
+
+    /**
+     * openRequest() only writes the request: a caller that creates the job
+     * and its request in one transaction announces it after the commit.
+     */
+    public function testOpenRequestWritesTheRequestWithoutAnnouncingIt(): void
+    {
+        $job = $this->scaffoldJob();
+        $rule = $this->createApprovalRule($job->launched_by);
+        $rule->timeout_minutes = 10;
+        $rule->save(false);
+        $audits = (int)\app\models\AuditLog::find()->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_REQUESTED])->count();
+
+        $request = $this->service()->openRequest($job, $rule);
+
+        $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
+        $this->assertSame($job->id, $request->job_id);
+        $this->assertGreaterThan(time(), (int)$request->expires_at);
+        $this->assertNotNull(ApprovalRequest::findOne($request->id));
+        $this->assertSame($audits, (int)\app\models\AuditLog::find()->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_REQUESTED])->count());
+
+        $this->service()->announceRequest($request, $job, $rule);
+
+        $entry = \app\models\AuditLog::find()
+            ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_REQUESTED, 'object_id' => $request->id])
+            ->one();
+        $this->assertNotNull($entry);
+        $this->assertSame(
+            ['job_id' => (int)$job->id, 'rule_id' => (int)$rule->id, 'rule_name' => (string)$rule->name],
+            json_decode((string)$entry->metadata, true)
+        );
+    }
+
+    public function testOpenRequestRefusesARequestThatCannotBeSaved(): void
+    {
+        $job = $this->scaffoldJob();
+        $rule = $this->createApprovalRule($job->launched_by);
+        $job->id = null;
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('Failed to create approval request: {"job_id":["Job Id cannot be blank."]}');
+        $this->service()->openRequest($job, $rule);
     }
 }

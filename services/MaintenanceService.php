@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\PendingMigrations;
 use app\components\SurveySecretBackfill;
 use app\models\Project;
 use app\models\ProjectSyncLog;
@@ -24,12 +25,36 @@ use yii\caching\CacheInterface;
  * which has SETNX semantics — so two schedule-runner instances launched
  * accidentally in parallel cannot double-trigger a sweep.
  *
- * Artifact cleanup follows that pattern; new periodic tasks should too
- * (config-driven interval, separate cache key, structured result). Two tasks
- * run on every tick instead: the stale-sync sweep, and the encryption of
+ * Artifact cleanup follows that pattern, and so does the sweep of deleted
+ * templates: the active runs of deleted workflow templates are canceled
+ * ({@see WorkflowTemplateDeletionService::sweep()}), then the stranded jobs
+ * (waiting jobs whose workflow run has ended, jobs that wait for an approval
+ * request that does not exist, and waiting jobs whose job template was purged
+ * with its project) and the steps still running in runs that ended
+ * ({@see StrandedJobSweep::sweep()}), then the waiting jobs of
+ * deleted job templates, whose schedules are disabled
+ * ({@see JobTemplateDeletionService::sweep()}); new periodic tasks should
+ * follow it too (config-driven interval, separate cache key, structured
+ * result). Three tasks run on every tick instead: the stale-sync sweep; the
+ * approval timeouts, which apply each expired approval request's timeout
+ * action ({@see ApprovalService::processTimeouts()}); and the encryption of
  * survey password answers that finished jobs stored in plaintext before
  * 2.9, which works through the job history a few seconds per tick until it
  * is done ({@see SurveySecretBackfill}).
+ *
+ * The approval timeouts and the deleted-template sweep change jobs, approval
+ * requests and workflow runs, so they wait while database migrations are
+ * pending: in the prebuilt setup the schedule runner starts while the app
+ * container still migrates, and a bind-mounted checkout runs new code right
+ * after `git pull`. They share one time budget per tick
+ * ({@see $jobTaskBudgetSeconds}): what they change sends notifications,
+ * synchronously, and a timeout can move a workflow run on to its next
+ * steps. An error in either is logged (its class, never its message, which
+ * can carry SQL with values). The approval timeouts are retried on the next
+ * tick; the sweep is retried when its interval
+ * ({@see $deletedTemplateSweepIntervalSeconds}) has passed, because its
+ * cooldown is taken before it starts and is kept after an error: the
+ * cooldown is the backoff for an error that repeats.
  */
 class MaintenanceService extends Component
 {
@@ -38,6 +63,28 @@ class MaintenanceService extends Component
 
     /** The cache key of the survey password scrub's position. */
     public const SURVEY_SECRET_SCRUB_CURSOR_KEY = 'maintenance:survey-secret-scrub:cursor';
+
+    /** The cooldown key of the sweep of deleted job and workflow templates. */
+    public const DELETED_TEMPLATE_SWEEP_KEY = 'maintenance:deleted-template-sweep';
+
+    public const TASK_APPROVAL_TIMEOUTS = 'approval-timeouts';
+    public const TASK_DELETED_TEMPLATE_SWEEP = 'deleted-template-sweep';
+
+    /** Skip reasons of the two tasks above (besides 'disabled' and 'cooldown'). */
+    public const SKIP_MIGRATIONS_PENDING = 'migrations-pending';
+    public const SKIP_ERROR = 'error';
+    public const SKIP_NONE_EXPIRED = 'none-expired';
+    public const SKIP_NONE_FOUND = 'none-found';
+
+    /**
+     * Expired approval requests one tick times out at most, oldest expiry
+     * first; the rest follow on the next ticks. The batch bounds the memory
+     * and the work of a tick; {@see $jobTaskBudgetSeconds} bounds its time.
+     */
+    public const APPROVAL_TIMEOUT_BATCH_SIZE = 100;
+
+    /** Logged when a task fails; sprintf(): what failed, the exception class. */
+    public const TASK_FAILED = 'MaintenanceService: %s stopped after an error (%s); the next run retries.';
 
     /**
      * Interval in seconds between artifact-cleanup runs. 0 disables the
@@ -62,6 +109,34 @@ class MaintenanceService extends Component
      * 150 seconds.
      */
     public float $surveySecretScrubBudgetSeconds = 5.0;
+
+    /**
+     * Seconds between two sweeps of deleted job and workflow templates and
+     * stranded jobs; 0 disables it. A sweep that leaves waiting jobs or
+     * active runs behind (more than one batch, its time budget used up, or
+     * cancels that failed) is followed on the next tick.
+     */
+    public int $deletedTemplateSweepIntervalSeconds = 600;
+
+    /**
+     * Seconds per tick for the tasks that change jobs: the approval timeouts
+     * and the sweep share one deadline, taken before the approval timeouts.
+     * Each of their loops starts no new item (request, run, job or step) once
+     * it has passed, finishes the item it started, and leaves the rest to the
+     * next ticks: the timeouts run on every tick, and a sweep with work left
+     * lets its cooldown go. 0 (or less) removes the bound.
+     *
+     * The batch sizes bound the memory and the work of a tick; this bounds
+     * its time, which notification endpoints stretch: notifications are sent
+     * synchronously, and an HTTP channel waits up to 10 seconds for an
+     * endpoint that does not answer. The schedule-runner loop sleeps 60
+     * seconds between ticks, and its health check fails once the loop has
+     * not come round for 150 seconds: the default leaves 45 seconds of that
+     * window for the rest of the loop, such as schedule/run, the survey
+     * password scrub (5 seconds) and the item that was running when the
+     * budget ran out.
+     */
+    public float $jobTaskBudgetSeconds = 45.0;
 
     /**
      * Run every task whose cooldown has expired and report what happened.
@@ -98,6 +173,12 @@ class MaintenanceService extends Component
             $report['skipped'][] = ['task' => 'stale-sync-sweep', 'reason' => 'none-stale'];
         }
 
+        $blocked = $this->migrationBlock();
+        // One deadline for both tasks that change jobs, taken before the first.
+        $deadline = $this->jobTaskBudgetSeconds > 0 ? microtime(true) + $this->jobTaskBudgetSeconds : null;
+        $report = self::withTask($report, self::TASK_APPROVAL_TIMEOUTS, $this->runApprovalTimeouts($blocked, $deadline));
+        $report = self::withTask($report, self::TASK_DELETED_TEMPLATE_SWEEP, $this->maybeRunDeletedTemplateSweep($blocked, $deadline));
+
         $scrub = $this->maybeRunSurveySecretScrub();
         if ($scrub['ran']) {
             $report['ran'][] = 'survey-secret-scrub';
@@ -107,6 +188,148 @@ class MaintenanceService extends Component
         }
 
         return $report;
+    }
+
+    /**
+     * $report with the outcome of $task: ran, with its result, or skipped,
+     * with the reason.
+     *
+     * @param array{ran: list<string>, skipped: list<array{task: string, reason: string}>, results: array<string, array<string, int>>} $report
+     * @param array{ran: bool, reason: string, result: array<string, int>} $outcome
+     * @return array{ran: list<string>, skipped: list<array{task: string, reason: string}>, results: array<string, array<string, int>>}
+     */
+    private static function withTask(array $report, string $task, array $outcome): array
+    {
+        if ($outcome['ran']) {
+            $report['ran'][] = $task;
+            $report['results'][$task] = $outcome['result'];
+        } else {
+            $report['skipped'][] = ['task' => $task, 'reason' => $outcome['reason']];
+        }
+
+        return $report;
+    }
+
+    /**
+     * Why the tasks that change jobs and approval requests must wait this
+     * tick: SKIP_MIGRATIONS_PENDING while the database lags behind the
+     * code, SKIP_ERROR when the migration state cannot be read; null when
+     * they may run.
+     */
+    private function migrationBlock(): ?string
+    {
+        try {
+            return $this->pendingMigrations()->count() > 0 ? self::SKIP_MIGRATIONS_PENDING : null;
+        } catch (\Throwable $e) {
+            self::logFailure('reading the migration state', $e);
+
+            return self::SKIP_ERROR;
+        }
+    }
+
+    /**
+     * Apply the timeout action of expired approval requests, at most
+     * APPROVAL_TIMEOUT_BATCH_SIZE per tick and none started after $deadline;
+     * the result counts the requests resolved (timed out, or closed because
+     * their job no longer waited). Runs on every tick: the query is an
+     * indexed SELECT that usually finds nothing, and a delay holds jobs and
+     * workflow runs back.
+     *
+     * @param string|null $blocked migrationBlock()
+     * @param float|null $deadline the tick's deadline (microtime(true)); null: no bound
+     * @return array{ran: bool, reason: string, result: array<string, int>}
+     */
+    private function runApprovalTimeouts(?string $blocked, ?float $deadline): array
+    {
+        if ($blocked !== null) {
+            return ['ran' => false, 'reason' => $blocked, 'result' => []];
+        }
+        try {
+            /** @var ApprovalService $approvals */
+            $approvals = \Yii::$app->get('approvalService');
+            $resolved = $approvals->processTimeouts(self::APPROVAL_TIMEOUT_BATCH_SIZE, $deadline);
+        } catch (\Throwable $e) {
+            self::logFailure('applying approval timeouts', $e);
+
+            return ['ran' => false, 'reason' => self::SKIP_ERROR, 'result' => []];
+        }
+
+        return $resolved > 0
+            ? ['ran' => true, 'reason' => 'due', 'result' => ['resolved' => $resolved]]
+            : ['ran' => false, 'reason' => self::SKIP_NONE_EXPIRED, 'result' => []];
+    }
+
+    /**
+     * Once per cooldown, until $deadline: cancel the active runs of deleted
+     * workflow templates (WorkflowTemplateDeletionService::sweep()), the
+     * stranded jobs (StrandedJobSweep::sweep()), and the waiting jobs of
+     * deleted job templates, whose enabled schedules are disabled
+     * (JobTemplateDeletionService::sweep()). When jobs or runs are left for
+     * the next batch, the cooldown is let go so the next tick goes on.
+     *
+     * The result line keeps the keys of the job templates, then of the runs,
+     * then of the stranded jobs.
+     *
+     * @param string|null $blocked migrationBlock()
+     * @param float|null $deadline the tick's deadline (microtime(true)); null: no bound
+     * @return array{ran: bool, reason: string, result: array<string, int>}
+     */
+    private function maybeRunDeletedTemplateSweep(?string $blocked, ?float $deadline): array
+    {
+        if ($this->deletedTemplateSweepIntervalSeconds <= 0) {
+            return ['ran' => false, 'reason' => 'disabled', 'result' => []];
+        }
+        if ($blocked !== null) {
+            return ['ran' => false, 'reason' => $blocked, 'result' => []];
+        }
+        if (!$this->acquireCooldown(self::DELETED_TEMPLATE_SWEEP_KEY, $this->deletedTemplateSweepIntervalSeconds)) {
+            return ['ran' => false, 'reason' => 'cooldown', 'result' => []];
+        }
+        try {
+            // The runs first, so that none of them goes on to its next step
+            // when a later sweep cancels the job it waits for. The stranded
+            // jobs next: the jobs of runs that have ended are canceled with
+            // their run's reason and no notification of their own, before
+            // the job sweep would cancel those of deleted job templates as
+            // ordinary jobs.
+            /** @var WorkflowTemplateDeletionService $workflows */
+            $workflows = \Yii::$app->get('workflowTemplateDeletionService');
+            $runs = $workflows->sweep(WorkflowTemplateDeletionService::SWEEP_BATCH_SIZE, $deadline);
+            /** @var StrandedJobSweep $strandedJobs */
+            $strandedJobs = \Yii::$app->get('strandedJobSweep');
+            $stranded = $strandedJobs->sweep(StrandedJobSweep::BATCH_SIZE, $deadline);
+            /** @var JobTemplateDeletionService $templates */
+            $templates = \Yii::$app->get('jobTemplateDeletionService');
+            $result = $templates->sweep(JobTemplateDeletionService::SWEEP_BATCH_SIZE, $deadline) + $runs + $stranded;
+        } catch (\Throwable $e) {
+            self::logFailure('the sweep of deleted job and workflow templates', $e);
+
+            return ['ran' => false, 'reason' => self::SKIP_ERROR, 'result' => []];
+        }
+        if ($result['remaining_jobs'] + $result['remaining_runs'] + $result['stranded_jobs_remaining'] > 0) {
+            /** @var CacheInterface $cache */
+            $cache = \Yii::$app->cache;
+            $cache->delete(self::DELETED_TEMPLATE_SWEEP_KEY);
+        }
+
+        // Jobs and runs left over (a full batch, the deadline, or cancels that failed) are reported too.
+        return array_sum($result) > 0
+            ? ['ran' => true, 'reason' => 'due', 'result' => $result]
+            : ['ran' => false, 'reason' => self::SKIP_NONE_FOUND, 'result' => []];
+    }
+
+    private static function logFailure(string $what, \Throwable $e): void
+    {
+        \Yii::warning(sprintf(self::TASK_FAILED, $what, get_class($e)), __CLASS__);
+    }
+
+    /**
+     * The migration state checked before the tasks that change jobs and
+     * approval requests.
+     */
+    protected function pendingMigrations(): PendingMigrations
+    {
+        return new PendingMigrations();
     }
 
     /**

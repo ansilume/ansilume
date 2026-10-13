@@ -45,6 +45,10 @@ class ApprovalRuleTest extends DbTestCase
         $this->assertArrayHasKey('approver_type', $rule->errors);
     }
 
+    /**
+     * Regression: the message named the column ("Approver_config must be
+     * valid JSON."), not the field's label as every other message does.
+     */
     public function testInvalidJsonApproverConfig(): void
     {
         $user = $this->createUser();
@@ -56,7 +60,79 @@ class ApprovalRuleTest extends DbTestCase
         $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
         $rule->created_by = $user->id;
         $this->assertFalse($rule->validate());
-        $this->assertArrayHasKey('approver_config', $rule->errors);
+        $this->assertSame(['Approver Config must be valid JSON.'], $rule->getErrors('approver_config'));
+        $this->assertSame(sprintf(ApprovalRule::INVALID_JSON, 'Approver Config'), $rule->getFirstError('approver_config'));
+    }
+
+    /**
+     * JSON that is no object names no approvers.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function configThatIsNoObjectProvider(): array
+    {
+        return [
+            'an empty list' => ['[]'],
+            'a list of user IDs' => ['[7, 12]'],
+            'a number' => ['7'],
+            'zero' => ['0'],
+            'a string' => ['"operator"'],
+            'null' => ['null'],
+            'true' => ['true'],
+        ];
+    }
+
+    /**
+     * Regression: an approver config that is valid JSON but no object (a
+     * list, a number, a string, null) was accepted, "0" even without any
+     * check. Such a rule names no approvers, and the API returned its config
+     * as a JSON list (or not at all) although it documents an object.
+     *
+     * @dataProvider configThatIsNoObjectProvider
+     */
+    public function testAnApproverConfigThatIsNoJsonObjectIsRefused(string $config): void
+    {
+        $rule = new ApprovalRule();
+        $rule->name = 'test-rule';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_ROLE;
+        $rule->approver_config = $config;
+
+        $this->assertFalse($rule->validate(['approver_config']));
+        $this->assertSame(['Approver Config must be a JSON object.'], $rule->getErrors('approver_config'));
+        $this->assertSame(sprintf(ApprovalRule::NOT_A_JSON_OBJECT, 'Approver Config'), $rule->getFirstError('approver_config'));
+    }
+
+    /**
+     * {} is what the web form stores for a role or team rule without a
+     * choice; a non-string value is left to the string rule.
+     */
+    public function testAnEmptyObjectIsAValidApproverConfigAndANonStringIsLeftToTheStringRule(): void
+    {
+        $rule = new ApprovalRule();
+        $rule->name = 'test-rule';
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_ROLE;
+        $rule->approver_config = '{}';
+        $this->assertTrue($rule->validate(['approver_config']));
+
+        $rule->setAttribute('approver_config', ['role' => 'admin']);
+        $rule->validateJson('approver_config');
+        $this->assertSame([], $rule->getErrors('approver_config'), 'validateJson adds nothing');
+        $this->assertFalse($rule->validate(['approver_config']));
+        $this->assertSame(['Approver Config must be a string.'], $rule->getErrors('approver_config'));
+    }
+
+    /**
+     * A list or another JSON value stored by an older version parses to
+     * no config at all, as getParsedConfig() documents (array<string, mixed>).
+     */
+    public function testGetParsedConfigOfJsonThatIsNoObjectIsEmpty(): void
+    {
+        $user = $this->createUser();
+        foreach (['[7, 12]', '[]', '7', '{}'] as $config) {
+            $rule = $this->createApprovalRule((int)$user->id, ApprovalRule::APPROVER_TYPE_ROLE, $config);
+            $this->assertSame([], $rule->getParsedConfig(), $config);
+            $this->assertSame([], $rule->getApproverUserIds(), $config);
+        }
     }
 
     public function testValidJsonApproverConfig(): void

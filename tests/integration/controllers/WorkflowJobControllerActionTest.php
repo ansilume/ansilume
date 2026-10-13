@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\components\SurveySecrets;
 use app\controllers\WorkflowJobController;
 use app\models\WorkflowJob;
 use app\models\WorkflowJobStep;
@@ -158,7 +159,7 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $ctrl = $this->makeController();
         $payload = $ctrl->actionStatus((int)$wj->id);
 
-        $row = $this->stepRow($payload, (int)$wjs->workflow_step_id);
+        $row = $this->stepRow($payload, (int)$wjs->id);
         $this->assertSame(75, $row['duration_seconds']);
         $this->assertSame('1m 15s', $row['duration_label']);
     }
@@ -177,7 +178,7 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $ctrl = $this->makeController();
         $payload = $ctrl->actionStatus((int)$wj->id);
 
-        $row = $this->stepRow($payload, (int)$wjs->workflow_step_id);
+        $row = $this->stepRow($payload, (int)$wjs->id);
         $this->assertGreaterThanOrEqual(29, $row['duration_seconds']);
         $this->assertStringStartsWith('running ', (string)$row['duration_label']);
     }
@@ -196,7 +197,7 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $ctrl = $this->makeController();
         $payload = $ctrl->actionStatus((int)$wj->id);
 
-        $row = $this->stepRow($payload, (int)$wjs->workflow_step_id);
+        $row = $this->stepRow($payload, (int)$wjs->id);
         $this->assertNull($row['duration_seconds']);
         $this->assertNull($row['duration_label']);
     }
@@ -215,14 +216,14 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $stepB = $this->createWorkflowStep($wf->id, 20, \app\models\WorkflowStep::TYPE_PAUSE);
 
         $wj = $this->createWfJobForTemplate($user, $wf);
-        $this->seedJobStep($wj->id, $stepA->id, time() - 30, time() - 10, \app\models\WorkflowJobStep::STATUS_SUCCEEDED);
-        $this->seedJobStep($wj->id, $stepB->id, time() - 5, null, \app\models\WorkflowJobStep::STATUS_RUNNING);
+        $wjsA = $this->seedJobStep($wj->id, $stepA->id, time() - 30, time() - 10, \app\models\WorkflowJobStep::STATUS_SUCCEEDED);
+        $wjsB = $this->seedJobStep($wj->id, $stepB->id, time() - 5, null, \app\models\WorkflowJobStep::STATUS_RUNNING);
 
         $ctrl = $this->makeController();
         $payload = $ctrl->actionStatus((int)$wj->id);
 
-        $rowA = $this->stepRow($payload, (int)$stepA->id);
-        $rowB = $this->stepRow($payload, (int)$stepB->id);
+        $rowA = $this->stepRow($payload, (int)$wjsA->id);
+        $rowB = $this->stepRow($payload, (int)$wjsB->id);
 
         $this->assertSame($stepA->name, $rowA['step_name']);
         $this->assertSame($stepB->name, $rowB['step_name']);
@@ -231,17 +232,178 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
     }
 
     /**
+     * Rows are keyed by the execution's own ID: a step can run more than
+     * once in a run, and workflow_step_id is null once its step was removed.
+     *
      * @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
-    private function stepRow(array $payload, int $workflowStepId): array
+    private function stepRow(array $payload, int $executionId): array
     {
-        foreach ($payload['steps'] as $row) {
-            if ($row['workflow_step_id'] === $workflowStepId) {
+        foreach ($this->steps($payload) as $row) {
+            if ($row['id'] === $executionId) {
                 return $row;
             }
         }
-        $this->fail('Step row for workflow_step_id ' . $workflowStepId . ' not present in status payload.');
+        $this->fail('Step row of execution #' . $executionId . ' not present in status payload.');
+    }
+
+    /**
+     * The rows of a status payload.
+     *
+     * @param array<string, mixed> $payload
+     * @return list<array<string, mixed>>
+     */
+    private function steps(array $payload): array
+    {
+        /** @var list<array<string, mixed>> $steps */
+        $steps = $payload['steps'];
+        return $steps;
+    }
+
+    // ── Run history: snapshot names and types, executions as rows ───────────
+
+    /**
+     * Regression: rows were keyed by workflow_step_id, so a step that ran
+     * twice in a run (a failure route back to it) gave two rows the poll
+     * could not tell apart, and both were highlighted as current.
+     */
+    public function testStatusKeysRowsByExecutionAndHighlightsOnlyTheNewestRunOfTheCurrentStep(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $retried = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $run = $this->createWfJobForTemplate($user, $wf);
+        $run->current_step_id = (int)$retried->id;
+        $run->save(false);
+        $first = $this->seedJobStep($run->id, $retried->id, time() - 30, time() - 20, WorkflowJobStep::STATUS_FAILED);
+        $second = $this->seedJobStep($run->id, $retried->id, time() - 10, null, WorkflowJobStep::STATUS_RUNNING);
+
+        $payload = $this->makeController()->actionStatus((int)$run->id);
+
+        $steps = $this->steps($payload);
+        $this->assertSame([(int)$first->id, (int)$second->id], array_column($steps, 'id'));
+        $this->assertSame([(int)$retried->id, (int)$retried->id], array_column($steps, 'workflow_step_id'));
+        $this->assertSame([false, true], array_column($steps, 'is_current'));
+        $this->assertSame([1, 2], array_column($steps, 'step_index'));
+    }
+
+    public function testStatusNamesEachStepAsItRanAlsoOnceItWasRemoved(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $rule = $this->createApprovalRule($user->id);
+        $gate = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_APPROVAL, null, (int)$rule->id);
+        $pause = $this->createWorkflowStep($wf->id, 20, WorkflowStep::TYPE_PAUSE);
+        $run = $this->createWfJobForTemplate($user, $wf);
+        $run->current_step_id = (int)$pause->id;
+        $run->save(false);
+        $this->seedJobStep($run->id, $gate->id, time() - 30, time() - 20, WorkflowJobStep::STATUS_SUCCEEDED);
+        $this->seedJobStep($run->id, $pause->id, time() - 10, null, WorkflowJobStep::STATUS_RUNNING);
+        $this->assertSame(1, $pause->delete());
+        $unknown = $this->seedJobStep($run->id, $gate->id, null, null, WorkflowJobStep::STATUS_PENDING);
+        WorkflowJobStep::updateAll(['workflow_step_id' => null, 'step_name' => null, 'step_type' => null], ['id' => $unknown->id]);
+        $legacy = $this->seedJobStep($run->id, $gate->id, null, null, WorkflowJobStep::STATUS_FAILED);
+        WorkflowJobStep::updateAll(['workflow_step_id' => null, 'step_name' => 'old', 'step_type' => 'JOB'], ['id' => $legacy->id]);
+
+        $payload = $this->makeController()->actionStatus((int)$run->id);
+
+        $steps = $this->steps($payload);
+        $this->assertSame([(int)$gate->id, null, null, null], array_column($steps, 'workflow_step_id'));
+        $this->assertSame(['step-10', 'step-20', WorkflowJobStep::UNKNOWN_STEP_NAME, 'old'], array_column($steps, 'step_name'));
+        $this->assertSame([WorkflowStep::TYPE_APPROVAL, WorkflowStep::TYPE_PAUSE, null, 'JOB'], array_column($steps, 'step_type'));
+        $this->assertSame(['Approval', 'Pause', '—', 'JOB'], array_column($steps, 'step_type_label'), 'a legacy type as stored');
+        $this->assertSame([false, false, false, false], array_column($steps, 'is_current'), 'the current step was removed');
+    }
+
+    /**
+     * Regression: the Resume button looked for a running step whose live
+     * step was a pause step, so a run paused at a step that was removed
+     * since could not be resumed from its page.
+     */
+    public function testRunPageRowsShowWhatEachStepWasAndOfferResumeForARemovedPauseStep(): void
+    {
+        $s = $this->teamScope();
+        [$run, $pause] = $this->pausedRun($s['admin']->id, $s['own']->id, $s['member']->id);
+        $pauseStep = WorkflowStep::findOne($pause->workflow_step_id);
+        $this->assertNotNull($pauseStep);
+        $pauseStep->name = 'Wait for <ops>';
+        $pauseStep->save(false);
+        WorkflowJobStep::updateAll(['step_name' => 'Wait for <ops>'], ['id' => $pause->id]);
+        $run->current_step_id = (int)$pauseStep->id;
+        $run->save(false);
+        $this->assertSame(1, $pauseStep->delete());
+        $unknown = $this->seedJobStep($run->id, (int)$run->workflowTemplate->getStartStep()?->id, null, null, WorkflowJobStep::STATUS_PENDING);
+        WorkflowJobStep::updateAll(['workflow_step_id' => null, 'step_name' => null, 'step_type' => null], ['id' => $unknown->id]);
+        $legacy = $this->seedJobStep($run->id, (int)$run->workflowTemplate->getStartStep()?->id, null, null, WorkflowJobStep::STATUS_FAILED);
+        WorkflowJobStep::updateAll(['workflow_step_id' => null, 'step_type' => '<JOB>'], ['id' => $legacy->id]);
+        $this->loginAs($s['member']);
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$run->id);
+
+        $html = $this->renderPage($ctrl->capturedParams);
+
+        $this->assertStringContainsString(Url::to(['/workflow-job/resume', 'id' => $run->id]), $html, 'Resume is offered');
+        $this->assertStringContainsString('<tr data-wjs-id="' . $pause->id . '" class="">', $html, 'keyed by the execution');
+        $this->assertStringContainsString('<td data-wjs-name-cell>Wait for &lt;ops&gt;</td>', $html);
+        $this->assertStringContainsString('<td data-wjs-type-cell>Pause</td>', $html);
+        $this->assertStringContainsString('<td data-wjs-name-cell>' . WorkflowJobStep::UNKNOWN_STEP_NAME . '</td>', $html, 'neither a snapshot nor a step');
+        $this->assertStringContainsString('<td data-wjs-type-cell>—</td>', $html);
+        $this->assertStringContainsString('<td data-wjs-type-cell>&lt;JOB&gt;</td>', $html, 'a legacy type as stored');
+        $this->assertStringNotContainsString('data-wjs-step-id', $html);
+    }
+
+    public function testRunPageHighlightsTheCurrentExecution(): void
+    {
+        $s = $this->teamScope();
+        [$run, $pause] = $this->pausedRun($s['admin']->id, $s['own']->id, $s['member']->id);
+        $run->current_step_id = (int)$pause->workflow_step_id;
+        $run->save(false);
+        $this->loginAs($s['member']);
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$run->id);
+        $this->assertSame((int)$pause->id, $ctrl->capturedParams['currentExecutionId']);
+
+        $html = $this->renderPage($ctrl->capturedParams);
+
+        $this->assertStringContainsString('<tr data-wjs-id="' . $pause->id . '" class="table-active">', $html);
+    }
+
+    /**
+     * The run's launch extra vars, a password answer as $encrypted$; the
+     * sealed answers are never on the page.
+     */
+    public function testRunPageShowsTheLaunchExtraVarsButNeverTheSealedAnswers(): void
+    {
+        $s = $this->teamScope();
+        [$run] = $this->pausedRun($s['admin']->id, $s['own']->id, $s['member']->id);
+        $run->setLaunchExtraVars(['env' => '<prod>', self::SURVEY_PASSWORD_FIELD => SurveySecrets::PLACEHOLDER]);
+        $run->setSealedSecretExtraVars(SurveySecrets::seal([self::SURVEY_PASSWORD_FIELD => self::SURVEY_PASSWORD_ANSWER]));
+        $run->save(false);
+        $this->loginAs($s['member']);
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$run->id);
+
+        $html = $this->renderPage($ctrl->capturedParams);
+
+        $this->assertStringContainsString('id="wj-extra-vars"', $html);
+        $this->assertStringContainsString('&quot;env&quot;: &quot;&lt;prod&gt;&quot;', $html);
+        $this->assertStringContainsString('&quot;' . self::SURVEY_PASSWORD_FIELD . '&quot;: &quot;$encrypted$&quot;', $html);
+        $this->assertStringNotContainsString(self::SURVEY_PASSWORD_ANSWER, $html);
+        $this->assertStringNotContainsString('<prod>', $html);
+    }
+
+    public function testRunPageOfARunWithoutExtraVarsHasNoExtraVarsRow(): void
+    {
+        $s = $this->teamScope();
+        [$run] = $this->pausedRun($s['admin']->id, $s['own']->id, $s['member']->id);
+        $this->loginAs($s['member']);
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$run->id);
+
+        $this->assertStringNotContainsString('id="wj-extra-vars"', $this->renderPage($ctrl->capturedParams));
     }
 
     private function createWfJobForTemplate(\app\models\User $user, \app\models\WorkflowTemplate $wf): WorkflowJob
@@ -298,6 +460,9 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         \Yii::$app->set($id, $replacement);
     }
 
+    /**
+     * @return WorkflowJobController&object{capturedView: string, capturedParams: array<string, mixed>}
+     */
     private function makeController(): WorkflowJobController
     {
         return new class ('workflow-job', \Yii::$app) extends WorkflowJobController {
@@ -438,7 +603,7 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
 
         $payload = $this->makeController()->actionStatus((int)$run->id);
 
-        $row = $this->stepRow($payload, (int)$step->id);
+        $row = $this->stepRow($payload, (int)$failed->id);
         $this->assertSame($failed->error_message, $row['error_message']);
     }
 

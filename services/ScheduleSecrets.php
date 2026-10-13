@@ -48,6 +48,9 @@ final class ScheduleSecrets
     /** @var array<string, int|list<string>> */
     private array $auditContext = [];
 
+    /** Whether the last successful prepare() stored an answer anew or dropped one. */
+    private bool $answersChanged = false;
+
     /**
      * Seal the password answers of a schedule about to be saved. Call it
      * after validate() succeeded and the job template access check returned
@@ -64,6 +67,7 @@ final class ScheduleSecrets
     public function prepare(Schedule $schedule, bool $extraVarsSubmitted): ?string
     {
         $this->auditContext = [];
+        $this->answersChanged = false;
         $storedTemplateId = self::storedTemplateId($schedule);
         $stored = new StoredScheduleAnswers(
             self::storedExtraVars($schedule),
@@ -93,6 +97,17 @@ final class ScheduleSecrets
     public function auditContext(): array
     {
         return $this->auditContext;
+    }
+
+    /**
+     * Whether the last successful prepare() replaced a stored answer, added
+     * one or dropped one: a value other than the placeholder counts as an
+     * answer entered anew, even one equal to the stored answer. Such a save
+     * changes what the schedule runs (see ScheduleRunAs).
+     */
+    public function answersChanged(): bool
+    {
+        return $this->answersChanged;
     }
 
     /**
@@ -289,6 +304,7 @@ final class ScheduleSecrets
             }
         }
         $this->auditContext = $context;
+        $this->answersChanged = array_filter(array_diff_key($changes, ['kept' => true])) !== [];
     }
 
     /**
@@ -298,7 +314,7 @@ final class ScheduleSecrets
      *
      * @return list<string>
      */
-    private static function passwordNames(?int $templateId): array
+    public static function passwordNames(?int $templateId): array
     {
         if ($templateId === null) {
             return [];

@@ -58,7 +58,9 @@ class ProfileController extends BaseController
 
         /** @var \yii\web\Session $session */
         $session = \Yii::$app->session;
-        $newToken = $session->getFlash('new_token');
+        // A new token is shown once, in the page's card: read with delete,
+        // so the flash is gone before the layout runs.
+        $newToken = $session->getFlash('new_token', null, true);
         return $this->render('tokens', ['tokens' => $tokens, 'newToken' => $newToken]);
     }
 

@@ -49,6 +49,12 @@ class JobClaimService extends Component
         return null;
     }
 
+    /**
+     * Claim the oldest queued job of $group's live job templates for
+     * $runner, or null when there is none. A job of a workflow step whose
+     * run is no longer active is never claimed: a run cancel that failed
+     * part-way left it queued, and StrandedJobSweep cancels it.
+     */
     public function claim(RunnerGroup $group, Runner $runner): ?Job
     {
         $db = \Yii::$app->db;
@@ -64,6 +70,7 @@ class JobClaimService extends Component
                     '{{%job_template}}.deleted_at' => null,
                     '{{%job}}.runner_id' => null,
                 ])
+                ->andWhere(['not exists', StrandedJobSweep::endedRunOfJob()])
                 ->orderBy(['{{%job}}.id' => SORT_ASC])
                 ->limit(1)
                 ->one($db);

@@ -7,9 +7,13 @@ declare(strict_types=1);
 /** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
 /** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings from JobTemplateWarnings */
 /** @var bool $canChange job-template.update and operator access to the template's project */
+/** @var bool $changeLocked $canChange, but not what the template runs: a gated template, no approval-rule.update */
+/** @var bool $canViewRules approval-rule.view: the approval rule as a link, else as text */
 
 use app\components\LintVerdict;
 use app\helpers\TimeHelper;
+use app\services\GatedJobTemplateLock;
+use app\services\JobTemplateRuleAssignment;
 use yii\helpers\Html;
 
 $this->title = $model->name;
@@ -37,7 +41,7 @@ $this->title = $model->name;
             </form>
         <?php endif; ?>
         <?php if (\Yii::$app->user?->can('job-template.delete')) : ?>
-            <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this template?')">
+            <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this template? Its waiting jobs are canceled and its schedules disabled.')">
                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
             </form>
@@ -49,6 +53,9 @@ $this->title = $model->name;
     <?= $this->render('/inventory/_localhost-warning', ['inventory' => $model->inventory]) ?>
 <?php endif; ?>
 <?= $this->render('_warnings', ['warnings' => $warnings]) ?>
+<?php if ($changeLocked) : ?>
+    <div class="alert alert-info" id="job-template-locked-notice"><?= Html::encode(GatedJobTemplateLock::NOTICE) ?></div>
+<?php endif; ?>
 
 <div class="row g-3">
     <div class="col-lg-6">
@@ -64,6 +71,17 @@ $this->title = $model->name;
                     <dd class="col-7"><?= $model->inventory ? Html::a(Html::encode($model->inventory->name), ['/inventory/view', 'id' => $model->inventory_id]) : '—' ?></dd>
                     <dt class="col-5">Credentials</dt>
                     <dd class="col-7"><?= $this->render('/credential/_credential-list', ['credentials' => $attachedCredentials, 'listId' => 'template-credentials']) ?></dd>
+                    <dt class="col-5">Approval rule</dt>
+                    <dd class="col-7" id="job-template-approval-rule">
+                        <?php $approvalRule = $model->approval_rule_id === null ? null : $model->approvalRule; ?>
+                        <?php if ($approvalRule === null) : ?>
+                            <span class="text-muted">None</span>
+                        <?php elseif ($canViewRules) : ?>
+                            <?= Html::a(Html::encode(JobTemplateRuleAssignment::label($approvalRule)), ['/approval-rule/view', 'id' => $approvalRule->id]) ?>
+                        <?php else : ?>
+                            <?= Html::encode(JobTemplateRuleAssignment::label($approvalRule)) ?>
+                        <?php endif; ?>
+                    </dd>
                     <dt class="col-5">Forks</dt>
                     <dd class="col-7"><?= $model->forks // xss-ok: integer?></dd>
                     <dt class="col-5">Verbosity</dt>

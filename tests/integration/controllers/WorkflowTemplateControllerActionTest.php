@@ -49,7 +49,8 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
                     return parent::launch($template, $launchedBy, $overrides, $source);
                 }
                 if ($this->throwOnLaunch) {
-                    throw new \RuntimeException('Workflow template has no steps.');
+                    // A server error of the launch: the generic RuntimeException branch.
+                    throw new \RuntimeException('Failed to create workflow job: []');
                 }
                 $j = new WorkflowJob();
                 $j->workflow_template_id = $template->id;
@@ -297,7 +298,7 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->assertInstanceOf(Response::class, $result);
         $flashes = \Yii::$app->session->getAllFlashes();
         $this->assertArrayHasKey('danger', $flashes);
-        $this->assertStringContainsString('no steps', $flashes['danger']);
+        $this->assertSame('Launch failed: Failed to create workflow job: []', $flashes['danger']);
     }
 
     public function testLaunchThrowsNotFound(): void
@@ -350,7 +351,9 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
 
     public function testRemoveStepDeletesStep(): void
     {
-        $user = $this->createUser();
+        // Only admins (approval-rule.update) change the steps of a workflow
+        // that has an approval step.
+        $user = $this->createUserWithRole('remover', 'admin');
         $this->loginAs($user);
         $wf = $this->createWorkflowTemplate($user->id);
         $step = $this->createWorkflowStep((int)$wf->id, 1, WorkflowStep::TYPE_APPROVAL);
@@ -963,6 +966,7 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
             'step_name' => 'own-step',
             'step_type' => WorkflowStep::TYPE_JOB,
             'job_template_id' => $s['own']->id,
+            'approval_rule_id' => null,
         ], $this->metadata($audit));
         $this->assertArrayHasKey('success', \Yii::$app->session->getAllFlashes());
     }
@@ -1085,14 +1089,15 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
     /**
      * The form posts the hidden job and approval dropdowns for every step
      * type; a job template left on a pause step would hide the workflow
-     * from everyone who cannot see that template.
+     * from everyone who cannot see that template. Approval steps are for
+     * admins, so an admin adds them here.
      */
     public function testAddStepKeepsOnlyTheTargetOfItsType(): void
     {
         $s = $this->teamScope();
         $wf = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
         $rule = $this->createApprovalRule($s['admin']->id);
-        $this->loginAs($s['member']);
+        $this->loginAs($s['admin']);
 
         $this->postStep(['name' => 'pause', 'step_type' => WorkflowStep::TYPE_PAUSE, 'job_template_id' => (string)$s['foreign']->id, 'approval_rule_id' => (string)$rule->id]);
         $this->makeController()->actionAddStep((int)$wf->id);

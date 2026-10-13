@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
-import { idWhere, indexRows } from '../../lib/scoping';
+import { asAdmin, idWhere, indexRows } from '../../lib/scoping';
 import { PASSWORD_FIELD, PLACEHOLDER, SECRET_SCHEDULE, SEEDED_SCHEDULE_ANSWER, TEXT_FIELD, expectNotInPage } from '../../lib/survey-secrets';
+import { DELETED_TEMPLATE_SCHEDULE, flash, scheduleEnableRefused, scheduleRow, toggleOpenSchedule } from '../../lib/approvals';
 
 /**
  * commands/E2eUnusablePasswordNameSeeder.php: SCHEDULE, PASSWORD_FIELD (a
@@ -62,5 +63,22 @@ test.describe('Schedules RBAC', () => {
     await page.goto(`/schedule/update?id=${id}`);
     expect(JSON.parse(await page.locator('textarea[data-extra-vars-editor]').inputValue())).toEqual(expected);
     await expectNotInPage(page, UNUSABLE_NAME_ANSWER);
+  });
+
+  // commands/E2eApprovalSeeder.php: the disabled schedule of e2e-deleted-template,
+  // a deleted template in e2e-project, which e2e-operator's team operates.
+  // Regression: a schedule of a deleted template could be re-enabled.
+  test('operator cannot enable the schedule of a deleted job template either', async ({ page, browser }, testInfo) => {
+    const id = await asAdmin(browser, testInfo, async (admin) => (await scheduleRow(admin, DELETED_TEMPLATE_SCHEDULE)).id);
+
+    await page.goto(`/schedule/view?id=${id}`);
+    await expect(page.locator('#page-content dl')).toContainText('Disabled');
+    await toggleOpenSchedule(page);
+    await expect(flash(page, 'danger')).toHaveText(scheduleEnableRefused(DELETED_TEMPLATE_SCHEDULE));
+    await expect(flash(page, 'success')).toHaveCount(0);
+
+    await page.goto(`/schedule/view?id=${id}`);
+    await expect(page.locator('#page-content dl')).toContainText('Disabled');
+    await expect(page.locator('#page-content dl')).not.toContainText('Enabled');
   });
 });

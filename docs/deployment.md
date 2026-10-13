@@ -66,7 +66,7 @@ The production stack consists of:
 | `db` | MariaDB database (optional — see external DB) |
 | `redis` | Cache, sessions, job queue |
 | `queue-worker` | Runs project syncs and lint from the Redis queue |
-| `schedule-runner` | Every minute: due schedules and maintenance (stale project syncs, artifact retention) |
+| `schedule-runner` | Every minute: due schedules and maintenance (stale project syncs, artifact retention, approval timeouts, deleted job and workflow templates and the jobs of ended workflow runs, encryption of old survey answers); its own failures are in its `runtime/logs/app.log`, not in `docker compose logs` |
 | `runner-1..N` | Pull-based Ansible execution agents |
 
 The runners sit on their own network (`ansilume_runner_network_name`, default

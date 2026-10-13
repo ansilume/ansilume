@@ -198,8 +198,8 @@ $active = fn (string $prefix): string =>
     </div>
 
     <div id="page-content">
-        <?php foreach (\Yii::$app->session?->getAllFlashes() ?? [] as $type => $messages) : ?>
-            <?php foreach ((array)$messages as $message) : ?>
+        <?php foreach (\app\components\FlashAlerts::of(\Yii::$app->session) as $type => $messages) : ?>
+            <?php foreach ($messages as $message) : ?>
                 <div class="alert alert-<?= Html::encode($type) ?> alert-dismissible fade show" role="alert">
                     <?= Html::encode($message) ?>
                     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>

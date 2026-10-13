@@ -38,7 +38,7 @@ class LdapController extends BaseApiController
      */
     public function actionTest(): array
     {
-        if (!$this->isAdmin()) {
+        if (!$this->userCan('admin')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -89,17 +89,6 @@ class LdapController extends BaseApiController
             'connection' => $diagnostic,
             'user' => $userResult,
         ]);
-    }
-
-    private function isAdmin(): bool
-    {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $u */
-        $u = \Yii::$app->user;
-        if ($u->can('admin')) {
-            return true;
-        }
-        $identity = $u->identity;
-        return $identity instanceof \app\models\User && $identity->is_superadmin;
     }
 
     private function ldap(): ?LdapService

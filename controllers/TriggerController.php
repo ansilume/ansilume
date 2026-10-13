@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\ErrorText;
 use app\components\TriggerTokenResolver;
 use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\NotificationTemplate;
 use app\models\WorkflowTemplate;
 use app\services\AuditService;
+use app\services\JobLaunchInput;
 use app\services\JobLaunchRejectedException;
 use app\services\JobLaunchService;
 use app\services\NotificationDispatcher;
@@ -17,6 +19,7 @@ use app\services\ProjectAccessChecker;
 use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
+use app\services\WorkflowLaunchRejectedException;
 use yii\filters\VerbFilter;
 use yii\web\BadRequestHttpException;
 use yii\web\Controller;
@@ -47,10 +50,10 @@ use yii\web\Response;
  * audited; the caller learns no team or project details.
  *
  * Optional JSON body for fire:
- *   { "extra_vars": { "env": "prod" }, "limit": "webservers" }
+ *   { "extra_vars": { "env": "prod" }, "limit": "webservers", "verbosity": 2 }
  *
  * Optional JSON body for fire-workflow:
- *   { "extra_vars": { "env": "prod" } }   // applied to the start step only
+ *   { "extra_vars": { "env": "prod" } }   // stored on the run, they reach every job step
  *
  * Response (JSON unless noted):
  *   201: { "job_id": 42 }              (fire)
@@ -59,8 +62,15 @@ use yii\web\Response;
  *   403: { "error": "Launch refused." } the user the trigger runs as may not launch it
  *   404: token not found or trigger not enabled (HTML error page)
  *   405: not a POST (HTML error page)
- *   422: { "error": "<why>" }           (fire) the launch was refused, e.g. a password
- *                                        survey answer was the placeholder $encrypted$
+ *   422: { "error": "<why>" }           the launch was refused for a reason the caller can
+ *                                        fix, e.g. a password survey answer was the
+ *                                        placeholder $encrypted$, or for fire a limit or a
+ *                                        verbosity the job record would refuse
+ *                                        (JobLaunchInput); for fire-workflow also
+ *                                        extra_vars that are not a JSON object, a deleted
+ *                                        workflow or one without steps, or an approval
+ *                                        step that too few approvers besides the user the
+ *                                        trigger runs as may decide
  *   500: { "error": "Launch failed." }
  */
 class TriggerController extends Controller
@@ -70,6 +80,24 @@ class TriggerController extends Controller
 
     /** Audit reason: the trigger's user may not operate the template's project. */
     public const DENIED_NO_PROJECT_ACCESS = 'no_project_access';
+
+    /**
+     * Logged when a job trigger failed for a reason the caller cannot fix
+     * (the answer is a bare 500). sprintf(): the job template's ID, then
+     * JobLaunchService::failureReason(): what may be said about the error
+     * (ErrorText: its message, but for a database error only its class,
+     * SQLSTATE and driver error code), without the "Job launch failed: "
+     * of JobLaunchService's own failures.
+     */
+    public const JOB_TRIGGER_FAILED = 'Trigger for template #%d failed: %s';
+
+    /**
+     * Logged when a workflow trigger failed for a reason the caller cannot
+     * fix (the answer is a bare 500). sprintf(): the workflow template's ID,
+     * then what may be said about the error (ErrorText): its message, but
+     * for a database error only its class, SQLSTATE and driver error code.
+     */
+    public const WORKFLOW_TRIGGER_FAILED = 'Workflow trigger for template #%d failed: %s';
 
     public $enableCsrfValidation = false;
 
@@ -113,7 +141,10 @@ class TriggerController extends Controller
         $launcher = \Yii::$app->get('jobLaunchService');
 
         try {
-            $job = $launcher->launch($template, $launchedBy, $this->parseOverrides());
+            $overrides = $this->parseOverrides();
+            // A limit or verbosity the job record would refuse: 422, before the launch.
+            JobLaunchInput::check($overrides);
+            $job = $launcher->launch($template, $launchedBy, $overrides);
         } catch (\RuntimeException $e) {
             return $this->jobLaunchFailure($template, $e);
         }
@@ -132,10 +163,11 @@ class TriggerController extends Controller
      * step (job + approval + pause) gets dispatched by
      * WorkflowExecutionService, as the user who generated the token.
      *
-     * The optional JSON body's `extra_vars` is forwarded as launch
-     * overrides. They reach the start step only, when it is a job step;
-     * later steps get their extra vars from the previous step's output, as
-     * configured on each step.
+     * The optional JSON body's `extra_vars` are the run's launch extra vars:
+     * stored on the run, they reach every job step, under the step's own
+     * mapping of the previous step's output (WorkflowRunVars). The launch is
+     * refused with 422 when they are not a JSON object, or hold the
+     * placeholder as a password answer of a job step's template.
      *
      * @throws BadRequestHttpException when the request carries no token
      * @throws NotFoundHttpException when no workflow template has the token
@@ -230,15 +262,16 @@ class TriggerController extends Controller
             \Yii::warning("Trigger for template #{$template->id} rejected: " . $e->getMessage(), __CLASS__);
             return $this->asJson(['error' => $e->getMessage()])->setStatusCode(422);
         }
-        \Yii::error("Trigger for template #{$template->id} failed: " . $e->getMessage(), __CLASS__);
+        \Yii::error(sprintf(self::JOB_TRIGGER_FAILED, (int)$template->id, JobLaunchService::failureReason($e)), __CLASS__);
 
         return $this->asJson(['error' => 'Launch failed.'])->setStatusCode(500);
     }
 
     /**
-     * Answer a workflow trigger that did not launch: 403 when the user it
-     * runs as may not launch the workflow (audited by the access check), 500
-     * otherwise. The caller gets no details either way.
+     * Answer a workflow trigger that did not launch: 403 without details when
+     * the user it runs as may not launch the workflow (audited by the access
+     * check), 422 with the reason when the launch was refused for a reason the
+     * caller can fix (as for a job trigger), 500 otherwise.
      */
     private function workflowLaunchFailure(WorkflowTemplate $template, \RuntimeException $e): Response
     {
@@ -246,7 +279,11 @@ class TriggerController extends Controller
             \Yii::warning("Workflow trigger for template #{$template->id} refused: " . $e->getMessage(), __CLASS__);
             return $this->asJson(['error' => 'Launch refused.'])->setStatusCode(403);
         }
-        \Yii::error("Workflow trigger for template #{$template->id} failed: " . $e->getMessage(), __CLASS__);
+        if ($e instanceof WorkflowLaunchRejectedException) {
+            \Yii::warning("Workflow trigger for template #{$template->id} rejected: " . $e->getMessage(), __CLASS__);
+            return $this->asJson(['error' => $e->getMessage()])->setStatusCode(422);
+        }
+        \Yii::error(sprintf(self::WORKFLOW_TRIGGER_FAILED, (int)$template->id, ErrorText::of($e)), __CLASS__);
 
         return $this->asJson(['error' => 'Launch failed.'])->setStatusCode(500);
     }
@@ -305,18 +342,23 @@ class TriggerController extends Controller
     /**
      * The overrides of the JSON body that a workflow takes: only extra_vars
      * (limit and verbosity are job template settings, set per step on the
-     * workflow instead). Other keys are dropped silently.
+     * workflow instead). Other keys are dropped silently. extra_vars go to
+     * the launch as sent, whenever the body has the key, so that the launch
+     * can refuse what is not a JSON object instead of dropping it.
      *
      * @return array<string, mixed>
      */
     private function workflowOverrides(): array
     {
-        $overrides = $this->parseOverrides();
+        $body = json_decode($this->webRequest()->getRawBody(), true);
 
-        return isset($overrides['extra_vars']) ? ['extra_vars' => $overrides['extra_vars']] : [];
+        return is_array($body) && array_key_exists('extra_vars', $body) ? ['extra_vars' => $body['extra_vars']] : [];
     }
 
     /**
+     * The overrides of the JSON body that a job takes: extra_vars, limit and
+     * verbosity, as sent (JobLaunchInput checks limit and verbosity).
+     *
      * @return array<string, mixed>
      */
     private function parseOverrides(): array
@@ -334,7 +376,7 @@ class TriggerController extends Controller
                     $overrides['limit'] = $body['limit'];
                 }
                 if (isset($body['verbosity'])) {
-                    $overrides['verbosity'] = (int)$body['verbosity'];
+                    $overrides['verbosity'] = $body['verbosity'];
                 }
             }
         }

@@ -31,6 +31,15 @@ class LaunchContextTest extends TestCase
         $this->assertSame(['schedule_id' => 9, 'carried_secret_keys' => ['db_password']], $context->auditContext);
     }
 
+    public function testAWorkflowJobStepCarriesTheAnswersOfItsRun(): void
+    {
+        $context = LaunchContext::forWorkflow(17, ['db_password' => self::MARKER, 'pin' => 1234]);
+
+        $this->assertSame(['db_password' => self::MARKER, 'pin' => 1234], $context->carriedSecrets);
+        $this->assertSame(['workflow_job_id' => 17, 'carried_secret_keys' => ['db_password', 'pin']], $context->auditContext);
+        $this->assertSame(['workflow_job_id' => 5, 'carried_secret_keys' => []], LaunchContext::forWorkflow(5, [])->auditContext);
+    }
+
     public function testWithoutAnswersTheAuditListsNoKeys(): void
     {
         $this->assertSame(['relaunch_of' => 3, 'carried_secret_keys' => []], LaunchContext::forRelaunch(3, [])->auditContext);

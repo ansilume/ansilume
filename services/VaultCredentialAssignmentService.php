@@ -79,9 +79,10 @@ class VaultCredentialAssignmentService extends Component
         $vaultChecks = \Yii::$app->get('vaultCheckService');
         // One run of vault checks for all templates: together they take no
         // longer than its time budget.
+        // checkedTemplates() refused every template without a user: $userId is set here.
         /** @var list<array{job_template_id: int, name: string, status: string, replaced: list<array{id: int, name: string}>, error: string|null}> $items */
         $items = $vaultChecks->batch(fn (): array => array_map(
-            fn (JobTemplate $template): array => $this->assignTo($vault, $template, $auditContext),
+            fn (JobTemplate $template): array => $this->assignTo($vault, $template, (int)$userId, $auditContext),
             $templates
         ));
 
@@ -162,10 +163,15 @@ class VaultCredentialAssignmentService extends Component
     }
 
     /**
+     * Saves $template with $vault for user #$userId, the user whom
+     * GatedJobTemplateLock judges, whoever is signed in: a template with an
+     * approval rule keeps its credentials unless that user holds
+     * approval-rule.update.
+     *
      * @param array<string, mixed> $auditContext
      * @return array{job_template_id: int, name: string, status: string, replaced: list<array{id: int, name: string}>, error: string|null}
      */
-    private function assignTo(Credential $vault, JobTemplate $template, array $auditContext): array
+    private function assignTo(Credential $vault, JobTemplate $template, int $userId, array $auditContext): array
     {
         $vaultId = (int)$vault->id;
         $snapshot = $template->credentialSnapshot();
@@ -183,7 +189,7 @@ class VaultCredentialAssignmentService extends Component
         $template->credential_id = $primary;
         $saved = $this->templateCredentials()->saveWithCredentials($template, $additional, $auditContext + [
             'vault_assignment' => ['credential_id' => $vaultId, 'replaced' => array_column($replaced, 'id')],
-        ]);
+        ], $userId);
         if (!$saved) {
             return array_merge($item, ['status' => VaultAssignmentResult::FAILED, 'error' => implode(' ', $template->getFirstErrors())]);
         }

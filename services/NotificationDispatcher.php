@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ErrorText;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\services\notification\ChannelInterface;
@@ -27,10 +28,33 @@ use yii\base\Component;
  * Every send attempt writes one audit row — `notification.dispatched` on
  * success, `notification.failed` on exception — so every channel delivery
  * is attributable and reviewable. Failures in one channel never block
- * others.
+ * others. What a failure's audit row and log line say about its error is
+ * ErrorText's: the message, but never that of a database error.
+ * sendSingle() also returns that error, so a test of one template can
+ * report it.
  */
 class NotificationDispatcher extends Component
 {
+    /**
+     * Logged when a channel failed to send a notification; its
+     * notification.failed audit entry carries the same error text.
+     * sprintf(): the notification template's ID, its channel, the event,
+     * then what may be said about the error (ErrorText): its message, but
+     * for a database error only its class, SQLSTATE and driver error code,
+     * never its message, which carries the SQL statement with its values.
+     */
+    public const SEND_FAILED = 'NotificationDispatcher: failed to send notification #%d (%s) for %s: %s';
+
+    /**
+     * The error of a notification template whose channel no handler sends:
+     * its notification.failed audit entry and sendSingle()'s answer.
+     * sprintf(): the channel.
+     */
+    public const UNKNOWN_CHANNEL = "Unknown channel '%s'";
+
+    /** Logged for a notification template whose channel no handler sends; sprintf(): the channel. */
+    public const UNKNOWN_CHANNEL_LOGGED = "NotificationDispatcher: unknown channel '%s'";
+
     private TemplateRenderer $renderer;
 
     /** @var array<string, ChannelInterface> */
@@ -77,45 +101,42 @@ class NotificationDispatcher extends Component
     }
 
     /**
-     * Send one notification template (used by dispatch and the /test API).
-     * Always writes an audit row — success or failure.
+     * Send one notification template (used by dispatch() and the test
+     * actions of the web UI and the API). Always writes an audit row —
+     * success or failure.
      *
      * @param array<string, string> $variables
+     * @return string|null null when the channel accepted the message; else
+     *     the error its notification.failed audit entry carries:
+     *     UNKNOWN_CHANNEL, or what may be said about the channel's error
+     *     (ErrorText), never the message of a database error
      */
-    public function sendSingle(NotificationTemplate $nt, array $variables, string $event = 'test'): void
+    public function sendSingle(NotificationTemplate $nt, array $variables, string $event = 'test'): ?string
     {
         $subject = $this->renderer->render((string)$nt->subject_template, $variables);
         $body = $this->renderer->render((string)$nt->body_template, $variables);
 
         $channel = $this->channels[$nt->channel] ?? null;
         if ($channel === null) {
-            $this->audit(AuditLog::ACTION_NOTIFICATION_FAILED, $nt, $event, [
-                'error' => "Unknown channel '{$nt->channel}'",
-            ]);
-            \Yii::warning("NotificationDispatcher: unknown channel '{$nt->channel}'", __CLASS__);
-            return;
+            $error = sprintf(self::UNKNOWN_CHANNEL, $nt->channel);
+            $this->audit(AuditLog::ACTION_NOTIFICATION_FAILED, $nt, $event, ['error' => $error]);
+            \Yii::warning(sprintf(self::UNKNOWN_CHANNEL_LOGGED, $nt->channel), __CLASS__);
+            return $error;
         }
 
         try {
             $channel->send($nt, $subject, $body, $variables);
-            $this->audit(AuditLog::ACTION_NOTIFICATION_DISPATCHED, $nt, $event, [
-                'subject' => mb_substr($subject, 0, 200),
-            ]);
         } catch (\Throwable $e) {
-            $this->audit(AuditLog::ACTION_NOTIFICATION_FAILED, $nt, $event, [
-                'error' => $e->getMessage(),
-            ]);
-            \Yii::error(
-                sprintf(
-                    'NotificationDispatcher: failed to send notification #%d (%s) for %s: %s',
-                    $nt->id,
-                    $nt->channel,
-                    $event,
-                    $e->getMessage()
-                ),
-                __CLASS__
-            );
+            $error = ErrorText::of($e);
+            $this->audit(AuditLog::ACTION_NOTIFICATION_FAILED, $nt, $event, ['error' => $error]);
+            \Yii::error(sprintf(self::SEND_FAILED, $nt->id, $nt->channel, $event, $error), __CLASS__);
+            return $error;
         }
+        $this->audit(AuditLog::ACTION_NOTIFICATION_DISPATCHED, $nt, $event, [
+            'subject' => mb_substr($subject, 0, 200),
+        ]);
+
+        return null;
     }
 
     /**

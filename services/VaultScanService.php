@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ErrorText;
 use app\components\vault\AnsibleCfgVaultReader;
 use app\components\vault\GitHeadReader;
 use app\components\vault\VaultContentScanner;
@@ -28,6 +29,14 @@ use yii\base\Component;
 class VaultScanService extends Component
 {
     /**
+     * Logged (warning) when a project's scan failed; the project then stores
+     * a failure that points to the log. sprintf(): the project's ID, then
+     * what may be said about the error (ErrorText): its message, but for a
+     * database error only its class, SQLSTATE and driver error code.
+     */
+    public const SCAN_FAILED = 'Vault scan of project #%d failed: %s';
+
+    /**
      * True when the checkout was scanned. False when there is none or the
      * scan failed; the reason is then stored and the previous entries are
      * removed, so an old scan never passes for a current one.
@@ -42,7 +51,7 @@ class VaultScanService extends Component
         try {
             $this->scanAndStore($project, $root);
         } catch (\Throwable $e) {
-            \Yii::warning("Vault scan of project #{$project->id} failed: " . $e->getMessage(), __CLASS__);
+            \Yii::warning(sprintf(self::SCAN_FAILED, (int)$project->id, ErrorText::of($e)), __CLASS__);
             $this->storeFailure($project, 'The scan could not be completed; the application log has the details.');
             return false;
         }

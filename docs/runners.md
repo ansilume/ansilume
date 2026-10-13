@@ -52,11 +52,18 @@ the runner. This means:
 
 No other ports or protocols are required. The runner uses:
 
-- **Polling** every 5 seconds to claim queued jobs
+- **Polling** every 5 seconds to claim queued jobs; the server never hands
+  out a job of a deleted job template, or of a workflow run that is no
+  longer running
 - **Heartbeat** every 30 seconds to report liveness
 - **Log streaming** via POST requests during job execution, in whole UTF-8
   characters; bytes that are not UTF-8 arrive as `�` (U+FFFD)
-- **Job completion** via POST when the playbook finishes
+- **Job completion** via POST when the playbook finishes. A completion or
+  timeout report for a job that was canceled, or marked failed because the
+  runner had stopped reporting, while the playbook ran is noted in the
+  job's log and otherwise ignored: the job keeps its status, and the server
+  answers with it. There is no cancel channel, so a runner runs a canceled
+  job's playbook to its end.
 
 If your server uses HTTPS with a self-signed certificate, ensure the runner's
 CA trust store includes it, or set `API_URL` with `http://` for testing.
@@ -297,7 +304,8 @@ update does not re-register them.
 ### Option B: Pre-configured token
 
 1. In the Ansilume UI, go to **Runner Groups** → select a group → **Add Runner**
-2. Copy the generated token
+2. Copy the generated token from the card on the group's page: it is shown
+   only this once (**Regen Token** gives the runner a new one)
 3. Set `RUNNER_TOKEN=<token>` in the runner's environment
 4. Runner uses this token directly — no registration step
 
@@ -567,6 +575,14 @@ to a different group:
 1. Create the group in the UI under **Runner Groups**
 2. Either pre-configure the runner with a token from that group, or move the
    runner to the group after it self-registers
+
+A runner group is deleted only while no runner belongs to it and no job
+template uses it; the web UI and `DELETE /api/v1/runner-groups/{id}` refuse
+it otherwise. Deleting it would delete its runners and take it off the
+templates, and no runner claims the jobs of a template without a runner
+group. Move or delete the runners and give the templates another group
+first, see
+[Deleting a runner group is refused](troubleshooting.md#deleting-a-runner-group-is-refused).
 
 ---
 

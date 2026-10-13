@@ -6,18 +6,19 @@ namespace app\models;
 
 use yii\db\ActiveQuery;
 use yii\db\ActiveRecord;
+use yii\db\Query;
 
 /**
  * @property int         $id
  * @property int         $job_id
- * @property int         $approval_rule_id
+ * @property int|null    $approval_rule_id  null once its rule was deleted (resolved requests keep their history)
  * @property string      $status
  * @property int|null    $requested_at
  * @property int|null    $resolved_at
  * @property int|null    $expires_at
  *
  * @property Job $job
- * @property ApprovalRule $approvalRule
+ * @property ApprovalRule|null $approvalRule
  * @property ApprovalDecision[] $decisions
  */
 class ApprovalRequest extends ActiveRecord
@@ -26,6 +27,8 @@ class ApprovalRequest extends ActiveRecord
     public const STATUS_APPROVED = 'approved';
     public const STATUS_REJECTED = 'rejected';
     public const STATUS_TIMED_OUT = 'timed_out';
+    /** Closed without a decision: its job or workflow run was canceled, or its template deleted. */
+    public const STATUS_CANCELED = 'canceled';
 
     public static function tableName(): string
     {
@@ -42,6 +45,7 @@ class ApprovalRequest extends ActiveRecord
                 self::STATUS_APPROVED,
                 self::STATUS_REJECTED,
                 self::STATUS_TIMED_OUT,
+                self::STATUS_CANCELED,
             ]],
             [['requested_at', 'resolved_at', 'expires_at'], 'integer'],
         ];
@@ -57,6 +61,7 @@ class ApprovalRequest extends ActiveRecord
             self::STATUS_APPROVED,
             self::STATUS_REJECTED,
             self::STATUS_TIMED_OUT,
+            self::STATUS_CANCELED,
         ];
     }
 
@@ -65,18 +70,64 @@ class ApprovalRequest extends ActiveRecord
         return $this->status !== self::STATUS_PENDING;
     }
 
-    public function approvalCount(): int
+    /**
+     * Whether the request's time ran out at $now: expires_at has passed.
+     * Votes are refused from then on, and the timeout applies its rule's
+     * timeout action (the same comparison on both paths).
+     */
+    public function hasExpired(int $now): bool
     {
-        return (int)ApprovalDecision::find()
-            ->where(['approval_request_id' => $this->id, 'decision' => 'approved'])
-            ->count();
+        return $this->expires_at !== null && (int)$this->expires_at <= $now;
     }
 
+    /**
+     * Whether user #$userId has voted on this request.
+     */
+    public function hasDecisionBy(int $userId): bool
+    {
+        return ApprovalDecision::find()
+            ->where(['approval_request_id' => $this->id, 'user_id' => $userId])
+            ->exists();
+    }
+
+    /**
+     * The user who launched the job that waits for this request: for a
+     * workflow approval step, the user who started the run. That user never
+     * decides on the request. 0 when the job is unknown (an unsaved request).
+     */
+    public function launcherId(): int
+    {
+        /** @var Job|null $job */
+        $job = $this->job;
+
+        return $job === null ? 0 : (int)$job->launched_by;
+    }
+
+    /**
+     * Whether $decision was cast by the user who launched the job. Such a
+     * decision, recorded before self-approval was refused, stays in the
+     * history but counts neither as an approval nor as a rejection.
+     */
+    public function isLauncherDecision(ApprovalDecision $decision): bool
+    {
+        return (int)$decision->user_id === $this->launcherId();
+    }
+
+    /**
+     * Approvals that count toward the rule's threshold: every approval except
+     * the launcher's own.
+     */
+    public function approvalCount(): int
+    {
+        return $this->countedDecisions(ApprovalDecision::DECISION_APPROVED);
+    }
+
+    /**
+     * Rejections that count: every rejection except the launcher's own.
+     */
     public function rejectionCount(): int
     {
-        return (int)ApprovalDecision::find()
-            ->where(['approval_request_id' => $this->id, 'decision' => 'rejected'])
-            ->count();
+        return $this->countedDecisions(ApprovalDecision::DECISION_REJECTED);
     }
 
     public function getJob(): ActiveQuery
@@ -101,6 +152,7 @@ class ApprovalRequest extends ActiveRecord
             self::STATUS_APPROVED => 'Approved',
             self::STATUS_REJECTED => 'Rejected',
             self::STATUS_TIMED_OUT => 'Timed Out',
+            self::STATUS_CANCELED => 'Canceled',
             default => $status,
         };
     }
@@ -112,7 +164,25 @@ class ApprovalRequest extends ActiveRecord
             self::STATUS_APPROVED => 'success',
             self::STATUS_REJECTED => 'danger',
             self::STATUS_TIMED_OUT => 'secondary',
+            self::STATUS_CANCELED => 'dark',
             default => 'secondary',
         };
+    }
+
+    /**
+     * Decisions of one kind, without the launcher's: one query, the launcher
+     * is read in a subquery on the job.
+     */
+    private function countedDecisions(string $decision): int
+    {
+        $launcher = (new Query())
+            ->select('launched_by')
+            ->from(Job::tableName())
+            ->where(['id' => $this->job_id]);
+
+        return (int)ApprovalDecision::find()
+            ->where(['approval_request_id' => $this->id, 'decision' => $decision])
+            ->andWhere(['not in', 'user_id', $launcher])
+            ->count();
     }
 }

@@ -213,6 +213,10 @@ class RoleControllerActionTest extends WebControllerTestCase
         ]));
     }
 
+    /**
+     * Regression: the refusal was flashed with the type "error", which the
+     * layout renders as the unstyled class alert-error. It is a danger flash.
+     */
     public function testDeleteRefusesSystemRole(): void
     {
         $user = $this->createUser();
@@ -223,10 +227,10 @@ class RoleControllerActionTest extends WebControllerTestCase
 
         $this->assertInstanceOf(Response::class, $result);
         // System role still exists.
-        $this->assertNotNull(\Yii::$app->authManager->getRole('viewer'));
-        // Error flash set.
-        $flashes = \Yii::$app->session->getAllFlashes();
-        $this->assertArrayHasKey('error', $flashes);
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $this->assertNotNull($auth->getRole('viewer'));
+        $this->assertSame(['danger' => 'Cannot delete system role "viewer".'], \Yii::$app->session->getAllFlashes());
     }
 
     public function testDeleteThrowsNotFound(): void

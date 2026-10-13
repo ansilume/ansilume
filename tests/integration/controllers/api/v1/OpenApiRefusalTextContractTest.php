@@ -134,8 +134,12 @@ class OpenApiRefusalTextContractTest extends TestCase
         $sentences = preg_split('/(?<=\.)\s+/', $section) ?: [];
         $workflow = array_values(array_filter($sentences, static fn (string $sentence): bool => str_contains($sentence, '`/trigger/fire-workflow`')));
         $this->assertNotEmpty($workflow, 'The info text says what a workflow trigger answers.');
-        $this->assertStringContainsString('`201`', $workflow[0]);
+        // Regression (step 3): a workflow launch checks its extra vars before
+        // the run exists, so the placeholder answers 422 and creates no run;
+        // the text still said 201 and a run that fails at its start step.
+        $this->assertStringNotContainsString('`201`', $workflow[0]);
         $this->assertStringContainsString('`POST /api/v1/jobs`', $workflow[0]);
+        $this->assertStringContainsString('`POST /api/v1/workflow-templates/{id}/launch`', $workflow[0]);
         $this->assertStringContainsString('`422`', $workflow[0]);
     }
 

@@ -8,11 +8,18 @@ declare(strict_types=1);
 
 use app\components\SurveySecrets;
 use app\components\VersionedAssetUrl;
+use app\services\ScheduleRunAs;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
 $isNew = $model->isNewRecord;
 $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
+// Whom the schedule runs as; saving a change to what or when it runs makes it run as the user who saves it.
+$runsAs = ScheduleRunAs::FORM_RUNS_AS_YOU;
+if (!$isNew && (int)$model->created_by !== (int)\Yii::$app->user->id) {
+    $runsAs = sprintf(ScheduleRunAs::FORM_RUNS_AS_OTHER, $model->creator->username ?? 'user #' . (int)$model->created_by)
+        . ScheduleRunAs::FORM_NOTE;
+}
 ?>
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
@@ -35,11 +42,10 @@ $this->title = $isNew ? 'New Schedule' : 'Edit: ' . Html::encode($model->name);
         <?= $form->field($model, 'name')->textInput(['maxlength' => 128, 'placeholder' => 'e.g. Nightly playbook run']) ?>
     </div>
     <div class="col-md-6">
-        <?php $runsAs = $isNew ? 'you' : ($model->creator->username ?? 'the schedule\'s creator'); ?>
         <?= $form->field($model, 'job_template_id')->dropDownList(
             $templates,
             ['prompt' => '— Select template —']
-        )->hint(Html::encode('Lists the job templates you may launch. Scheduled jobs run as ' . $runsAs . '.')) ?>
+        )->hint(Html::encode('Lists the job templates you may launch. ' . $runsAs)) ?>
     </div>
     <div class="col-md-6">
         <?= $form->field($model, 'cron_expression')

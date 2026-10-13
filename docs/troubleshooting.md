@@ -60,6 +60,13 @@ docker compose exec app php yii migrate/history
 docker compose exec app php yii migrate --interactive=0
 ```
 
+A migration that fails can print its database error with the message,
+which holds the SQL statement with its values: when the app container
+starts, to `docker compose logs app`, and in a manual run, to your
+terminal, but not to the application log. Read that output before you
+share it (see the known limits in
+[updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows)).
+
 ## Parse Inventory or lint mentions vault-encrypted content
 
 The server never decrypts vault content, not even with a password file or
@@ -141,13 +148,45 @@ Nothing ran on the target hosts.
 
 **Fix:** Fix the runner's temp directory or free space, then launch again.
 
+## Job was not canceled: it is already finished
+
+**Symptom:** **Cancel** on a job page shows the warning
+`Job #42 was not canceled: it is already succeeded.` (with the job's status
+in words, such as `timed out`), and `POST /api/v1/jobs/{id}/cancel` answers
+`409` with it and the status in `error.status`.
+
+**Cause:** The job finished between loading the page, or the call, and the
+cancel. A cancel changes a job only while it has not finished, so the job
+keeps its outcome, and nothing else changes.
+
+**Fix:** None.
+
+## Job log: the runner reported after the job had finished
+
+**Symptom:** The log of a canceled job ends with
+`Runner reported completion (exit_code=0) after job was already in terminal status "canceled" — ignored.`
+or `Runner reported timeout after job was already in terminal status "canceled" — ignored.`
+(or another status, such as `failed`).
+
+**Cause:** The job was canceled, or marked failed because its runner had
+stopped reporting, before the runner reported its end. A runner is not told
+about a cancel and runs the playbook to its end; its late report goes into
+the log and changes nothing else: the job keeps its status, and no
+`job.finished` audit entry, webhook, notification or workflow step follows.
+
+**Fix:** None for the job: its status is final. A playbook that ran on after
+the cancel may have changed the hosts; check them.
+
 ## Launch refused: password answer is the placeholder
 
 **Symptom:** A launch fails with
 `The value of "db_password" is the placeholder $encrypted$; send the real value.`
 The launch form shows it, `POST /api/v1/jobs` and job triggers answer `422`
-with it, a workflow step fails with it as the step's error (a workflow
-trigger still answers `201`), and a scheduled run fails to launch with it.
+with it, a workflow step fails with it as the step's error, and a scheduled
+run fails to launch with it. A workflow launch with such a password answer
+in its extra vars, for a password field of any job step's template, is
+refused before the run exists: `/trigger/fire-workflow` and
+`POST /api/v1/workflow-templates/{id}/launch` answer `422`.
 
 **Cause:** `$encrypted$` stands for a stored password answer in job pages,
 the jobs API and schedules. It was sent back as the answer, usually because
@@ -253,10 +292,193 @@ octal, `420`), `yes`, `no`, `on` and `off` as text (Ansible: booleans), and
 text `2026-10-11T00:00:00.000Z`. Quote such values, write booleans as
 `true` and `false`, or use JSON mode.
 
+## Launch refused: too few approvers besides the launcher
+
+**Symptom:** A launch of a job template with an approval rule fails with
+`Approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide on this job. An admin can add approvers to the rule.`
+The launch form shows it after `Launch failed: `, `POST /api/v1/jobs` and
+job triggers answer `422` with it, a scheduled run fails to launch with it,
+and a workflow job step fails with it. A workflow is refused the same way
+before its run exists, for its first approval step or job step, in step
+order, whose approval could never be granted:
+`Step "Release approval": approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide. An admin can add approvers to the rule.`
+
+**Cause:** Nobody approves their own launch, and only eligible approvers
+count: users on the rule's approver list (for a role rule, the users
+assigned that role directly) who have an active account, are superadmins or
+hold `approval.decide`, and may see the job template's project (for a
+workflow approval step, the workflow). Fewer of them than the rule's
+required approvals remain besides the user who launches, so the request
+could never be approved. That user is whoever launches in the web UI or the
+API, the user a schedule runs as (who last changed what or when it runs, or
+enabled it), the user a trigger runs as (who generated its token, or the
+template's creator for a token generated before Ansilume recorded that), or
+the user who starts the workflow run.
+
+**Fix:** An admin adds approvers who may decide to the rule, or lowers its
+required approvals. Check that the approvers are active, hold
+`approval.decide` (viewers do not) and have access to the project. Or let a
+user who is none of the needed approvers launch, change or enable the
+schedule (it then runs as that user), or generate the trigger token.
+
+## Launch refused: the job template or its approval rule changed
+
+**Symptom:** A launch fails with one of these messages, shown and answered
+like the other launch refusals (`422` from `POST /api/v1/jobs` and job
+triggers):
+
+- `The approval rule of job template #7 no longer exists. An admin can choose another rule.`
+- `Job template #7 was deleted.`
+- `The approval rule of job template #7 changed while the job was being launched. Launch it again.`
+
+**Cause and fix:**
+
+- The first: the template named an approval rule that no longer existed when
+  the job was launched, for example because an admin took the rule off the
+  template and deleted it at that moment. The launch is refused rather than
+  run without the approval. Launch again; if the message stays, an admin
+  chooses a rule, or none, on the template.
+- The second: the template was deleted while the job was being launched.
+  Nothing was launched.
+- The third: an admin changed the template's approval rule while the job was
+  being launched, so the job would have waited for another rule. Launch it
+  again.
+
+## Launch refused: the limit or the verbosity
+
+**Symptom:** A launch fails with `Limit should contain at most 255 characters.`,
+`Limit must be a string.`, `Verbosity must be no greater than 5.`,
+`Verbosity must be no less than 0.` or `Verbosity must be an integer.`,
+and nothing is launched. The launch form shows it after `Launch failed: `;
+`POST /api/v1/jobs` answers `422` with it in `error.message` and with each
+such field and its message in `error.fields`, for example
+`{"error": {"message": "Verbosity must be no greater than 5.", "fields": {"verbosity": "Verbosity must be no greater than 5."}}}`;
+a job trigger answers `422` with `{"error": "Verbosity must be no greater than 5."}`.
+
+**Cause:** The job record does not take the launch's `limit` or
+`verbosity`: a limit longer than 255 characters, a verbosity below 0 or
+above 5, or a list or an object for either (the launch form drops a list).
+Before the update to approvals and workflows such a launch failed with a
+server error (`500`), and a list or an object as the verbosity was taken
+for a number.
+
+**Fix:** Send a limit of at most 255 characters as text and a verbosity
+from 0 to 5, or leave them out to use the job template's.
+
+## Approve or Reject is refused, or missing
+
+**Symptom:** The page of an approval request shows no Approve and Reject
+but a note why, or a vote is refused. The web UI shows the message as a
+warning, as an error page, or after `Your decision was not recorded: `;
+`POST /api/v1/approvals/{id}/approve` and `/reject` answer with the status
+in brackets:
+
+- `You launched this job; another approver must decide.` (`403`): you
+  launched the job or started the workflow run; or the schedule that
+  launched it runs as you, because you were the last to change what or
+  when it runs, or to enable it; or the trigger that launched it runs as
+  you, because you generated its token, or because you created the
+  template and its token was generated before Ansilume recorded who
+  generated it (until the token is generated again). Nobody approves their
+  own launch, admins and superadmins included, and votes you cast before
+  the update count for nothing (the page marks them
+  `launcher, not counted`). Another approver must decide.
+- `You are not eligible to decide on this request.` (`403`): you are not on
+  the rule's approver list, you lack `approval.decide`, or you may not see
+  the job's project (the workflow, for a workflow approval step). An admin
+  adds you to the rule, or another approver decides.
+- `Approval request #12 is already resolved: approved.` (`409`, or
+  `rejected`, `timed out` or `canceled`): someone decided it first, its
+  timeout was applied, or it was canceled. The request is final.
+- `Approval request #12 has expired and takes no more votes; its timeout is applied by the next maintenance run.`
+  (`409`): its rule's timeout ran out. The next maintenance run, usually
+  within a minute, applies the rule's timeout action (see
+  [Approval request shows Timed Out or Canceled](#approval-request-shows-timed-out-or-canceled)).
+- `Approval request #12 can no longer be decided: its job #34 no longer waits for approval.`
+  (`409`): the job was canceled, or finished otherwise; the vote closed the
+  request as canceled. Also when the job still waited but could never run:
+  its workflow step no longer ran, or its run had ended, for example
+  because canceling the run failed part way, or its job template had been
+  deleted. Then the vote canceled the job too, so that it never runs. A job
+  whose job template was removed with its project counts as one of a
+  deleted template.
+- `User has already voted on this request.` (`422`): you voted on this
+  request already, also with a second vote sent at the same moment.
+- `The decision cannot be recorded: Comment should contain at most 1,000 characters.`
+  (`422`): shorten the comment.
+- `The decision cannot be recorded: Comment must be a string.` (`422`): the
+  API got a `comment` that is a list, an object or a number; send text, or
+  leave it out.
+- `Approval request #12 no longer exists.` (`404`): the request was deleted
+  while the vote ran.
+
+A vote that was recorded stays recorded when what follows it fails, such as
+its audit entry, its notification or the next step of a workflow. The
+application log then has
+`Approval request #12: the audit entry, notification or workflow advance after the vote of user #7 failed: ...`
+with the class of the error, and a workflow that did not go on can be
+canceled and launched again. The same holds for a timeout, see
+[Approval timeouts or the deleted-template sweep keep failing](#approval-timeouts-or-the-deleted-template-sweep-keep-failing).
+
+## Approval request shows Timed Out or Canceled
+
+**Symptom:** An approval request has the status Timed Out or Canceled
+although nobody approved or rejected it, and its job did not run, or ran
+without an approval.
+
+**Cause:**
+
+- Timed Out: its rule has a timeout, and nobody decided before it ran out.
+  The maintenance run, which the schedule-runner starts every minute,
+  applies the rule's timeout action: it rejects the job, or approves it when
+  the action is `approve`, but only within 60 minutes after the request
+  expired; later it rejects, and the `approval.timed_out` audit entry has
+  `reason: grace_period_exceeded`. Earlier releases never applied timeouts
+  on the stock deployments, so the first maintenance run after the update to
+  approvals and workflows applies all overdue ones.
+- Canceled: the job was canceled, or the workflow run that waited for it,
+  or its job template or workflow template was deleted; or a vote or timeout
+  found that its job no longer waited for approval, that the workflow step
+  or run of its job had ended, or that its job template had been deleted.
+  The `approval.canceled` audit entry has the reason (`operator`,
+  `template_deleted`, `workflow_canceled`, `workflow_template_deleted`,
+  `job_not_waiting` or `workflow_step_ended`).
+
+**Fix:** Launch the job template or workflow again if the job should still
+run. To give approvers more time, an admin raises the rule's timeout, or
+sets none.
+
+## Deleting an approval rule is refused
+
+**Symptom:** Deleting an approval rule shows, and
+`DELETE /api/v1/approval-rules/{id}` answers `409` with,
+`Approval rule "deploy-prod" is in use by 2 job template(s) and 1 workflow step(s). Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.`
+The rule page shows Delete disabled, and its **Used by** card lists the job
+templates and workflow steps that use the rule (`error.used_by` in the
+API).
+
+**Cause:** A rule is in use while live job templates, steps of live
+workflows, or pending approval requests whose job still waits for approval
+refer to it. Before the update to approvals and workflows, deleting such a
+rule silently ungated its job templates and deleted its requests.
+
+**Fix:** Choose another rule, or none, on each job template; remove the
+workflow steps that use it (this needs `approval-rule.update`, and waits
+until the workflow's runs have finished); and let its pending requests be
+decided, or cancel their jobs. The card lists only what you may see and
+counts the rest: an admin who sees everything finds the others. Then delete
+the rule.
+
+A delete can also end in a server error, `500` from the API, whose entry in
+the application log mentions `Deadlock found when trying to get lock` or
+`Lock wait timeout exceeded`: another save assigned the rule at the same
+moment, twice in a row. Try again; once that save has committed, the delete
+is refused with the message above.
+
 ## Workflow step failed without a job
 
-**Symptom:** A workflow run fails at a step that has no job. The run page
-shows a message under the step's status, and the API returns it as
+**Symptom:** A workflow run fails at a step whose job did not run. The run
+page shows a message under the step's status, and the API returns it as
 `steps[].error` of `GET /api/v1/workflow-jobs/{id}`, for example
 `Not launched: user #7, whom this workflow runs as, may not launch job template "Deploy web" (#15).`
 
@@ -275,8 +497,25 @@ step's project. The other messages:
 
 - **"The job template of this step no longer exists."**: the step's job
   template was deleted.
-- **"The approval rule of this step no longer exists."**: the step's approval
-  rule was deleted.
+- **"The approval rule of this step no longer exists."**: the approval step
+  has no rule. An approval rule that steps use can no longer be deleted, so
+  this happens only to steps whose rule was deleted before the update to
+  approvals and workflows (migration `m000083` cleared their rule), and to
+  approval steps an older version saved without a rule. Such a workflow is
+  also refused at launch (see [Workflow launch refused](#workflow-launch-refused)).
+- **"Not run: approval rule "deploy-prod" needs 1 approval(s) from users
+  other than user #7, who launched this workflow, but only 0 of its
+  approvers may decide."**: the run reached an approval step whose request
+  could never be approved, as too few eligible approvers remain besides the
+  user who started the run, for example because an approver was disabled
+  after the launch. No request was created. See
+  [Launch refused: too few approvers besides the launcher](#launch-refused-too-few-approvers-besides-the-launcher).
+- **"The approval request could not be created; see the application log."**:
+  writing the approval request of an approval step failed. The application
+  log (`runtime/logs/app.log` of the app container, or of the
+  schedule-runner when an approval timeout started the step) has
+  `Workflow job #12: the approval request of step #31 failed: ...` with
+  the class of the error, its SQLSTATE and the driver's error code.
 - **"The value of ... is the placeholder $encrypted$; send the real value."**,
   **"Survey field ... has a name that cannot be used for a password
   answer; ..."** or **"The extra vars cannot be stored: ..."** (or **"The
@@ -286,20 +525,357 @@ step's project. The other messages:
   [Launch refused: a password field needs another name](#launch-refused-a-password-field-needs-another-name)
   and [Launch or save refused: a number too large for JSON](#launch-or-save-refused-a-number-too-large-for-json).
 - **"The job could not be launched; see the application log."**: launching
-  the job failed for another reason. The reason is in `runtime/logs/app.log`
-  of the app container.
+  the job failed for another reason, also a database error. The
+  application log (as above) has
+  `Workflow job #12: launching job template #15 for step #31 failed: ...`
+  with the class of the error, its SQLSTATE and the driver's error code.
+  Before, a database error there left the run running for good, which
+  locked the steps of its workflow.
 - **"Not run: unknown step type "…"."**: the step's type is none of job,
   approval and pause, compared exactly (`JOB` or `job ` with a trailing space
   are unknown too). Older versions stored such steps: the API did not
   validate steps, and the add-step form stored `true` from a JSON request as
   `1`.
 
+A step can also end the run because of its approval, or because the run
+cannot go on after it. Its error says why:
+
+- **"Approval request #12 was rejected."**, **"Approval request #12 timed
+  out."** or **"Approval request #12 was canceled."** on an approval step,
+  and **"Not run: approval request #12 was rejected."**, **"... timed
+  out."** or **"... was canceled."** on a job step whose job waited for
+  approval: the gate did not open. The request was rejected, timed out with
+  the rule's timeout action `reject` (or more than 60 minutes late), or was
+  canceled with its job or run. An empty On Failure branch ends the run as
+  failed then, and an Always branch is not taken, on approval steps and on
+  job steps alike; before the update to approvals and workflows, the run
+  went on with the next step, or with the Always branch.
+- **"Not approved: the approval request of this step no longer exists."**
+  on an approval step, and **"Not run: the approval request of its job no
+  longer exists."** on a job step: the step waited for approval without an
+  approval request, which releases up to 2.9.0 left when a rule was deleted
+  while it had pending requests, and the maintenance run canceled its job
+  (see [A job was canceled without anyone canceling it](#a-job-was-canceled-without-anyone-canceling-it)).
+  The run goes on as after a rejection.
+- **"The next step #7 of this workflow no longer exists."**, added to the
+  step's own error, also on a step that succeeded: one of its branches leads
+  to a step that was removed, so the run fails instead of ending as if the
+  workflow were done.
+- **"This step was removed from the workflow while it ran, so the run
+  cannot go on."**: the step's row was deleted while it ran, which Ansilume
+  itself refuses while a run is active, for example in the database; the
+  run fails.
+- **"Not finished: the run was canceled."** and **"Not finished: the run was
+  canceled because its workflow template was deleted."**: the run was
+  canceled, or its workflow template deleted, while the step ran, or as it
+  started. Its job was canceled with its pending approval request; when
+  that failed, the maintenance run cancels the job later (see
+  [A job was canceled without anyone canceling it](#a-job-was-canceled-without-anyone-canceling-it)).
+- **"Not finished: the run had ended."**: the step still showed as running
+  in a run that had ended otherwise; the maintenance run ended it.
+
 **Fix:** Give the user back what they lack (re-enable them, restore
 `workflow.launch`, or operator access to the step's project), or let a user
 who may operate every job step launch the workflow again. For a trigger,
 revoke its token and generate a new one as such a user. For a missing job
-template or approval rule, edit the workflow and replace the step; for an
-unknown step type, remove the step and add it again with its type.
+template or approval rule, or a branch to a removed step, remove the step
+and add it again with its target and branches, after the workflow's runs
+finished or were canceled (see
+[Changing workflow steps is refused](#changing-workflow-steps-is-refused));
+only admins change the steps of a workflow with an approval step or a job
+step whose job template has an approval rule. For an
+unknown step type, remove the step and add it again with its type. For a
+closed gate, set the step's On Failure branch to the step that should follow
+a rejection, if the workflow should go on; for too few approvers, an admin
+adds approvers to the rule. Then launch the workflow again.
+
+## Workflow launch refused
+
+**Symptom:** Launching a workflow shows `Launch failed: ` and the reason,
+`POST /api/v1/workflow-templates/{id}/launch` answers `422` with it, and
+`/trigger/fire-workflow` answers `422` with `{"error": "..."}`. No run is
+created.
+
+**Cause and fix:**
+
+- `The extra vars must be a JSON object, such as {"env": "prod"}.`: the
+  launch extra vars are a list, a number, a text that is no JSON object,
+  `true` or `false`. Send an object, or leave them out: `null`, an empty
+  text and `{}` mean none.
+- `The extra vars cannot be stored: they contain a number too large for JSON.`,
+  `... characters that are not valid UTF-8.` or
+  `The extra vars cannot be stored as JSON.` (and the same with
+  `The password answers cannot be stored: `): see
+  [Launch or save refused: a number too large for JSON](#launch-or-save-refused-a-number-too-large-for-json).
+- `The extra vars are too large: a run stores at most 65535 bytes of them as JSON.`:
+  send fewer or shorter extra vars.
+- `The value of "db_password" is the placeholder $encrypted$; send the real value.`:
+  `db_password` is a password field of the job template of one of the job
+  steps; see
+  [Launch refused: password answer is the placeholder](#launch-refused-password-answer-is-the-placeholder).
+- `Workflow template #5 has no steps.`: add steps first. A workflow trigger
+  answered `500` `Launch failed.` for it before.
+- `Workflow template #5 was deleted.`: the workflow was deleted while it was
+  being launched.
+- `Step "Release approval": approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide. An admin can add approvers to the rule.`:
+  see [Launch refused: too few approvers besides the launcher](#launch-refused-too-few-approvers-besides-the-launcher).
+- `Step "Release approval": its approval rule no longer exists. An admin can choose another rule.`:
+  the approval step has no rule (see
+  [Workflow step failed without a job](#workflow-step-failed-without-a-job)).
+  An admin removes the step and adds it again with a rule.
+
+A refusal by team scoping answers `403` instead, as before.
+
+A database error is no refusal. The page shows `Launch failed: ` with the
+error's class, SQLSTATE and driver error code when the error escaped Yii's
+wrapping, such as
+`Launch failed: PDOException (SQLSTATE HY000, driver error 2006)`, and the
+error page otherwise; `POST /api/v1/workflow-templates/{id}/launch`
+answers `500` with the error's class and codes, such as
+`yii\db\Exception (SQLSTATE 40001, driver error 1213)`, and the application
+log has
+`Launch of workflow template #5 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213)`.
+No run was created, unless the error struck while the first step started:
+then the run has ended as failed. Launch again; for an error that repeats,
+see
+[A page or an API call fails with a server error](#a-page-or-an-api-call-fails-with-a-server-error).
+
+## Changing workflow steps is refused
+
+**Symptom:** Adding, removing or moving a step on a workflow's page, or
+`POST` or `PUT /api/v1/workflow-templates` with `steps`, is refused. The
+page shows the message (after `Step not added: ` for a new step) or an
+error page (`403`); the API answers with the status in brackets:
+
+- `Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.`
+  (`409`, with every such run in `error.workflow_job_ids`): a run reads the
+  steps at every step it reaches, so the steps stay as they are while a run
+  of the workflow is running. The workflow's page names the runs and hides
+  the step controls. Wait for them, or cancel them. A run that never
+  finishes, for example one whose step records an older release deleted,
+  blocks the steps until it is canceled; the eighth query under
+  [updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows)
+  lists such runs.
+- `Step "Build" was not removed: other steps route to it (#10 "Retry"). Remove those steps first, and add them again with other routes if you still need them.`:
+  a branch of another step leads to this one, and would fail the run.
+  Remove the steps it names first.
+- `Only admins may add approval steps: that needs approval-rule.update.`
+  (`403`): adding an approval step, or steps that include one, needs
+  `approval-rule.update`.
+- `This workflow has an approval step: only admins may change its steps (approval-rule.update).`
+  (`403`): every change of the steps of a workflow with an approval step
+  needs `approval-rule.update`, also a `steps` list with the same steps.
+  Users without it may still rename the workflow, launch it and manage its
+  trigger token.
+- `Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.`
+  (`403`): a gated job step, one whose job template has an approval rule, is
+  for admins, as an approval step is: its job runs as the user who starts
+  the workflow, who never approves it, so whoever chose the step could
+  approve it alone. The add-step form offers users without
+  `approval-rule.update` only job templates without an approval rule.
+- `This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).`
+  (`403`): the workflow has a gated job step, so every change of its steps
+  needs `approval-rule.update`, as for an approval step. This holds as well
+  when the job template got its approval rule after the step was added.
+  Ask an admin to make the change. Such a step stays as it was added: its
+  job runs as the user who starts the run, and the user who added it may
+  approve it, so an admin reviews it, and removes it if it should not be
+  there (see
+  [updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows),
+  **Only admins change what a gated job template runs**).
+- `Step not added: An approval step needs an approval rule.`, or
+  `Step not added: The selected approval rule does not exist.`: choose an
+  existing rule for the approval step. The API answers
+  `steps[1]: An approval step needs approval_rule_id, the ID of an approval rule.`
+  or `Approval rule(s) not found: #9.` (`422`).
+- `Step not added: An approval step cannot have an Always branch: a rejection would continue past it.`:
+  approval steps have no Always branch; use On Success and On Failure.
+- `Step not added: The selected step is not part of this workflow.`: a
+  branch names a step of another workflow, or one that was removed
+  meanwhile; choose a step of this workflow.
+
+## Deleting a workflow template: runs could not be canceled
+
+**Symptom:** Deleting a workflow template warns
+`Workflow template "Release web" deleted. 1 running run(s) were canceled; 1 could not be canceled, the maintenance run retries them (see the application log).`,
+and `DELETE /api/v1/workflow-templates/{id}` answers with `failed_runs`
+above 0.
+
+**Cause:** The template is deleted, and its running runs are canceled one
+after the other. Canceling one of them failed, for example on a database
+error; the others were canceled all the same. The application log has
+`Canceling run #12 of deleted workflow template #5 failed: ...` with the
+class of the error, its SQLSTATE and the driver's error code (see
+[Approval timeouts or the deleted-template sweep keep failing](#approval-timeouts-or-the-deleted-template-sweep-keep-failing)).
+Such a run can still show as running, or show as canceled while the job of
+one of its steps still waits: no runner starts that job, and its approval
+request takes no more votes.
+
+**Fix:** None needed: every ten minutes the maintenance run cancels the
+running runs of deleted workflow templates, and the jobs that ended runs
+left waiting. To cancel a run that still shows as running at once, use
+**Cancel** on its page; a waiting job of a run that shows as canceled can
+be canceled on the job's page.
+
+## Canceling or resuming a workflow run fails with a database error
+
+**Symptom:** **Cancel** or **Resume** on the page of a workflow run shows
+`Canceling workflow run #12 failed with a database error; see the application log. Load the run again: a run that still runs can be canceled again; for a canceled run, the maintenance run ends its steps and cancels their waiting jobs.`
+or
+`Resuming workflow run #12 failed with a database error; see the application log. Load the run again: a pause step that still waits can be resumed again.`,
+and `POST /api/v1/workflow-jobs/{id}/cancel` or `/resume` answers `500`
+with it. Before the update to approvals and workflows, such an error
+answered a bare server error.
+
+**Cause:** A database error, such as a deadlock, a lock wait timeout or a
+lost connection. The application log of the app container
+(`runtime/logs/app.log`) has, for example,
+`Workflow run #12: the cancel failed with a database error: yii\db\Exception (SQLSTATE 40001, driver error 1213).`
+(`the resume` for a resume): the class of the error, its SQLSTATE and the
+driver's error code, never the statement. What the error left depends on
+where it struck. A cancel that failed before it claimed the run left the
+run running; one that failed after left it canceled, with steps that can
+still show as running and jobs that can still wait. A resume that failed
+before it moved the pause step on left the step waiting; one that failed
+later left the run where it stopped.
+
+**Fix:** Load the run again, on its page or with
+`GET /api/v1/workflow-jobs/{id}`. Cancel a run that still runs again, or
+resume a pause step that still waits again. For a run that shows canceled,
+nothing: no runner starts its waiting jobs, and the maintenance run ends
+its steps and cancels the jobs (see
+[A job was canceled without anyone canceling it](#a-job-was-canceled-without-anyone-canceling-it)).
+A run that stopped after a resume can be canceled.
+
+## A notification was not sent
+
+**Symptom:** A notification does not arrive, for example the email or the
+webhook call of a failed job.
+
+**Cause:** Every send of a notification template writes an audit entry:
+`notification.dispatched`, or `notification.failed` with the `error` of the
+channel, such as the HTTP status a webhook endpoint answered, or that the
+mailer could not send an email. The application log of the container that
+sent it (the app container for the web UI, the API and runner reports, the
+schedule-runner for schedules and the maintenance run, the queue-worker for
+project syncs) has the same error, for example
+`NotificationDispatcher: failed to send notification #3 (webhook) for job.failed: ...`.
+A database error is written to both only as its class, SQLSTATE and driver
+error code, for example
+`yii\db\Exception (SQLSTATE HY000, driver error 2006)`: its message
+carries the SQL statement with its values, which the `notification.failed`
+entry and the log line held before the update to approvals and workflows.
+When the notification templates of a workflow event cannot even be read,
+no audit entry is written; the log has
+`Workflow job #12: the workflow.step_failed notification failed: yii\db\Exception (SQLSTATE HY000, driver error 2006).`,
+and the run goes on.
+
+**Fix:** For a channel error, check the channel's settings on the
+notification template (for email also the
+[mail settings](installation.md#email--notifications) of the installation),
+then use **Send Test** on its page. When the channel does not take the test
+message, the page shows `Test notification failed: ` and the channel's
+error as an error, for example `WebhookChannel: HTTP 404 — ...` with the
+start of the endpoint's answer, or `WebhookChannel: HTTP 0 — ` when nothing
+answered; `POST /api/v1/notification-templates/{id}/test` answers `502` with
+`Test failed: ` and the same error. Before the update to approvals and
+workflows the test said `Test notification sent successfully.` whatever the
+channel answered. Like every send, the test writes its
+`notification.dispatched` or `notification.failed` audit entry. For a
+database error, see
+[Approval timeouts or the deleted-template sweep keep failing](#approval-timeouts-or-the-deleted-template-sweep-keep-failing)
+for what the SQLSTATE and the driver's error code mean. A notification that
+failed is not sent again.
+
+## Approval timeouts or the deleted-template sweep keep failing
+
+**Symptom:** Approval requests stay **Pending** after they expired, or
+waiting jobs and running runs of deleted templates, or jobs that canceled
+workflow runs left waiting, are not canceled. `docker compose logs
+schedule-runner` does not say why: the maintenance run prints only the
+tasks that did something, and counts the cancels that failed (`failed_runs`,
+`stranded_jobs_failed`) without a reason. The application log has lines
+such as:
+
+- `Approval timeout of request #12 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213).`
+- `Approval request #12 was settled by its timeout, but the audit entry, notification or workflow advance after it failed: yii\db\Exception (SQLSTATE HY000, driver error 2006).`
+- `MaintenanceService: applying approval timeouts stopped after an error (yii\db\Exception); the next run retries.`
+- `MaintenanceService: the sweep of deleted job and workflow templates stopped after an error (yii\db\Exception); the next run retries.`
+- `Canceling job #42 of deleted job template #15 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213); the maintenance run retries while the job waits.`
+- `Canceling run #12 of deleted workflow template #5 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213); the maintenance run cancels the run, or the jobs it left.`
+- `Run #12 was canceled, but ending its step #31 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213); no runner takes the step's job, and the maintenance run ends the step and cancels the job.`
+- `Canceling stranded job #42 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213); the next maintenance run retries.`
+- `Ending step #31 of ended run #12 failed: yii\db\Exception (SQLSTATE 40001, driver error 1213); the next maintenance run retries.`
+
+The lines of the maintenance run are in the application log of the
+schedule-runner, those of a delete or a cancel in the web UI or the API in
+the app container's. In a git checkout both write `runtime/logs/app.log`.
+With the prebuilt images, the log is inside each container:
+
+```bash
+docker compose exec schedule-runner grep -e 'Approval timeout of request' -e 'settled by its timeout' -e 'MaintenanceService:' -e 'Canceling ' -e 'was canceled, but' -e 'Ending step' /var/www/runtime/logs/app.log
+docker compose exec app grep -e 'Canceling ' -e 'was canceled, but' /var/www/runtime/logs/app.log
+```
+
+**Cause:** A database error. The lines name its class, its SQLSTATE and the
+driver's error code, never the statement, which can carry values: SQLSTATE
+`40001` with `1213` is a deadlock and `1205` a lock wait timeout, which
+usually pass; `HY000` with `2006` is a lost connection to the database.
+
+- A timeout that failed is undone and tried again at the next run, a minute
+  later, before the other expired requests. A request whose timeout keeps
+  failing stays first and keeps its job waiting.
+- A timeout that was applied, but whose audit entry, notification or next
+  workflow step failed afterwards, is not tried again: the request is
+  settled, and a workflow run that waited for it stays at its step.
+- When a whole task stopped (`MaintenanceService: ...`), the approval
+  timeouts run again a minute later, and the sweep at its next turn, ten
+  minutes later.
+- A job or run whose cancel failed keeps waiting or running, and the next
+  run tries again, a minute later. No runner starts a job of a deleted job
+  template or of a workflow run that has ended meanwhile, and an approval
+  of such a job is refused: the vote, or the timeout, closes its request
+  and cancels the job instead. `DELETE /api/v1/job-templates/{id}` does
+  not count the jobs whose cancel failed, and
+  `DELETE /api/v1/workflow-templates/{id}` counts the runs as
+  `failed_runs`.
+
+**Fix:** For a deadlock or a lock wait timeout, nothing: the next run tries
+again. For an error that repeats, look into the database with the SQLSTATE
+and the driver's error code (its own log, free space, the connection). A
+request whose timeout keeps failing ends when its job is canceled on the
+job's page: the request is closed as canceled. A workflow run that stays at
+its step because what followed its timeout failed does not go on by
+itself: cancel it and launch it again.
+
+## A job was canceled without anyone canceling it
+
+**Symptom:** A job shows **Canceled**, and its `job.canceled` audit entry
+has no user and the reason `template_deleted`, `workflow_canceled`,
+`workflow_template_deleted` or `approval_request_missing`.
+
+**Cause:** The maintenance run cancels jobs that wait for something that can
+never come: the waiting jobs of a deleted job template
+(`template_deleted`); the waiting jobs whose job template is gone, five
+minutes after they were created, as releases up to 2.9.0 removed the
+deleted job templates of a deleted project with their jobs still waiting
+(`template_deleted`; the job shows no job template); the jobs a workflow
+run left waiting when canceling the run, or deleting its workflow template,
+could not cancel them (`workflow_canceled`, `workflow_template_deleted`);
+and jobs that have waited for approval for five minutes or more without an
+approval request, which releases up to 2.9.0 left when a rule was deleted
+while it had pending requests (`approval_request_missing`). A workflow step
+that waited for such a job fails with it (see
+[Workflow step failed without a job](#workflow-step-failed-without-a-job)).
+Deleting a project now cancels the waiting jobs of its deleted job
+templates itself, with the user who deleted it, before it removes them.
+
+A vote or a timeout on the approval request of such a job cancels it as
+well, with the same reason, and names the voter as the user of the
+`job.canceled` entry (nobody for a timeout).
+
+**Fix:** None: the job could not run. Launch its job template again if it
+should still run.
 
 ## Trigger answers 403 "Launch refused."
 
@@ -350,10 +926,13 @@ Give the new token to the system that calls the trigger, to send in the
   versions.
 - **`422`** with `{"error": "..."}`: the job template refused the launch, see
   [Launch refused: password answer is the placeholder](#launch-refused-password-answer-is-the-placeholder),
-  [Launch refused: a password field needs another name](#launch-refused-a-password-field-needs-another-name)
-  and [Launch or save refused: a number too large for JSON](#launch-or-save-refused-a-number-too-large-for-json).
-  A workflow trigger answers `201` instead, and its run fails at the start
-  step with the reason (see [Workflow step failed without a job](#workflow-step-failed-without-a-job)).
+  [Launch refused: a password field needs another name](#launch-refused-a-password-field-needs-another-name),
+  [Launch or save refused: a number too large for JSON](#launch-or-save-refused-a-number-too-large-for-json)
+  and [Launch refused: too few approvers besides the launcher](#launch-refused-too-few-approvers-besides-the-launcher).
+  A workflow trigger answers `422` for the reasons under
+  [Workflow launch refused](#workflow-launch-refused), and creates no run;
+  a job step that is refused later, when the run reaches it, fails with
+  the reason (see [Workflow step failed without a job](#workflow-step-failed-without-a-job)).
 
 **Fix:** Call `POST /trigger/fire` (or `/trigger/fire-workflow`) with the
 token in the header:
@@ -375,18 +954,40 @@ notification, if one is set up, says for example
 `Schedule #12 (Nightly deploy) not launched: user #7, whom it runs as, is not an active user allowed to launch job template #15.`
 or `... has no operator access to the project of job template #15.`
 
-**Cause:** A schedule launches its job template as the user who created it.
-At every due time Ansilume checks that this user is active, holds
-`job.launch` and may operate the template's project, with or without teams.
-A refused schedule stays enabled and moves on to its next due time, where the
-check runs again.
+**Cause:** A schedule launches its job template as the user it runs as: the
+user who last changed its job template, cron expression, timezone or extra
+vars, or enabled it; its creator until then. At every due time Ansilume
+checks that this user is active, holds `job.launch` and may operate the
+template's project, with or without teams. A refused schedule stays enabled
+and moves on to its next due time, where the check runs again.
 
 **Fix:** Re-enable the user, or give them back `job.launch` or operator access
-to the project. Otherwise recreate the schedule as a user who may launch the
-template and delete the old one: the creator of a schedule cannot be changed,
-and editing the schedule keeps it. The schedule page shows the creator under
-**Created by**, and the API returns it as `created_by` of
-`GET /api/v1/schedules/{id}`.
+to the project. Otherwise let a user who may launch the template disable and
+enable the schedule, or change what or when it runs: the schedule then runs
+as that user. Renaming it, or saving it without a change, keeps the user it
+runs as. The schedule page shows that user under **Runs as**, and the API
+returns it as `created_by` of `GET /api/v1/schedules/{id}`.
+
+## Schedule cannot be enabled: its job template was deleted
+
+**Symptom:** **Enable** on a schedule shows
+`Schedule "Nightly deploy" was not enabled: its job template #15 was deleted. Edit the schedule to choose another job template, or delete it.`,
+and `POST /api/v1/schedules/{id}/toggle` answers `422` with it. Or a
+schedule was disabled without anyone disabling it, and the
+`schedule.failed_to_launch` notification said
+`Job template #15 was deleted; the schedule was disabled.`
+
+**Cause:** A deleted job template can never run again. Deleting a template
+disables its schedules, a due schedule of a deleted template disables
+itself, and the maintenance run disables the schedules of templates deleted
+before the update to approvals and workflows. The `schedule.toggled` audit
+entry has `reason: template_deleted`, and no user when the system disabled
+the schedule. Before, such a schedule stayed enabled and failed at every due
+time with `Job template not found for schedule #12`.
+
+**Fix:** Edit the schedule, choose another job template and enable it, or
+delete the schedule. Saving it while it still points at the deleted template
+fails with `The selected job template does not exist.`
 
 ## Schedule fails: stored password answers cannot be decrypted
 
@@ -447,13 +1048,47 @@ launches nothing:
   runs on the project and inventory the job ran with.
 - `The original job's encrypted survey answers cannot be decrypted; launch the template and enter the password answers.`:
   `APP_SECRET_KEY` changed since the job ran.
-- `Re-launch failed: ...`: the launch itself failed, with the reason.
+- `Re-launch failed: ...`: the launch itself failed, with the reason, for
+  example an approval rule with too few approvers besides you (see
+  [Launch refused: too few approvers besides the launcher](#launch-refused-too-few-approvers-besides-the-launcher)).
+  A re-launch runs as you, so you never approve it.
 
 A user who gets `403` lacks `job.launch`, which re-launch needs since this
 release; `job.cancel` was enough before.
 
 **Fix:** Launch the job template from its launch page and enter the password
 answers, or give the user `job.launch`.
+
+## Saving a job template is refused: it has an approval rule
+
+**Symptom:** Saving a job template, in its edit form or with
+`PUT /api/v1/job-templates/{id}`, is refused with
+`This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.`
+(an error page in the web UI, `403` from the API), and nothing is saved.
+The template page and the edit form say
+`This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may still change its name and description, launch it and manage its trigger token.`,
+and the form shows every field but the name and the description disabled.
+
+**Cause:** The template has an approval rule, and you lack
+`approval-rule.update`. A schedule, a trigger or a workflow launches the
+template's jobs as the user it runs as, who never approves them: if you
+could change what the template runs, you could approve alone what you
+chose. Every field but the name and the description counts: the project,
+inventory, playbook, credentials and their order, extra vars, survey,
+runner group, timeout and the Ansible settings. A field sent with the value
+it has is no change, so a client may send back what
+`GET /api/v1/job-templates/{id}` returned with a new name. The save checks
+the template as it is at that moment, so such a change is refused as well
+when the form was opened before an admin gave the template its rule.
+
+**Fix:** Ask an admin to make the change. Rename the template or change its
+description yourself, and launch it, clone it or manage its trigger token
+as before. Deleting it needs `job-template.delete`, as before, which the
+operator role does not grant. A clone keeps the rule, so it is locked for
+you as well. A change of the rule itself is refused with
+`Only admins may assign or remove an approval rule: that needs approval-rule.update.`
+first; see
+[updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows).
 
 ## Saving a job template fails: survey rules
 
@@ -672,6 +1307,47 @@ and restart the process; dev checkout: `docker compose up -d
 migrations). Without `runner-group.view` the card shows only how many runners
 are affected.
 
+## Deleting a project is refused
+
+**Symptom:** Deleting a project shows
+`Cannot delete "web": 1 job template(s) still reference this project. Remove or reassign them first.`
+as an error, `DELETE /api/v1/projects/{id}` answers `422` with it, and the
+project stays.
+
+**Cause:** Job templates that are not deleted belong to the project.
+Deleted job templates do not count: the delete removes them with the
+project, after it canceled their waiting jobs. A job template created in
+the project, or moved into it, while the delete ran counts too: the
+database refuses the delete then, and the templates are counted again.
+Until the update to approvals and workflows such a template was deleted
+together with the project.
+
+**Fix:** Delete the job templates of the project, or move them to another
+project, then delete it again. Moving a job template with an approval rule
+to another project is for admins (see
+[Saving a job template is refused: it has an approval rule](#saving-a-job-template-is-refused-it-has-an-approval-rule)).
+
+## Deleting a runner group is refused
+
+**Symptom:** Deleting a runner group shows
+`Cannot delete "eu-west": 2 runner(s) still belong to this group.` or
+`Cannot delete "eu-west": 3 job template(s) reference this group.` as an
+error, `DELETE /api/v1/runner-groups/{id}` answers `422` with it, and the
+group stays.
+
+**Cause:** Runners belong to the group, or job templates use it; deleted job
+templates do not count. Deleting the group would delete its runners and
+take it off the templates, and no runner claims the jobs of a template
+without a runner group. The API refused such a delete already; the web UI
+deleted the group until the update to approvals and workflows.
+
+**Fix:** Move the runners to another group, with **Move** on the group's
+page or `POST /api/v1/runners/{id}/move`, or delete them, and choose
+another runner group for every job template that uses the group; then
+delete it. Changing the runner group of a job template with an approval
+rule is for admins (see
+[Saving a job template is refused: it has an approval rule](#saving-a-job-template-is-refused-it-has-an-approval-rule)).
+
 ## Runner group page warns about plain HTTP
 
 **Symptom:** A runner shows "Plain HTTP" in the Transport column, and the
@@ -761,6 +1437,51 @@ Runners that start during this window see the same 502 from nginx. They log
 `Server is not ready for runner registration yet ... retrying in 5s` and keep
 trying for about a minute before giving up and letting the container restart
 policy retry — no action is needed as long as the app container comes up.
+
+## A page or an API call fails with a server error
+
+**Symptom:** A page shows the error page with `500`, an API call answers
+`500` in the framework's shape (`"status": 500`), or a console command
+stops with `Error: ` and one line (with debug mode, with the whole error),
+for example in `docker compose logs schedule-runner`.
+
+**Cause:** An error that nothing in Ansilume caught. The application log of
+the container that ran the code has it, with its file, line and stack
+trace: the app container for the web UI and the API, the schedule-runner
+for schedules and the maintenance run, the queue-worker for project syncs.
+In a git checkout they all write `runtime/logs/app.log`;
+with the prebuilt images, the log is inside each container, for example:
+
+```bash
+docker compose exec app tail -n 200 /var/www/runtime/logs/app.log
+```
+
+A database error is written without its message, which would carry the SQL
+statement with its values: by its class, SQLSTATE and driver error code,
+for example `yii\db\Exception (SQLSTATE 40001, driver error 1213)`, also
+when another error wraps it; that one follows after `Next`, as its class
+and `(message withheld: it wraps a database error)`. A connection that
+failed or was lost also shows the driver's text, such as
+`yii\db\Exception (SQLSTATE HY000, driver error 2002): Connection refused`.
+Without debug mode (`YII_DEBUG`), a console command prints such an error
+as one line, such as
+`Error: RuntimeException (message withheld: it wraps a database error); caused by yii\db\Exception (SQLSTATE 40001, driver error 1213)`;
+with debug mode it prints the whole error, its message with the statement
+and its values included, while the application log leaves the message out
+in both modes. Before the update to approvals and workflows the log and
+the one line held the statement with its values (see
+[updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows)).
+
+**Fix:** SQLSTATE `40001` with driver error `1213` is a deadlock and `1205`
+a lock wait timeout, which usually pass: try again. `HY000` with `2002` or
+`2006` is a database that cannot be reached or a lost connection: check the
+`db` container, or your external database, and the database settings. For
+any other error, the class, the file and the line say where it struck; the
+stack trace shows the calls without their arguments. Debug mode
+(`YII_DEBUG`) shows the messages of errors on the error page, in the
+API's answers and in what console commands print, where they can hold
+values: never turn it on in production (see
+[installation.md](installation.md)).
 
 ## Health endpoint reports unhealthy
 

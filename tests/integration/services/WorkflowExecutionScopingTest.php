@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\models\ApprovalRule;
 use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobTemplate;
@@ -167,7 +168,7 @@ class WorkflowExecutionScopingTest extends DbTestCase
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
-        $this->swap('jobLaunchService', new class extends JobLaunchService {
+        $this->swap('jobLaunchService', new class () extends JobLaunchService {
             public function launch(JobTemplate $template, int $launchedBy, array $overrides = []): Job
             {
                 throw new \RuntimeException('Failed to create job: {"limit":["too long"]}');
@@ -183,19 +184,24 @@ class WorkflowExecutionScopingTest extends DbTestCase
 
     /**
      * Regression: an approval step without a rule failed the step but left
-     * the workflow running forever.
+     * the workflow running forever. A launch now refuses such a step up
+     * front; one whose rule is gone by the time the run reaches it still
+     * fails the workflow.
      */
     public function testAnApprovalStepWithoutARuleFailsTheWorkflow(): void
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowTemplate($s['admin']->id);
-        $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_APPROVAL);
-
+        $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_PAUSE);
+        $approval = $this->ruledApprovalStep($s, $workflow, 1);
         $run = $this->service()->launch($workflow, $s['member']->id);
+        $this->dropRule($approval);
+
+        $this->service()->resume($run, $s['member']->id);
 
         $run->refresh();
         $this->assertSame(WorkflowJob::STATUS_FAILED, $run->status);
-        $this->assertSame('The approval rule of this step no longer exists.', $this->stepOf($run, 0)->error_message);
+        $this->assertSame('The approval rule of this step no longer exists.', $this->stepOf($run, 1)->error_message);
     }
 
     // -- Resume and cancel ------------------------------------------------------
@@ -339,16 +345,19 @@ class WorkflowExecutionScopingTest extends DbTestCase
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowTemplate($s['admin']->id);
-        $approval = $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_APPROVAL);
-        $this->createWorkflowStep($workflow->id, 1, WorkflowStep::TYPE_PAUSE);
-        $branch = $this->createWorkflowStep($workflow->id, 2, WorkflowStep::TYPE_JOB, $s['open']->id);
+        $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_PAUSE);
+        $approval = $this->ruledApprovalStep($s, $workflow, 1);
+        $this->createWorkflowStep($workflow->id, 2, WorkflowStep::TYPE_PAUSE);
+        $branch = $this->createWorkflowStep($workflow->id, 3, WorkflowStep::TYPE_JOB, $s['open']->id);
         $this->branch($approval, 'on_failure_step_id', $branch);
-
         $run = $this->service()->launch($workflow, $s['member']->id);
+        $this->dropRule($approval);
 
-        $this->assertSame('The approval rule of this step no longer exists.', $this->stepOf($run, 0)->error_message);
+        $this->service()->resume($run, $s['member']->id);
+
+        $this->assertSame('The approval rule of this step no longer exists.', $this->stepOf($run, 1)->error_message);
         $this->assertEndedBefore($run, $branch);
-        $this->assertEndedBefore($run, $this->stepAt($workflow, 1));
+        $this->assertEndedBefore($run, $this->stepAt($workflow, 2));
         $this->assertSame(0, (int)Job::find()->where(['job_template_id' => $s['open']->id])->count());
     }
 
@@ -385,6 +394,32 @@ class WorkflowExecutionScopingTest extends DbTestCase
     {
         $this->swapped[] = [$id, \Yii::$app->get($id)];
         \Yii::$app->set($id, $service);
+    }
+
+    /**
+     * An approval step at $order whose rule the outsider (an operator, not
+     * the launcher) may decide, so the launch lets it through.
+     *
+     * @param array{member: User, admin: User, outsider: User, own: JobTemplate, viewed: JobTemplate, foreign: JobTemplate, open: JobTemplate} $s
+     */
+    private function ruledApprovalStep(array $s, WorkflowTemplate $workflow, int $order): WorkflowStep
+    {
+        $rule = $this->createApprovalRule(
+            (int)$s['admin']->id,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            (string)json_encode(['user_ids' => [(int)$s['outsider']->id]])
+        );
+
+        return $this->createWorkflowStep((int)$workflow->id, $order, WorkflowStep::TYPE_APPROVAL, null, (int)$rule->id);
+    }
+
+    /**
+     * The step loses its rule while a run waits before it, as a step saved
+     * without one (or cleared by migration m000083) has none.
+     */
+    private function dropRule(WorkflowStep $step): void
+    {
+        WorkflowStep::updateAll(['approval_rule_id' => null], ['id' => $step->id]);
     }
 
     private function secondTemplateIn(JobTemplate $sibling, int $createdBy): JobTemplate

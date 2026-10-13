@@ -190,14 +190,14 @@ class ProjectController extends BaseController
 
         /** @var ProjectDeletionService $deletion */
         $deletion = \Yii::$app->get('projectDeletionService');
-        $templateCount = $deletion->blockingTemplateCount($model);
-        if ($templateCount > 0) {
-            $this->session()->setFlash('danger', $deletion->refusalMessage($model, $templateCount));
+        $name = $model->name;
+        // Refused while active job templates reference the project, also
+        // when one was created while the delete ran.
+        $refusal = $deletion->delete($model);
+        if ($refusal !== null) {
+            $this->session()->setFlash('danger', $refusal);
             return $this->redirect(['view', 'id' => $id]);
         }
-
-        $name = $model->name;
-        $deletion->delete($model);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_DELETED, 'project', $id, null, ['name' => $name]);
         $this->session()->setFlash('success', "Project \"{$name}\" deleted.");
         return $this->redirect(['index']);

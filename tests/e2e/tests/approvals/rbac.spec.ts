@@ -1,6 +1,18 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
 import { forgePost, indexRows, rowsWhere } from '../../lib/scoping';
+import {
+  GATED_TEMPLATE,
+  LAUNCHER_REFUSED,
+  cancelJob,
+  decisionForms,
+  decisionRows,
+  expectClosedRequest,
+  flash,
+  launchTemplate,
+  requestOfJob,
+  waitingForApproval,
+} from '../../lib/approvals';
 
 /**
  * The viewer only sees the approval requests of jobs in their team's projects
@@ -49,5 +61,29 @@ test.describe('Approvals RBAC', () => {
 
     await page.goto(`/approval/view?id=${id}`);
     await expect(page.locator('#page-content table').first()).toContainText('Pending');
+  });
+
+  // commands/E2eApprovalSeeder.php: e2e-gated-template is in e2e-project,
+  // which e2e-operator's team operates; e2e-admin, the rule's other approver,
+  // decides on what e2e-operator launches. Regression: the launcher could
+  // approve their own job; this holds for operators as for admins.
+  test('operator launches a gated template, and as its launcher cannot decide on it', async ({ page }) => {
+    const jobId = await launchTemplate(page, GATED_TEMPLATE);
+    await expect(flash(page, 'info')).toHaveText(waitingForApproval(jobId));
+    const requestId = await requestOfJob(page, jobId);
+
+    await page.goto(`/approval/view?id=${requestId}`);
+    await expect(page.locator('#approval-launched-by')).toHaveText('e2e-operator');
+    await expect(page.locator('#approval-decision-note')).toHaveText(LAUNCHER_REFUSED);
+    await expect(decisionForms(page)).toHaveCount(0);
+    await forgePost(page, `/approval/approve?id=${requestId}`, {}, /\/approval\/approve/);
+    await expectForbidden(page);
+    await expect(page.locator('#page-content')).toContainText(LAUNCHER_REFUSED);
+
+    // Canceling the job closes its request.
+    await page.goto(`/job/view?id=${jobId}`);
+    await cancelJob(page);
+    await expectClosedRequest(page, requestId, 'Canceled');
+    await expect(decisionRows(page)).toHaveCount(0);
   });
 });

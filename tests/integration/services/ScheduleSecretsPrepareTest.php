@@ -406,6 +406,72 @@ class ScheduleSecretsPrepareTest extends DbTestCase
     // answers are #[\SensitiveParameter], at a save or at a launch, in every
     // method: tests/unit/SensitiveParametersTest.php (MARKED, MUST_BE_MARKED).
 
+    // -- answersChanged(): an answer entered anew or dropped --------------------
+
+    /**
+     * Whether a save stores an answer anew or drops one, which changes what
+     * the schedule runs (ScheduleRunAs): any value other than the
+     * placeholder counts as entered anew, even the stored one.
+     *
+     * @return array<string, array{0: string|null, 1: bool, 2: bool}>
+     */
+    public static function answerChangeProvider(): array
+    {
+        return [
+            'the placeholder' => ['{"app_env":"prod","db_password":"$encrypted$"}', true, false],
+            'other extra vars and the placeholder' => ['{"app_env":"stage","db_password":"$encrypted$"}', true, false],
+            'no extra vars sent' => [null, false, false],
+            'a new answer' => ['{"app_env":"prod","db_password":"' . self::NEW_ANSWER . '"}', true, true],
+            'the stored answer entered anew' => ['{"app_env":"prod","db_password":"' . self::ANSWER . '"}', true, true],
+            'the answer left out' => ['{"app_env":"prod"}', true, true],
+            'the extra vars cleared' => [null, true, true],
+        ];
+    }
+
+    /**
+     * @dataProvider answerChangeProvider
+     */
+    public function testAnswersChangedTellsWhetherAnAnswerWasEnteredAnewOrDropped(?string $extraVars, bool $submitted, bool $changed): void
+    {
+        $schedule = $this->storedSchedule();
+        if ($submitted) {
+            $schedule->extra_vars = $extraVars;
+        }
+        $secrets = new ScheduleSecrets();
+
+        $this->assertNull($secrets->prepare($schedule, $submitted));
+
+        $this->assertSame($changed, $secrets->answersChanged());
+    }
+
+    public function testAnAnswerOfANewScheduleIsEnteredAnew(): void
+    {
+        $secrets = new ScheduleSecrets();
+
+        $this->assertNull($secrets->prepare($this->newSchedule('{"db_password":"' . self::ANSWER . '"}'), true));
+
+        $this->assertTrue($secrets->answersChanged());
+    }
+
+    /**
+     * Each prepare() answers for itself: a refused one, and one after a
+     * prepare that changed an answer, report no change.
+     */
+    public function testAnswersChangedIsThatOfTheLastPrepare(): void
+    {
+        $secrets = new ScheduleSecrets();
+        $this->assertNull($secrets->prepare($this->scheduleWithANewAnswer(), true));
+        $this->assertTrue($secrets->answersChanged());
+
+        $this->assertNotNull($secrets->prepare($this->newSchedule('{"db_password":"$encrypted$"}'), true));
+        $this->assertFalse($secrets->answersChanged(), 'a refused prepare');
+
+        $this->assertNull($secrets->prepare($this->scheduleWithANewAnswer(), true));
+        $this->assertTrue($secrets->answersChanged());
+        $this->assertNull($secrets->prepare($this->storedSchedule(), false));
+        $this->assertFalse($secrets->answersChanged(), 'a prepare that keeps the answers');
+    }
+
     // -- Helpers ----------------------------------------------------------------
 
     private function newSchedule(?string $extraVars): Schedule
@@ -427,6 +493,17 @@ class ScheduleSecretsPrepareTest extends DbTestCase
     private function storedSchedule(): Schedule
     {
         return $this->createScheduleWithAnswers((int)$this->template->id, $this->userId, [self::SURVEY_PASSWORD_FIELD => self::ANSWER]);
+    }
+
+    /**
+     * A stored schedule whose submitted extra vars replace its answer.
+     */
+    private function scheduleWithANewAnswer(): Schedule
+    {
+        $schedule = $this->storedSchedule();
+        $schedule->extra_vars = '{"db_password":"' . self::NEW_ANSWER . '"}';
+
+        return $schedule;
     }
 
     /**

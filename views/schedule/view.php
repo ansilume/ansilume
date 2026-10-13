@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 use app\components\SurveySecrets;
 use app\helpers\ConfirmHelper;
+use app\services\ScheduleRunAs;
 use app\services\ScheduleSecrets;
 use yii\helpers\Html;
 use yii\helpers\Url;
@@ -74,10 +75,10 @@ $this->title = Html::encode($model->name);
                         <?= $model->last_run_at ? date('Y-m-d H:i:s', $model->last_run_at) . ' UTC' : 'Never' ?>
                     </dd>
 
-                    <dt class="col-sm-4">Created by</dt>
+                    <dt class="col-sm-4">Runs as</dt>
                     <dd class="col-sm-8">
-                        <?= Html::encode($model->creator->username ?? '—') ?>
-                        <div class="small text-muted" data-testid="schedule-runs-as">Scheduled jobs run as this user, and only while they may launch the job template.</div>
+                        <span id="schedule-runs-as"><?= Html::encode($model->creator->username ?? '—') ?></span>
+                        <div class="small text-muted" data-testid="schedule-runs-as"><?= Html::encode(ScheduleRunAs::VIEW_NOTE) ?></div>
                     </dd>
 
                     <dt class="col-sm-4">Created</dt>

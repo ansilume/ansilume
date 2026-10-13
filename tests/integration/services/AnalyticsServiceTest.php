@@ -623,10 +623,46 @@ class AnalyticsServiceTest extends DbTestCase
         $this->assertSame(2, $result['approved']);
         $this->assertSame(1, $result['rejected']);
         $this->assertSame(1, $result['timed_out']);
+        $this->assertSame(0, $result['canceled']);
         $this->assertSame(1, $result['pending']);
         // 2 approved / 3 decided (approved + rejected) = 66.67
         $this->assertSame(66.67, $result['approval_rate']);
         $this->assertGreaterThan(0, $result['avg_decision_seconds']);
+    }
+
+    /**
+     * Canceled requests (their job or run was canceled, or their template
+     * deleted, before anybody decided) are counted on their own and left out
+     * of the average decision time; timed-out requests count in it.
+     */
+    public function testApprovalSummaryCountsCanceledRequestsApartAndNotInTheDecisionTime(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+        $rule = $this->createApprovalRule($user->id);
+        $jobs = [];
+        for ($i = 0; $i < 4; $i++) {
+            $jobs[] = $this->createJob($tpl->id, $user->id);
+        }
+        $this->makeApprovalRequest($jobs[0]->id, $rule->id, ApprovalRequest::STATUS_APPROVED, 100);
+        $this->makeApprovalRequest($jobs[1]->id, $rule->id, ApprovalRequest::STATUS_TIMED_OUT, 300);
+        $this->makeApprovalRequest($jobs[2]->id, $rule->id, ApprovalRequest::STATUS_CANCELED, 5000);
+        $this->makeApprovalRequest($jobs[3]->id, $rule->id, ApprovalRequest::STATUS_CANCELED, 7000);
+
+        $result = $this->service->approvalSummary($this->makeQuery());
+
+        $this->assertSame(4, $result['total']);
+        $this->assertSame(2, $result['canceled']);
+        $this->assertSame(1, $result['approved']);
+        $this->assertSame(1, $result['timed_out']);
+        $this->assertSame(0, $result['pending']);
+        $this->assertSame(100.0, $result['approval_rate'], 'canceled requests are no decisions');
+        // (100 + 300) / 2: the canceled requests' 5000 and 7000 seconds are left out.
+        $this->assertEqualsWithDelta(200.0, $result['avg_decision_seconds'], 2.0);
+        $this->assertSame(
+            ['total', 'approved', 'rejected', 'timed_out', 'canceled', 'pending', 'approval_rate', 'avg_decision_seconds'],
+            array_keys($result),
+            'the CSV export takes its columns from these keys'
+        );
     }
 
     // ─── runner activity ────────────────────────────────────────────────

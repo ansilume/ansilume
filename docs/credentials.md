@@ -81,7 +81,12 @@ A credential in use is not deleted right away. The page offers
 **Delete anyway**, and the confirmation names how many templates,
 projects and waiting jobs use it. Deleting it detaches it from all of
 them, and waiting jobs that need it fail before they start. The audit
-log records the forced delete with those counts.
+log records the forced delete with those counts. Job templates with an
+approval rule lose the credential too, although only admins change what
+they run otherwise: deleting credentials (`credential.delete`) is for
+admins by default, keep it so (see
+[What an approval rule does not stop](updating.md#after-updating-from-290-or-older-approvals-and-workflows)
+in the update notes).
 
 Over the API, `DELETE /api/v1/credentials/{id}` answers `409` with
 `error.used_by` while the credential is in use. Repeat the request with
@@ -272,6 +277,15 @@ the vault password they were launched with. The assignment needs the
 offered for vault passwords with a usable secret. One request changes at
 most 500 job templates; "select all" selects the first 500, and a second
 round assigns the rest.
+
+A job template with an approval rule changes only for users with
+`approval-rule.update`, admins by default, as in its own form (see
+[updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows),
+**Only admins change what a gated job template runs**). For everyone else
+the list offers it too, but the assignment leaves it as it is and reports
+it as failed with
+`This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.`;
+the other templates are assigned.
 
 The API offers the same: `GET /api/v1/credentials/{id}/job-templates`
 lists the templates you may change, and `POST` with

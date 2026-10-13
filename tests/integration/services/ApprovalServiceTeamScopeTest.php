@@ -210,7 +210,9 @@ class ApprovalServiceTeamScopeTest extends DbTestCase
     private function requestFor(JobTemplate $template, array $approvers, int $required = 1): ApprovalRequest
     {
         $createdBy = (int)$template->created_by;
-        $job = $this->createJob((int)$template->id, $createdBy, Job::STATUS_PENDING_APPROVAL);
+        // Launched by a user who is no approver: the launcher's own decisions never count.
+        $launcher = (int)$this->createUser('launcher')->id;
+        $job = $this->createJob((int)$template->id, $launcher, Job::STATUS_PENDING_APPROVAL);
         return $this->service()->createRequest($job, $this->rule($createdBy, $approvers, $required));
     }
 

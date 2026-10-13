@@ -7,6 +7,8 @@ namespace app\controllers\api\v1;
 use app\models\AuditLog;
 use app\models\Schedule;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
+use app\services\ScheduleEnablement;
+use app\services\ScheduleRunAs;
 use app\services\ScheduleSecrets;
 use app\services\ScheduleService;
 use yii\data\ActiveDataProvider;
@@ -83,29 +85,31 @@ class SchedulesController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('job.launch')) {
+        if (!$this->userCan('job.launch')) {
             return $this->error('Forbidden.', 403);
         }
 
+        $userId = (int)\Yii::$app->user->id;
         $model = new Schedule();
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
         // Set in code only: the schedule launches its jobs as this user.
-        $model->created_by = (int)$user->id;
+        $model->created_by = $userId;
 
-        return $this->saveSchedule($model, (int)$user->id, AuditLog::ACTION_SCHEDULE_CREATED, 201, array_key_exists('extra_vars', $body));
+        return $this->saveSchedule($model, $userId, AuditLog::ACTION_SCHEDULE_CREATED, 201, array_key_exists('extra_vars', $body));
     }
 
     /**
+     * A change to what or when the schedule runs (job_template_id,
+     * cron_expression, timezone, extra_vars, a password answer sent anew or
+     * dropped) or enabled: true for a disabled schedule makes the caller the
+     * user the schedule runs as (created_by; see ScheduleRunAs).
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionUpdate(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('job.launch')) {
+        if (!$this->userCan('job.launch')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -125,9 +129,7 @@ class SchedulesController extends BaseApiController
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('job.launch')) {
+        if (!$this->userCan('job.launch')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -151,6 +153,11 @@ class SchedulesController extends BaseApiController
     }
 
     /**
+     * Enable a disabled schedule or disable an enabled one. Enabling a
+     * schedule whose job template was deleted answers 422
+     * (ScheduleEnablement::ENABLE_REFUSED) and changes nothing. Enabling
+     * makes the caller the user the schedule runs as (created_by).
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionToggle(int $id): array
@@ -160,19 +167,17 @@ class SchedulesController extends BaseApiController
         if ($userId === null || !$this->schedules()->canOperate($userId, $schedule)) {
             return $this->error('Forbidden.', 403);
         }
-        $schedule->enabled = !$schedule->enabled;
-        if ($schedule->enabled) {
-            $schedule->computeNextRunAt();
-        } else {
-            $schedule->next_run_at = null;
+        $enablement = new ScheduleEnablement();
+        $refusal = $enablement->toggle($schedule, $userId);
+        if ($refusal !== null) {
+            return $this->error($refusal, 422);
         }
-        $schedule->save(false, ['enabled', 'next_run_at', 'updated_at']);
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_SCHEDULE_TOGGLED,
             'schedule',
             $schedule->id,
             null,
-            ['name' => $schedule->name, 'enabled' => $schedule->enabled]
+            ['name' => $schedule->name, 'enabled' => $schedule->enabled] + $enablement->runAsContext()
         );
         return $this->success($this->serialize($schedule));
     }
@@ -188,6 +193,10 @@ class SchedulesController extends BaseApiController
      * (422) name the template's password fields. A body without extra_vars
      * keeps the stored extra vars and answers, unless the template changes.
      *
+     * An update that arms the schedule makes the caller the user it runs as
+     * in the same save (ScheduleRunAs); a new schedule runs as the caller
+     * already.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     private function saveSchedule(Schedule $model, int $userId, string $auditAction, int $status, bool $extraVarsSubmitted): array
@@ -201,11 +210,14 @@ class SchedulesController extends BaseApiController
         if (!$model->validate()) {
             return $this->error($this->firstError($model), 422);
         }
+        // Taken before prepare(), which drops the stored extra vars from the old attributes.
+        $runAs = new ScheduleRunAs($model);
         $secrets = new ScheduleSecrets();
         $secretsError = $secrets->prepare($model, $extraVarsSubmitted);
         if ($secretsError !== null) {
             return $this->error($secretsError, 422);
         }
+        $runAs->claim($userId, $secrets->answersChanged());
         if (!$model->save(false)) {
             return $this->error('Failed to save schedule.', 422);
         }
@@ -215,7 +227,7 @@ class SchedulesController extends BaseApiController
             'schedule',
             $model->id,
             null,
-            ['name' => $model->name, 'source' => 'api'] + $secrets->auditContext()
+            ['name' => $model->name, 'source' => 'api'] + $secrets->auditContext() + $runAs->auditContext()
         );
 
         return $this->success($this->serialize($model), $status);
@@ -265,7 +277,8 @@ class SchedulesController extends BaseApiController
     }
 
     /**
-     * created_by is the user the schedule launches its jobs as.
+     * created_by is the user the schedule launches its jobs as: its creator,
+     * or the user who last changed what or when it runs, or enabled it.
      *
      * @return array{id: int, name: string, job_template_id: int, cron_expression: string, timezone: string, extra_vars: string|null, enabled: bool, last_run_at: int|null, next_run_at: int|null, created_by: int, created_at: int, updated_at: int}
      */

@@ -84,16 +84,14 @@ class ProjectsController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('project.create')) {
+        if (!$this->userCan('project.create')) {
             return $this->error('Forbidden.', 403);
         }
 
         $model = new Project();
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
-        $model->created_by = (int)$user->id;
+        $model->created_by = (int)\Yii::$app->user->id;
         $model->status = 'new';
 
         if (!$model->validate()) {
@@ -128,9 +126,7 @@ class ProjectsController extends BaseApiController
      */
     public function actionUpdate(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('project.update')) {
+        if (!$this->userCan('project.update')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -175,9 +171,7 @@ class ProjectsController extends BaseApiController
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('project.delete')) {
+        if (!$this->userCan('project.delete')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -188,13 +182,13 @@ class ProjectsController extends BaseApiController
         }
         /** @var \app\services\ProjectDeletionService $deletion */
         $deletion = \Yii::$app->get('projectDeletionService');
-        $templateCount = $deletion->blockingTemplateCount($model);
-        if ($templateCount > 0) {
-            return $this->error($deletion->refusalMessage($model, $templateCount), 422);
-        }
-
         $name = $model->name;
-        $deletion->delete($model);
+        // Refused while active job templates reference the project, also
+        // when one was created while the delete ran.
+        $refusal = $deletion->delete($model);
+        if ($refusal !== null) {
+            return $this->error($refusal, 422);
+        }
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_PROJECT_DELETED,
@@ -212,9 +206,7 @@ class ProjectsController extends BaseApiController
      */
     public function actionSync(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('project.update')) {
+        if (!$this->userCan('project.update')) {
             return $this->error('Forbidden.', 403);
         }
 

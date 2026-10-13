@@ -29,9 +29,7 @@ class AuditLogsController extends BaseApiController
      */
     public function actionIndex(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.view')) {
+        if (!$this->userCan('user.view')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -74,9 +72,7 @@ class AuditLogsController extends BaseApiController
      */
     public function actionView(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('user.view')) {
+        if (!$this->userCan('user.view')) {
             return $this->error('Forbidden.', 403);
         }
         return $this->success($this->serialize($this->findModel($id)));

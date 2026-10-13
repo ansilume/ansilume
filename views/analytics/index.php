@@ -9,6 +9,7 @@ declare(strict_types=1);
 /** @var array<int, string> $templates */
 /** @var array<int, string> $users */
 
+use app\services\ApprovalAnalytics;
 use yii\helpers\Html;
 use yii\helpers\Json;
 use yii\helpers\Url;
@@ -464,41 +465,48 @@ $this->title = 'Analytics';
         <!-- Approvals -->
         <div class="tab-pane" id="tab-approvals">
             <?php $as = $data['approvalSummary']; ?>
-            <div class="row mb-3">
-                <div class="col-md-2">
-                    <div class="card text-center"><div class="card-body py-2">
+            <div class="row g-2 mb-3">
+                <div class="col-6 col-md">
+                    <div class="card text-center h-100"><div class="card-body py-2">
                         <div class="text-muted small">Total Requests</div>
                         <div class="fs-4 fw-bold"><?= Html::encode((string)$as['total']) ?></div>
                     </div></div>
                 </div>
-                <div class="col-md-2">
-                    <div class="card text-center"><div class="card-body py-2">
+                <div class="col-6 col-md">
+                    <div class="card text-center h-100"><div class="card-body py-2">
                         <div class="text-muted small">Approved</div>
                         <div class="fs-4 fw-bold text-success"><?= Html::encode((string)$as['approved']) ?></div>
                     </div></div>
                 </div>
-                <div class="col-md-2">
-                    <div class="card text-center"><div class="card-body py-2">
+                <div class="col-6 col-md">
+                    <div class="card text-center h-100"><div class="card-body py-2">
                         <div class="text-muted small">Rejected</div>
                         <div class="fs-4 fw-bold text-danger"><?= Html::encode((string)$as['rejected']) ?></div>
                     </div></div>
                 </div>
-                <div class="col-md-2">
-                    <div class="card text-center"><div class="card-body py-2">
+                <div class="col-6 col-md">
+                    <div class="card text-center h-100"><div class="card-body py-2">
                         <div class="text-muted small">Timed Out</div>
                         <div class="fs-4 fw-bold text-warning"><?= Html::encode((string)$as['timed_out']) ?></div>
                     </div></div>
                 </div>
-                <div class="col-md-2">
-                    <div class="card text-center"><div class="card-body py-2">
+                <div class="col-6 col-md">
+                    <div class="card text-center h-100"><div class="card-body py-2">
+                        <div class="text-muted small">Canceled</div>
+                        <div class="fs-4 fw-bold text-secondary" id="analytics-approvals-canceled"><?= Html::encode((string)$as['canceled']) ?></div>
+                    </div></div>
+                </div>
+                <div class="col-6 col-md">
+                    <div class="card text-center h-100"><div class="card-body py-2">
                         <div class="text-muted small">Approval Rate</div>
                         <div class="fs-4 fw-bold"><?= Html::encode((string)$as['approval_rate']) ?>%</div>
                     </div></div>
                 </div>
-                <div class="col-md-2">
-                    <div class="card text-center"><div class="card-body py-2">
+                <div class="col-6 col-md">
+                    <div class="card text-center h-100"><div class="card-body py-2">
                         <div class="text-muted small">Avg Decision Time</div>
-                        <div class="fs-4 fw-bold"><?= Html::encode((string)$as['avg_decision_seconds']) ?>s</div>
+                        <div class="fs-4 fw-bold" id="analytics-approvals-avg-decision"><?= Html::encode((string)$as['avg_decision_seconds']) ?>s</div>
+                        <div class="text-muted small" id="analytics-approvals-avg-decision-note"><?= Html::encode(ApprovalAnalytics::AVG_DECISION_NOTE) ?></div>
                     </div></div>
                 </div>
             </div>

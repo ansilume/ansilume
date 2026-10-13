@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace app\commands;
 
 use app\components\E2eConsoleGuard;
-use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Inventory;
 use app\models\JobTemplate;
@@ -202,12 +201,20 @@ class E2eController extends Controller
         $this->seedWorkflowStep($workflowTemplateId, $templateId, $approvalRuleId);
         $this->seedApprovalWorkflow($userId, $templateId, $approvalRuleId);
         $this->seedTeam($userId, $projectId);
+        // After the team: its launcher joins the teams of e2e-template's project.
+        (new E2eApprovalSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
+        (new E2eScheduleRunAsSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
+        (new E2eLockedTemplateSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
+        (new E2eDeletedTemplateApprovalSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
+        (new E2eFailingNotificationSeeder($logger))->seed($userId);
+        (new E2eRunnerGroupGuardSeeder($logger))->seed($userId, $templateId);
         $this->seedJobWithArtifacts($userId, $templateId);
         (new E2eLogStreamSeeder($logger))->seed($userId, $templateId);
         (new E2eWorkflowPausedSeeder($logger))->seed($userId, $templateId);
         (new E2eSurveyTemplateSeeder($logger))->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
         (new E2eTeamScopingSeeder($logger))->seed($userId, $runnerGroupId);
         (new E2eWorkflowScopingSeeder($logger))->seed($userId);
+        (new E2eWorkflowGateSeeder($logger))->seed($userId, $templateId);
         (new E2eCustomRoleSeeder($logger))->seed(self::PREFIX);
         (new E2eLdapUserSeeder($logger))->seed(self::PREFIX);
         (new E2eTotpUserSeeder($logger))->seed(self::PREFIX);
@@ -462,27 +469,16 @@ class E2eController extends Controller
         $this->stdout("  Created schedule (ID {$schedule->id}).\n");
     }
 
+    /**
+     * e2e-approval-rule, restored also when an earlier seed created it: the
+     * launcher never approves their own job, so e2e-admin needs a second
+     * approver (E2eApprovalSeeder::seedRule()).
+     */
     private function seedApprovalRule(int $userId): int
     {
-        $existing = ApprovalRule::find()->where(['name' => self::PREFIX . 'approval-rule'])->one();
-        if ($existing !== null) {
-            $this->stdout("  Approval rule already exists (ID {$existing->id}).\n");
-            return $existing->id;
-        }
-
-        $rule = new ApprovalRule();
-        $rule->name = self::PREFIX . 'approval-rule';
-        $rule->description = 'E2E test approval rule';
-        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
-        $rule->approver_config = (string)json_encode(['user_ids' => [$userId]]);
-        $rule->required_approvals = 1;
-        $rule->timeout_minutes = 60;
-        $rule->timeout_action = 'reject';
-        $rule->created_by = $userId;
-        $rule->save(false);
-
-        $this->stdout("  Created approval rule (ID {$rule->id}).\n");
-        return $rule->id;
+        return (new E2eApprovalSeeder(function (string $msg): void {
+            $this->stdout($msg);
+        }))->seedRule($userId);
     }
 
     private function seedWorkflowTemplate(int $userId): int

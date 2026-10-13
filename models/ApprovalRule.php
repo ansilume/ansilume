@@ -11,7 +11,7 @@ use yii\db\ActiveRecord;
  * @property int         $id
  * @property string      $name
  * @property string|null $description
- * @property int|null    $job_template_id
+ * @property int|null    $job_template_id      unused: job_template.approval_rule_id gates a template; set in code only
  * @property int         $required_approvals
  * @property int|null    $timeout_minutes
  * @property string      $timeout_action       reject or approve
@@ -34,6 +34,23 @@ class ApprovalRule extends ActiveRecord
     public const TIMEOUT_ACTION_REJECT = 'reject';
     public const TIMEOUT_ACTION_APPROVE = 'approve';
 
+    /**
+     * Shown on the rule form when the required approvals reach the number of
+     * approvers: the launcher's own approval never counts.
+     */
+    public const LAUNCHER_NOTE = 'The user who launches a job never approves it: a launch is refused '
+        . 'unless enough other approvers may decide.';
+
+    /** Validation message of an approver config that is no valid JSON; sprintf(): the attribute's label. */
+    public const INVALID_JSON = '%s must be valid JSON.';
+
+    /**
+     * Validation message of an approver config that is JSON, but no object
+     * (a list, a number, a string, null): it names no approvers.
+     * sprintf(): the attribute's label.
+     */
+    public const NOT_A_JSON_OBJECT = '%s must be a JSON object.';
+
     public static function tableName(): string
     {
         return '{{%approval_rule}}';
@@ -47,7 +64,9 @@ class ApprovalRule extends ActiveRecord
     public function rules(): array
     {
         return [
-            [['name', 'approver_type'], 'required'],
+            // approver_config has no default in the database: without it the
+            // insert failed with a server error instead of a validation error.
+            [['name', 'approver_type', 'approver_config'], 'required'],
             [['name'], 'string', 'max' => 128],
             [['description'], 'string', 'max' => 1000],
             [['required_approvals'], 'integer', 'min' => 1, 'max' => 50],
@@ -56,7 +75,10 @@ class ApprovalRule extends ActiveRecord
             [['approver_type'], 'in', 'range' => [self::APPROVER_TYPE_ROLE, self::APPROVER_TYPE_TEAM, self::APPROVER_TYPE_USERS]],
             [['approver_config'], 'string', 'max' => 4096],
             [['approver_config'], 'validateJson'],
-            [['job_template_id', 'created_by'], 'integer'],
+            // Set in code only: the creator is whoever creates the rule, and
+            // job_template_id never gated a template (job_template.approval_rule_id
+            // does), so a form must not set either.
+            [['!created_by', '!job_template_id'], 'integer'],
             [['required_approvals'], 'validateApproverCount'],
         ];
     }
@@ -101,13 +123,23 @@ class ApprovalRule extends ActiveRecord
         }
     }
 
+    /**
+     * The approver config is a JSON object, such as {"role": "operator"} or
+     * {} (no approvers chosen yet). A list or any other JSON value names no
+     * approvers, and the API documents the config as an object.
+     */
     public function validateJson(string $attribute): void
     {
-        if (!empty($this->$attribute)) {
-            json_decode((string)$this->$attribute);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                $this->addError($attribute, ucfirst($attribute) . ' must be valid JSON.');
-            }
+        $value = $this->$attribute;
+        if (!is_string($value) || $value === '') {
+            // The required and string rules report these.
+            return;
+        }
+        $decoded = json_decode($value);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->addError($attribute, sprintf(self::INVALID_JSON, $this->getAttributeLabel($attribute)));
+        } elseif (!$decoded instanceof \stdClass) {
+            $this->addError($attribute, sprintf(self::NOT_A_JSON_OBJECT, $this->getAttributeLabel($attribute)));
         }
     }
 
@@ -156,6 +188,10 @@ class ApprovalRule extends ActiveRecord
     }
 
     /**
+     * The approver config as an array with its keys; [] when it is empty,
+     * no valid JSON, or no JSON object (a list stored by an older version
+     * names no approvers either).
+     *
      * @return array<string, mixed>
      */
     public function getParsedConfig(): array
@@ -164,7 +200,7 @@ class ApprovalRule extends ActiveRecord
             return [];
         }
         $decoded = json_decode($this->approver_config, true);
-        return is_array($decoded) ? $decoded : [];
+        return is_array($decoded) && !array_is_list($decoded) ? $decoded : [];
     }
 
     public function getCreator(): ActiveQuery

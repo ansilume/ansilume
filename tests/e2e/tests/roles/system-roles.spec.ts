@@ -48,7 +48,7 @@ test.describe('System Roles', () => {
 
   test('attempting to POST delete for system role is blocked', async ({ page }) => {
     // Drive the delete endpoint directly via a POST form — the controller
-    // must refuse and redirect back to the view page with an error flash.
+    // must refuse and redirect back to the view page with a danger flash.
     await page.goto('/role/view/viewer');
     await page.evaluate(() => {
       const csrfMeta = document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement | null;
@@ -67,6 +67,10 @@ test.describe('System Roles', () => {
       form.submit();
     });
     await page.waitForLoadState('networkidle', { timeout: 10_000 });
+    // Regression: the refusal had the flash type "error", which rendered as
+    // the unstyled class alert-error instead of a red alert.
+    await expect(page.locator('#page-content > .alert-danger[role="alert"]')).toHaveText('Cannot delete system role "viewer".');
+    await expect(page.locator('#page-content > .alert-error')).toHaveCount(0);
     // Still exists.
     await page.goto('/role/index');
     await expect(page.locator('table.table')).toContainText('viewer');

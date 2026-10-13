@@ -358,16 +358,24 @@ if (logEl.scrollHeight > logEl.clientHeight) {
 </script>
 
 <?php if ($isLive) : ?>
+    <?php
+    // The poll shows a status as the page renders it: its label and colour
+    // for every job status, from the Job model.
+    $statusLabels = [];
+    $statusClasses = [];
+    foreach (Job::statuses() as $status) {
+        $statusLabels[$status] = Job::statusLabel($status);
+        $statusClasses[$status] = Job::statusCssClass($status);
+    }
+    ?>
 <script>
 (function () {
     var badgeEl   = document.getElementById('status-badge');
     var liveEl    = document.getElementById('live-indicator');
     var lastSeq   = <?= empty($logs) ? -1 : end($logs)->sequence ?>;
     var pollUrl   = <?= Json::htmlEncode(Url::to(['/job/log-poll', 'id' => $job->id])) ?>;
-    var statusClasses = {
-        pending: 'secondary', queued: 'secondary', running: 'primary',
-        succeeded: 'success', failed: 'danger', canceled: 'warning'
-    };
+    var statusLabels = <?= Json::htmlEncode($statusLabels) ?>;
+    var statusClasses = <?= Json::htmlEncode($statusClasses) ?>;
 
     function poll() {
         fetch(pollUrl + '&after=' + lastSeq)
@@ -380,7 +388,7 @@ if (logEl.scrollHeight > logEl.clientHeight) {
                 if (data.chunks.length) {
                     logEl.scrollTop = logEl.scrollHeight;
                 }
-                badgeEl.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+                badgeEl.textContent = statusLabels[data.status] || data.status;
                 badgeEl.className   = 'badge text-bg-' + (statusClasses[data.status] || 'secondary') + ' ms-2 fs-6';
 
                 if (data.execution_command && !document.getElementById('exec-cmd-display')) {

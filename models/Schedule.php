@@ -20,12 +20,12 @@ use yii\db\ActiveRecord;
  * @property bool        $enabled
  * @property int|null    $last_run_at      Unix timestamp of last execution
  * @property int|null    $next_run_at      Pre-computed Unix timestamp of next execution
- * @property int         $created_by
+ * @property int         $created_by       The user the schedule runs as ("Runs as"): its creator, or whoever last changed what or when it runs, or enabled it (ScheduleRunAs)
  * @property int         $created_at
  * @property int         $updated_at
  *
  * @property JobTemplate $jobTemplate
- * @property User        $creator
+ * @property User        $creator          The user the schedule runs as (created_by)
  *
  * The sealed password answers (column secret_extra_vars) are read and
  * written only through getSealedSecretExtraVars() and

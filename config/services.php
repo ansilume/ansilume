@@ -134,4 +134,43 @@ return [
     'vaultOverviewService' => [
         'class' => 'app\services\VaultOverviewService',
     ],
+    'approverEligibility' => [
+        'class' => 'app\services\ApproverEligibility',
+    ],
+    'approvalSettlement' => [
+        'class' => 'app\services\ApprovalSettlement',
+    ],
+    'approvalRuleAssignmentPolicy' => [
+        'class' => 'app\services\ApprovalRuleAssignmentPolicy',
+    ],
+    'approvalRuleUsageService' => [
+        'class' => 'app\services\ApprovalRuleUsageService',
+    ],
+    'approvalRuleWriteService' => [
+        'class' => 'app\services\ApprovalRuleWriteService',
+    ],
+    'jobCancellationService' => [
+        'class' => 'app\services\JobCancellationService',
+    ],
+    'jobTemplateDeletionService' => [
+        'class' => 'app\services\JobTemplateDeletionService',
+    ],
+    'workflowCancellationService' => [
+        'class' => 'app\services\WorkflowCancellationService',
+    ],
+    'workflowRunVars' => [
+        'class' => 'app\services\WorkflowRunVars',
+    ],
+    'workflowStepChangeGuard' => [
+        'class' => 'app\services\WorkflowStepChangeGuard',
+    ],
+    'workflowStepRouter' => [
+        'class' => 'app\services\WorkflowStepRouter',
+    ],
+    'workflowTemplateDeletionService' => [
+        'class' => 'app\services\WorkflowTemplateDeletionService',
+    ],
+    'strandedJobSweep' => [
+        'class' => 'app\services\StrandedJobSweep',
+    ],
 ];

@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
+use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalService;
 use app\services\WorkflowAccessChecker;
 use yii\data\ActiveDataProvider;
@@ -17,6 +18,14 @@ use yii\web\NotFoundHttpException;
  * Team scoping applies: the list holds only the requests the caller may see
  * (view access to the job's project or, for a workflow approval step, the
  * workflow); other requests answer 403.
+ *
+ * A vote that is refused answers (ApprovalDecisionRefusedException):
+ * 409 {"error": {"message", "status"}} for the request's state (resolved,
+ * expired, its job no longer waiting; "status" is the request's status),
+ * 403 for the voter (the launcher, no eligible approver), 422 for the vote
+ * (a second vote, an invalid comment), 404 for a request that is gone.
+ * A "comment" that is neither a string nor null answers 422 before the vote
+ * is checked (ApprovalService::COMMENT_NOT_A_STRING).
  */
 class ApprovalsController extends BaseApiController
 {
@@ -35,7 +44,7 @@ class ApprovalsController extends BaseApiController
      */
     public function actionIndex(): array
     {
-        $query = ApprovalRequest::find()->orderBy(['id' => SORT_DESC]);
+        $query = ApprovalRequest::find()->with('job')->orderBy(['id' => SORT_DESC]);
         $filter = $this->access()->buildApprovalRequestFilter($this->currentUserId());
         if ($filter !== null) {
             $query->andWhere($filter);
@@ -67,7 +76,7 @@ class ApprovalsController extends BaseApiController
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array<string, mixed>}
      */
     public function actionApprove(int $id): array
     {
@@ -75,7 +84,7 @@ class ApprovalsController extends BaseApiController
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array<string, mixed>}
      */
     public function actionReject(int $id): array
     {
@@ -83,9 +92,11 @@ class ApprovalsController extends BaseApiController
     }
 
     /**
-     * Visibility first, then eligibility: both answer 403.
+     * Visibility first (403), then the comment's type (422); then the
+     * service checks the vote under the request's lock, and a refusal
+     * answers with its status code.
      *
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array<string, mixed>}
      */
     private function decide(int $id, string $decision): array
     {
@@ -94,20 +105,18 @@ class ApprovalsController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
 
-        $userId = (int)\Yii::$app->user->id;
+        $body = (array)\Yii::$app->request->bodyParams;
+
         /** @var ApprovalService $service */
         $service = \Yii::$app->get('approvalService');
-        if (!$service->canUserApprove($model, $userId)) {
-            return $this->error('You are not eligible to decide on this request.', 403);
-        }
-
-        $body = (array)\Yii::$app->request->bodyParams;
-        $comment = isset($body['comment']) ? (string)$body['comment'] : null;
-
         try {
-            $service->recordDecision($model, $userId, $decision, $comment);
-        } catch (\RuntimeException $e) {
-            return $this->error($e->getMessage(), 422);
+            $comment = ApprovalService::commentOf($model, $body['comment'] ?? null);
+            $service->recordDecision($model, (int)\Yii::$app->user->id, $decision, $comment);
+        } catch (ApprovalDecisionRefusedException $e) {
+            if ($e->httpStatus() === 409) {
+                return $this->errorWithDetails($e->getMessage(), 409, ['status' => $e->requestStatus()]);
+            }
+            return $this->error($e->getMessage(), $e->httpStatus());
         }
 
         $model->refresh();
@@ -140,6 +149,8 @@ class ApprovalsController extends BaseApiController
         return [
             'id' => $m->id,
             'job_id' => $m->job_id,
+            // Who launched the job (for a workflow approval step: started the run); never an approver.
+            'launched_by' => $m->launcherId(),
             'approval_rule_id' => $m->approval_rule_id,
             'status' => $m->status,
             'requested_at' => $m->requested_at,

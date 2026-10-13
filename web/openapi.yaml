@@ -29,8 +29,8 @@ info:
     Every endpoint requires a permission, the same one the matching page in
     the web UI requires (for example `credential.view` to list credentials).
     Without it the call returns `403 Forbidden` before anything happens.
-    Superadmins pass every permission check. Tokens of disabled users are
-    rejected with `401`.
+    Superadmins pass every permission check, also those without any role.
+    Tokens of disabled users are rejected with `401`.
 
     ## Team scope
 
@@ -65,7 +65,8 @@ info:
       see the workflow; others get a `403` without them.
     - An approval request follows its job's project; the request of a
       workflow approval step, like the placeholder job behind it, follows its
-      workflow.
+      workflow. Only approvers who may see a request can decide it, and only
+      they count for its rule (see the Approvals endpoints).
     - Analytics count only what the caller may see.
     - Triggers (`/trigger/...`) run as the user who generated the token and
       are refused once that user may no longer launch; see the Triggers
@@ -77,23 +78,28 @@ info:
     `SurveyField`). The value of an extra var whose top-level key is the
     name of such a field is a password answer, whatever sends it:
     `extra_vars` of `POST /api/v1/jobs`, the body of a trigger, the
-    `extra_vars` of a schedule, or the web UI. Ansilume stores password
-    answers only encrypted, with `APP_SECRET_KEY` like credentials, and
-    gives them only to the runner that runs the job. Responses show the
-    placeholder `$encrypted$` in their place, in `extra_vars` and
-    `execution_command` of every job and in `extra_vars` of every schedule.
-    A launch that sends `$encrypted$` as a password answer is refused:
-    `POST /api/v1/jobs`, `/trigger/fire` and `/trigger/{token}` answer
-    `422` and launch nothing, while `/trigger/fire-workflow` answers `201`
-    and the run fails at its start step. In the `extra_vars` of a schedule,
-    `$encrypted$` keeps the answer the schedule has stored.
+    `extra_vars` of a schedule, the launch extra vars of a workflow run, or
+    the web UI. For a workflow run, that is a password field of the job
+    template of any of its job steps. Ansilume stores password answers only
+    encrypted, with `APP_SECRET_KEY` like credentials, and gives them only
+    to the runner that runs the job. Responses show the placeholder
+    `$encrypted$` in their place, in `extra_vars` and `execution_command`
+    of every job, in `extra_vars` of every schedule and in `extra_vars` of
+    every workflow run. A launch that sends `$encrypted$` as a password
+    answer is refused: `POST /api/v1/jobs`, `/trigger/fire`,
+    `/trigger/{token}`, `/trigger/fire-workflow` and
+    `POST /api/v1/workflow-templates/{id}/launch` answer `422` and launch
+    nothing; a workflow run is not created. In the `extra_vars` of a
+    schedule, `$encrypted$` keeps the answer the schedule has stored.
 
     ## Errors
 
     Error responses have the shape `{ "error": { "message": "..." } }` and
     use conventional HTTP status codes (401, 403, 404, 409, 422). Some errors
-    add fields next to `message`, such as `error.job_template_ids` or
-    `error.used_by`. Others come from the framework instead, with the shape
+    add fields next to `message`, such as `error.job_template_ids`,
+    `error.used_by`, `error.status` (the state that refused the request, for
+    example of an approval request) or `error.workflow_job_ids`. Others come
+    from the framework instead, with the shape
     `{ "name": "Not Found", "message": "...", "code": 0, "status": 404 }`:
     `400` for a request body that is not valid JSON, `401` for a missing or
     invalid token, `404` for an unknown resource `{id}` in the path (a
@@ -122,6 +128,13 @@ tags:
   - name: Job Templates
   - name: Jobs
   - name: Schedules
+    description: |
+      A schedule launches its job template at the times of its cron
+      expression, as one user: `created_by`, shown as **Runs as** in the web
+      UI. That is the user who created the schedule, or who last changed
+      its job template, cron expression, timezone or extra vars, or enabled
+      it; renaming and disabling keep the user. This user is the launcher of
+      the schedule's jobs and never approves them.
   - name: Runner Groups
   - name: Runners
   - name: Teams
@@ -130,12 +143,63 @@ tags:
   - name: Audit Logs
   - name: Notification Templates
   - name: Approval Rules
+    description: |
+      An approval rule gates every launch of the job templates it is
+      assigned to (`approval_rule_id` of the job template), and the workflow
+      approval steps that use it: the job waits for the rule's approvers.
+      Rules are managed by admins: viewing them needs `approval-rule.view`;
+      creating, changing and deleting them need `approval-rule.create`,
+      `approval-rule.update` and `approval-rule.delete`, which of the
+      built-in roles only admin holds. Assigning a rule to a job template or
+      removing it, adding an approval step to a workflow, and changing the
+      steps of a workflow that has one need `approval-rule.update` as well,
+      and so do adding a job step whose job template has a rule (a gated
+      job step) and changing the steps of a workflow that has one. Changing
+      what a job template with a rule runs, any field but its name and
+      description, needs `approval-rule.update` too (403 otherwise). A
+      custom role can be given these permissions.
+
+      A rule gates a job template, not a playbook or an inventory: a user
+      who may create job templates in a project can create one without a
+      rule that runs the same playbook on the same inventory. Only admins
+      assign rules, but an approval rule does not stop such a template. An
+      approval step gates the runs of its workflow, not the job templates
+      in it: users who may launch those templates can launch them
+      directly, or from another workflow without the step. To gate a job
+      template wherever it runs, give the template an approval rule. An
+      approval approves a launch: a runner reads the playbook from the
+      project's repository, and the job's inventory, when it claims the
+      job, after the approval. The inventory, the project and the
+      credentials of a job template with a rule keep their own
+      permissions: users who may change them, or push to the repository,
+      change what its next jobs run without becoming their launcher, so
+      they may approve them when they are approvers. An approval at the
+      level of an inventory is planned.
+
+      Rule names are not unique. A change to a rule that is in use applies
+      to its pending requests only at their next vote or timeout. A rule
+      that job templates, approval steps of workflows or pending requests
+      use cannot be deleted (409).
   - name: Approvals
     description: |
       Approval requests of jobs whose template has an approval rule, and of
       workflow approval steps. Seeing a request needs view access to the
       job's project or, for a workflow approval step, to the workflow.
-      Deciding also needs a place on the rule's approver list.
+
+      An eligible approver is on the rule's approver list (a role rule
+      counts the users assigned that role directly), has an active account,
+      is a superadmin or holds `approval.decide`, may see the request, and
+      did not launch its job (`launched_by`). Nobody approves their own
+      launch, admins and superadmins included; their earlier votes count
+      neither as approvals nor as rejections. A launch is refused (422)
+      when fewer eligible approvers than the rule requires remain besides
+      the user who launches.
+
+      Votes and timeouts settle a request exactly once: each runs under a
+      lock of the request, and the first that decides it wins. The
+      maintenance run (`php yii maintenance/run`, which the
+      schedule-runner starts every minute) applies the timeouts of expired
+      requests.
   - name: Workflow Templates
     description: |
       A workflow template has no project of its own: it belongs to the
@@ -267,12 +331,34 @@ paths:
       description: |
         Requires `project.delete`. Refuses with 422 while active job templates
         reference this project. Templates that were already deleted (soft-deleted,
-        no longer listed) are purged together with the project.
+        no longer listed) are purged together with the project. Their waiting
+        jobs (`pending`, `queued`, `pending_approval`) are canceled first, as
+        the delete of a job template cancels them: `job.canceled` audit
+        entries with `reason: template_deleted` and the caller as their user,
+        their pending approval requests closed, a workflow step that waits
+        for such a job failed with it. Running jobs are left alone. A cancel
+        that fails is logged and the maintenance run cancels that job later;
+        it never runs meanwhile.
+
+        A job template created in the project, or moved into it, while the
+        delete runs gets the same refusal (422) with the templates counted
+        again, and the project and its templates stay; the waiting jobs of
+        its deleted templates that were canceled stay canceled. Releases up
+        to 2.9.0 deleted such a template together with the project.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422':
+          description: |
+            Job templates that are not deleted reference the project, also
+            one created while the delete ran; nothing was deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  message: 'Cannot delete "web": 1 job template(s) still reference this project. Remove or reassign them first.'
   /api/v1/projects/{id}/vault:
     get:
       tags: [Projects]
@@ -508,7 +594,10 @@ paths:
         project or a waiting job uses is not deleted: the answer is 409 with
         `error.used_by`. Pass `force=1` to delete it anyway. It is then
         detached from every job template and project, and waiting jobs that
-        need it fail before they start.
+        need it fail before they start. Job templates with an approval rule
+        lose it too, although only admins (`approval-rule.update`) change
+        what they run otherwise; `credential.delete` is for admins by
+        default.
       parameters:
         - name: force
           in: query
@@ -530,6 +619,9 @@ paths:
       description: |
         Requires `job-template.update` and `credential.view`. Lists the job
         templates the caller may change, with their current vault passwords.
+        Job templates with an approval rule are listed too; only callers with
+        `approval-rule.update` can assign a vault password to them (see
+        `POST`).
       responses:
         '200': { $ref: '#/components/responses/VaultAssignmentCandidatesResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -545,6 +637,14 @@ paths:
         each template ends up with exactly this one. Each changed template is
         audited as `job-template.updated`. Jobs that already wait keep the
         credentials they were launched with.
+
+        A job template with an approval rule changes only for callers with
+        `approval-rule.update` (admins), as on `PUT
+        /api/v1/job-templates/{id}`: for everyone else it is left as it is,
+        reported with the status `failed` and the error `This job template
+        has an approval rule: only admins may change what it runs
+        (approval-rule.update). You may change its name and description.`,
+        and the other templates are assigned.
 
         Nothing is written when the request is invalid: 422 for a credential
         that is not a vault password or has no usable secret, a malformed or
@@ -587,13 +687,17 @@ paths:
       summary: Create a job template
       description: |
         Requires `job-template.create` and operator access to the project
-        (403 otherwise). Rejected with 422 when the credentials hold more than
-        one vault password, when a file or dynamic inventory belongs to another
-        project than the template, and when the project, inventory, runner
-        group or approval rule does not exist. An inventory of a project the
-        caller cannot see counts as not existing. The survey and the extra
-        vars are checked by the rules described at `survey_fields` and
-        `extra_vars` of `JobTemplateInput` (422 with the first problem).
+        (403 otherwise). An `approval_rule_id` other than null needs
+        `approval-rule.update` as well (admins): without it the create
+        answers 403 `Only admins may assign or remove an approval rule: that
+        needs approval-rule.update.` and writes nothing. Rejected with 422
+        when the credentials hold more than one vault password, when a file or
+        dynamic inventory belongs to another project than the template, and
+        when the project, inventory, runner group or approval rule does not
+        exist. An inventory of a project the caller cannot see counts as not
+        existing. The survey and the extra vars are checked by the rules
+        described at `survey_fields` and `extra_vars` of `JobTemplateInput`
+        (422 with the first problem).
       requestBody:
         required: true
         content:
@@ -650,6 +754,31 @@ paths:
         check, so templates saved before the rules keep saving. Extra vars
         that hold a number too large for JSON are rejected on every update
         (see `extra_vars`).
+
+        Setting, changing or removing `approval_rule_id` needs
+        `approval-rule.update` (admins): another value than the stored one,
+        `null` and `""` included, answers 403 `Only admins may assign or
+        remove an approval rule: that needs approval-rule.update.` for
+        everyone else and writes nothing. Sending the stored value again, or
+        leaving the field out, is allowed.
+
+        A job template with an approval rule is changed only by admins
+        (`approval-rule.update`), but for its `name` and `description`: its
+        schedules, triggers and workflows launch its jobs as the user they
+        run as, who never approves them, so whoever changed what it runs
+        could approve it alone. For everyone else, an update that changes
+        any other field, the credentials and their order and the survey
+        included, answers 403 `This job template has an approval rule: only
+        admins may change what it runs (approval-rule.update). You may
+        change its name and description.` and writes nothing. A field sent
+        with its stored value is no change: values are compared as their
+        field's type (`"5"` and `5` alike), `extra_vars` and
+        `survey_fields` as JSON, where spacing does not count but the order
+        of keys does, and the credentials as the ordered list. So the body
+        of `GET` sent back with a new `name` is accepted. A change of
+        `approval_rule_id` is refused with its own message first. The
+        template row is locked while the update decides, so a rule assigned
+        at the same moment counts.
       requestBody:
         required: true
         content:
@@ -657,18 +786,68 @@ paths:
             schema: { $ref: '#/components/schemas/JobTemplateInput' }
       responses:
         '200': { $ref: '#/components/responses/JobTemplateResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403':
+          description: |
+            Missing `job-template.update` or operator access to the
+            project (`Forbidden.`); a change of `approval_rule_id` without
+            `approval-rule.update`; or, on a job template with an approval
+            rule, a change of any field but `name` and `description` without
+            `approval-rule.update`. Nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                forbidden:
+                  summary: No permission or no operator access
+                  value:
+                    error:
+                      message: 'Forbidden.'
+                approvalRule:
+                  summary: The update changes the approval rule
+                  value:
+                    error:
+                      message: 'Only admins may assign or remove an approval rule: that needs approval-rule.update.'
+                gatedTemplate:
+                  summary: The template has an approval rule, and the update changes more than its name and description
+                  value:
+                    error:
+                      message: 'This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.'
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       tags: [Job Templates]
       summary: Delete a job template
       description: |
-        Requires `job-template.delete`. A soft delete, like in the web UI: the
+        Requires `job-template.delete` and operator access to the template's
+        project (403 otherwise). A soft delete, like in the web UI: the
         template disappears from lists and can no longer be launched, while
         its jobs keep their link to it. Its trigger token is revoked.
+
+        A deleted template can never run its jobs or schedules, so the
+        delete resolves them:
+        - its enabled schedules are disabled (`schedule.toggled` audit
+          entries with `reason: template_deleted`);
+        - its waiting jobs (`pending`, `queued` and `pending_approval`) are
+          canceled, each with a `job.canceled` audit entry with
+          `reason: template_deleted` and its `job.canceled` notification,
+          and their pending approval requests are canceled with them. A
+          workflow step that waits for such a job fails with it, and its
+          run moves on as after any failed step; for a job that waited for
+          approval, as after a rejection (see `on_failure_step_id` of
+          `WorkflowStep`);
+        - running jobs are not touched: they finish, and their results are
+          recorded.
+
+        A launch of the template at the same moment either commits first
+        (its job is then canceled here) or is refused with 422
+        `Job template #7 was deleted.` The response counts what the delete
+        did; the `job-template.deleted` audit entry has the same counts. A
+        job whose cancel failed, for example on a database error, is not
+        counted: it keeps waiting, no runner claims it, the application log
+        names it, and the maintenance run cancels it. A template that
+        another request deleted first answers 404 `Template #7 not found.`
       responses:
-        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '200': { $ref: '#/components/responses/JobTemplateDeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/job-templates/{id}/trigger-token:
@@ -744,6 +923,24 @@ paths:
         cannot hold, such as a number too large for JSON (`1e999`), in
         either form of `extra_vars`. Other failures, such as an
         `APP_SECRET_KEY` that cannot encrypt, answer 500 `Launch failed.`
+
+        A `limit` longer than 255 characters, a `verbosity` below 0 or
+        above 5, or a list or an object as either is refused with 422
+        before anything is written: `error.message` has the job record's
+        messages, and `error.fields` each such field with its message
+        (example `invalidInput`). Releases up to 2.9.0 answered 500 for
+        it, or took a list or an object as the verbosity for a number.
+
+        A template with an approval rule (`approval_rule_id`) creates the
+        job with status `pending_approval` and its approval request in one
+        transaction; the job is queued once the request is approved. Also
+        refused with 422, before anything is written: a rule that leaves
+        fewer eligible approvers besides the caller than it requires (the
+        caller never approves their own job, see Approvals), a rule that no
+        longer exists, a template that was deleted, or one whose approval
+        rule changed while the job was being launched. Schedules report the
+        same reasons when they fail to launch (`schedule.failed_to_launch`),
+        and a workflow job step fails with them.
       requestBody:
         required: true
         content:
@@ -785,14 +982,39 @@ paths:
         workflow approval placeholder. Access is checked before the job's
         state, so a caller without it gets 403 whatever the status; 409 only
         tells a caller with access that the job is already finished.
+
+        A job that waits for approval is canceled together with its pending
+        approval request, which gets the status `canceled` (audited as
+        `approval.canceled`) and takes no more votes. A job of a workflow
+        step ends its step, and the run moves on. The cancel changes the job
+        only while it has not finished: a job that finished between the
+        check and the cancel keeps its outcome, and the call answers 409
+        with the status the job has now in `error.status`.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/JobDetailResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          description: The job is already finished and cannot be canceled
-          content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+          description: |
+            The job is already finished and was not canceled. The job keeps
+            its status; `error.status` is set when the job finished while it
+            was being canceled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobCancelConflictError' }
+              examples:
+                finished:
+                  summary: The job had finished before the call
+                  value:
+                    error:
+                      message: "Job #42 cannot be canceled in status 'succeeded'."
+                finishedMeanwhile:
+                  summary: The job finished while it was being canceled
+                  value:
+                    error:
+                      message: 'Job #42 was not canceled: it is already succeeded.'
+                      status: succeeded
 
   /api/v1/jobs/{id}/artifacts:
     get:
@@ -921,12 +1143,13 @@ paths:
         see answers 422 `The selected job template does not exist.` A body
         without `name`, `job_template_id` or `cron_expression` answers 422.
 
-        The caller becomes the schedule's creator, returned as `created_by`;
-        `created_by` in the body is ignored. Scheduled jobs run as the
-        creator, and only while the creator is active, holds `job.launch` and
-        may operate the job template's project. Otherwise the schedule does
-        not launch when it is due: the refusal is audited as
-        `schedule.launch.denied` and the `schedule.failed_to_launch`
+        The caller becomes the user the schedule runs as, returned as
+        `created_by` (**Runs as** in the web UI); `created_by` in the body is
+        ignored. Scheduled jobs run as this user, who is their launcher and
+        never approves them, and only while this user is active, holds
+        `job.launch` and may operate the job template's project. Otherwise
+        the schedule does not launch when it is due: the refusal is audited
+        as `schedule.launch.denied` and the `schedule.failed_to_launch`
         notification is sent. This holds on installations without teams too.
 
         Password answers in `extra_vars` are stored only encrypted; see
@@ -968,10 +1191,19 @@ paths:
         schedule's job template (403 otherwise). A new `job_template_id`
         follows the rules of create: 403 for a template the caller sees but
         may not operate, 422 `The selected job template does not exist.` for
-        an unknown, deleted or invisible one. The schedule keeps its creator
-        (`created_by`), whom its jobs run as; `created_by` in the body is
-        ignored. Every update stores a fresh `next_run_at`, the next time the
-        cron expression matches.
+        an unknown, deleted or invisible one. Every update stores a fresh
+        `next_run_at`, the next time the cron expression matches.
+
+        An update that changes what or when the schedule runs makes the
+        caller the user the schedule runs as (`created_by`): a new
+        `job_template_id`, `cron_expression`, `timezone` or `extra_vars`
+        (a password answer sent anew, or dropped from `extra_vars`, counts;
+        `$encrypted$` for a stored answer, or the same values written
+        differently, does not),
+        or `enabled: true` for a disabled schedule. Its `schedule.updated`
+        audit entry then records `run_as` with `from` and `to`. Renaming the
+        schedule, disabling it, and sending the stored values again keep the
+        user it runs as. `created_by` in the body is ignored.
 
         Fields the body leaves out keep their value. A body without
         `extra_vars` keeps the extra vars and the stored password answers,
@@ -979,6 +1211,10 @@ paths:
         request answers 422 until it sends `extra_vars` with the answers
         again, as stored answers never move to another job template. See
         `extra_vars` of `ScheduleInput`.
+
+        A schedule whose job template was deleted answers 422
+        `The selected job template does not exist.` to every update, unless
+        the body moves it to another job template.
       requestBody:
         required: true
         content:
@@ -1004,12 +1240,30 @@ paths:
     post:
       tags: [Schedules]
       summary: Toggle a schedule between enabled and disabled
-      description: Requires `job.launch` and operator access to the project of the schedule's job template.
+      description: |
+        Requires `job.launch` and operator access to the project of the
+        schedule's job template. Disabling always works and keeps the user
+        the schedule runs as. Enabling makes the caller the user the
+        schedule runs as (`created_by`), and its `schedule.toggled` audit
+        entry records `run_as` with `from` and `to` when that user changes.
+        Enabling a schedule whose job template was deleted is refused with
+        422; deleting a job template disables its schedules, and a due
+        schedule of a deleted template disables itself
+        (`schedule.failed_to_launch`:
+        `Job template #15 was deleted; the schedule was disabled.`).
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/ScheduleResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422':
+          description: The schedule was not enabled, because its job template was deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  message: 'Schedule "Nightly deploy" was not enabled: its job template #15 was deleted. Edit the schedule to choose another job template, or delete it.'
 
   # ─────────────────────── Runner Groups ───────────────────────
   /api/v1/runner-groups:
@@ -1065,13 +1319,36 @@ paths:
       tags: [Runner Groups]
       summary: Delete a runner group
       description: |
-        Requires `runner-group.delete`. Refuses if runners or job templates
-        still reference this group.
+        Requires `runner-group.delete`. Refused with 422, and nothing is
+        deleted, while runners belong to the group or job templates use it
+        (deleted job templates do not count): deleting it would delete its
+        runners and take it off the templates, whose jobs no runner would
+        claim any more. Move the runners to another group
+        (`POST /api/v1/runners/{id}/move`) or delete them, and give the
+        templates another runner group, first. The web UI refuses the same
+        deletes with the same messages.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422':
+          description: |
+            Runners belong to the group, or job templates use it; nothing
+            was deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                runners:
+                  summary: Runners belong to the group
+                  value:
+                    error:
+                      message: 'Cannot delete "eu-west": 2 runner(s) still belong to this group.'
+                jobTemplates:
+                  summary: Job templates use the group
+                  value:
+                    error:
+                      message: 'Cannot delete "eu-west": 3 job template(s) reference this group.'
 
   # ────────────────────────────── Runners ────────────────────────────
   /api/v1/runners:
@@ -1606,10 +1883,21 @@ paths:
     post:
       tags: [Notification Templates]
       summary: Send a test notification through this template
+      description: |
+        Requires `notification-template.update`. Sends one test message
+        through the template's channel. Like every send, it writes a
+        `notification.dispatched` or `notification.failed` audit entry.
+        Answers `{"sent": true}` only when the channel took the message.
+        When the channel did not, for example a webhook endpoint that
+        answered an error status or could not be reached, the call answers
+        502 with `Test failed: ` and the channel's error, where it answered
+        `{"sent": true}` before. Another error answers 500 with
+        `Test failed: ` and the error; a database error is named by its
+        class, SQLSTATE and driver error code, never by its message.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200':
-          description: Test dispatched
+          description: The channel took the test message.
           content:
             application/json:
               schema:
@@ -1618,57 +1906,139 @@ paths:
                   data:
                     type: object
                     properties:
-                      sent: { type: boolean }
+                      sent: { type: boolean, enum: [true] }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '500':
+          description: |
+            The test failed outside the delivery, for example while the
+            message was put together. The message names the error, a
+            database error by its class, SQLSTATE and driver error code
+            only.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  message: 'Test failed: yii\db\Exception (SQLSTATE HY000, driver error 2006)'
+        '502':
+          description: |
+            The channel did not take the test message. The message names the
+            channel's error, such as the HTTP status a webhook endpoint
+            answered (`HTTP 0` when nothing answered). The
+            `notification.failed` audit entry has the same error.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  message: 'Test failed: WebhookChannel: HTTP 404 — Not Found'
 
   # ─────────────────────────── Approval Rules ───────────────────────────
   /api/v1/approval-rules:
     get:
       tags: [Approval Rules]
       summary: List approval rules
+      description: Requires `approval-rule.view`. Newest first, 25 per page, without `used_by`.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
           description: Paginated list
-          content: { application/json: { schema: { $ref: '#/components/schemas/GenericList' } } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalRuleList' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [Approval Rules]
       summary: Create an approval rule
+      description: |
+        Requires `approval-rule.create`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included). The
+        caller becomes `created_by`. Audited as `approval-rule.created` with
+        the rule's settings and source `api`. The response is the rule as
+        stored, with the database's defaults for the fields the body left
+        out.
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object } } }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalRuleInput' }
+            example:
+              name: deploy-prod
+              description: Production deploys need a second pair of eyes
+              approver_type: users
+              approver_config: { user_ids: [7, 12] }
+              required_approvals: 1
+              timeout_minutes: 60
+              timeout_action: reject
       responses:
-        '201': { $ref: '#/components/responses/GenericResponse' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '201': { $ref: '#/components/responses/ApprovalRuleResponse' }
+        '422': { $ref: '#/components/responses/ApprovalRuleRejected' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/approval-rules/{id}:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
     get:
       tags: [Approval Rules]
       summary: Get an approval rule
+      description: |
+        Requires `approval-rule.view`. Includes `used_by`: where the rule is
+        used, which decides whether it can be deleted.
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/ApprovalRuleDetailResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
     put:
       tags: [Approval Rules]
       summary: Update an approval rule
+      description: |
+        Requires `approval-rule.update`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included). Fields
+        the body leaves out keep their value; `created_by` cannot be
+        changed. Audited as `approval-rule.updated` with each changed field
+        under `changes`, as `{"from": ..., "to": ...}`, and source `api`.
+        The response is the rule as stored.
+
+        A rule that is in use changes for its job templates and approval
+        steps at once. Its pending requests are checked against the new
+        settings at their next vote or timeout, not when the rule changes.
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object } } }
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalRuleInput' }
+            example:
+              required_approvals: 2
+              approver_config: { user_ids: [7, 12, 15] }
       responses:
-        '200': { $ref: '#/components/responses/GenericResponse' }
+        '200': { $ref: '#/components/responses/ApprovalRuleResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ApprovalRuleRejected' }
     delete:
       tags: [Approval Rules]
       summary: Delete an approval rule
+      description: |
+        Requires `approval-rule.delete` (403 otherwise). A rule is in use
+        while live job templates, steps of live workflows or pending
+        approval requests whose job still waits for approval refer to it.
+        Deleting a rule in use is refused with 409 and `error.used_by`, and
+        nothing is changed; there is no force option. Remove the rule from
+        the job templates and workflow steps, and let its pending requests
+        be decided or their jobs canceled, first.
+
+        Deleting an unused rule clears it from deleted job templates and
+        from steps of deleted workflows, which cannot run, and keeps its
+        resolved approval requests, whose `approval_rule_id` becomes
+        null. Audited as `approval-rule.deleted` with the rule's settings,
+        the number of detached job templates and workflow steps, and source
+        `api`.
+
+        A delete that collides with a concurrent assignment of the rule
+        (deadlock or lock wait timeout) is retried once and then refused
+        with the same 409 and `used_by`; a second collision is a 500.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/ApprovalRuleInUse' }
 
   # ────────────────────────────── Approvals ──────────────────────────────
   /api/v1/approvals:
@@ -1677,10 +2047,10 @@ paths:
       summary: List approval requests
       description: |
         Requires `approval.view`. Lists approval requests of every status
-        (pending, approved, rejected, timed out), newest first, 25 per page.
-        Only the requests the caller may see: those of jobs whose project the
-        caller may view and those of workflow approval steps whose workflow
-        the caller may view.
+        (pending, approved, rejected, timed out, canceled), newest first, 25
+        per page. Only the requests the caller may see: those of jobs whose
+        project the caller may view and those of workflow approval steps
+        whose workflow the caller may view.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
@@ -1703,14 +2073,37 @@ paths:
       summary: Approve a pending request
       description: |
         Requires `approval.decide`. A request the caller may not see answers
-        403 `Forbidden.` Deciding also needs a place on the rule's approver
-        list and a pending request; otherwise 403 `You are not eligible to
-        decide on this request.` A second vote of the same caller answers
-        422. Only approvers who may see the request count toward the rule's
-        threshold: once the approvals still possible cannot reach it, the
-        request is rejected. The decision changes only a job that still
-        waits for approval: a job or workflow run canceled in the meantime
-        stays canceled, although its request stays pending until decided.
+        403 `Forbidden.` before anything else. Then the vote is checked
+        under a lock of the request, in this order, and a refused vote
+        records nothing:
+        - the request is resolved (approved, rejected, timed out or
+          canceled): 409;
+        - it has expired (`expires_at` has passed): 409, as the next
+          maintenance run applies its timeout;
+        - its job no longer waits for approval, for example because it was
+          canceled: 409, and the request is closed as canceled; also when
+          the job still waits but its workflow run has ended, which
+          cancels the job too, and likewise when its workflow step no
+          longer runs or its job template was deleted;
+        - the caller launched the job (for a workflow approval step:
+          started the run): 403 `You launched this job; another approver
+          must decide.`, also for admins and superadmins;
+        - the caller is not an eligible approver (see Approvals): 403
+          `You are not eligible to decide on this request.`;
+        - the caller has voted on this request already: 422
+          `User has already voted on this request.`;
+        - the vote cannot be stored, for example a comment that is too
+          long: 422 `The decision cannot be recorded: ...`.
+        A 409 carries the request's status in `error.status`. A request
+        that was deleted while the vote ran answers 404.
+
+        The request is approved once the approvals that count reach the
+        rule's `required_approvals`, and rejected as soon as the approvals
+        still possible cannot reach it; the launcher's votes never count.
+        Votes and timeouts settle a request exactly once. An approved job is
+        queued; the placeholder job of a workflow approval step succeeds,
+        and its run goes on. A workflow job step whose job waited for the
+        approval stays running until its job finishes.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       requestBody:
         required: false
@@ -1721,29 +2114,38 @@ paths:
               comment: Change window confirmed
       responses:
         '200': { $ref: '#/components/responses/ApprovalRequestResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/ApprovalDecisionForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/ApprovalDecisionConflict' }
+        '422': { $ref: '#/components/responses/ApprovalDecisionRejected' }
   /api/v1/approvals/{id}/reject:
     post:
       tags: [Approvals]
       summary: Reject a pending request
       description: |
-        Requires `approval.decide`; the same checks as approve (403 for a
-        request the caller may not see or may not decide on, 422 for a second
-        vote). As with approve, a job or workflow run canceled in the
-        meantime stays canceled.
+        Requires `approval.decide`; the same checks, in the same order, and
+        the same answers as approve (403, 409, 422). A rejection lowers the
+        approvals still possible: the request is rejected as soon as they
+        cannot reach the rule's `required_approvals`. A rejected job ends
+        as `rejected`; a workflow approval step, or a job
+        step whose job waited for the approval, then fails, and its run
+        follows the step's On Failure branch or ends as failed (see
+        `on_failure_step_id` of `WorkflowStep`). The comment is stored with
+        the vote and shown with the decisions.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       requestBody:
         required: false
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ApprovalDecisionInput' }
+            example:
+              comment: Not during the freeze
       responses:
         '200': { $ref: '#/components/responses/ApprovalRequestResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/ApprovalDecisionForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/ApprovalDecisionConflict' }
+        '422': { $ref: '#/components/responses/ApprovalDecisionRejected' }
 
   # ─────────────────────── Workflow Templates ───────────────────────
   /api/v1/workflow-templates:
@@ -1779,10 +2181,28 @@ paths:
         every step are valid; the template and its steps are then written in
         one transaction.
 
+        Approval steps are for admins: steps that include one need
+        `approval-rule.update`, otherwise the call answers 403 `Only admins
+        may add approval steps: that needs approval-rule.update.` and writes
+        nothing. So are gated job steps, job steps whose job template has an
+        approval rule: steps that include one need `approval-rule.update` as
+        well, otherwise the call answers 403 `Only admins may add a job step
+        whose job template has an approval rule: that needs
+        approval-rule.update.` A job template the caller cannot see counts
+        as none for this check and answers 422 as not found. The answers come
+        in this order: 422 for a template that is not valid, such as one
+        without a name (`Name cannot be blank.`); 422 for steps that cannot
+        be read; 403 for approval steps and gated job steps; 422 for unknown
+        approval rules; 422 or 403 for job templates; 422 for a template or
+        step that cannot be saved.
+
         Branches (`on_success_step_id`, `on_failure_step_id`,
         `on_always_step_id`) cannot be set through the API. Steps written
-        here have none: each continues with the next step in order, whatever
-        its outcome. Set branches in the web UI.
+        here have none: a step that succeeds or fails continues with the
+        next step in order. An approval step that is rejected, times out or
+        is canceled, and a job step whose job is rejected or canceled while
+        it waits for approval, end the run as failed instead (see
+        `on_failure_step_id` of `WorkflowStep`). Set branches in the web UI.
       requestBody:
         required: true
         content:
@@ -1806,10 +2226,30 @@ paths:
         '201': { $ref: '#/components/responses/WorkflowTemplateResponse' }
         '403':
           description: |
-            Missing `workflow-template.create`, or a job step uses a job
+            Missing `workflow-template.create`, approval steps or gated job
+            steps without `approval-rule.update`, or a job step uses a job
             template the caller can see but may not operate (named in
             `error.job_template_ids`). Nothing was written.
-          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                approvalStep:
+                  summary: The steps include an approval step
+                  value:
+                    error:
+                      message: 'Only admins may add approval steps: that needs approval-rule.update.'
+                gatedJobStep:
+                  summary: The steps include a job step whose job template has an approval rule
+                  value:
+                    error:
+                      message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                jobTemplate:
+                  summary: A job template the caller may not operate
+                  value:
+                    error:
+                      message: 'You may not use job template(s) #15 in a workflow: that needs operator access to their project.'
+                      job_template_ids: [15]
         '422':
           description: |
             Invalid template or step, an unknown approval rule, or job
@@ -1840,11 +2280,40 @@ paths:
         create (422 or 403 with `error.job_template_ids`). A rejected update
         changes nothing, neither the template nor its steps.
 
-        Replacing the steps also deletes the step records of every earlier
-        and running run of this workflow: earlier runs lose their `steps`,
-        and a running run stops advancing and stays `running` until it is
-        canceled. Let runs finish, or cancel them, before replacing the
-        steps.
+        Approval steps and gated job steps (job steps whose job template has
+        an approval rule) are for admins (`approval-rule.update`). Without
+        that permission, a `steps` list that includes an approval step
+        answers 403 `Only admins may add approval steps: that needs
+        approval-rule.update.`, one that includes a gated job step 403 `Only
+        admins may add a job step whose job template has an approval rule:
+        that needs approval-rule.update.`, and any `steps` list for a
+        workflow that has an approval step answers 403 `This workflow has an
+        approval step: only admins may change its steps
+        (approval-rule.update).`, or for a workflow that has a gated job step
+        403 `This workflow has a job step whose job template has an approval
+        rule: only admins may change its steps (approval-rule.update).`, also
+        when it holds the same steps. Whether a job step is gated is read
+        from its job template at each call, so a job template that gets an
+        approval rule locks the workflows that use it from then on. A job
+        template the caller cannot see counts as none for this check. Without
+        `steps`, or with `steps: null`, the name and description change as
+        before.
+
+        The steps cannot change while a run of the workflow is active
+        (`running`): such an update answers 409 and names the runs in
+        `error.workflow_job_ids`. Let them finish, or cancel them, first. A
+        workflow that another request deleted meanwhile answers 404
+        `Workflow template #5 not found.` The answers come in this order:
+        403 `Forbidden.` without access to the workflow; 422 for a template
+        that is not valid, such as an empty name (`Name cannot be blank.`);
+        422 for steps that cannot be read; 403 for approval steps and gated
+        job steps; 422 for unknown approval rules; 422 or 403 for job
+        templates; 404 for a workflow deleted meanwhile; 409 for an active
+        run; 422 for a template or step that cannot be saved.
+
+        Runs keep the history of replaced steps: their executions keep the
+        name and type the step had when it ran (`step_name`, `step_type`),
+        and their `workflow_step_id` becomes null.
       requestBody:
         required: true
         content:
@@ -1856,10 +2325,35 @@ paths:
         '403':
           description: |
             Missing `workflow-template.update`, no operator access to the
-            project of every current job step, or a new step uses a job
+            project of every current job step, approval steps or gated job
+            steps without `approval-rule.update`, or a new step uses a job
             template the caller can see but may not operate (named in
             `error.job_template_ids`). Nothing was written.
-          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                approvalStep:
+                  summary: The new steps include an approval step
+                  value:
+                    error:
+                      message: 'Only admins may add approval steps: that needs approval-rule.update.'
+                gatedJobStep:
+                  summary: The new steps include a job step whose job template has an approval rule
+                  value:
+                    error:
+                      message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                approvalWorkflow:
+                  summary: The workflow has an approval step
+                  value:
+                    error:
+                      message: 'This workflow has an approval step: only admins may change its steps (approval-rule.update).'
+                gatedJobWorkflow:
+                  summary: The workflow has a job step whose job template has an approval rule
+                  value:
+                    error:
+                      message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+        '409': { $ref: '#/components/responses/WorkflowStepsLocked' }
         '422':
           description: |
             Invalid template or step, an unknown approval rule, or job
@@ -1874,8 +2368,23 @@ paths:
         of every job step. A soft delete: the template disappears from lists
         and can no longer be launched; its runs stay. Its trigger token is
         revoked.
+
+        The workflow's running runs are canceled: their running steps fail
+        with `Not finished: the run was canceled because its workflow
+        template was deleted.`, the jobs of these steps are canceled
+        together with their pending approval requests, and each run gets
+        one `workflow.canceled` audit entry and one `workflow.canceled`
+        notification. A run that finished meanwhile keeps its outcome. The
+        response counts the canceled runs, and the runs whose cancel failed;
+        the maintenance run cancels those, or the jobs they left waiting,
+        later (see `failed_runs`). A canceled run whose step's job could not
+        be canceled leaves that job to the maintenance run as well, as
+        `POST /api/v1/workflow-jobs/{id}/cancel` does. A launch at the same moment
+        either commits first (its run is then canceled here) or is refused
+        with 422 `Workflow template #5 was deleted.` A workflow that another
+        request deleted first answers 404.
       responses:
-        '200': { $ref: '#/components/responses/DeletedResponse' }
+        '200': { $ref: '#/components/responses/WorkflowTemplateDeletedResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/workflow-templates/{id}/launch:
@@ -1891,9 +2400,36 @@ paths:
         not launch this workflow.` without them. The run belongs to the
         caller: each job step runs as the caller and is checked again when it
         starts. A step the caller may no longer launch then fails without a
-        job (see `steps[].error` of the run) and the workflow fails. 422 when
-        the template has no steps.
+        job (see `steps[].error` of the run) and the workflow fails.
+
+        The optional `extra_vars` are the run's launch extra vars. They are
+        stored on the run (`extra_vars` of `GET /api/v1/workflow-jobs/{id}`,
+        password answers as `$encrypted$`) and reach every job step of it:
+        over the job template's extra vars, and under the step's mapping of
+        the previous step's output (`extra_vars_template`). A value whose
+        key is a password field of the job template of any job step is a
+        password answer, stored only encrypted and passed on encrypted to
+        every job step's job. `null`, `""`, `[]` and `{}` mean none.
+
+        Refused with 422, and no run is created: launch extra vars that are
+        not a JSON object, that JSON cannot hold or that take more than
+        65535 bytes, `$encrypted$` sent as a password answer, a template
+        without steps, a template deleted meanwhile, and an approval that
+        could never be granted: an approval step, or a job step whose job
+        template has an approval rule, whose rule leaves too few eligible
+        approvers besides the caller or no longer exists.
+
+        A database error is no refusal: 500, with the error named by its
+        class, SQLSTATE and driver error code only (it answered 422 with its
+        message, or a bare server error, before).
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkflowLaunchInput' }
+            example:
+              extra_vars: { env: prod, release: '2026.10' }
       responses:
         '201': { $ref: '#/components/responses/WorkflowLaunchResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1918,7 +2454,8 @@ paths:
                   value:
                     error:
                       message: You may not launch this workflow.
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/WorkflowLaunchRejected' }
+        '500': { $ref: '#/components/responses/WorkflowLaunchFailed' }
   /api/v1/workflow-templates/{id}/trigger-token:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
     post:
@@ -1984,9 +2521,10 @@ paths:
         step of the run's workflow (403 otherwise). `steps` lists the steps
         that ran; `steps[].error` says why a step failed without a job, for
         example because the user the workflow runs as may not launch the
-        step's job template. Replacing the workflow's steps
-        (`PUT /api/v1/workflow-templates/{id}` with `steps`) or removing a
-        step in the web UI deletes these records for every run.
+        step's job template. Each execution keeps the name and type its step
+        had when it ran, also after the step was removed from the workflow
+        or replaced; its `workflow_step_id` is null then. `extra_vars` are
+        the run's launch extra vars, password answers as `$encrypted$`.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/WorkflowJobDetailResponse' }
@@ -1999,12 +2537,24 @@ paths:
       description: |
         Requires `workflow.cancel` and operator access to the project of every
         job step of the run's workflow (403 otherwise). Fails the running
-        steps and cancels their jobs. Access is checked before the run's
-        state, so a caller without it gets 403 whatever the status; 422 only
-        tells a caller with access that the run is already finished.
+        steps with `Not finished: the run was canceled.` and cancels their
+        jobs together with their pending approval requests, which get the
+        status `canceled`. The run gets one `workflow.canceled` audit entry
+        and one `workflow.canceled` notification. A step whose job cannot be
+        canceled, for example on a database error, does not stop the
+        cancel: the run is canceled all the same, no runner starts that
+        job, its approval request takes no more votes, and the maintenance
+        run cancels the job later. Access is checked before
+        the run's state, so a caller without it gets 403 whatever the
+        status; 422 `Workflow is already finished.` only tells a caller with
+        access that the run is already finished, also when it finished while
+        it was being canceled. A database error answers 500 with a message
+        that says what it left (see the 500 response), where it answered a
+        bare server error before.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/WorkflowJobResponse' }
+        '500': { $ref: '#/components/responses/WorkflowRunOperationFailed' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403':
           description: |
@@ -2027,10 +2577,13 @@ paths:
         still run as the user who launched the run. Access is checked before
         the run's state, so a caller without it gets 403 whatever the status;
         422 only tells a caller with access that the workflow is already
-        finished or has no paused step.
+        finished or has no paused step. A database error answers 500 with a
+        message that says what it left (see the 500 response), where it
+        answered a bare server error before.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/WorkflowJobResponse' }
+        '500': { $ref: '#/components/responses/WorkflowRunOperationFailed' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
         '403':
@@ -2119,9 +2672,14 @@ paths:
     get:
       tags: [Analytics]
       summary: Approval request outcomes and avg decision time
+      description: |
+        Counts the approval requests of the period by status, see
+        `ApprovalSummary`. With `format=csv`, one header row with the
+        columns total, approved, rejected, timed_out, canceled, pending,
+        approval_rate and avg_decision_seconds, and one row of values.
       parameters: *analyticsFilters
       responses:
-        '200': { $ref: '#/components/responses/AnalyticsResult' }
+        '200': { $ref: '#/components/responses/ApprovalSummaryResult' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/analytics/runner-activity:
@@ -2167,15 +2725,21 @@ paths:
         `trigger.denied` with the reason (`not_permitted` or
         `no_project_access`) and the transport; the caller learns nothing
         else. A launch is audited as `trigger.fired` with the transport and
-        the `job_id`.
+        the `job_id`. This user is the job's launcher (`launched_by`) and
+        never approves it, so for an older token the template's creator does
+        not approve the jobs of its trigger until the token is generated
+        again.
 
         The optional JSON body overrides `extra_vars`, `limit` and
         `verbosity` of the job template. Values in `extra_vars` whose key is
         a password field of the template's survey are password answers,
         stored only encrypted. A launch the server refuses for a reason the
         caller can fix answers 422 with the reason, for example
-        `$encrypted$` sent as a password answer. Any method but POST answers
-        405.
+        `$encrypted$` sent as a password answer, a `verbosity` above 5, or
+        an approval rule that leaves too few eligible approvers besides the
+        user the trigger runs as (that user never approves the job). A
+        template with an approval rule creates a job that waits for
+        approval. Any method but POST answers 405.
       security:
         - triggerTokenHeader: []
         - triggerTokenBearer: []
@@ -2268,16 +2832,30 @@ paths:
         audited as `workflow.launch.denied` with source `trigger` and the
         transport. Each job step is checked again, as the same user, when it
         starts. A launch is audited as `trigger.fired` with the transport and
-        the `workflow_job_id`.
+        the `workflow_job_id`. This user is the launcher of the run's
+        approval steps and job steps and never approves them, so for an
+        older token the workflow's creator does not approve them until the
+        token is generated again.
 
-        The optional JSON body's `extra_vars` reach the start step only, when
-        it is a job step. Later steps get their extra vars from the previous
-        step's output, as each step's `extra_vars_template` maps them. Other
-        keys are ignored. A start step whose launch is refused, for example
-        because a password answer is `$encrypted$`, does not fail the call:
-        it answers 201, and the run fails at that step with the reason in
-        `steps[].error` of `GET /api/v1/workflow-jobs/{id}`. Any method but
-        POST answers 405.
+        The optional JSON body's `extra_vars` (a JSON object, or JSON text of
+        one) are the run's launch extra vars. They are stored on the run,
+        password answers as `$encrypted$`, and reach every job step of it:
+        over the job template's extra vars, and under the step's mapping of
+        the previous step's output (`extra_vars_template`). A value whose
+        key is a password field of the job template of any job step is a
+        password answer: it is stored only encrypted and stays encrypted in
+        every step's job. `null`, `""` and `{}` mean none. Other keys of the
+        body are ignored, and so is a body that is not valid JSON.
+
+        A launch the server refuses for a reason the caller can fix answers
+        422 with the reason, and no run is created: extra vars that are not
+        a JSON object, that JSON cannot hold or that take more than 65535
+        bytes, `$encrypted$` sent as a password answer, a workflow without
+        steps, a workflow deleted meanwhile, and an approval that could
+        never be granted (an approval step, or a job step whose job template
+        has an approval rule, whose rule leaves too few eligible approvers
+        besides the user the trigger runs as, or no longer exists). Any
+        method but POST answers 405.
       security:
         - triggerTokenHeader: []
         - triggerTokenBearer: []
@@ -2310,6 +2888,7 @@ paths:
         '400': { $ref: '#/components/responses/TriggerTokenMissing' }
         '403': { $ref: '#/components/responses/TriggerLaunchRefused' }
         '404': { $ref: '#/components/responses/TriggerNotFound' }
+        '422': { $ref: '#/components/responses/WorkflowTriggerLaunchRejected' }
         '500': { $ref: '#/components/responses/TriggerLaunchFailed' }
 
   # ────────────────────────────── Roles ──────────────────────────────
@@ -2742,6 +3321,132 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/ApprovalRequest' }
+    ApprovalDecisionForbidden:
+      description: |
+        The vote was refused, and nothing was recorded: the caller may not
+        see the request, launched its job, or is not an eligible approver
+        (see Approvals).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            hidden:
+              summary: The caller may not see the request
+              value:
+                error:
+                  message: Forbidden.
+            launcher:
+              summary: The caller launched the job
+              value:
+                error:
+                  message: You launched this job; another approver must decide.
+            notEligible:
+              summary: The caller is no eligible approver
+              value:
+                error:
+                  message: You are not eligible to decide on this request.
+    ApprovalDecisionConflict:
+      description: |
+        The request takes no more votes, and nothing was recorded:
+        `error.status` is the request's status. It is resolved; it has
+        expired (status still `pending`: the next maintenance run applies
+        its timeout); or its job no longer waits for approval, or still
+        waits but can never run, because its workflow step or run has
+        ended or its job template was deleted (status `canceled`: the vote
+        closed the request, and canceled such a job).
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApprovalDecisionConflictError' }
+          examples:
+            resolved:
+              summary: The request is resolved
+              value:
+                error:
+                  message: 'Approval request #12 is already resolved: approved.'
+                  status: approved
+            expired:
+              summary: The request has expired
+              value:
+                error:
+                  message: 'Approval request #12 has expired and takes no more votes; its timeout is applied by the next maintenance run.'
+                  status: pending
+            jobNotWaiting:
+              summary: The job no longer waits for approval
+              value:
+                error:
+                  message: 'Approval request #12 can no longer be decided: its job #34 no longer waits for approval.'
+                  status: canceled
+    ApprovalDecisionRejected:
+      description: |
+        The vote was not recorded: the caller has voted on this request
+        already, or the vote is invalid, for example a comment that is too
+        long or not a string.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            alreadyVoted:
+              summary: A second vote of the same caller
+              value:
+                error:
+                  message: User has already voted on this request.
+            commentTooLong:
+              summary: A comment of more than 1000 characters
+              value:
+                error:
+                  message: 'The decision cannot be recorded: Comment should contain at most 1,000 characters.'
+            commentNotAString:
+              summary: A comment that is a list, an object or a number
+              value:
+                error:
+                  message: 'The decision cannot be recorded: Comment must be a string.'
+    ApprovalRuleResponse:
+      description: Approval rule, as stored
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/ApprovalRule' }
+    ApprovalRuleDetailResponse:
+      description: Approval rule with where it is used
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/ApprovalRuleDetail' }
+    ApprovalRuleRejected:
+      description: |
+        The rule was not saved: `job_template_id` other than null (approval
+        rules never gated a job template that way), or the first validation
+        error, such as `Name cannot be blank.`, `Name must be a string.`,
+        `Approver Type cannot be blank.`, `Approver Type is invalid.`,
+        `Approver Config cannot be blank.`, `Approver Config must be valid
+        JSON.`, `Approver Config must be a JSON object.` for a list or a
+        single value, or, for a `users` rule, `Required approvals (3)
+        exceeds eligible approvers (1).`
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            jobTemplateId:
+              summary: job_template_id was sent
+              value:
+                error:
+                  message: 'job_template_id is not used by approval rules: set approval_rule_id on the job template (admins only).'
+            tooFewApprovers:
+              summary: More required approvals than listed users
+              value:
+                error:
+                  message: Required approvals (3) exceeds eligible approvers (1).
+    ApprovalRuleInUse:
+      description: |
+        The rule is in use and was not deleted. `error.used_by` says where:
+        the lists hold what the caller may see, the counts everything.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApprovalRuleInUseError' }
     WorkflowTemplateResponse:
       description: Workflow template with its steps
       content:
@@ -2763,6 +3468,116 @@ components:
                   workflow_job_id: { type: integer }
           example:
             data: { workflow_job_id: 17 }
+    WorkflowLaunchRejected:
+      description: |
+        The launch was refused for a reason the caller or an admin can fix,
+        and no run was created. `error.message` says why.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            notAnObject:
+              summary: The extra vars are not a JSON object
+              value:
+                error:
+                  message: 'The extra vars must be a JSON object, such as {"env": "prod"}.'
+            placeholder:
+              summary: A password answer was the placeholder
+              value:
+                error:
+                  message: 'The value of "db_password" is the placeholder $encrypted$; send the real value.'
+            tooFewApprovers:
+              summary: An approval that could never be granted
+              value:
+                error:
+                  message: 'Step "Release approval": approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide. An admin can add approvers to the rule.'
+            ruleMissing:
+              summary: An approval step whose rule is gone
+              value:
+                error:
+                  message: 'Step "Release approval": its approval rule no longer exists. An admin can choose another rule.'
+            noSteps:
+              summary: The workflow has no steps
+              value:
+                error:
+                  message: 'Workflow template #5 has no steps.'
+            deleted:
+              summary: The workflow was deleted meanwhile
+              value:
+                error:
+                  message: 'Workflow template #5 was deleted.'
+    WorkflowLaunchFailed:
+      description: |
+        A database error stopped the launch, for example a deadlock, a lock
+        wait timeout or a lost connection; it is no refusal. The message
+        names the error by its class, SQLSTATE and driver error code, never
+        by its message, which can carry the SQL statement with its values,
+        and the application log has it as `Launch of workflow template #5
+        failed: ...` with the same text. No run was created, unless the
+        error struck while the run's first step started: then the run exists
+        and has ended as failed. Launch again.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            deadlock:
+              summary: A deadlock
+              value:
+                error:
+                  message: 'yii\db\Exception (SQLSTATE 40001, driver error 1213)'
+            lostConnection:
+              summary: A database error that escaped Yii's wrapping, such as a failed COMMIT
+              value:
+                error:
+                  message: 'PDOException (SQLSTATE HY000, driver error 2006)'
+    WorkflowStepsLocked:
+      description: |
+        The steps did not change, because runs of the workflow are active.
+        The message names the first 10 runs and counts the others;
+        `error.workflow_job_ids` lists them all. Let them finish, or cancel
+        them, then send the steps again.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkflowStepsLockedError' }
+          example:
+            error:
+              message: 'Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.'
+              workflow_job_ids: [12]
+    WorkflowRunOperationFailed:
+      description: |
+        A database error stopped the cancel or the resume of the run. The
+        message says what to do, and the application log has the error as
+        `Workflow run #12: the cancel failed with a database error: ...`
+        (`the resume` for a resume), with its class, SQLSTATE and driver
+        error code, never its message. Load the run again
+        (`GET /api/v1/workflow-jobs/{id}`): a run that still runs can be
+        canceled again, and a pause step that still waits can be resumed
+        again; for a run that shows canceled, the maintenance run ends its
+        steps and cancels their waiting jobs.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            cancel:
+              summary: A cancel failed on a database error
+              value:
+                error:
+                  message: 'Canceling workflow run #12 failed with a database error; see the application log. Load the run again: a run that still runs can be canceled again; for a canceled run, the maintenance run ends its steps and cancels their waiting jobs.'
+            resume:
+              summary: A resume failed on a database error
+              value:
+                error:
+                  message: 'Resuming workflow run #12 failed with a database error; see the application log. Load the run again: a pause step that still waits can be resumed again.'
+    WorkflowTemplateDeletedResponse:
+      description: The workflow template was deleted, and its running runs canceled.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/WorkflowTemplateDeletion' }
+          example:
+            data: { deleted: true, canceled_runs: 1, failed_runs: 0 }
     WorkflowJobResponse:
       description: Workflow run, without its steps
       content:
@@ -2822,12 +3637,24 @@ components:
         operator can fix; nothing was launched. `error` says why:
         `$encrypted$` sent as a password answer (send the real value), a
         password field whose name cannot carry an answer (rename it in the
-        survey), or extra vars that JSON cannot hold, such as a number too
-        large for JSON (`1e999`), in the extra vars or in a password answer.
+        survey), extra vars that JSON cannot hold, such as a number too
+        large for JSON (`1e999`), in the extra vars or in a password answer,
+        or the template's approval rule: too few eligible approvers besides
+        the user the trigger runs as, a rule that no longer exists, or a
+        rule that changed while the job was being launched (an admin fixes
+        the rule, or the call is sent again). A `limit` or a `verbosity`
+        the job record does not take (longer than 255 characters; below 0
+        or above 5; a list or an object) is refused with the record's
+        messages; releases up to 2.9.0 answered 500 for it, or took a list
+        or an object as the verbosity for a number.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/TriggerRejectedError' }
           examples:
+            invalidInput:
+              summary: A verbosity the job record does not take
+              value:
+                error: Verbosity must be no greater than 5.
             placeholder:
               summary: A password answer was the placeholder
               value:
@@ -2840,10 +3667,53 @@ components:
               summary: A number JSON cannot hold, in a password answer
               value:
                 error: 'The password answers cannot be stored: they contain a number too large for JSON.'
+            tooFewApprovers:
+              summary: Too few approvers besides the user the trigger runs as
+              value:
+                error: 'Approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide on this job. An admin can add approvers to the rule.'
+            ruleMissing:
+              summary: The template's approval rule no longer exists
+              value:
+                error: 'The approval rule of job template #7 no longer exists. An admin can choose another rule.'
+    WorkflowTriggerLaunchRejected:
+      description: |
+        The workflow launch was refused for a reason the caller or an admin
+        can fix, and no run was created. `error` says why: extra vars that
+        are not a JSON object, that JSON cannot hold (`The extra vars cannot
+        be stored: ...` or `The password answers cannot be stored: ...`) or
+        that are too large (`The extra vars are too large: a run stores at
+        most 65535 bytes of them as JSON.`), `$encrypted$` sent as a
+        password answer of a job step's template, a workflow without steps,
+        a workflow deleted meanwhile, or an approval that could never be
+        granted.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TriggerRejectedError' }
+          examples:
+            notAnObject:
+              summary: The extra vars are not a JSON object
+              value:
+                error: 'The extra vars must be a JSON object, such as {"env": "prod"}.'
+            placeholder:
+              summary: A password answer was the placeholder
+              value:
+                error: 'The value of "db_password" is the placeholder $encrypted$; send the real value.'
+            tooFewApprovers:
+              summary: An approval that could never be granted
+              value:
+                error: 'Step "Release approval": approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide. An admin can add approvers to the rule.'
+            noSteps:
+              summary: The workflow has no steps
+              value:
+                error: 'Workflow template #5 has no steps.'
+            deleted:
+              summary: The workflow was deleted meanwhile
+              value:
+                error: 'Workflow template #5 was deleted.'
     TriggerLaunchFailed:
       description: |
-        The launch failed for another reason, for example a workflow without
-        steps. The reason is in the application log.
+        The launch failed for another reason, for example a database error.
+        The reason is in the application log.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/TriggerError' }
@@ -2881,14 +3751,29 @@ components:
         Nothing was launched or stored. `job_template_id` is missing, the
         launch would leave a password answer unprotected (`$encrypted$` sent
         as an answer, or a password field of the template whose name cannot
-        carry an answer: rename it in the survey), or JSON cannot hold the
-        extra vars, such as a number too large for JSON (`1e999`); the
+        carry an answer: rename it in the survey), JSON cannot hold the
+        extra vars, such as a number too large for JSON (`1e999`; the
         message says whether that is in the extra vars or in a password
-        answer.
+        answer), or the template's approval rule refuses it: fewer eligible
+        approvers besides the caller than the rule requires (an admin adds
+        approvers to the rule), a rule that no longer exists (an admin
+        chooses another), a template deleted meanwhile, or a rule that
+        changed while the job was being launched (launch it again). A
+        `limit` or a `verbosity` the job record does not take (longer than
+        255 characters; below 0 or above 5; a list or an object) is refused
+        with the record's messages, and `error.fields` names each such
+        field with its message.
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          schema: { $ref: '#/components/schemas/JobLaunchError' }
           examples:
+            invalidInput:
+              summary: A verbosity the job record does not take
+              value:
+                error:
+                  message: Verbosity must be no greater than 5.
+                  fields:
+                    verbosity: Verbosity must be no greater than 5.
             placeholder:
               summary: A password answer was the placeholder
               value:
@@ -2909,6 +3794,56 @@ components:
               value:
                 error:
                   message: job_template_id is required.
+            tooFewApprovers:
+              summary: Too few approvers besides the caller
+              value:
+                error:
+                  message: 'Approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide on this job. An admin can add approvers to the rule.'
+            ruleMissing:
+              summary: The template's approval rule no longer exists
+              value:
+                error:
+                  message: 'The approval rule of job template #7 no longer exists. An admin can choose another rule.'
+            templateDeleted:
+              summary: The template was deleted meanwhile
+              value:
+                error:
+                  message: 'Job template #7 was deleted.'
+            ruleChanged:
+              summary: The template's approval rule changed meanwhile
+              value:
+                error:
+                  message: 'The approval rule of job template #7 changed while the job was being launched. Launch it again.'
+    JobTemplateDeletedResponse:
+      description: The job template was deleted; what the delete resolved.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/JobTemplateDeletion' }
+          example:
+            data: { deleted: true, canceled_jobs: 2, disabled_schedules: 1 }
+    ApprovalSummaryResult:
+      description: |
+        The approval summary of the period, counting only the requests the
+        caller may see. With `format=csv` the body is raw CSV.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  filters:
+                    type: object
+                    description: Echo of the filter parameters that were applied
+                  result: { $ref: '#/components/schemas/ApprovalSummary' }
+        text/csv:
+          schema:
+            type: string
+            description: CSV export (only when `format=csv`)
 
   schemas:
     ChangePasswordInput:
@@ -2925,6 +3860,23 @@ components:
           type: object
           properties:
             message: { type: string }
+    JobLaunchError:
+      type: object
+      description: |
+        Why `POST /api/v1/jobs` launched nothing (422). `fields` is there
+        only for a `limit` or a `verbosity` that the job record does not
+        take: each such field with the record's message, which `message`
+        joins.
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: { type: string }
+            fields:
+              type: object
+              description: The refused launch fields (`limit`, `verbosity`), each with its message.
+              additionalProperties: { type: string }
     FrameworkError:
       type: object
       description: |
@@ -3323,6 +4275,23 @@ components:
           type: array
           description: All credentials in precedence order, primary first. Never includes secrets.
           items: { $ref: '#/components/schemas/JobTemplateCredential' }
+        approval_rule_id:
+          type: integer
+          nullable: true
+          description: |
+            The approval rule that gates every launch of the template: each
+            job waits for the rule's approvers (status `pending_approval`)
+            before it runs. null for none. Only admins
+            (`approval-rule.update`) set, change or remove it, and while it
+            is set only they change what the template runs: everyone else
+            may change only its `name` and `description` (see
+            `PUT /api/v1/job-templates/{id}`).
+          example: 3
+        approval_rule_name:
+          type: string
+          nullable: true
+          description: The name of that rule; null for none. Rule names are not unique.
+          example: deploy-prod
         playbook:        { type: string }
         verbosity:       { type: integer }
         forks:           { type: integer }
@@ -3352,9 +4321,10 @@ components:
           description: |
             The user a trigger launch runs as: whoever generated the current
             token, or the template's creator for tokens generated before
-            Ansilume recorded that. null without a token. Like
-            `has_trigger_token`, only callers who may change the template get
-            this field.
+            Ansilume recorded that. This user is the launcher of the
+            trigger's jobs and never approves them. null without a token.
+            Like `has_trigger_token`, only callers who may change the
+            template get this field.
           example: 7
         warnings:
           type: array
@@ -3404,6 +4374,39 @@ components:
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/JobTemplate' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+    JobTemplateDeletion:
+      type: object
+      required: [deleted, canceled_jobs, disabled_schedules]
+      properties:
+        deleted:
+          type: boolean
+          enum: [true]
+        canceled_jobs:
+          type: integer
+          description: |
+            The waiting jobs (pending, queued, pending_approval) this delete
+            canceled. A job whose cancel failed is not counted; the
+            maintenance run cancels it.
+        disabled_schedules:
+          type: integer
+          description: The enabled schedules this delete disabled.
+    JobCancelConflictError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: string
+              example: 'Job #42 was not canceled: it is already succeeded.'
+            status:
+              type: string
+              enum: [pending, queued, running, succeeded, failed, canceled, timed_out, pending_approval, rejected]
+              description: |
+                The job's status now. Set only when the job finished while it
+                was being canceled; the message then names the status in
+                words, such as `timed out`.
 
     Job:
       type: object
@@ -3493,8 +4496,8 @@ components:
           oneOf:
             - { type: object, additionalProperties: true }
             - { type: string }
-        limit: { type: string }
-        verbosity: { type: integer, minimum: 0, maximum: 5 }
+        limit: { type: string, maxLength: 255, description: "Longer text, a list or an object is refused with 422 (error.fields)." }
+        verbosity: { type: integer, minimum: 0, maximum: 5, description: "A value below 0 or above 5, a list or an object is refused with 422 (error.fields)." }
         check_mode: { type: boolean }
       example:
         job_template_id: 12
@@ -3574,9 +4577,13 @@ components:
         created_by:
           type: integer
           description: |
-            User ID of the creator. Scheduled jobs run as this user, and only
-            while the user is active, holds `job.launch` and may operate the
-            job template's project. It cannot be changed.
+            User ID of the user the schedule runs as (**Runs as** in the web
+            UI): its creator, or the user who last changed its job template,
+            cron expression, timezone or extra vars, or enabled it. Scheduled
+            jobs run as this user, who is their launcher and never approves
+            them, and only while the user is active, holds `job.launch` and
+            may operate the job template's project. A request body cannot set
+            it.
         created_at:      { type: integer }
         updated_at:      { type: integer }
     ScheduleList:
@@ -3706,7 +4713,24 @@ components:
         skip_tags: { type: string, nullable: true }
         timeout_minutes: { type: integer, default: 120 }
         runner_group_id: { type: integer, nullable: true }
-        approval_rule_id: { type: integer, nullable: true }
+        approval_rule_id:
+          type: integer
+          nullable: true
+          description: |
+            The approval rule that gates every launch of the template; null
+            or `""` for none. Only admins (`approval-rule.update`) may set,
+            change or remove it: a create with a rule, or an update that
+            sends another value than the stored one, answers 403 `Only admins
+            may assign or remove an approval rule: that needs
+            approval-rule.update.` and writes nothing. Sending the stored
+            value again, or leaving the field out, is allowed for everyone.
+            An unusable value answers 422 `Approval rule must be an integer.`
+            or `The selected approval rule does not exist.` While a template
+            has a rule, an update by anyone else that changes another field
+            than `name` and `description` answers 403 `This job template has
+            an approval rule: only admins may change what it runs
+            (approval-rule.update). You may change its name and
+            description.`
         survey_fields:
           description: |
             The survey: launch-time inputs whose answers become extra vars,
@@ -3797,8 +4821,9 @@ components:
     ScheduleInput:
       type: object
       description: |
-        `created_by` is not accepted: a schedule's creator is the user who
-        created it, and its jobs run as that user.
+        `created_by` is not accepted: a schedule runs as the user who created
+        it, or who last changed its job template, cron expression, timezone
+        or extra vars, or enabled it (see `created_by` of `Schedule`).
       required: [name, job_template_id, cron_expression]
       properties:
         name: { type: string, maxLength: 128 }
@@ -4132,23 +5157,53 @@ components:
 
     ApprovalRequest:
       type: object
+      required: [id, job_id, launched_by, approval_rule_id, status, requested_at, resolved_at, expires_at, approval_count, rejection_count]
       properties:
         id: { type: integer }
         job_id: { type: integer, description: "The job waiting for the decision; for a workflow approval step, its placeholder job without a job template." }
-        approval_rule_id: { type: integer }
-        status: { type: string, enum: [pending, approved, rejected, timed_out] }
+        launched_by:
+          type: integer
+          description: |
+            The user who launched the job: for a schedule, the user it runs
+            as; for a trigger, the user it runs as; for a workflow approval
+            step, the user who started the run. Never an eligible approver:
+            this user's votes are refused and earlier ones count for
+            nothing.
+          example: 7
+        approval_rule_id:
+          type: integer
+          nullable: true
+          description: The rule the request waits for; null once that rule was deleted (only a rule without pending requests can be).
+        status:
+          type: string
+          enum: [pending, approved, rejected, timed_out, canceled]
+          description: |
+            `canceled`: the job or workflow run was canceled, or its job
+            template deleted, while the request was pending, or a vote or
+            timeout found that its job no longer waited for approval. A
+            canceled request takes no votes.
         requested_at: { type: integer }
         resolved_at: { type: integer, nullable: true }
         expires_at:
           type: integer
           nullable: true
           description: |
-            When the rule's timeout runs out; null without a timeout. The
-            timeout is applied only by the console command
-            `approval/check-timeouts`, which the stock deployments do not run,
-            so a request stays pending past this time until it is decided.
-        approval_count: { type: integer }
-        rejection_count: { type: integer }
+            When the rule's timeout runs out; null without a timeout. A vote
+            at or after this time answers 409. The maintenance run, which the
+            schedule-runner starts every minute, then applies the rule's
+            timeout action: the request becomes `timed_out` and its job is
+            rejected, or approved when the rule's timeout action is
+            `approve`. An approve applies only within 60 minutes (3600
+            seconds) after `expires_at`, counted when the timeout is
+            applied; a timeout applied later rejects, and its
+            `approval.timed_out` audit entry says so
+            (`reason: grace_period_exceeded`).
+        approval_count:
+          type: integer
+          description: The approvals that count; the launcher's votes are left out.
+        rejection_count:
+          type: integer
+          description: The rejections that count; the launcher's votes are left out.
     ApprovalRequestList:
       type: object
       properties:
@@ -4157,7 +5212,200 @@ components:
     ApprovalDecisionInput:
       type: object
       properties:
-        comment: { type: string, description: "Optional comment stored with the vote." }
+        comment:
+          type: string
+          nullable: true
+          maxLength: 1000
+          description: Optional comment stored with the vote and shown with the decisions. Longer text, or a value that is not a string, answers 422.
+    ApprovalDecisionConflictError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [message, status]
+          properties:
+            message:
+              type: string
+              example: 'Approval request #12 is already resolved: approved.'
+            status:
+              type: string
+              enum: [pending, approved, rejected, timed_out, canceled]
+              description: The request's status.
+
+    ApprovalRule:
+      type: object
+      required: [id, name, description, required_approvals, timeout_minutes, timeout_action, approver_type, approver_config, job_template_id, created_by, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        name: { type: string, maxLength: 128, description: "Not unique: two rules can have the same name." }
+        description: { type: string, nullable: true, maxLength: 1000 }
+        required_approvals:
+          type: integer
+          minimum: 1
+          maximum: 50
+          description: |
+            How many eligible approvers must approve; the user who launched
+            the job never counts (see Approvals).
+        timeout_minutes:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 10080
+          description: Minutes until a request of this rule expires; null for none.
+        timeout_action:
+          type: string
+          enum: [reject, approve]
+          description: |
+            What happens to the job of an expired request. `approve` applies
+            only within 60 minutes after the request expired; later the
+            request is rejected.
+        approver_type: { type: string, enum: [role, team, users] }
+        approver_config:
+          type: object
+          description: |
+            Who is on the approver list: `{"user_ids": [7, 12]}` for
+            `users`, `{"role": "operator"}` for `role` (the users assigned
+            that role directly), `{"team_id": 3}` for `team` (the team's
+            members). Only those who are eligible may decide (see Approvals).
+            Always a JSON object: `{}` for a rule without approvers. A rule
+            whose approver list an older version stored as a JSON list or a
+            single value names no approvers and is returned with `{}` too.
+          example: { user_ids: [7, 12] }
+        job_template_id:
+          type: integer
+          nullable: true
+          deprecated: true
+          description: |
+            Unused: a rule never gated a job template through this field.
+            `approval_rule_id` of the job template does that.
+        created_by: { type: integer, description: "The user who created the rule; it cannot be changed." }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+    ApprovalRuleDetail:
+      allOf:
+        - $ref: '#/components/schemas/ApprovalRule'
+        - type: object
+          required: [used_by]
+          properties:
+            used_by: { $ref: '#/components/schemas/ApprovalRuleUsage' }
+    ApprovalRuleList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ApprovalRule' } }
+        meta: { $ref: '#/components/schemas/PaginationMeta' }
+    ApprovalRuleInput:
+      type: object
+      description: |
+        `name`, `approver_type` and `approver_config` are required on create
+        and kept when omitted on update. `created_by` is not accepted: the
+        caller who creates the rule is its creator.
+      properties:
+        name: { type: string, maxLength: 128 }
+        description: { type: string, nullable: true, maxLength: 1000 }
+        approver_type: { type: string, enum: [role, team, users] }
+        approver_config:
+          description: |
+            The approver list, as an object or as JSON text of one, see
+            `approver_config` of `ApprovalRule`. A list or a single value
+            answers 422 `Approver Config must be a JSON object.` So does an
+            update that leaves the field out, of a rule whose approver list
+            an older version stored as a list or a single value, until the
+            update sends an object; saving the rule in the web form stores
+            the approvers the form shows.
+          oneOf:
+            - { type: object }
+            - { type: string, maxLength: 4096 }
+        required_approvals:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 1
+          description: |
+            For a `users` rule, at most the number of listed users: more
+            answers 422 `Required approvals (3) exceeds eligible approvers
+            (1).` Role and team rules are checked at launch, where too few
+            eligible approvers besides the launcher refuse the launch.
+        timeout_minutes: { type: integer, nullable: true, minimum: 1, maximum: 10080 }
+        timeout_action: { type: string, enum: [reject, approve], default: reject }
+        job_template_id:
+          type: integer
+          nullable: true
+          deprecated: true
+          description: |
+            Not used: null is ignored, and any other value answers 422
+            `job_template_id is not used by approval rules: set
+            approval_rule_id on the job template (admins only).`
+    ApprovalRuleUsage:
+      type: object
+      description: |
+        Where an approval rule is used. A rule is in use while one of the
+        counts is above 0, and cannot be deleted then. The lists hold only
+        what the caller may see (team scope); the hidden counts say how many
+        more there are.
+      required: [in_use, job_templates, hidden_job_template_count, workflow_steps, hidden_workflow_step_count, pending_request_count]
+      properties:
+        in_use: { type: boolean }
+        job_templates:
+          type: array
+          description: Live job templates that the rule gates.
+          items:
+            type: object
+            required: [id, name, project_id, project_name]
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              project_id: { type: integer }
+              project_name: { type: string, nullable: true }
+        hidden_job_template_count: { type: integer }
+        workflow_steps:
+          type: array
+          description: Steps of live workflows that use the rule.
+          items:
+            type: object
+            required: [workflow_template_id, workflow_template_name, step_id, step_name]
+            properties:
+              workflow_template_id: { type: integer }
+              workflow_template_name: { type: string }
+              step_id: { type: integer }
+              step_name: { type: string }
+        hidden_workflow_step_count: { type: integer }
+        pending_request_count:
+          type: integer
+          description: Pending approval requests of the rule whose job still waits for approval.
+    ApprovalRuleInUseError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [message, used_by]
+          properties:
+            message:
+              type: string
+              example: 'Approval rule "deploy-prod" is in use by 2 job template(s) and 1 workflow step(s). Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.'
+            used_by: { $ref: '#/components/schemas/ApprovalRuleUsage' }
+
+    ApprovalSummary:
+      type: object
+      required: [total, approved, rejected, timed_out, canceled, pending, approval_rate, avg_decision_seconds]
+      properties:
+        total: { type: integer, description: "Approval requests of the period." }
+        approved: { type: integer }
+        rejected: { type: integer }
+        timed_out: { type: integer }
+        canceled:
+          type: integer
+          description: Requests closed because their job or workflow run was canceled, or their job template deleted, before anybody decided.
+        pending: { type: integer }
+        approval_rate:
+          type: number
+          description: Approved requests in percent of the approved and rejected ones; 0 when there are none.
+        avg_decision_seconds:
+          type: number
+          description: |
+            The average time from request to resolution of the resolved
+            requests, canceled ones left out. A timed-out request counts
+            until its `expires_at`, also when the maintenance run applied
+            its timeout later.
 
     WorkflowTemplate:
       type: object
@@ -4185,9 +5433,10 @@ components:
           description: |
             The user a trigger launch runs as: whoever generated the current
             token, or the workflow's creator for tokens generated before
-            Ansilume recorded that. null without a token. Like
-            `has_trigger_token`, only callers who may change the workflow get
-            this field.
+            Ansilume recorded that. This user is the launcher of the run's
+            approval steps and job steps and never approves them. null
+            without a token. Like `has_trigger_token`, only callers who may
+            change the workflow get this field.
           example: 7
         created_at: { type: integer }
         updated_at: { type: integer }
@@ -4214,9 +5463,39 @@ components:
             removed; runs fail at such a step (see docs/updating.md).
         job_template_id: { type: integer, nullable: true, description: "Job steps only; null on approval and pause steps." }
         approval_rule_id: { type: integer, nullable: true, description: "Approval steps only; null on job and pause steps." }
-        on_success_step_id: { type: integer, nullable: true, description: "Step after success. null: the next step in order; 0: end the workflow." }
-        on_failure_step_id: { type: integer, nullable: true, description: "Step after failure. null: the next step in order; 0: end the workflow." }
-        on_always_step_id: { type: integer, nullable: true, description: "Step after either outcome; wins over the other two. null: not set; 0: end the workflow." }
+        on_success_step_id:
+          type: integer
+          nullable: true
+          description: |
+            Step after success. null: the next step in order (after the last
+            step, the run ends as succeeded); 0: end the workflow. A branch
+            to a step that no longer exists fails the run
+            (`The next step #7 of this workflow no longer exists.`).
+        on_failure_step_id:
+          type: integer
+          nullable: true
+          description: |
+            Step after failure. null: the next step in order; 0: end the
+            workflow. After a closed approval gate, null ends the run as
+            failed instead of going on with the next step: an approval step
+            that was rejected, timed out (rejecting) or canceled, and a job
+            step whose job was rejected or canceled while it waited for
+            approval. Only an explicit step here continues the run then. A
+            run that ends after a failed step ends as failed; a branch to a
+            step that no longer exists fails the run.
+        on_always_step_id:
+          type: integer
+          nullable: true
+          description: |
+            Step after either outcome; wins over the other two, except after
+            a closed approval gate (see `on_failure_step_id`): then it is
+            not taken, on job steps too. A job step still takes it after a
+            job that ran. null: not set; 0: end the workflow. Approval steps
+            cannot have one: saving it is refused (`An approval step cannot
+            have an Always branch: a rejection would continue past it.`),
+            and on an approval step saved before that it is followed after
+            an approval only. A branch to a step that no longer exists fails
+            the run.
         extra_vars_template:
           description: |
             Extra vars this step takes from the output of the previous step:
@@ -4244,7 +5523,11 @@ components:
           description: |
             All steps in run order; replaces the current ones, branches
             included. Omit it or send null to keep the current steps on
-            update; `[]` removes them all.
+            update; `[]` removes them all. Not while a run of the workflow is
+            active (409), and only for admins when an approval step or a
+            gated job step (a job step whose job template has an approval
+            rule) is in the list or in the workflow (403). Runs keep the
+            history of replaced steps.
           items: { $ref: '#/components/schemas/WorkflowStepInput' }
     WorkflowStepInput:
       type: object
@@ -4252,14 +5535,30 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 128, description: "Required; a missing or empty name answers 422." }
         step_type: { type: string, enum: [job, approval, pause], default: job }
-        job_template_id: { type: integer, minimum: 1, description: "Required for a job step: a job template the caller may operate. Ignored for other step types." }
-        approval_rule_id: { type: integer, minimum: 1, description: "Required for an approval step: an existing approval rule. Ignored for other step types." }
+        job_template_id:
+          type: integer
+          minimum: 1
+          description: |
+            Required for a job step: a job template the caller may operate.
+            Ignored for other step types. A job template with an approval
+            rule makes the step a gated job step, which is for admins as an
+            approval step is: it needs `approval-rule.update` (403
+            otherwise).
+        approval_rule_id:
+          type: integer
+          minimum: 1
+          description: |
+            Required for an approval step: an existing approval rule. Ignored
+            for other step types. Approval steps are for admins: steps with
+            one need `approval-rule.update` (403 otherwise).
         extra_vars_template:
           description: |
             Extra vars this step takes from the output of the previous step:
             a JSON object mapping an extra var name to the name of an output
-            variable, or the same object as JSON text. Unused on the start
-            step, which has no previous step. Either form with a number too
+            variable, or the same object as JSON text. A mapped value wins
+            over the run's launch extra vars, which win over the job
+            template's extra vars. The start step has no previous step, so
+            its mapping gives nothing. Either form with a number too
             large for JSON, such as `1e999`, is rejected with 422
             `steps[<n>]: The extra vars cannot be stored: they contain a
             number too large for JSON.` An object with text that is not
@@ -4289,17 +5588,38 @@ components:
         - $ref: '#/components/schemas/WorkflowJob'
         - type: object
           properties:
+            extra_vars:
+              type: object
+              nullable: true
+              additionalProperties: true
+              description: |
+                The extra vars the run was launched with, which every job
+                step received; password answers as `$encrypted$`. The
+                encrypted answers themselves are never returned. null when
+                the run was launched without extra vars.
+              example: { env: prod, db_password: '$encrypted$' }
             steps:
               type: array
               description: |
-                The steps that ran or run now. Removing or replacing steps of
-                the workflow deletes their records here, for every run.
+                The steps that ran or run now, in the order they started.
+                They stay when steps of the workflow are removed or
+                replaced.
               items: { $ref: '#/components/schemas/WorkflowJobStep' }
     WorkflowJobStep:
       type: object
       properties:
         id: { type: integer }
-        workflow_step_id: { type: integer }
+        workflow_step_id:
+          type: integer
+          nullable: true
+          description: The step of the workflow that ran; null once the step was removed from the workflow.
+        step_name:
+          type: string
+          description: The step's name when it ran; `—` when unknown.
+        step_type:
+          type: string
+          nullable: true
+          description: The step's type when it ran (`job`, `approval` or `pause`, or a type an older version stored), as stored.
         job_id: { type: integer, nullable: true, description: "The job of a job step, or the placeholder job of an approval step." }
         status: { type: string, enum: [pending, running, succeeded, failed, skipped] }
         started_at: { type: integer, nullable: true }
@@ -4308,34 +5628,129 @@ components:
           type: string
           nullable: true
           description: |
-            Why the step failed without a job: the user the workflow runs as
-            may not launch the step's job template (inactive, without
-            `workflow.launch`, or without operator access to its project), the
-            job template or approval rule no longer exists, the launch was
-            refused for a reason the message names (for example
-            `The value of "db_password" is the placeholder $encrypted$; send
-            the real value.`), the job could not be launched for another
-            reason, or the step's type is none of job, approval and pause
-            (`Not run: unknown step type "1".`), which older versions could
-            store. null otherwise.
+            Why the step failed, or why the run could not go on after it;
+            null otherwise. The messages:
+            - the user the workflow runs as may not launch the step's job
+              template (inactive, without `workflow.launch`, or without
+              operator access to its project), as in the example;
+            - `The job template of this step no longer exists.`,
+              `The approval rule of this step no longer exists.`;
+            - the launch was refused for a reason the message names, for
+              example `The value of "db_password" is the placeholder
+              $encrypted$; send the real value.`, or the approval rule of the
+              job template;
+            - `The job could not be launched; see the application log.`,
+              `The approval request could not be created; see the application
+              log.`;
+            - `Not run: unknown step type "1".`, for a type that older
+              versions could store;
+            - `Not run: approval rule "deploy-prod" needs 1 approval(s) from
+              users other than user #7, who launched this workflow, but only
+              0 of its approvers may decide.`: an approval step whose request
+              could never be approved;
+            - `Approval request #12 was rejected.`, `... timed out.` and
+              `... was canceled.` for an approval step, `Not run: approval
+              request #12 was rejected.`, `... timed out.` and
+              `... was canceled.` for a job step whose job waited for
+              approval: the gate did not open (see `on_failure_step_id` of
+              `WorkflowStep`);
+            - `Not approved: the approval request of this step no longer
+              exists.` for an approval step, `Not run: the approval request of
+              its job no longer exists.` for a job step: the job waited for
+              approval without an approval request (2.9.0 and older deleted
+              the requests of a deleted rule), and the maintenance run
+              canceled it; the gate did not open;
+            - `The next step #7 of this workflow no longer exists.`: a branch
+              to a removed step, which fails the run; added to the step's own
+              message, also on a step that succeeded;
+            - `This step was removed from the workflow while it ran, so the
+              run cannot go on.`;
+            - `Not finished: the run was canceled.` and `Not finished: the run
+              was canceled because its workflow template was deleted.`;
+            - `Not finished: the run had ended.`: the step still ran in a run
+              that had ended otherwise, and the maintenance run ended it.
           example: 'Not launched: user #7, whom this workflow runs as, may not launch job template "Deploy web" (#15).'
     WorkflowJobList:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/WorkflowJob' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+    WorkflowLaunchInput:
+      type: object
+      description: Optional launch options of a workflow run.
+      properties:
+        extra_vars:
+          description: |
+            The run's launch extra vars: a JSON object, or JSON text of one.
+            Every job step of the run receives them, over its job template's
+            extra vars and under the step's `extra_vars_template` mapping.
+            Values under the name of a password field of any job step's job
+            template are password answers, stored only encrypted. `null`,
+            `""`, `[]` and `{}` mean none. An object whose keys are 0, 1, 2
+            and so on reads as a list and is refused (such keys are no
+            variable names). Anything that is not an object answers 422
+            `The extra vars must be a JSON object, such as {"env": "prod"}.`
+          oneOf:
+            - { type: object, additionalProperties: true, nullable: true }
+            - { type: string }
+          example: { env: prod, release: '2026.10' }
+    WorkflowStepsLockedError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [message, workflow_job_ids]
+          properties:
+            message:
+              type: string
+              example: 'Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.'
+            workflow_job_ids:
+              type: array
+              items: { type: integer }
+              description: Every active run of the workflow, ascending.
+              example: [12]
+    WorkflowTemplateDeletion:
+      type: object
+      required: [deleted, canceled_runs, failed_runs]
+      properties:
+        deleted:
+          type: boolean
+          enum: [true]
+        canceled_runs:
+          type: integer
+          description: The running runs of the workflow this delete canceled.
+        failed_runs:
+          type: integer
+          description: |
+            The running runs whose cancel failed, for example on a database
+            error. Such a run can still be running, or be canceled while the
+            job of one of its steps still waits: no runner starts that job,
+            and its approval request takes no more votes. The maintenance
+            run cancels the run, or the job, later. The reason is in the
+            application log.
 
     TriggerJobInput:
       type: object
       description: Optional launch overrides for the job template.
       properties:
         extra_vars: { type: object, additionalProperties: true, description: "Merged over the template's extra vars." }
-        limit: { type: string }
-        verbosity: { type: integer, minimum: 0, maximum: 5 }
+        limit: { type: string, maxLength: 255, description: "Longer text, a list or an object is refused with 422." }
+        verbosity: { type: integer, minimum: 0, maximum: 5, description: "A value below 0 or above 5, a list or an object is refused with 422." }
     TriggerWorkflowInput:
       type: object
       properties:
-        extra_vars: { type: object, additionalProperties: true, description: "Extra vars for the start step, when it is a job step." }
+        extra_vars:
+          description: |
+            The run's launch extra vars: a JSON object, or JSON text of one.
+            They are stored on the run, password answers as `$encrypted$`,
+            and reach every job step: over the job template's extra vars and
+            under the step's `extra_vars_template` mapping. Values under the
+            name of a password field of any job step's job template stay
+            encrypted in every step's job. `null`, `""` and `{}` mean none;
+            anything that is not an object answers 422.
+          oneOf:
+            - { type: object, additionalProperties: true, nullable: true }
+            - { type: string }
     TriggerJobResult:
       type: object
       properties:
@@ -4354,7 +5769,7 @@ components:
         error: { type: string, enum: ['Launch refused.', 'Launch failed.'] }
     TriggerRejectedError:
       type: object
-      description: Why `/trigger/fire` or `/trigger/{token}` launched nothing (422).
+      description: Why `/trigger/fire`, `/trigger/{token}` or `/trigger/fire-workflow` launched nothing (422).
       properties:
         error:
           type: string

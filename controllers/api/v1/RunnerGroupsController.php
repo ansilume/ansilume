@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
 use app\models\RunnerGroup;
+use app\services\RunnerGroupDeletionService;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
 use yii\web\NotFoundHttpException;
@@ -64,16 +65,14 @@ class RunnerGroupsController extends BaseApiController
      */
     public function actionCreate(): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('runner-group.create')) {
+        if (!$this->userCan('runner-group.create')) {
             return $this->error('Forbidden.', 403);
         }
 
         $model = new RunnerGroup();
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($model, $body);
-        $model->created_by = (int)$user->id;
+        $model->created_by = (int)\Yii::$app->user->id;
 
         if (!$model->validate()) {
             return $this->error($this->firstError($model), 422);
@@ -98,9 +97,7 @@ class RunnerGroupsController extends BaseApiController
      */
     public function actionUpdate(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('runner-group.update')) {
+        if (!$this->userCan('runner-group.update')) {
             return $this->error('Forbidden.', 403);
         }
 
@@ -131,31 +128,17 @@ class RunnerGroupsController extends BaseApiController
      */
     public function actionDelete(int $id): array
     {
-        /** @var \yii\web\User<\yii\web\IdentityInterface> $user */
-        $user = \Yii::$app->user;
-        if (!$user->can('runner-group.delete')) {
+        if (!$this->userCan('runner-group.delete')) {
             return $this->error('Forbidden.', 403);
         }
 
         $model = $this->findModel($id);
-        $runnerCount = $model->getRunners()->count();
-        if ($runnerCount > 0) {
-            return $this->error(
-                "Cannot delete \"{$model->name}\": {$runnerCount} runner(s) still belong to this group.",
-                422
-            );
-        }
-
-        $templateCount = $model->getJobTemplates()->count();
-        if ($templateCount > 0) {
-            return $this->error(
-                "Cannot delete \"{$model->name}\": {$templateCount} job template(s) reference this group.",
-                422
-            );
-        }
-
         $name = $model->name;
-        $model->delete();
+        // Refused while runners belong to the group or job templates run on it (as in the web UI).
+        $refusal = (new RunnerGroupDeletionService())->delete($model);
+        if ($refusal !== null) {
+            return $this->error($refusal, 422);
+        }
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_RUNNER_GROUP_DELETED,
