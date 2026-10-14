@@ -8,6 +8,7 @@ use app\controllers\WorkflowTemplateController;
 use app\models\AuditLog;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\WorkflowStepChangeSummary;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\Response;
 
@@ -16,6 +17,10 @@ use yii\web\Response;
  * rule compared loosely, so add-step saved a step whose step_type was the
  * JSON true, stored as "1". No step type matched it, so a run that reached
  * the step waited there until someone canceled it.
+ *
+ * The step form's reader (WorkflowStepCommand::fromForm()) reads the type
+ * as text, so true and 1 are "1" now, which the strict rule refuses as
+ * any other unknown type. A posted step_order is ignored.
  */
 class WorkflowTemplateControllerStepTypeTest extends WebControllerTestCase
 {
@@ -28,8 +33,8 @@ class WorkflowTemplateControllerStepTypeTest extends WebControllerTestCase
     public static function stepTypeThatIsNoTypeProvider(): array
     {
         return [
-            'true' => [true, 'Step not added: Step Type must be a string.'],
-            'the number 1' => [1, 'Step not added: Step Type must be a string.'],
+            'true' => [true, 'Step not added: Step Type is invalid.'],
+            'the number 1' => [1, 'Step not added: Step Type is invalid.'],
             'the text "1"' => ['1', 'Step not added: Step Type is invalid.'],
         ];
     }
@@ -70,10 +75,19 @@ class WorkflowTemplateControllerStepTypeTest extends WebControllerTestCase
             WorkflowStep::TYPE_PAUSE => [],
         ];
 
+        $position = 1;
+        $previous = 'step-0';
         foreach ($targets as $type => $target) {
             $this->sendJson(['WorkflowStep' => ['name' => 'json-' . $type, 'step_type' => $type] + $target]);
             $this->makeController()->actionAddStep((int)$workflow->id);
-            $this->assertSame(['success' => "Step \"json-{$type}\" added."], \Yii::$app->session->getAllFlashes(true), $type);
+            $position++;
+            $flashes = \Yii::$app->session->getAllFlashes(true);
+            $this->assertStringStartsWith(
+                sprintf(WorkflowStepChangeSummary::ADDED, 'json-' . $type, $position, $position, sprintf(WorkflowStepChangeSummary::AFTER, $previous)),
+                (string)($flashes['success'] ?? ''),
+                $type
+            );
+            $previous = 'json-' . $type;
         }
 
         $saved = WorkflowStep::find()

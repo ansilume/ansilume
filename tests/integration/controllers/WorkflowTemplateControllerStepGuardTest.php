@@ -18,6 +18,8 @@ use app\services\WorkflowExecutionService;
 use app\services\WorkflowLaunchRejectedException;
 use app\services\WorkflowStepChangeGuard;
 use app\services\WorkflowStepChangeRefusedException;
+use app\services\WorkflowStepChangeSummary;
+use app\services\WorkflowStepsTable;
 use app\services\WorkflowTemplateDeletionService;
 use app\services\WorkflowTemplatePage;
 use app\tests\integration\services\FailingWorkflowCancellation;
@@ -126,7 +128,7 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
         $this->makeController()->actionAddStep((int)$workflow->id);
         $gate = WorkflowStep::findOne(['workflow_template_id' => $workflow->id, 'name' => 'gate']);
         $this->assertNotNull($gate);
-        $this->assertSame(['success' => 'Step "gate" added.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertSuccessFlash(sprintf(WorkflowStepChangeSummary::ADDED, 'gate', 2, 2, sprintf(WorkflowStepChangeSummary::AFTER, 'step-0')));
         $added = AuditLog::findOne(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_ADDED, 'object_id' => $workflow->id]);
         $this->assertNotNull($added);
         $this->assertSame((int)$rule->id, $this->metadata($added)['approval_rule_id'] ?? null, 'the audit names the rule');
@@ -134,7 +136,7 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
         $this->setPost(['step_id' => (string)$gate->id]);
         $this->makeController()->actionRemoveStep((int)$workflow->id);
         $this->assertNull(WorkflowStep::findOne($gate->id));
-        $this->assertSame(['success' => 'Step removed.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertSuccessFlash(sprintf(WorkflowStepChangeSummary::REMOVED, 'gate', 2, 2));
         $removed = AuditLog::findOne(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_REMOVED, 'object_id' => $workflow->id]);
         $this->assertNotNull($removed);
         $this->assertSame((int)$rule->id, $this->metadata($removed)['approval_rule_id'] ?? null);
@@ -279,7 +281,7 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
 
         $this->setPost(['WorkflowStep' => ['name' => 'second-gate', 'step_type' => WorkflowStep::TYPE_JOB, 'job_template_id' => (string)$s['own']->id]]);
         $this->makeController()->actionAddStep((int)$workflow->id);
-        $this->assertSame(['success' => 'Step "second-gate" added.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertSuccessFlash(sprintf(WorkflowStepChangeSummary::ADDED, 'second-gate', 3, 3, sprintf(WorkflowStepChangeSummary::AFTER, 'step-1')));
         $added = WorkflowStep::findOne(['workflow_template_id' => $workflow->id, 'name' => 'second-gate']);
         $this->assertNotNull($added);
         $this->assertSame((int)$s['own']->id, (int)$added->job_template_id);
@@ -289,11 +291,11 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
 
         $this->setPost(['step_id' => (string)$added->id, 'direction' => 'up']);
         $this->makeController()->actionMoveStep((int)$workflow->id);
-        $this->assertSame(['success' => 'Step "second-gate" moved up.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertSuccessFlash(sprintf(WorkflowStepChangeSummary::MOVED, 'second-gate', 2, 3, sprintf(WorkflowStepChangeSummary::AFTER, 'step-0')));
 
         $this->setPost(['step_id' => (string)$added->id]);
         $this->makeController()->actionRemoveStep((int)$workflow->id);
-        $this->assertSame(['success' => 'Step removed.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertSuccessFlash(sprintf(WorkflowStepChangeSummary::REMOVED, 'second-gate', 2, 3));
         $this->assertNull(WorkflowStep::findOne($added->id));
     }
 
@@ -310,7 +312,7 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
 
         $this->setPost(['WorkflowStep' => ['name' => 'before-the-rule', 'step_type' => WorkflowStep::TYPE_PAUSE]]);
         $this->makeController()->actionAddStep((int)$workflow->id);
-        $this->assertSame(['success' => 'Step "before-the-rule" added.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertSuccessFlash(sprintf(WorkflowStepChangeSummary::ADDED, 'before-the-rule', 2, 2, sprintf(WorkflowStepChangeSummary::AFTER, 'step-0')));
 
         $this->gate($s['own'], $s);
 
@@ -384,7 +386,7 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
 
         $this->setPost(['step_id' => (string)$steps[1]->id, 'direction' => 'up']);
         $this->makeController()->actionMoveStep((int)$workflow->id);
-        $this->assertSame(['danger' => $refusal], \Yii::$app->session->getAllFlashes(true));
+        $this->assertSame(['danger' => WorkflowTemplateController::FLASH_STEP_NOT_MOVED . $refusal], \Yii::$app->session->getAllFlashes(true));
 
         $this->assertSame($before, $this->stepRows($workflow), 'nothing changed');
         $this->assertFalse($this->stepAuditExists((int)$workflow->id));
@@ -393,7 +395,7 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
         $run->save(false);
         $this->setPost(['WorkflowStep' => ['name' => 'late-step', 'step_type' => WorkflowStep::TYPE_PAUSE]]);
         $this->makeController()->actionAddStep((int)$workflow->id);
-        $this->assertSame(['success' => 'Step "late-step" added.'], \Yii::$app->session->getAllFlashes(true), 'a finished run does not block');
+        $this->assertSuccessFlash(sprintf(WorkflowStepChangeSummary::ADDED, 'late-step', 3, 3, sprintf(WorkflowStepChangeSummary::AFTER, 'step-1')), 'a finished run does not block');
     }
 
     /**
@@ -465,7 +467,7 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
         $this->makeController()->actionRemoveStep((int)$workflow->id);
 
         $this->assertSame(
-            ['danger' => sprintf(WorkflowStepChangeGuard::STEP_ROUTED_TO, '"step-20"', '#10 "step-10"')],
+            ['danger' => sprintf(WorkflowStepChangeGuard::STEP_ROUTED_TO, '"step-20"', 'step 1 "step-10"')],
             \Yii::$app->session->getAllFlashes(true)
         );
         $this->assertNotNull(WorkflowStep::findOne($target->id));
@@ -730,7 +732,8 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
         $this->loginAs($s['admin']);
 
         $params = $this->viewParams((int)$workflow->id);
-        $this->assertSame($runs, $params['activeRunIds']);
+        $this->assertSame(array_slice($runs, 0, WorkflowStepChangeGuard::RUN_LIST_LIMIT), $params['activeRunIds'], 'the oldest ten');
+        $this->assertSame(12, $params['activeRunCount']);
         $html = $this->renderPage($params);
 
         $this->assertStringContainsString('id="wf-active-runs-notice"', $html);
@@ -780,12 +783,16 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
         $html = $this->renderPage($this->viewParams((int)$workflow->id));
 
         $this->assertStringContainsString('<th>Always</th>', $html);
-        $next = WorkflowTemplatePage::ROUTE_NEXT_STEP;
-        $this->assertSame(['#' . $elsewhere->id, $next, '—'], $this->routes($html, $stray));
-        $this->assertSame([$next, $next, '#20 step-20'], $this->routes($html, $job));
-        $this->assertSame([$next, WorkflowTemplatePage::ROUTE_END_FAILED, '—'], $this->routes($html, $gate), 'a rejection ends the run');
+        $unused = WorkflowStepsTable::ROUTE_UNUSED;
+        $this->assertSame([sprintf(WorkflowStepsTable::ROUTE_MISSING, $elsewhere->id), $unused, $unused], $this->routes($html, $stray));
+        $this->assertSame([$unused, $unused, sprintf(WorkflowStepsTable::ROUTE_TO, '2. step-20')], $this->routes($html, $job), 'Always wins');
         $this->assertSame(
-            [$next, WorkflowTemplatePage::ROUTE_END, '#10 step-10 ' . WorkflowTemplatePage::APPROVAL_ALWAYS_NOTE],
+            [sprintf(WorkflowStepsTable::ROUTE_TO_NEXT, '3. step-30'), WorkflowStepsTable::ROUTE_END_FAILS, $unused],
+            $this->routes($html, $gate),
+            'a rejection ends the run'
+        );
+        $this->assertSame(
+            [$unused, WorkflowStepsTable::ROUTE_END_FAILS, sprintf(WorkflowStepsTable::ROUTE_LOOP, '1. step-10') . ' ' . WorkflowStepsTable::APPROVAL_ALWAYS_NOTE],
             $this->routes($html, $legacyGate)
         );
     }
@@ -870,9 +877,9 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
      */
     private function routes(string $html, WorkflowStep $step): array
     {
-        $found = preg_match('#<tr data-step-id="' . $step->id . '">(.*?)</tr>#s', $html, $row);
+        $found = preg_match('#<tr\b[^>]*\bdata-step-id="' . $step->id . '"[^>]*>(.*?)</tr>#s', $html, $row);
         $this->assertSame(1, $found, "row of step #{$step->id}");
-        preg_match_all('#<td data-route="(?:success|failure|always)">(.*?)</td>#s', $row[1], $cells);
+        preg_match_all('#<td\b[^>]*\bdata-route="(?:success|failure|always)"[^>]*>(.*?)</td>#s', $row[1], $cells);
 
         return array_map(
             static fn (string $cell): string => (string)preg_replace('/\s+/', ' ', trim(html_entity_decode(strip_tags($cell)))),
@@ -948,6 +955,17 @@ class WorkflowTemplateControllerStepGuardTest extends WebControllerTestCase
             $this->swapped[$id] = \Yii::$app->getComponents(true)[$id] ?? null;
         }
         \Yii::$app->set($id, $replacement);
+    }
+
+    /**
+     * The flashes are the success flash of a change, which starts with
+     * $first (WorkflowStepChangeSummary words the rest), and maybe warnings.
+     */
+    private function assertSuccessFlash(string $first, string $message = ''): void
+    {
+        $flashes = \Yii::$app->session->getAllFlashes(true);
+        $this->assertSame([], array_diff(array_keys($flashes), ['success', 'warning']), $message);
+        $this->assertStringStartsWith($first, (string)($flashes['success'] ?? ''), $message);
     }
 
     private function assertForbidden(callable $action, string $message): void

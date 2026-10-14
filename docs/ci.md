@@ -84,6 +84,7 @@ gh run view <run id> --log-failed
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | PHPStan: `Child process error ... PHPStan process crashed because it reached configured PHP memory limit`, only in CI | PHPStan's parallel workers inherit the container's CLI `memory_limit` (256M). The CI runner has 4 cores, so each worker analyses a quarter of the files; a development machine with more cores splits them finer and passes | `bin/tests-phpstan.sh` passes `--memory-limit=1G` to every worker (since the CI run of v2.10.0). If the code outgrows it, raise it there and in `PhpstanMemoryLimitTest`. To reproduce it locally, include `phpstan.neon` in a config that sets `parallel: maximumNumberOfProcesses: 4` |
+| PHPUnit: `Integration tests failed`, and the output ends with `Allowed memory size of 268435456 bytes exhausted` before any test failed | The coverage run keeps, for every covered line, the tests that ran it, so its memory grows with the number of tests; the 10444 tests of 2.11.0 outgrew the container's CLI `memory_limit` (256M) | `bin/tests-phpunit.sh` passes `-d memory_limit=1G` to every PHPUnit run (since 2.11.0). If the tests outgrow it, raise it there and in `PhpunitMemoryLimitTest` |
 
 ## When Scrutinizer is red
 

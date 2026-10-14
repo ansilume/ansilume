@@ -276,6 +276,46 @@ class AuditLogCompletenessTest extends DbTestCase
     }
 
     // -------------------------------------------------------------------------
+    // Workflow step actions (WorkflowStepWriteService, WorkflowStepAudit)
+    // -------------------------------------------------------------------------
+
+    public function testTheWorkflowStepActionsKeepTheirNames(): void
+    {
+        $this->assertSame(
+            [
+                'workflow-template.step.added',
+                'workflow-template.step.updated',
+                'workflow-template.step.moved',
+                'workflow-template.step.removed',
+            ],
+            [
+                AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_ADDED,
+                AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_UPDATED,
+                AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_MOVED,
+                AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_REMOVED,
+            ]
+        );
+        $this->assertSame(AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_UPDATED, AuditService::ACTION_WORKFLOW_TEMPLATE_STEP_UPDATED);
+    }
+
+    public function testWorkflowStepUpdatedAudit(): void
+    {
+        $user = $this->createUser('ws_update');
+        $workflow = $this->createWorkflowTemplate($user->id);
+
+        $this->audit->log(AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_UPDATED, 'workflow_template', $workflow->id, $user->id, [
+            'step_id' => 7,
+            'changes' => ['name' => ['from' => 'Build', 'to' => 'Compile']],
+            'source' => 'web',
+        ]);
+
+        $record = $this->assertAuditEntry(AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_UPDATED, 'workflow_template', $workflow->id);
+        $this->assertSame($user->id, $record->user_id);
+        $meta = json_decode((string)$record->metadata, true);
+        $this->assertSame(['name' => ['from' => 'Build', 'to' => 'Compile']], $meta['changes']);
+    }
+
+    // -------------------------------------------------------------------------
     // Spot-check existing audit calls still work with constants
     // -------------------------------------------------------------------------
 

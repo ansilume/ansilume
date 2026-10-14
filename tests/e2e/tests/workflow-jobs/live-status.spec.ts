@@ -1,11 +1,14 @@
 import { test, expect } from '@playwright/test';
+import { PAUSED, stepBadge } from '../../lib/runs';
 import { LOCKED_PAUSE, LOCKED_WORKFLOW, newestRunId, runStepRow } from '../../lib/workflows';
 
 // The workflow-job detail page polls /workflow-job/status while the
 // workflow is still running so the status badge, per-step status, and
 // finished-timestamp refresh in place without the operator hitting F5.
 // The run of e2e-locked-workflow waits at its pause step, and no spec moves
-// it on (commands/E2eWorkflowGateSeeder.php): a stable unfinished run.
+// it on (commands/E2eWorkflowGateSeeder.php): a stable unfinished run. It is
+// stored as running and shows as Paused: the poll keeps the stored status and
+// adds the display state (state, state_label, waiting_for).
 
 test.describe('Workflow job live status', () => {
   test('status endpoint returns a JSON snapshot of the run, its steps keyed by execution', async ({ page }) => {
@@ -19,6 +22,10 @@ test.describe('Workflow job live status', () => {
       id: Number(id),
       status: 'running',
       status_label: 'Running',
+      state: 'paused',
+      state_label: 'Paused',
+      state_css: 'warning',
+      waiting_for: 'resume',
       is_finished: false,
       finished_at: null,
     });
@@ -37,6 +44,10 @@ test.describe('Workflow job live status', () => {
       is_current: true,
       status: 'running',
       status_label: 'Running',
+      state: 'paused',
+      state_label: 'Paused',
+      waiting_for: 'resume',
+      approval: null,
       error_message: null,
     });
     expect(typeof step.id).toBe('number');
@@ -56,13 +67,13 @@ test.describe('Workflow job live status', () => {
     // The status badge is marked with its own id so the polling loop
     // can target it. Presence of that id is a signal the JS hook points
     // at the right element.
-    await expect(page.locator('#wj-status')).toHaveText('Running');
+    await expect(page.locator('#wj-status')).toHaveText(PAUSED);
     const pause = runStepRow(page, LOCKED_PAUSE);
     await expect(pause.locator('[data-wjs-type-cell]')).toHaveText('Pause');
     await expect(pause).toHaveClass(/table-active/);
     // A poll runs right after the page loaded: the row stays one row.
     await page.waitForResponse((response) => response.url().includes('/workflow-job/status'));
     await expect(page.locator('#wj-steps-table tbody tr')).toHaveCount(1);
-    await expect(pause.locator('[data-wjs-status-cell] .badge')).toHaveText('Running');
+    await expect(stepBadge(pause)).toHaveText(PAUSED);
   });
 });

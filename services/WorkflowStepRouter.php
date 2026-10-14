@@ -8,6 +8,7 @@ use app\models\ApprovalRequest;
 use app\models\Job;
 use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
+use app\models\WorkflowTemplate;
 use yii\base\Component;
 
 /**
@@ -16,8 +17,10 @@ use yii\base\Component;
  * - A step that succeeded follows its Always branch, else its On Success
  *   branch; one that failed its Always branch, else its On Failure branch.
  * - A branch is the end of the workflow (END_WORKFLOW), a step of the same
- *   workflow, or empty: then the step with the next higher step order runs,
- *   and after the last step the run ends with the outcome of that step.
+ *   workflow (also the step itself or an earlier one: a loop), or empty: then
+ *   the next step in the run order runs (WorkflowTemplate::RUN_ORDER: by
+ *   step order, ties by ID, so steps that share a step order all run), and
+ *   after the last step the run ends with the outcome of that step.
  * - A gate that did not open fails closed: an approval step that was
  *   rejected, timed out (rejecting) or canceled, and a job step whose job
  *   never ran because its approval was rejected, timed out or canceled while
@@ -65,8 +68,12 @@ class WorkflowStepRouter extends Component
      */
     public const JOB_APPROVAL_MISSING = 'Not run: the approval request of its job no longer exists.';
 
-    /** The run failed at a branch to a step that no longer exists: the step ID. */
-    public const ROUTE_TARGET_MISSING = 'The next step #%d of this workflow no longer exists.';
+    /**
+     * The run failed at a branch to a step that no longer exists: the step
+     * ID, written "step ID N" ("#N" names runs, jobs and requests, "N." a
+     * position). Runs that failed before keep the text they stored.
+     */
+    public const ROUTE_TARGET_MISSING = 'The step this branch leads to no longer exists (step ID %d).';
 
     /**
      * The next step after $step, or why the run ends failed.
@@ -131,7 +138,8 @@ class WorkflowStepRouter extends Component
     }
 
     /**
-     * A branch: END_WORKFLOW, a step ID, or null for the next step by order.
+     * A branch: END_WORKFLOW, a step ID, or null for the next step in the run
+     * order.
      *
      * @return array{next: WorkflowStep|null, error: string|null}
      */
@@ -149,14 +157,28 @@ class WorkflowStepRouter extends Component
                 : ['next' => $target, 'error' => null];
         }
 
+        return ['next' => $this->nextInRunOrder($current), 'error' => null];
+    }
+
+    /**
+     * The step after $current in the run order (WorkflowTemplate::RUN_ORDER):
+     * the first one with a higher step order, or with the same step order and
+     * a higher ID; null after the last step.
+     */
+    private function nextInRunOrder(WorkflowStep $current): ?WorkflowStep
+    {
         /** @var WorkflowStep|null $next */
         $next = WorkflowStep::find()
             ->where(['workflow_template_id' => $current->workflow_template_id])
-            ->andWhere(['>', 'step_order', $current->step_order])
-            ->orderBy(['step_order' => SORT_ASC])
+            ->andWhere([
+                'or',
+                ['>', 'step_order', $current->step_order],
+                ['and', ['step_order' => $current->step_order], ['>', 'id', $current->id]],
+            ])
+            ->orderBy(WorkflowTemplate::RUN_ORDER)
             ->one();
 
-        return ['next' => $next, 'error' => null];
+        return $next;
     }
 
     /**

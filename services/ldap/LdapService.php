@@ -18,9 +18,25 @@ use yii\base\Component;
  * null. The reason is exposed via {@see getLastError()} for diagnostics
  * (logged + audited by the LoginForm) but never surfaced to the user, so
  * we do not leak directory state at the login screen.
+ *
+ * A lookup without a password ({@see lookup()}) tells a user the directory
+ * no longer has from a lookup that failed, so that ldap/sync disables only
+ * the first.
  */
 class LdapService extends Component
 {
+    /** Why a sign-in or a lookup fails while LDAP is not enabled or its host or base DN is not set. */
+    public const NOT_USABLE = 'LDAP is not enabled or not fully configured.';
+
+    /** Why the service bind failed, when the client gives no reason. */
+    public const SERVICE_BIND_FAILED = 'Service bind failed.';
+
+    /**
+     * Why a lookup finds no user: the user search ran and found no entry. A
+     * sign-in answers it for every user search that answers no user.
+     */
+    public const USER_NOT_FOUND = 'User not found in directory.';
+
     /**
      * Either an instance of {@see LdapClientInterface}, a Yii2 config
      * array (`['class' => SomeClient::class, ...]`), or null to fall
@@ -86,7 +102,7 @@ class LdapService extends Component
 
         $config = $this->getConfig();
         if (!$config->isUsable()) {
-            $this->lastError = 'LDAP is not enabled or not fully configured.';
+            $this->lastError = self::NOT_USABLE;
             return null;
         }
         // Reject empty credentials early — also done in the client, but
@@ -98,14 +114,14 @@ class LdapService extends Component
 
         $client = $this->getClient();
         if (!$client->bindServiceAccount()) {
-            $this->lastError = $client->getLastError() ?? 'Service bind failed.';
+            $this->lastError = $client->getLastError() ?? self::SERVICE_BIND_FAILED;
             return null;
         }
 
         $entry = $client->findUser($username);
         if ($entry === null) {
             // Treat "not found" the same as "wrong password" externally.
-            $this->lastError = 'User not found in directory.';
+            $this->lastError = self::USER_NOT_FOUND;
             return null;
         }
 
@@ -124,53 +140,51 @@ class LdapService extends Component
             return null;
         }
 
-        $groups = $client->findUserGroups($entry->dn);
-        $roles = $this->mapGroupsToRoles($groups);
-
-        return new LdapAuthResult(
-            dn: $entry->dn,
-            uid: $this->extractUid($entry, $config),
-            username: $entry->first($config->attrUsername) ?? $username,
-            email: $entry->first($config->attrEmail) ?? '',
-            displayName: $entry->first($config->attrDisplayName) ?? '',
-            groups: $groups,
-            roles: $roles,
-        );
+        return $this->buildResult($entry, $client->findUserGroups($entry->dn), $username, $config);
     }
 
     /**
-     * Look up a user without verifying a password. Used by lifecycle sync
-     * (Phase 14) and the diagnostic endpoint (Phase 12). Returns null if
-     * the user is no longer present in the directory.
+     * Look up a user without verifying a password, for ldap/sync and the
+     * diagnostics.
+     *
+     * Only a user search that ran and found no entry answers
+     * {@see LdapLookupResult::MISSING}. LDAP that is not usable, a failed
+     * service bind, a user search that failed or answered more than one
+     * entry, and a failed group search answer a failure with its reason,
+     * which {@see getLastError()} gives too: such a lookup says nothing about
+     * the user.
      */
-    public function lookupByUsername(string $username): ?LdapAuthResult
+    public function lookup(string $username): LdapLookupResult
     {
         $this->lastError = null;
         $config = $this->getConfig();
         if (!$config->isUsable()) {
-            $this->lastError = 'LDAP is not enabled or not fully configured.';
-            return null;
+            return $this->failedLookup(LdapLookupResult::NOT_USABLE, self::NOT_USABLE);
         }
         $client = $this->getClient();
         if (!$client->bindServiceAccount()) {
-            $this->lastError = $client->getLastError() ?? 'Service bind failed.';
-            return null;
+            return $this->failedLookup(LdapLookupResult::BIND_FAILED, $client->getLastError() ?? self::SERVICE_BIND_FAILED);
         }
         $entry = $client->findUser($username);
         if ($entry === null) {
-            $this->lastError = 'User not found in directory.';
-            return null;
+            return $this->noEntry($client->getLastError());
         }
         $groups = $client->findUserGroups($entry->dn);
-        return new LdapAuthResult(
-            dn: $entry->dn,
-            uid: $this->extractUid($entry, $config),
-            username: $entry->first($config->attrUsername) ?? $username,
-            email: $entry->first($config->attrEmail) ?? '',
-            displayName: $entry->first($config->attrDisplayName) ?? '',
-            groups: $groups,
-            roles: $this->mapGroupsToRoles($groups),
-        );
+        $groupError = $client->getLastError();
+        if ($groupError !== null) {
+            return $this->failedLookup(LdapLookupResult::GROUPS_FAILED, $groupError);
+        }
+        return LdapLookupResult::found($this->buildResult($entry, $groups, $username, $config));
+    }
+
+    /**
+     * The user {@see lookup()} finds, or null when the directory has no such
+     * user or the lookup failed: {@see getLastError()} says which. Used by
+     * `ldap/test-user` and `POST /api/v1/admin/ldap/test`.
+     */
+    public function lookupByUsername(string $username): ?LdapAuthResult
+    {
+        return $this->lookup($username)->user;
     }
 
     /**
@@ -278,6 +292,47 @@ class LdapService extends Component
             $this->resolvedClient = new PhpLdapClient($config);
         }
         return $this->resolvedClient;
+    }
+
+    /**
+     * The answer of a user search that answered no entry: the user is
+     * missing when the client reports no error, the search failed when it
+     * does.
+     */
+    private function noEntry(?string $searchError): LdapLookupResult
+    {
+        if ($searchError !== null) {
+            return $this->failedLookup(LdapLookupResult::SEARCH_FAILED, $searchError);
+        }
+        $this->lastError = self::USER_NOT_FOUND;
+        return LdapLookupResult::missing();
+    }
+
+    /**
+     * @param LdapLookupResult::NOT_USABLE|LdapLookupResult::BIND_FAILED|LdapLookupResult::SEARCH_FAILED|LdapLookupResult::GROUPS_FAILED $outcome
+     */
+    private function failedLookup(string $outcome, string $error): LdapLookupResult
+    {
+        $this->lastError = $error;
+        return LdapLookupResult::failed($outcome, $error);
+    }
+
+    /**
+     * The directory entry of a user, with the roles their groups map to.
+     *
+     * @param list<string> $groups
+     */
+    private function buildResult(LdapEntry $entry, array $groups, string $username, LdapConfig $config): LdapAuthResult
+    {
+        return new LdapAuthResult(
+            dn: $entry->dn,
+            uid: $this->extractUid($entry, $config),
+            username: $entry->first($config->attrUsername) ?? $username,
+            email: $entry->first($config->attrEmail) ?? '',
+            displayName: $entry->first($config->attrDisplayName) ?? '',
+            groups: $groups,
+            roles: $this->mapGroupsToRoles($groups),
+        );
     }
 
     /**

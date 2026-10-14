@@ -39,6 +39,8 @@ use yii\db\ActiveRecord;
  * @property JobLog[]             $logs
  * @property JobHostSummary[]     $hostSummaries
  * @property JobArtifact[]        $artifacts
+ * @property ApprovalRequest|null $approvalRequest the request of a job that waits or waited for an approval
+ * @property WorkflowJobStep|null $workflowJobStep the workflow step execution the job was created for
  *
  * The sealed password answers (column secret_extra_vars) are read and
  * written only through getSealedSecretExtraVars() and
@@ -261,5 +263,28 @@ class Job extends ActiveRecord
     public function getArtifacts(): \yii\db\ActiveQuery
     {
         return $this->hasMany(JobArtifact::class, ['job_id' => 'id'])->orderBy('display_name ASC');
+    }
+
+    /**
+     * The approval request of the job: of a job whose template has an
+     * approval rule, or of the placeholder of a workflow approval step. A job
+     * has at most one (approval_request.job_id is unique); null for a job that
+     * never waited for an approval.
+     */
+    public function getApprovalRequest(): \yii\db\ActiveQuery
+    {
+        return $this->hasOne(ApprovalRequest::class, ['job_id' => 'id']);
+    }
+
+    /**
+     * The workflow step execution the job was created for: the job of a job
+     * step, or the placeholder of an approval step, which holds the step's
+     * approval request and never runs. Every execution creates a job of its
+     * own, so a job belongs to at most one; null for a job launched outside a
+     * workflow. The execution outlives its step (see WorkflowJobStep).
+     */
+    public function getWorkflowJobStep(): \yii\db\ActiveQuery
+    {
+        return $this->hasOne(WorkflowJobStep::class, ['job_id' => 'id']);
     }
 }

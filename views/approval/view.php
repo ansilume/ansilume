@@ -6,7 +6,10 @@ declare(strict_types=1);
 /** @var app\models\ApprovalRequest $model */
 /** @var bool $canDecide the user's vote would be recorded now */
 /** @var string|null $decisionNote why the user, who holds approval.decide, cannot decide; null: nothing to say */
+/** @var app\services\runstate\RequestContext|null $context what the request is for (ApprovalRequestContexts) */
+/** @var app\services\runstate\Viewer $viewer who looks at the page */
 
+use app\controllers\ApprovalController;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use yii\helpers\Html;
@@ -25,6 +28,10 @@ $decisionNote = $decisionNote ?? null;
             <tr>
                 <th style="width:180px">Status</th>
                 <td><span class="badge text-bg-<?= Html::encode(ApprovalRequest::statusCssClass($model->status)) ?>"><?= Html::encode(ApprovalRequest::statusLabel($model->status)) ?></span></td>
+            </tr>
+            <tr>
+                <th><?= Html::encode(ApprovalController::FOR_HEADER) ?></th>
+                <td id="approval-for"><?= $this->render('_for', ['context' => $context ?? null, 'viewer' => $viewer]) ?></td>
             </tr>
             <tr>
                 <th>Job</th>

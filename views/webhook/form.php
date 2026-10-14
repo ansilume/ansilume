@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\Webhook $model */
+/** @var string $secret What the secret field shows: as submitted, else the placeholder for a stored secret */
 
 use app\models\Webhook;
 use yii\helpers\Html;
@@ -48,8 +49,9 @@ $this->title = $isNew ? 'New Webhook' : 'Edit: ' . Html::encode($model->name);
     </div>
     <div class="col-md-6">
         <?= $form->field($model, 'secret')
-            ->passwordInput(['maxlength' => 128, 'autocomplete' => 'off'])
-            ->hint('Optional. When set, deliveries include an <code>X-Ansilume-Signature: sha256=&lt;hmac&gt;</code> header for verification.') ?>
+            ->passwordInput(['maxlength' => 128, 'autocomplete' => 'off', 'value' => $secret])
+            ->hint('Optional. When set, deliveries include an <code>X-Ansilume-Signature: sha256=&lt;hmac&gt;</code> header for verification.'
+                . ($model->getShownSecret() !== '' ? ' ' . Html::encode(Webhook::SECRET_HINT) : '')) ?>
     </div>
     <div class="col-12">
         <?= $form->field($model, 'enabled')->checkbox() ?>

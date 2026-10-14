@@ -7,6 +7,7 @@ import {
   REQUEST_JOB_COLUMN,
   REQUEST_RULE_COLUMN,
   REQUEST_STATUS_COLUMN,
+  approvalsCount,
   asOperator,
   decisionForms,
   decisionRows,
@@ -103,7 +104,7 @@ test.describe('Approval Requests That Cannot Be Decided', () => {
     await expect(votes.nth(1).locator('td').nth(0)).toHaveText('e2e-operator');
     await expect(votes.nth(1).locator('.approval-launcher-decision')).toHaveCount(0);
     // Only e2e-operator's approval counts; the deleted rule's threshold is unknown.
-    await expect(page.locator('#page-content table').first().locator('tr', { hasText: 'Approvals' }).locator('td')).toHaveText('1 / ?');
+    await expect(approvalsCount(page)).toHaveText('1 / ?');
   });
 });
 

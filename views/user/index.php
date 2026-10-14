@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
+/** @var array<int, list<string>> $roles user ID => the names of the roles assigned to that user (AssignedRoles) */
+/** @var array<int, bool> $changeable user ID => whether the signed-in user may change that user (UserChangePolicy) */
 
 use app\models\User;
 use yii\helpers\Html;
@@ -32,11 +34,7 @@ $this->title = 'Users';
         </thead>
         <tbody>
         <?php foreach ($dataProvider->getModels() as $user) : ?>
-            <?php
-            /** @var \yii\rbac\ManagerInterface $auth */
-            $auth = \Yii::$app->authManager;
-            $roles = $auth->getRolesByUser($user->id);
-            ?>
+            <?php $userRoles = $roles[$user->id] ?? []; ?>
             <tr>
                 <td><?= $user->id ?></td>
                 <td><?= Html::a(Html::encode($user->username), ['view', 'id' => $user->id]) ?></td>
@@ -49,10 +47,10 @@ $this->title = 'Users';
                     <?php endif; ?>
                 </td>
                 <td>
-                    <?php foreach ($roles as $role) : ?>
-                        <span class="badge text-bg-secondary"><?= Html::encode($role->name) ?></span>
+                    <?php foreach ($userRoles as $role) : ?>
+                        <span class="badge text-bg-secondary"><?= Html::encode($role) ?></span>
                     <?php endforeach; ?>
-                    <?php if (empty($roles)) :
+                    <?php if ($userRoles === []) :
                         ?><span class="text-muted">—</span><?php
                     endif; ?>
                 </td>
@@ -68,7 +66,7 @@ $this->title = 'Users';
                 <td><?= date('Y-m-d', $user->created_at) ?></td>
                 <td class="text-end text-nowrap">
                     <?= Html::a('View', ['view', 'id' => $user->id], ['class' => 'btn btn-sm btn-outline-secondary']) ?>
-                    <?php if (\Yii::$app->user?->can('user.update')) : ?>
+                    <?php if (($changeable[$user->id] ?? false) && \Yii::$app->user?->can('user.update')) : ?>
                         <?= Html::a('Edit', ['update', 'id' => $user->id], ['class' => 'btn btn-sm btn-outline-secondary ms-1']) ?>
                     <?php endif; ?>
                 </td>

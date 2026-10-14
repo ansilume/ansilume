@@ -42,7 +42,11 @@ class SiteControllerActionTest extends WebControllerTestCase
         $this->assertArrayHasKey('onlineRunners', $p);
         $this->assertArrayHasKey('totalRunners', $p);
         $this->assertArrayHasKey('pendingApprovals', $p);
+        $this->assertSame([], $p['approvalContexts'], 'what each pending request is for, by request ID');
         $this->assertArrayHasKey('runningWorkflows', $p);
+        $this->assertSame([], $p['runStates'], 'the state of each running workflow, by run ID');
+        $this->assertInstanceOf(\app\services\runstate\Viewer::class, $p['viewer']);
+        $this->assertSame((int)$user->id, $p['viewer']->userId);
         $this->assertArrayHasKey('upcomingSchedules', $p);
         $this->assertArrayHasKey('failedJobs', $p);
         $this->assertArrayHasKey('syncErrors', $p);
@@ -114,6 +118,9 @@ class SiteControllerActionTest extends WebControllerTestCase
 
         $this->assertGreaterThanOrEqual(1, $ctrl->capturedParams['stats']['pending_approvals']);
         $this->assertNotEmpty($ctrl->capturedParams['pendingApprovals']);
+        $context = $ctrl->capturedParams['approvalContexts'][(int)$ar->id] ?? null;
+        $this->assertInstanceOf(\app\services\runstate\RequestContext::class, $context);
+        $this->assertSame(sprintf(\app\services\runstate\Texts::FOR_JOB_TEMPLATE, $tpl->name), $context->text());
     }
 
     public function testIndexShowsRunningWorkflows(): void
@@ -140,6 +147,10 @@ class SiteControllerActionTest extends WebControllerTestCase
         $ctrl->actionIndex();
 
         $this->assertNotEmpty($ctrl->capturedParams['runningWorkflows']);
+        $state = $ctrl->capturedParams['runStates'][(int)$wfJob->id] ?? null;
+        $this->assertInstanceOf(\app\services\runstate\RunState::class, $state);
+        $this->assertSame(\app\services\runstate\Display::STATE_RUNNING, $state->state, 'between two steps it runs');
+        $this->assertNull($state->current);
     }
 
     public function testIndexShowsUpcomingSchedules(): void

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\ShownSecretField;
 use app\models\AuditLog;
 use app\models\Webhook;
 use yii\data\ActiveDataProvider;
@@ -65,7 +66,7 @@ class WebhookController extends BaseController
             }
         }
 
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', ['model' => $model, 'secret' => ShownSecretField::value($model, 'secret', $model->getShownSecret())]);
     }
 
     public function actionUpdate(int $id): Response|string
@@ -86,7 +87,7 @@ class WebhookController extends BaseController
             }
         }
 
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', ['model' => $model, 'secret' => ShownSecretField::value($model, 'secret', $model->getShownSecret())]);
     }
 
     public function actionDelete(int $id): Response

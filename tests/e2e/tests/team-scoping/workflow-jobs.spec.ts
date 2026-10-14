@@ -1,5 +1,6 @@
 import { test, expect, Browser, Page, TestInfo } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
+import { PAUSED, RUN_WORKFLOW_COLUMN, stepBadge, waitBanner } from '../../lib/runs';
 import { asAdmin, forgePost, idWhere, indexRows, rowsWhere } from '../../lib/scoping';
 
 /**
@@ -8,17 +9,16 @@ import { asAdmin, forgePost, idWhere, indexRows, rowsWhere } from '../../lib/sco
  * canceling it operator access to every one.
  *
  * Runs seeded by commands/E2eWorkflowScopingSeeder.php:
- *   e2e-alpha-wf          succeeded, child job on e2e-alpha-tmpl
- *   e2e-beta-wf           succeeded, child job on e2e-beta-tmpl
- *   e2e-alpha-viewed-wf   running, paused at its pause step (operator's team only views it)
+ *   e2e-alpha-wf          succeeded, its job on e2e-alpha-tmpl
+ *   e2e-beta-wf           succeeded, its job on e2e-beta-tmpl
+ *   e2e-alpha-viewed-wf   paused at its pause step (operator's team only views it)
  *   e2e-alpha-denied-wf   failed, launched by e2e-operator: the job of its step on
  *                         e2e-alpha-tmpl succeeded, its step on e2e-alpha-viewed-tmpl
  *                         was not launched, with the reason
- *   e2e-beta-approval-wf  running, waiting at its approval step
+ *   e2e-beta-approval-wf  waiting at its approval step
  */
 const INDEX = '/workflow-job/index';
-// Columns of the index: #, Workflow, Status, Launched By, Started, Finished.
-const WORKFLOW = 1;
+const WORKFLOW = RUN_WORKFLOW_COLUMN;
 
 /** The id of the run of a fixture workflow, as the signed-in user sees the index. */
 async function runId(page: Page, workflow: string): Promise<string> {
@@ -93,7 +93,7 @@ test.describe('Team Scoping — Workflow Jobs', () => {
   test('operator may view but not resume or cancel a run of a workflow their team only views', async ({ page }) => {
     const id = await runId(page, 'e2e-alpha-viewed-wf');
     await page.goto(`/workflow-job/view?id=${id}`);
-    await expect(page.locator('#wj-status')).toHaveText('Running');
+    await expect(page.locator('#wj-status')).toHaveText(PAUSED);
     await expect(page.locator('#wj-steps-table')).toContainText('e2e-alpha-viewed-wf-pause');
     await expect(page.locator('form[action*="/workflow-job/resume"]')).toHaveCount(0);
     await expect(page.locator('form[action*="/workflow-job/cancel"]')).toHaveCount(0);
@@ -106,17 +106,17 @@ test.describe('Team Scoping — Workflow Jobs', () => {
     await expectForbidden(page);
 
     await page.goto(`/workflow-job/view?id=${id}`);
-    await expect(page.locator('#wj-status')).toHaveText('Running');
+    await expect(page.locator('#wj-status')).toHaveText(PAUSED);
     await expect(page.locator('#wj-steps-table tbody tr')).toHaveCount(1);
-    await expect(page.locator('#wj-steps-table tbody tr').first()).toContainText('Running');
+    await expect(stepBadge(page.locator('#wj-steps-table tbody tr').first())).toHaveText(PAUSED);
   });
 
-  test('operator opens a finished run of their team\'s workflow with its child job', async ({ page }) => {
+  test('operator opens a finished run of their team\'s workflow with its job', async ({ page }) => {
     await page.goto(`/workflow-job/view?id=${await runId(page, 'e2e-alpha-wf')}`);
     await expect(page.locator('#wj-status')).toHaveText('Succeeded');
     const step = page.locator('#wj-steps-table tbody tr', { hasText: 'e2e-alpha-wf-job' });
     await expect(step).toContainText('Succeeded');
-    await step.locator('[data-wjs-job-cell] a').click();
+    await step.locator('[data-wjs-job-link]').click();
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
     await expect(page.locator('#page-content')).toContainText('e2e-alpha-tmpl');
   });
@@ -131,6 +131,8 @@ test.describe('Team Scoping — Workflow Jobs', () => {
     // While a run is unfinished, its page polls /workflow-job/status and adds
     // the steps it reports. This poll answer has the paused run go on and its
     // job step refused, with HTML in the reason: the page must show it as text.
+    // The badges show the display state (state_*), so the answer sets it
+    // besides the stored status (status_*); a finished run waits for nothing.
     const reason = '<img src=x onerror=alert(1)>denied';
     await page.route(/\/workflow-job\/status\?id=\d+$/, async (route) => {
       const response = await route.fetch();
@@ -139,9 +141,25 @@ test.describe('Team Scoping — Workflow Jobs', () => {
       data.status = 'failed';
       data.status_label = 'Failed';
       data.status_css = 'danger';
+      data.state = 'failed';
+      data.state_label = 'Failed';
+      data.state_css = 'danger';
+      data.waiting_for = null;
+      data.banner = null;
+      data.actions = { resume: false, cancel: false };
       data.is_finished = true;
       data.steps = [
-        { ...pause, is_current: false, status: 'succeeded', status_label: 'Succeeded', status_css: 'success' },
+        {
+          ...pause,
+          is_current: false,
+          status: 'succeeded',
+          status_label: 'Succeeded',
+          status_css: 'success',
+          state: 'succeeded',
+          state_label: 'Succeeded',
+          state_css: 'success',
+          waiting_for: null,
+        },
         {
           ...pause,
           // Rows are keyed by the execution's own ID: a new execution has
@@ -153,10 +171,18 @@ test.describe('Team Scoping — Workflow Jobs', () => {
           step_type_label: 'Job',
           step_index: 2,
           job_id: null,
+          show_job_link: true,
+          job_status: null,
+          approval: null,
+          decision_note: null,
           is_current: false,
           status: 'failed',
           status_label: 'Failed',
           status_css: 'danger',
+          state: 'failed',
+          state_label: 'Failed',
+          state_css: 'danger',
+          waiting_for: null,
           error_message: reason,
         },
       ];
@@ -176,9 +202,11 @@ test.describe('Team Scoping — Workflow Jobs', () => {
     await expect(pauseRow.locator('[data-wjs-error]')).toHaveCount(0);
     await expect(pauseRow.locator('[data-wjs-type-cell]')).toHaveText('Pause');
     await expect(pauseRow.locator('[data-wjs-status-cell] .badge')).toHaveText('Succeeded');
-    // The whole answer was applied: the run is shown failed and polling stopped.
+    // The whole answer was applied: the run is shown failed, its wait is
+    // over and polling stopped.
     await expect(page.locator('#wj-status')).toHaveText('Failed');
     await expect(page.locator('#wj-live')).toHaveCount(0);
+    await expect(waitBanner(page)).toBeHidden();
   });
 
   // -- Viewer (team-beta) --------------------------------------------------------
@@ -194,13 +222,13 @@ test.describe('Team Scoping — Workflow Jobs', () => {
     expect(rowsWhere(rows, WORKFLOW, 'e2e-paused-workflow')).toHaveLength(0);
   });
 
-  test('viewer opens a finished run of their team\'s workflow with its child job', async ({ page }) => {
+  test('viewer opens a finished run of their team\'s workflow with its job', async ({ page }) => {
     await page.goto(`/workflow-job/view?id=${await runId(page, 'e2e-beta-wf')}`);
     await expect(page.locator('#wj-status')).toHaveText('Succeeded');
     const step = page.locator('#wj-steps-table tbody tr', { hasText: 'e2e-beta-wf-job' });
     await expect(step).toContainText('Succeeded');
     await expect(step.locator('[data-wjs-error]')).toHaveCount(0);
-    await step.locator('[data-wjs-job-cell] a').click();
+    await step.locator('[data-wjs-job-link]').click();
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
     await expect(page.locator('#page-content')).toContainText('e2e-beta-tmpl');
   });

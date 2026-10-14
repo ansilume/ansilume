@@ -37,7 +37,7 @@ class JobTaskTest extends DbTestCase
 
     public function testStatusCssClassUnreachable(): void
     {
-        $this->assertSame('dark', JobTask::statusCssClass(JobTask::STATUS_UNREACHABLE));
+        $this->assertSame('danger', JobTask::statusCssClass(JobTask::STATUS_UNREACHABLE));
     }
 
     public function testStatusCssClassUnknownDefaultsBranch(): void

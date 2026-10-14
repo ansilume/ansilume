@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
 /** @var list<int>|null $operableIds listed workflows the user may launch; null = all of them */
+/** @var array<int, int> $stepCounts the number of steps of each listed workflow, by its ID; a workflow without steps is missing */
 
 use app\helpers\TimeHelper;
 use app\models\WorkflowTemplate;
@@ -38,7 +39,7 @@ $this->title = 'Workflow Templates';
             <?php foreach ($dataProvider->getModels() as $model) : ?>
                 <tr>
                     <td><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></td>
-                    <td><?= Html::encode((string)count($model->steps)) ?></td>
+                    <td><?= Html::encode((string)($stepCounts[(int)$model->id] ?? 0)) ?></td>
                     <td><?= Html::encode($model->creator?->username ?? '—') ?></td>
                     <td><?= TimeHelper::relative((int)$model->created_at) ?></td>
                     <td class="text-end">

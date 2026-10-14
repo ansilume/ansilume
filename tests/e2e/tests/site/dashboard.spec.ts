@@ -55,6 +55,22 @@ test.describe('Dashboard', () => {
     expect(href).not.toContain('JobSearchForm');
   });
 
+  // The seeded waiting runs and requests (commands/E2eWorkflowWaitSeeder.php,
+  // E2eWorkflowScopingSeeder.php) fill both panels.
+  test('the waiting runs and pending approvals panels link their full lists', async ({ page }) => {
+    await page.goto('/site/index');
+    await page.locator('#dashboard-running-workflows').getByRole('link', { name: 'All Workflow Jobs' }).click();
+    await expect(page).toHaveURL(/\/workflow-job\/index$/);
+    await expect(page.locator('#page-content h2').first()).toHaveText('Workflow Jobs');
+
+    await page.goto('/site/index');
+    const pending = page.locator('#dashboard-pending-approvals');
+    await expect(pending.locator('thead th')).toHaveText(['Rule', 'For', 'Job', 'Requested', 'Expires', '']);
+    await pending.getByRole('link', { name: 'All pending' }).click();
+    await expect(page).toHaveURL(/\/approval\/index\?status=pending$/);
+    await expect(page.locator('#approval-status-filter a[aria-current="page"]')).toHaveText('Pending');
+  });
+
   test('has navigation elements', async ({ page }) => {
     await page.goto('/site/index');
     await expect(page.locator('#sidebar, nav, .navbar').first()).toBeVisible();

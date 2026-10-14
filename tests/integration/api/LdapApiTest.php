@@ -177,7 +177,48 @@ class LdapApiTest extends WebControllerTestCase
 
         $this->assertArrayHasKey('user', $result['data']);
         $this->assertFalse($result['data']['user']['found']);
-        $this->assertNotNull($result['data']['user']['error']);
+        $this->assertSame(LdapService::USER_NOT_FOUND, $result['data']['user']['error']);
+    }
+
+    /**
+     * A failed user search is reported as such: up to 2.10.1 the answer
+     * said "User not found in directory." for it too.
+     */
+    public function testUserLookupNamesAFailedSearch(): void
+    {
+        $client = $this->configureLdap($this->defaultParams());
+        $client->addUser('jdoe', 'uid=jdoe,dc=test', 'pw', ['uid' => 'jdoe', 'entryUUID' => 'guid-1']);
+        $client->failSearch(true);
+        $this->loginAs($this->makeAdmin());
+        $this->setPost(['username' => 'jdoe']);
+
+        $result = $this->makeController()->actionTest();
+
+        $this->assertSame(['found' => false, 'error' => 'Simulated user search failure.'], $result['data']['user']);
+        $this->assertSame(FakeLdapClient::SEARCH_FAILURE, $result['data']['user']['error']);
+    }
+
+    /**
+     * regression: a failed group search answered the user as found, with no
+     * groups and the roles of no group, which hid the failure.
+     */
+    public function testRegressionUserLookupReportsAFailedGroupSearch(): void
+    {
+        $client = $this->configureLdap($this->defaultParams([
+            'roleMapping' => ['Admins' => 'admin'],
+            'defaultRole' => 'viewer',
+        ]));
+        $client->addUser('jdoe', 'uid=jdoe,dc=test', 'pw', ['uid' => 'jdoe', 'entryUUID' => 'guid-1']);
+        $client->addGroupMembership('uid=jdoe,dc=test', 'Admins');
+        $client->failGroupSearch(true);
+        $this->loginAs($this->makeAdmin());
+        $this->setPost(['username' => 'jdoe']);
+
+        $result = $this->makeController()->actionTest();
+
+        $this->assertFalse($result['data']['user']['found']);
+        $this->assertSame(FakeLdapClient::GROUP_SEARCH_FAILURE, $result['data']['user']['error']);
+        $this->assertArrayNotHasKey('mapped_roles', $result['data']['user']);
     }
 
     // ── full authenticate (POST with password) ───────────────────────────────

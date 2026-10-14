@@ -143,9 +143,10 @@ class ApprovalSettlement extends Component
      * or null when they may. In this order: the request is resolved, it
      * has expired, its job no longer waits (also: the job's workflow step or
      * run has ended, or its job template was deleted), the user launched the
-     * job, the user is no eligible approver, the user has voted already. A
-     * vote runs the same checks on the locked rows; the view uses this to
-     * show or hide Approve and Reject.
+     * job (for the job of a workflow step: started its run), the user is no
+     * eligible approver, the user has voted already. A vote runs the same
+     * checks on the locked rows; the view uses this to show or hide Approve
+     * and Reject.
      */
     public function check(ApprovalRequest $request, ?Job $job, int $userId, int $now): ?ApprovalDecisionRefusedException
     {
@@ -153,11 +154,12 @@ class ApprovalSettlement extends Component
         if ($refusal !== null) {
             return $refusal;
         }
-        if (!ApprovalJobState::read($job)->waits()) {
+        $state = ApprovalJobState::read($job);
+        if (!$state->waits()) {
             return ApprovalDecisionRefusedException::jobNotWaiting($request);
         }
 
-        return $this->voterRefusal($request, $userId);
+        return $this->voterRefusal($request, $userId, $state->step !== null);
     }
 
     private function voteLocked(int $requestId, int $userId, string $decision, ?string $comment): ApprovalOutcome
@@ -177,7 +179,7 @@ class ApprovalSettlement extends Component
         if (!$state->waits()) {
             return $this->close($request, $state, $now);
         }
-        $refusal = $this->voterRefusal($request, $userId);
+        $refusal = $this->voterRefusal($request, $userId, $state->step !== null);
         if ($refusal !== null) {
             throw $refusal;
         }
@@ -238,12 +240,17 @@ class ApprovalSettlement extends Component
 
     /**
      * The voter: not the launcher, an eligible approver, not voted yet.
+     * $workflowRun: the job belongs to a workflow step (ApprovalJobState's
+     * step), so its launcher started the run and is told so.
      */
-    private function voterRefusal(ApprovalRequest $request, int $userId): ?ApprovalDecisionRefusedException
-    {
+    private function voterRefusal(
+        ApprovalRequest $request,
+        int $userId,
+        bool $workflowRun
+    ): ?ApprovalDecisionRefusedException {
         $eligibility = $this->eligibility();
         if ($eligibility->isLauncher($request, $userId)) {
-            return ApprovalDecisionRefusedException::launcher($request);
+            return ApprovalDecisionRefusedException::launcher($request, $workflowRun);
         }
         if (!$eligibility->mayDecide($request, $userId)) {
             return ApprovalDecisionRefusedException::notEligible($request);

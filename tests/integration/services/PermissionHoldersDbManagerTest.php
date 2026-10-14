@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\components\AuthManager;
 use app\services\PermissionHolders;
 use app\tests\integration\CountsQueries;
 use app\tests\integration\DbTestCase;
@@ -17,7 +18,8 @@ use yii\rbac\Role;
  * PermissionHolders reads DbManager's tables in bulk and must find exactly
  * the users DbManager::checkAccess() finds one by one: through roles at any
  * depth, a permission assigned directly, default roles, and business rules
- * (which only checkAccess() can evaluate).
+ * (which only checkAccess() can evaluate). IDs below 1 name no user and hold
+ * nothing, as app\components\AuthManager answers.
  */
 class PermissionHoldersDbManagerTest extends DbTestCase
 {
@@ -75,6 +77,32 @@ class PermissionHoldersDbManagerTest extends DbTestCase
             $auth->defaultRoles = [];
             $this->assertSame([$viewer], $this->holders()->among(self::DECIDE, $ids));
             $this->assertSame([$viewer], $this->checkedOneByOne(self::DECIDE, $ids));
+        } finally {
+            $auth->defaultRoles = $saved;
+        }
+    }
+
+    /**
+     * regression: a default role that grants the item answered every given
+     * ID, also 0 and -1, which name no user: app\components\AuthManager
+     * answers false for them, and among() promises its answer.
+     */
+    public function testRegressionIdsBelowOneHoldNothingUnderTheDefaultRole(): void
+    {
+        $auth = $this->auth();
+        $this->assertInstanceOf(AuthManager::class, $auth, 'the manager of every application');
+        $auth->addChild($this->role('viewer'), $this->permission(self::DECIDE));
+        $plain = (int)$this->createUser('below-one-plain')->id;
+        $admin = (int)$this->createUserWithRole('below-one-admin', 'admin')->id;
+        $ids = [0, $plain, -1, $admin];
+
+        $saved = $auth->defaultRoles;
+        try {
+            $auth->defaultRoles = ['viewer'];
+            $this->assertSame([$plain, $admin], $this->checkedOneByOne(self::DECIDE, $ids), 'AuthManager');
+            $this->assertSame([$plain, $admin], $this->holders()->among(self::DECIDE, $ids), 'through the default role');
+            $this->assertSame([$admin], $this->holders()->among('admin', $ids), 'through an assignment');
+            $this->assertSame([], $this->holders()->among(self::DECIDE, [0, -1]));
         } finally {
             $auth->defaultRoles = $saved;
         }

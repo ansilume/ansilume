@@ -10,6 +10,7 @@ use app\models\AuditLog;
 use app\models\Job;
 use app\models\NotificationTemplate;
 use app\models\User;
+use app\models\WorkflowStep;
 use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalSettlement;
 use app\tests\integration\DbTestCase;
@@ -213,6 +214,81 @@ class ApprovalVoteTest extends DbTestCase
         $this->legacyVote($request, $launcher, ApprovalDecision::DECISION_APPROVED);
 
         $this->assertVoteRefused($request, $launcher, ApprovalDecision::DECISION_APPROVED, ApprovalDecisionRefusedException::REASON_LAUNCHER);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function workflowStepProvider(): array
+    {
+        return [
+            'the placeholder of an approval step' => [WorkflowStep::TYPE_APPROVAL],
+            'the job of a gated job step' => [WorkflowStep::TYPE_JOB],
+        ];
+    }
+
+    /**
+     * Regression: the launcher of a workflow run was told "You launched this
+     * job". They started the run, and the run created the job that waits:
+     * the placeholder of an approval step, or the job of a job step whose
+     * template is gated. A vote and the check behind the request page's note
+     * (ApprovalSettlement::check() through ApprovalService::decisionRefusal())
+     * now name the run; the request stays for the other approver.
+     *
+     * @dataProvider workflowStepProvider
+     */
+    public function testRegressionTheLauncherOfAWorkflowRunWasToldYouLaunchedThisJob(string $stepType): void
+    {
+        $launcher = $this->approverUser('run-launcher');
+        $other = $this->approverUser('run-other');
+        $rule = $this->listRule((int)$launcher->id, [$launcher, $other]);
+        ['job' => $job, 'request' => $request] = $this->workflowStepWaiting($stepType, $rule, $launcher);
+
+        foreach ([ApprovalDecision::DECISION_APPROVED, ApprovalDecision::DECISION_REJECTED] as $decision) {
+            $refusal = $this->assertVoteRefused(
+                $request,
+                $launcher,
+                $decision,
+                ApprovalDecisionRefusedException::REASON_LAUNCHER,
+                ApprovalDecisionRefusedException::LAUNCHER_REFUSED_RUN
+            );
+            $this->assertSame('You launched this workflow run; another approver must decide.', $refusal->getMessage());
+            $this->assertSame(403, $refusal->httpStatus());
+            $this->assertSame(ApprovalRequest::STATUS_PENDING, $refusal->requestStatus());
+        }
+
+        $checked = $this->settlement()->check($request, $request->job, (int)$launcher->id, time());
+        $this->assertNotNull($checked);
+        $this->assertSame(ApprovalDecisionRefusedException::REASON_LAUNCHER, $checked->reason());
+        $this->assertSame(ApprovalDecisionRefusedException::LAUNCHER_REFUSED_RUN, $checked->getMessage());
+        $this->assertSame(
+            ApprovalDecisionRefusedException::LAUNCHER_REFUSED_RUN,
+            $this->approvals()->decisionRefusal($request, (int)$launcher->id)?->getMessage(),
+            'the note on the request page'
+        );
+
+        $this->assertSame(ApprovalRequest::STATUS_PENDING, $this->reloadRequest($request)->status);
+        $this->assertSame(Job::STATUS_PENDING_APPROVAL, $this->reloadJob($job)->status);
+        $this->assertSame([], $this->auditsOf(AuditLog::ACTION_APPROVAL_DECIDED, 'approval_request', (int)$request->id));
+        $this->assertNull($this->settlement()->check($request, $request->job, (int)$other->id, time()), 'the other approver decides');
+    }
+
+    /**
+     * The launcher of a job outside a workflow keeps the job's text, on the
+     * request page as in a vote.
+     */
+    public function testTheLauncherOfAJobOutsideAWorkflowIsToldTheyLaunchedTheJob(): void
+    {
+        $launcher = $this->approverUser('plain-launcher');
+        ['request' => $request] = $this->waitingRequest([$launcher, $this->approverUser()], 1, $launcher);
+
+        $checked = $this->settlement()->check($request, $request->job, (int)$launcher->id, time());
+
+        $this->assertNotNull($checked);
+        $this->assertSame(ApprovalDecisionRefusedException::REASON_LAUNCHER, $checked->reason());
+        $this->assertSame(ApprovalDecisionRefusedException::LAUNCHER_REFUSED, $checked->getMessage());
+        $this->assertSame('You launched this job; another approver must decide.', $checked->getMessage());
+        $this->assertSame(ApprovalDecisionRefusedException::LAUNCHER_REFUSED, ApprovalDecisionRefusedException::launcher($request)->getMessage());
     }
 
     // -- The request's state ----------------------------------------------------------

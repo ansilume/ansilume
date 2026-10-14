@@ -22,6 +22,17 @@ use yii\web\Controller;
 abstract class BaseController extends Controller
 {
     /**
+     * The 403 of a page whose user may not change the resource without
+     * operator access: to its project (TeamScopingTrait::requireChildOperate())
+     * or to the project of every job step of a workflow
+     * (TeamScopingTrait::requireWorkflowOperate(); the template page answers
+     * it too when the step write path refuses the same with the workflow
+     * locked, WorkflowTemplateController). Here and not in the trait:
+     * Scrutinizer's parser cannot read a constant in a trait.
+     */
+    public const MODIFY_FORBIDDEN = 'You do not have permission to modify this resource.';
+
+    /**
      * Return Yii2 access-rule config arrays (without the superadmin rule).
      * Example: [['actions' => ['index'], 'allow' => true, 'roles' => ['@']]]
      *

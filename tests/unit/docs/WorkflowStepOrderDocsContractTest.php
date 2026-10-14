@@ -24,6 +24,11 @@ use yii\validators\NumberValidator;
  * workflow, also in front of an approval step, and no doc said how the
  * steps are ordered, how to find such workflows or how to fix them. These
  * tests fail on the docs from before.
+ *
+ * Since 2.11.0 the section is history: positions replaced the Step Order
+ * field and its hint (WorkflowStepsUpdateDocsContractTest), so the section
+ * keeps quoting them as 2.10.1 worded them, and these tests quote the same
+ * literals; the troubleshooting entry describes positions.
  */
 class WorkflowStepOrderDocsContractTest extends TestCase
 {
@@ -40,10 +45,19 @@ class WorkflowStepOrderDocsContractTest extends TestCase
     /** The releases that put a step added with the form's Step Order at the top. */
     private const AFFECTED = 'From 2.3.15 to 2.10.0';
 
-    public function testTheSectionIsTheNewest(): void
+    /** The placeholder of the Step Order field in 2.10.1, which 2.11.0 replaced with Position. */
+    private const PLACEHOLDER_2101 = 'At the end';
+
+    /** The hint below the steps in 2.10.1, as the section quotes it. */
+    private const HINT_2101 = 'Leave Step Order empty to add the step at the end. To put a step between two others, '
+        . 'enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every add and '
+        . 'move. Use ▲ / ▼ to move a step.';
+
+    public function testTheSectionFollowsTheOneOf2110(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The section of 2.11.0 comes first.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][1] ?? null, 'This section comes next.');
         $this->assertSame(
             self::SECTION_ANCHOR,
             str_replace(' ', '-', (string)preg_replace('/[^a-z0-9 -]/', '', strtolower(substr(self::UPDATE_SECTION, 3)))),
@@ -76,28 +90,29 @@ class WorkflowStepOrderDocsContractTest extends TestCase
     }
 
     /**
-     * The placeholder and the hint of the Add Step form are quoted as the
-     * page shows them, from their constants.
+     * The section quotes the placeholder and the hint of the Add Step form
+     * as 2.10.1 worded them. 2.11.0 replaced the field with Position: the
+     * form has no Step Order field, the page no such constants, and the
+     * troubleshooting entry no longer tells to leave the field empty.
      */
-    public function testTheTextsOfTheFormAreQuotedAsTheCodeWordsThem(): void
+    public function testTheSectionQuotesTheFormAs2101WordedIt(): void
     {
-        // The view is code: read from the repository, whatever root() says.
-        $view = (string)file_get_contents(dirname(__DIR__, 3) . '/views/workflow-template/view.php');
-        foreach (['STEP_ORDER_PLACEHOLDER', 'STEP_ORDER_HINT'] as $name) {
-            $this->assertStringContainsString('WorkflowTemplatePage::' . $name, $view, "The workflow page shows {$name}.");
-        }
         $section = $this->flat('docs/updating.md', self::UPDATE_SECTION);
         $this->assertMentions(
-            'The Step Order field of the Add Step form is empty now, with the placeholder `' . WorkflowTemplatePage::STEP_ORDER_PLACEHOLDER . '`',
+            'The Step Order field of the Add Step form is empty now, with the placeholder `' . self::PLACEHOLDER_2101 . '`',
             $section,
             'updating.md'
         );
-        $this->assertMentions('The hint below the steps reads `' . WorkflowTemplatePage::STEP_ORDER_HINT . '`', $section, 'updating.md');
-        $this->assertMentions(
-            'To add a step at the end, leave Step Order empty (`' . WorkflowTemplatePage::STEP_ORDER_PLACEHOLDER . '`)',
-            $this->flat('docs/troubleshooting.md', self::ENTRY),
-            'troubleshooting.md'
-        );
+        $this->assertMentions('The hint below the steps reads `' . self::HINT_2101 . '`', $section, 'updating.md');
+        // The form is code: read from the repository, whatever root() says.
+        $form = (string)file_get_contents(dirname(__DIR__, 3) . '/views/workflow-template/_step-form.php');
+        $this->assertStringNotContainsString('step_order', $form, 'The step form has no Step Order field.');
+        $this->assertStringContainsString('WorkflowStepFormView::POSITION_LABEL', $form, 'The step form has a Position field.');
+        foreach (['STEP_ORDER_PLACEHOLDER', 'STEP_ORDER_HINT'] as $name) {
+            $this->assertFalse(defined(WorkflowTemplatePage::class . '::' . $name), "{$name} is gone.");
+        }
+        $entry = $this->flat('docs/troubleshooting.md', self::ENTRY);
+        $this->assertStringNotContainsString('leave Step Order empty', $entry, 'troubleshooting.md advises no field that is gone.');
     }
 
     /**
@@ -114,7 +129,7 @@ class WorkflowStepOrderDocsContractTest extends TestCase
         }
         $this->assertSame([[true, 0, WorkflowStep::MAX_STEP_ORDER]], $limits);
         $section = $this->flat('docs/updating.md', self::UPDATE_SECTION);
-        $this->assertMentions('with the placeholder `' . WorkflowTemplatePage::STEP_ORDER_PLACEHOLDER . '`, and takes no number below 0.', $section, 'updating.md');
+        $this->assertMentions('with the placeholder `' . self::PLACEHOLDER_2101 . '`, and takes no number below 0.', $section, 'updating.md');
         $this->assertMentions(
             sprintf('An emptied Step Order field, and a number above %d, ended in a server error (`500`) before; such a number is refused now.', WorkflowStep::MAX_STEP_ORDER),
             $section,
@@ -131,7 +146,7 @@ class WorkflowStepOrderDocsContractTest extends TestCase
     {
         $step = WorkflowStepReorderService::ORDER_STEP;
         $renumbered = sprintf('%d, %d, %d…', $step, 2 * $step, 3 * $step);
-        $this->assertStringContainsString('steps are renumbered ' . $renumbered . ' after every add and move', WorkflowTemplatePage::STEP_ORDER_HINT);
+        $this->assertStringContainsString('steps are renumbered ' . $renumbered . ' after every add and move', self::HINT_2101);
         $section = $this->flat('docs/updating.md', self::UPDATE_SECTION);
         $this->assertMentions("every step added or moved on a workflow's page renumbers the workflow's steps {$renumbered}", $section, 'updating.md');
         $this->assertMentions(
@@ -167,16 +182,17 @@ class WorkflowStepOrderDocsContractTest extends TestCase
 
     /**
      * How to fix the order: the moves, named as the audit log names them,
-     * and the refusals of a move, in the troubleshooting entry it links to.
+     * and the refusals of a move, in the troubleshooting entry it links to,
+     * which names the moves of 2.11.0.
      */
     public function testTheFixNamesTheMovesAndWhereTheirRefusalsAre(): void
     {
         $fix = $this->paragraph('**Fix the order.**');
-        $this->assertStringContainsString('Use ▲ / ▼ to move a step.', WorkflowTemplatePage::STEP_ORDER_HINT);
+        $this->assertStringContainsString('Use ▲ / ▼ to move a step.', self::HINT_2101);
         $this->assertMentions('move a step with ▲ / ▼, one place per click; each move is audited as `' . AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_MOVED . '`', $fix, 'updating.md');
         $this->assertMentions('[troubleshooting.md](troubleshooting.md#changing-workflow-steps-is-refused)', $fix, 'updating.md');
         $entry = $this->flat('docs/troubleshooting.md', self::ENTRY);
-        $this->assertMentions('move the steps with ▲ / ▼ until the table lists them in the order they should run', $entry, 'troubleshooting.md');
+        $this->assertMentions('move the steps with ▲ / ▼ or **Move to…** until the table lists them in the order they should run', $entry, 'troubleshooting.md');
         $this->assertMentions('[Changing workflow steps is refused](#changing-workflow-steps-is-refused)', $entry, 'troubleshooting.md');
     }
 

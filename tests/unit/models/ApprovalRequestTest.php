@@ -104,7 +104,7 @@ class ApprovalRequestTest extends TestCase
             [ApprovalRequest::STATUS_APPROVED, 'success'],
             [ApprovalRequest::STATUS_REJECTED, 'danger'],
             [ApprovalRequest::STATUS_TIMED_OUT, 'secondary'],
-            [ApprovalRequest::STATUS_CANCELED, 'dark'],
+            [ApprovalRequest::STATUS_CANCELED, 'secondary'],
         ];
     }
 
@@ -112,6 +112,24 @@ class ApprovalRequestTest extends TestCase
     public function testStatusCssClassMapsToExpectedBadge(string $status, string $expected): void
     {
         $this->assertSame($expected, ApprovalRequest::statusCssClass($status));
+    }
+
+    /**
+     * regression: a canceled approval request's badge was nearly invisible
+     * on the dark theme. The layout sets data-bs-theme="dark", whose page
+     * background is the colour of text-bg-dark, so no status may use the
+     * css "dark" (nor "light", its counterpart on a light theme).
+     */
+    public function testNoStatusBadgeUsesAColourTheThemeHides(): void
+    {
+        $this->assertSame('secondary', ApprovalRequest::statusCssClass(ApprovalRequest::STATUS_CANCELED));
+        foreach (ApprovalRequest::statuses() as $status) {
+            $this->assertNotContains(
+                ApprovalRequest::statusCssClass($status),
+                ['dark', 'light'],
+                "the badge of a {$status} request"
+            );
+        }
     }
 
     public function testStatusCssClassFallsBackToSecondaryForUnknownStatus(): void

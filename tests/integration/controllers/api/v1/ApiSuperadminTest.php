@@ -6,6 +6,7 @@ namespace app\tests\integration\controllers\api\v1;
 
 use app\controllers\api\v1\BaseApiController;
 use app\models\ApiToken;
+use app\models\ApprovalRule;
 use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
@@ -16,6 +17,7 @@ use app\models\Schedule;
 use app\models\Team;
 use app\models\User;
 use app\models\Webhook;
+use app\models\WorkflowStep;
 use app\services\ldap\FakeLdapClient;
 use app\services\ldap\LdapConfig;
 use app\services\ldap\LdapService;
@@ -132,7 +134,64 @@ class ApiSuperadminTest extends WebControllerTestCase
         $this->assertTrue($asSuperadmin['done'], "the superadmin's call did its work");
     }
 
+    /**
+     * @return array<string, array{0: string, 1: string, 2: int}>
+     */
+    public static function workflowStepProvider(): array
+    {
+        return [
+            'add a step' => ['create', 'POST', 201],
+            'change a step' => ['update', 'PUT', 200],
+            'move a step' => ['move', 'POST', 200],
+            'remove a step' => ['delete', 'DELETE', 200],
+        ];
+    }
+
+    /**
+     * The per-step endpoints of the workflow API, on a workflow with an
+     * approval step, whose steps only admins may change (rule 12): a
+     * superadmin without RBAC roles passes the gate, the team scope and the
+     * policy, as an admin does.
+     *
+     * @dataProvider workflowStepProvider
+     */
+    public function testARolelessSuperadminChangesTheStepsOfAGatedWorkflow(string $action, string $verb, int $expected): void
+    {
+        $asAdmin = $this->changeStep($this->tokenUser(false, 'admin'), $action, $verb);
+        $asSuperadmin = $this->changeStep($this->tokenUser(true, null), $action, $verb);
+
+        $this->assertSame($expected, $asAdmin['status'], 'the admin');
+        $this->assertTrue($asAdmin['done'], "the admin's call did its work");
+        $this->assertSame($expected, $asSuperadmin['status'], 'a superadmin without roles is answered as an admin');
+        $this->assertSame(['data', 'change'], array_keys($asSuperadmin['response']));
+        $this->assertTrue($asSuperadmin['done'], "the superadmin's call did its work");
+    }
+
     // -- helpers ------------------------------------------------------------------
+
+    /**
+     * $action of the per-step controller on the pause step of a new
+     * workflow whose first step is an approval step, as $user.
+     *
+     * @return array{status: int, response: array<string, mixed>, done: bool}
+     */
+    private function changeStep(User $user, string $action, string $verb): array
+    {
+        $ownerId = (int)$user->id;
+        $workflow = $this->createWorkflowTemplate($ownerId);
+        $rule = $this->createApprovalRule($ownerId, ApprovalRule::APPROVER_TYPE_USERS, (string)json_encode(['user_ids' => [$ownerId]]));
+        $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_APPROVAL, null, (int)$rule->id);
+        $stepId = (int)$this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_PAUSE)->id;
+        $params = ['id' => (int)$workflow->id, 'stepId' => $stepId];
+        [$params, $body, $done] = match ($action) {
+            'create' => [['id' => (int)$workflow->id], ['name' => 'superadmin-step', 'step_type' => 'pause'], static fn (): bool => WorkflowStep::find()->where(['workflow_template_id' => $workflow->id, 'name' => 'superadmin-step'])->exists()],
+            'update' => [$params, ['name' => 'superadmin-renamed'], static fn (): bool => WorkflowStep::findOne($stepId)?->name === 'superadmin-renamed'],
+            'move' => [$params, ['position' => 'start'], static fn (): bool => (int)WorkflowStep::find()->where(['workflow_template_id' => $workflow->id])->orderBy(['step_order' => SORT_ASC, 'id' => SORT_ASC])->select('id')->scalar() === $stepId],
+            default => [$params, [], static fn (): bool => WorkflowStep::findOne($stepId) === null],
+        };
+
+        return $this->callAs($user, 'WorkflowSteps', $action, $verb, $params, $body) + ['done' => $done()];
+    }
 
     /**
      * @return array{status: int, response: array<string, mixed>, done: bool}

@@ -48,8 +48,9 @@ class JobSearchForm extends Model
         // Don't throw on invalid filter input — just ignore it
         $this->validate();
 
+        // The step execution (and its step) names the placeholder of a workflow approval step.
         $query = Job::find()
-            ->with(['jobTemplate', 'launcher', 'hostSummaries'])
+            ->with(['jobTemplate', 'launcher', 'hostSummaries', 'workflowJobStep.workflowStep'])
             ->orderBy(['id' => SORT_DESC]);
 
         if ($this->teamFilter !== null) {

@@ -105,7 +105,7 @@ class PagerDutyChannel implements ChannelInterface
     /**
      * @param string[] $headers
      */
-    protected function post(string $url, string $payload, array $headers): string
+    protected function post(string $url, #[\SensitiveParameter] string $payload, array $headers): string
     {
         $ch = curl_init($url);
         if ($ch === false) {

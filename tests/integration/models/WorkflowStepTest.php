@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\models;
 
+use app\components\WorkflowStepMapping;
 use app\models\ApprovalRule;
 use app\models\JobTemplate;
 use app\models\WorkflowStep;
@@ -131,6 +132,89 @@ class WorkflowStepTest extends DbTestCase
         $step->step_type = WorkflowStep::TYPE_PAUSE;
         $step->extra_vars_template = '';
         $this->assertTrue($step->validate());
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function noMappingProvider(): array
+    {
+        return [
+            'a list of names' => ['["build_version"]'],
+            'a list of numbers' => ['[1, 2]'],
+            'a number' => ['5'],
+            'text' => ['"text"'],
+            'true' => ['true'],
+            'an object as a value' => ['{"a": {"b": "c"}}'],
+            'a number as a value' => ['{"a": 1}'],
+            'a key PHP reads as a number' => ['{"0": "build_version"}'],
+            'an empty key' => ['{"": "build_version"}'],
+        ];
+    }
+
+    /**
+     * regression: the rules took any JSON as the variable mapping. A new
+     * step's mapping must be none or a JSON object of extra var names to the
+     * names of output variables now.
+     *
+     * @dataProvider noMappingProvider
+     */
+    public function testRegressionANewStepRefusesAMappingOfAnotherShape(string $mapping): void
+    {
+        $step = $this->pauseStep($mapping);
+
+        $this->assertFalse($step->validate());
+        $this->assertSame([WorkflowStepMapping::INVALID], $step->getErrors('extra_vars_template'));
+    }
+
+    /**
+     * None, and an object of names, are mappings a step takes.
+     */
+    public function testANewStepTakesNoneAndAnObjectOfNames(): void
+    {
+        foreach (['{}', '[]', 'null', '{"app_version": "build_version", "target": "hosts"}'] as $mapping) {
+            $step = $this->pauseStep($mapping);
+
+            $this->assertTrue($step->validate(), $mapping . ': ' . (string)json_encode($step->getErrors()));
+        }
+    }
+
+    /**
+     * Text that is no JSON keeps the JSON rule's message alone: the shape
+     * is not checked then.
+     */
+    public function testTextThatIsNoJsonGetsOnlyTheJsonRulesMessage(): void
+    {
+        $step = $this->pauseStep('{not valid');
+
+        $this->assertFalse($step->validate());
+        $this->assertSame(['Extra_vars_template must be valid JSON.'], $step->getErrors('extra_vars_template'));
+    }
+
+    /**
+     * A mapping of another shape that an older version stored stays valid
+     * while it is not changed: the step's other fields can change (the
+     * template page cannot change its mapping), and the same mapping in other
+     * words is no change. Another mapping is checked.
+     */
+    public function testAMappingAnOlderVersionStoredIsCheckedOnlyWhenItChanges(): void
+    {
+        $user = $this->createUser();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $stored = $this->createWorkflowStep((int)$wt->id, 1, WorkflowStep::TYPE_PAUSE);
+        WorkflowStep::updateAll(['extra_vars_template' => '["build_version"]'], ['id' => $stored->id]);
+        $step = WorkflowStep::findOne($stored->id);
+        $this->assertNotNull($step);
+
+        $step->name = 'renamed';
+        $this->assertTrue($step->validate(), 'the stored mapping stays: ' . (string)json_encode($step->getErrors()));
+        $step->extra_vars_template = '[ "build_version" ]';
+        $this->assertTrue($step->validate(), 'the same mapping in other words');
+        $step->extra_vars_template = '["release_version"]';
+        $this->assertFalse($step->validate(), 'another mapping of that shape');
+        $this->assertSame([WorkflowStepMapping::INVALID], $step->getErrors('extra_vars_template'));
+        $step->extra_vars_template = '{"app_version": "build_version"}';
+        $this->assertTrue($step->validate(), 'a mapping of names');
     }
 
     public function testGetParsedExtraVarsTemplateReturnsDecodedArray(): void
@@ -263,6 +347,62 @@ class WorkflowStepTest extends DbTestCase
         $this->assertTrue($step->validate());
     }
 
+    public function testTheJobTemplateMessagesAreTheConstants(): void
+    {
+        $this->assertSame('A job step needs a job template.', WorkflowStep::JOB_TEMPLATE_REQUIRED);
+        $this->assertSame('The selected job template does not exist.', WorkflowStep::JOB_TEMPLATE_NOT_FOUND);
+    }
+
+    /**
+     * regression: a posted step_order was mass-assigned. A form or a body
+     * could then decide where a step runs (and, in 2.10.0, a pre-filled
+     * number put new steps first). Placement sets it now; load() and
+     * setAttributes() leave it as it is.
+     */
+    public function testRegressionAPostedStepOrderIsNotMassAssigned(): void
+    {
+        $step = new WorkflowStep();
+        $step->load(['WorkflowStep' => ['step_order' => '5', 'name' => 'x', 'step_type' => WorkflowStep::TYPE_PAUSE]]);
+
+        $this->assertNull($step->step_order);
+        $this->assertSame('x', $step->name);
+        $this->assertNotContains('step_order', $step->safeAttributes());
+
+        $stored = $this->createWorkflowStep($this->createWorkflowTemplate($this->createUser('step_order_mass')->id)->id, 20);
+        $stored->setAttributes(['step_order' => 0]);
+        $this->assertSame(20, $stored->step_order, 'a saved step keeps its order too');
+    }
+
+    /**
+     * Code still sets step_order (placement, the API's bulk list): the rule
+     * still checks the values the column holds.
+     *
+     * @return array<string, array{0: mixed, 1: string|null}>
+     */
+    public static function stepOrderProvider(): array
+    {
+        return [
+            'empty, as a new step has it' => [null, null],
+            '0' => [0, null],
+            'the largest the column holds' => [WorkflowStep::MAX_STEP_ORDER, null],
+            'below 0' => [-1, 'Step Order must be no less than 0.'],
+            'more than the column holds' => [WorkflowStep::MAX_STEP_ORDER + 1, 'Step Order must be no greater than 2147483647.'],
+            'not a number' => ['abc', 'Step Order must be an integer.'],
+        ];
+    }
+
+    /**
+     * @dataProvider stepOrderProvider
+     */
+    public function testAStepOrderSetInCodeIsStillValidated(mixed $order, ?string $error): void
+    {
+        $step = new WorkflowStep();
+        $step->step_order = $order;
+
+        $this->assertSame($error === null, $step->validate(['step_order']));
+        $this->assertSame($error, $step->getFirstError('step_order'));
+    }
+
     /**
      * Regression: add-step loaded the posted form after setting the step's
      * workflow, so a form field could plant a step in another workflow.
@@ -280,5 +420,20 @@ class WorkflowStepTest extends DbTestCase
         $this->assertSame($mine->id, $step->workflow_template_id);
         $this->assertSame('x', $step->name);
         $this->assertNotContains('workflow_template_id', $step->safeAttributes());
+    }
+
+    /**
+     * A pause step of a new workflow, not saved, with $mapping.
+     */
+    private function pauseStep(string $mapping): WorkflowStep
+    {
+        $user = $this->createUser();
+        $step = new WorkflowStep();
+        $step->workflow_template_id = (int)$this->createWorkflowTemplate($user->id)->id;
+        $step->name = 'mapped';
+        $step->step_type = WorkflowStep::TYPE_PAUSE;
+        $step->extra_vars_template = $mapping;
+
+        return $step;
     }
 }

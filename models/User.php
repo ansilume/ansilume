@@ -21,6 +21,7 @@ use yii\web\IdentityInterface;
  * @property string|null $ldap_dn           Distinguished name from the directory (set after bind)
  * @property string|null $ldap_uid          Stable directory identifier (objectGUID/entryUUID)
  * @property int|null    $last_synced_at    Unix timestamp of the last LDAP attribute sync
+ * @property bool        $ldap_sync_disabled ldap/sync deactivated the account (the directory no longer had the user); see LdapSyncDisabledBehavior
  * @property int    $status
  * @property bool   $is_superadmin
  * @property int    $created_at
@@ -102,6 +103,29 @@ class User extends ActiveRecord implements IdentityInterface
         /** @var self|null $result */
         $result = static::findOne(['username' => $username, 'status' => self::STATUS_ACTIVE]);
         return $result;
+    }
+
+    /**
+     * Whether an active superadmin exists: a user with the superadmin flag
+     * and the status STATUS_ACTIVE, the only status that signs in
+     * (findIdentity()); with $exceptId, one other than that user. An
+     * inactive superadmin does not count. The one place that decides on them
+     * (GET /health counts them with the same condition,
+     * HealthController::checkUsers()): the only active superadmin neither
+     * clears their own flag nor is deactivated or deleted
+     * (UserController::ONLY_SUPERADMIN, UsersController::ONLY_SUPERADMIN_DEMOTED,
+     * ONLY_SUPERADMIN_DEACTIVATED, ONLY_SUPERADMIN_DELETED), and setup/admin
+     * creates a superadmin only while none exists
+     * (SetupController::ACTIVE_SUPERADMIN_EXISTS).
+     */
+    public static function activeSuperadminExists(?int $exceptId = null): bool
+    {
+        $query = static::find()->where(['is_superadmin' => true, 'status' => self::STATUS_ACTIVE]);
+        if ($exceptId !== null) {
+            $query->andWhere(['!=', 'id', $exceptId]);
+        }
+
+        return $query->exists();
     }
 
     public function getId(): int
@@ -267,6 +291,7 @@ class User extends ActiveRecord implements IdentityInterface
     {
         return [
             \yii\behaviors\TimestampBehavior::class,
+            \app\components\LdapSyncDisabledBehavior::class,
         ];
     }
 }

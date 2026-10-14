@@ -157,6 +157,40 @@ class WorkflowTemplateTest extends DbTestCase
         $this->assertNull($wt->getStartStep());
     }
 
+    /**
+     * Of steps that share the lowest step order, the one with the lowest ID
+     * starts the run; steps of other workflows do not count.
+     */
+    public function testGetStartStepBreaksATieOnTheLowestStepOrderById(): void
+    {
+        $user = $this->createUser();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $other = $this->createWorkflowTemplate($user->id);
+        $this->createWorkflowStep($wt->id, 20, WorkflowStep::TYPE_PAUSE);
+        $first = $this->createWorkflowStep($wt->id, 5, WorkflowStep::TYPE_PAUSE);
+        $this->createWorkflowStep($wt->id, 5, WorkflowStep::TYPE_PAUSE);
+        $this->createWorkflowStep($other->id, 0, WorkflowStep::TYPE_PAUSE);
+
+        $this->assertSame($first->id, $wt->getStartStep()?->id);
+    }
+
+    /**
+     * The run order names its tie-break, by step order and then by ID,
+     * instead of leaving the order of tied steps to whichever index the
+     * database reads: the start step and the steps relation both sort that
+     * way.
+     */
+    public function testTheStartStepAndTheStepsRelationSortByStepOrderThenId(): void
+    {
+        $user = $this->createUser();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $sql = 'SELECT * FROM `workflow_step` WHERE `workflow_template_id`=' . $wt->id . ' ORDER BY `step_order`, `id`';
+
+        $this->assertSame([$sql], $this->queriesDuring(fn () => $wt->getStartStep()));
+        $this->assertSame($sql, $wt->getSteps()->createCommand()->getRawSql());
+        $this->assertSame(['step_order' => SORT_ASC, 'id' => SORT_ASC], WorkflowTemplate::RUN_ORDER);
+    }
+
     // -- relations --------------------------------------------------------------
 
     public function testCreatorRelationReturnsUser(): void
@@ -185,6 +219,27 @@ class WorkflowTemplateTest extends DbTestCase
         $this->assertSame(1, (int)$steps[0]->step_order);
         $this->assertSame(2, (int)$steps[1]->step_order);
         $this->assertSame(3, (int)$steps[2]->step_order);
+    }
+
+    /**
+     * The steps relation lists tied steps by ID, so a step's index in it is
+     * its position in the run order, lazily and eagerly loaded.
+     */
+    public function testStepsRelationListsTiedStepsById(): void
+    {
+        $user = $this->createUser();
+        $wt = $this->createWorkflowTemplate($user->id);
+        $c = $this->createWorkflowStep($wt->id, 20, WorkflowStep::TYPE_PAUSE);
+        $a = $this->createWorkflowStep($wt->id, 10, WorkflowStep::TYPE_PAUSE);
+        $b = $this->createWorkflowStep($wt->id, 10, WorkflowStep::TYPE_PAUSE);
+        $start = $this->createWorkflowStep($wt->id, 0, WorkflowStep::TYPE_PAUSE);
+        $expected = [$start->id, $a->id, $b->id, $c->id];
+        $idsOf = static fn (WorkflowTemplate $t): array => array_map(static fn (WorkflowStep $s): int => (int)$s->id, $t->steps);
+
+        $this->assertSame($expected, $idsOf($wt));
+        $eager = WorkflowTemplate::find()->where(['id' => $wt->id])->with('steps')->one();
+        $this->assertInstanceOf(WorkflowTemplate::class, $eager);
+        $this->assertSame($expected, $idsOf($eager));
     }
 
     public function testStepsRelationReturnsEmptyArrayWhenNoSteps(): void
@@ -377,22 +432,35 @@ class WorkflowTemplateTest extends DbTestCase
     {
         $user = $this->createUser('wt_lock_sql');
         $template = $this->createWorkflowTemplate($user->id);
+
+        $statements = $this->queriesDuring(static fn () => WorkflowTemplate::lockLive((int)$template->id));
+
+        $this->assertSame(['SELECT `deleted_at` FROM `workflow_template` WHERE `id` = ' . $template->id . ' FOR UPDATE'], $statements);
+    }
+
+    /**
+     * The queries $action sends, in order.
+     *
+     * @return list<string>
+     */
+    private function queriesDuring(callable $action): array
+    {
         $logger = new \yii\log\Logger();
         $logger->flushInterval = PHP_INT_MAX;
         $previous = \Yii::getLogger();
         \Yii::setLogger($logger);
         try {
-            WorkflowTemplate::lockLive((int)$template->id);
+            $action();
         } finally {
             \Yii::setLogger($previous);
         }
-
-        $statements = [];
+        $queries = [];
         foreach ($logger->messages as $message) {
             if ($message[2] === 'yii\db\Command::query' && $message[1] === \yii\log\Logger::LEVEL_INFO && is_string($message[0])) {
-                $statements[] = $message[0];
+                $queries[] = $message[0];
             }
         }
-        $this->assertSame(['SELECT `deleted_at` FROM `workflow_template` WHERE `id` = ' . $template->id . ' FOR UPDATE'], $statements);
+
+        return $queries;
     }
 }

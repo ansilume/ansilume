@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace app\commands;
 
 use app\models\User;
+use app\services\ldap\LdapConfig;
+use app\services\ldap\LdapLookupResult;
 use app\services\ldap\LdapService;
 use app\services\ldap\LdapUserProvisioner;
 use yii\console\Controller;
@@ -18,14 +20,57 @@ use yii\console\ExitCode;
  *   php yii ldap/test-user <username>      — look up a single user (no password needed)
  *   php yii ldap/sync                      — reconcile every LDAP-backed user with the directory:
  *                                            update attributes/roles, disable accounts the directory
- *                                            no longer recognises, re-enable ones it does.
+ *                                            no longer has, re-enable the ones it disabled once the
+ *                                            directory has them again.
  *   php yii ldap/sync --dry-run            — same as above, but reports without making changes.
  *
  * Run `php yii ldap/sync` from cron (e.g. nightly) so accounts that have been
  * removed or disabled in the directory lose their Ansilume access too.
+ *
+ * Only a lookup whose user search ran and found no entry disables an account.
+ * A lookup that fails says nothing about the user: sync leaves that account,
+ * its roles and its API tokens as they are and counts an error. A failed
+ * service bind stops the run, since every further lookup would fail too, and
+ * LDAP that is enabled but not fully configured stops it before the first
+ * user. The command exits non-zero whenever it counted an error.
+ *
+ * An inactive account the directory has is activated again only when
+ * ldap/sync deactivated it (user.ldap_sync_disabled). One deactivated in
+ * Ansilume stays inactive: sync updates what the directory says of it but
+ * prints SYNC_LEFT_INACTIVE instead of re-enabling it (CLAUDE.md security
+ * rule 15).
  */
 class LdapController extends Controller
 {
+    /**
+     * ldap/sync while LDAP is enabled but its host or base DN is not set: it
+     * looks up no user, changes nothing and exits with ExitCode::CONFIG (78).
+     */
+    public const SYNC_NOT_USABLE = "[ldap] LDAP is enabled but not fully configured (host or base DN missing): sync stopped, no user changed.\n";
+
+    /**
+     * The service bind failed, so no lookup can succeed: ldap/sync stops
+     * before the user it was about to sync (the reason, then the number of
+     * users it did not sync), counts one error and exits non-zero.
+     */
+    public const SYNC_BIND_FAILED = "[ldap] Service bind failed (%s): sync stopped, %d user(s) left unchanged.\n";
+
+    /**
+     * A user whose lookup failed (the username, then the reason): ldap/sync
+     * leaves the account, its roles and its API tokens as they are, and
+     * counts an error.
+     */
+    public const SYNC_LOOKUP_FAILED = "  - %s: lookup failed → left unchanged (%s)\n";
+
+    /**
+     * A user the directory has whose account was deactivated in Ansilume, not
+     * by ldap/sync (the username; LdapUserProvisioner::staysInactive()):
+     * ldap/sync updates what the directory says of it (DN, email, roles) but
+     * leaves it inactive, and counts it as updated, not as re-enabled.
+     * --dry-run prints the same line.
+     */
+    public const SYNC_LEFT_INACTIVE = "  - %s: deactivated in Ansilume, not by ldap/sync → left inactive\n";
+
     /**
      * @var bool When true, sync prints planned changes but commits nothing.
      */
@@ -131,15 +176,18 @@ class LdapController extends Controller
         }
 
         $config = $svc->getConfig();
-        $users = User::find()->where(['auth_source' => User::AUTH_SOURCE_LDAP])->all();
+        if (!$config->isUsable()) {
+            $this->stderr(self::SYNC_NOT_USABLE);
+            return ExitCode::CONFIG;
+        }
+
+        // By ID, so that the users a stopped run did not sync are the last ones.
+        /** @var list<User> $users */
+        $users = User::find()->where(['auth_source' => User::AUTH_SOURCE_LDAP])->orderBy(['id' => SORT_ASC])->all();
         $this->stdout("[ldap] Syncing " . count($users) . " LDAP-backed user(s)"
             . ($this->dryRun ? ' (dry-run)' : '') . "\n");
 
-        $counts = ['updated' => 0, 'disabled' => 0, 'reEnabled' => 0, 'errors' => 0];
-        foreach ($users as $user) {
-            /** @var User $user */
-            $this->syncOne($user, $svc, $prov, $config, $counts);
-        }
+        $counts = $this->syncUsers($users, $svc, $prov, $config);
 
         $this->stdout("[ldap] Done. updated={$counts['updated']} disabled={$counts['disabled']} "
             . "re-enabled={$counts['reEnabled']} errors={$counts['errors']}\n");
@@ -147,46 +195,105 @@ class LdapController extends Controller
     }
 
     /**
-     * Sync a single user against the directory. Mutates $counts in place.
+     * Sync every user in turn. A failed service bind stops the run, since no
+     * lookup can succeed then: the users not synced yet keep their state.
+     *
+     * @param list<User> $users
+     * @return array{updated: int, disabled: int, reEnabled: int, errors: int}
+     */
+    private function syncUsers(array $users, LdapService $svc, LdapUserProvisioner $prov, LdapConfig $config): array
+    {
+        $counts = ['updated' => 0, 'disabled' => 0, 'reEnabled' => 0, 'errors' => 0];
+        foreach ($users as $index => $user) {
+            $lookup = $svc->lookup((string)$user->username);
+            if ($lookup->outcome === LdapLookupResult::BIND_FAILED) {
+                $this->stderr(sprintf(self::SYNC_BIND_FAILED, (string)$lookup->error, count($users) - $index));
+                $counts['errors']++;
+                break;
+            }
+            $this->syncOne($user, $lookup, $prov, $config, $counts);
+        }
+        return $counts;
+    }
+
+    /**
+     * Sync a single user with what their lookup found. Mutates $counts in place.
      *
      * @param array{updated: int, disabled: int, reEnabled: int, errors: int} $counts
      */
     private function syncOne(
         User $user,
-        LdapService $svc,
+        LdapLookupResult $lookup,
         LdapUserProvisioner $prov,
-        \app\services\ldap\LdapConfig $config,
+        LdapConfig $config,
         array &$counts
     ): void {
         $username = (string)$user->username;
-        $result = $svc->lookupByUsername($username);
+        $result = $lookup->user;
 
         if ($result === null) {
-            $this->handleMissingUser($user, $username, (string)($svc->getLastError() ?? 'not found in directory'), $prov, $counts);
+            $this->handleNoUser($user, $username, $lookup, $prov, $counts);
             return;
         }
 
         $wasInactive = (int)$user->status !== User::STATUS_ACTIVE;
         if ($this->dryRun) {
+            $leftInactive = $prov->staysInactive($user);
             $rolesPreview = empty($result->roles) ? '(none)' : implode(',', $result->roles);
             $this->stdout("  - {$username}: present (dn={$result->dn}, roles={$rolesPreview})"
-                . ($wasInactive ? ' → would RE-ENABLE' : '') . "\n");
-            $counts['updated']++;
-            if ($wasInactive) {
-                $counts['reEnabled']++;
-            }
+                . ($wasInactive && !$leftInactive ? ' → would RE-ENABLE' : '') . "\n");
+            $this->countFound($username, $wasInactive, $leftInactive, $counts);
             return;
         }
 
-        if ($prov->provisionOrUpdate($result, $config) === null) {
+        $persisted = $prov->provisionOrUpdate($result, $config);
+        if ($persisted === null) {
             $this->stderr("  - {$username}: provisionOrUpdate failed\n");
             $counts['errors']++;
             return;
         }
+        $this->countFound($username, $wasInactive, (int)$persisted->status !== User::STATUS_ACTIVE, $counts);
+    }
+
+    /**
+     * Count a user the directory has as updated, and as re-enabled when the
+     * account was inactive, unless it stays inactive because it was
+     * deactivated in Ansilume (SYNC_LEFT_INACTIVE). Mutates $counts in place.
+     *
+     * @param array{updated: int, disabled: int, reEnabled: int, errors: int} $counts
+     */
+    private function countFound(string $username, bool $wasInactive, bool $leftInactive, array &$counts): void
+    {
         $counts['updated']++;
+        if ($leftInactive) {
+            $this->stdout(sprintf(self::SYNC_LEFT_INACTIVE, $username));
+            return;
+        }
         if ($wasInactive) {
             $counts['reEnabled']++;
         }
+    }
+
+    /**
+     * A user the lookup did not answer. Disabled when the directory no
+     * longer has them; when the lookup failed, left as they are and counted
+     * as an error, since a failed lookup says nothing about the user.
+     *
+     * @param array{updated: int, disabled: int, reEnabled: int, errors: int} $counts
+     */
+    private function handleNoUser(
+        User $user,
+        string $username,
+        LdapLookupResult $lookup,
+        LdapUserProvisioner $prov,
+        array &$counts
+    ): void {
+        if ($lookup->outcome === LdapLookupResult::MISSING) {
+            $this->handleMissingUser($user, $username, LdapService::USER_NOT_FOUND, $prov, $counts);
+            return;
+        }
+        $this->stderr(sprintf(self::SYNC_LOOKUP_FAILED, $username, (string)$lookup->error));
+        $counts['errors']++;
     }
 
     /**

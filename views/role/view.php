@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var array{name: string, description: string, isSystem: bool, directPermissions: string[], effectivePermissions: string[], userIds: int[]} $role */
 /** @var \app\models\User[] $users */
+/** @var bool $mayChange whether the signed-in user may change or delete the role (app\services\RoleChangePolicy) */
 
 use app\helpers\ConfirmHelper;
 use app\helpers\PermissionCatalog;
@@ -25,10 +26,10 @@ $inherited = array_diff($role['effectivePermissions'], $role['directPermissions'
         <?php endif; ?>
     </h2>
     <div>
-        <?php if (Yii::$app->user->can('role.update')) : ?>
+        <?php if ($mayChange && Yii::$app->user->can('role.update')) : ?>
             <?= Html::a('Edit', ['update', 'name' => $role['name']], ['class' => 'btn btn-outline-primary btn-sm']) ?>
         <?php endif; ?>
-        <?php if (!$role['isSystem'] && Yii::$app->user->can('role.delete')) : ?>
+        <?php if ($mayChange && !$role['isSystem'] && Yii::$app->user->can('role.delete')) : ?>
             <form action="<?= \yii\helpers\Url::to(['delete', 'name' => $role['name']]) ?>" method="post" style="display:inline"
                   onsubmit="<?= ConfirmHelper::attribute('Delete role "' . $role['name'] . '"? Users holding this role will be left without a role.') ?>">
                 <input type="hidden" name="<?= Yii::$app->request->csrfParam ?>" value="<?= Yii::$app->request->csrfToken ?>">

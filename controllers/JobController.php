@@ -19,6 +19,8 @@ use app\services\JobCancellationService;
 use app\services\JobLaunchService;
 use app\services\RelaunchRefusedException;
 use app\services\RelaunchService;
+use app\services\runstate\ApprovalRequestContexts;
+use app\services\runstate\Viewer;
 use app\services\WorkflowAccessChecker;
 use app\controllers\traits\TeamScopingTrait;
 use yii\web\ForbiddenHttpException;
@@ -95,6 +97,8 @@ class JobController extends BaseController
         $tasks = JobTask::find()->where(['job_id' => $job->id])->orderBy('sequence')->all();
         $hostSummaries = $job->getHostSummaries()->all();
         $artifacts = $job->getArtifacts()->all();
+        /** @var ApprovalRequestContexts $contexts */
+        $contexts = \Yii::$app->get('approvalRequestContexts');
         return $this->render('view', [
             'job' => $job,
             'logs' => $logs,
@@ -102,6 +106,8 @@ class JobController extends BaseController
             'hostSummaries' => $hostSummaries,
             'artifacts' => $artifacts,
             'jobCredentials' => $this->credentialResolver()->describe($job->decodedRunnerPayload()),
+            // The workflow run and step the job was created for, and the approval it waits or waited for.
+            'context' => $contexts->forJob($job, Viewer::current()),
         ]);
     }
 

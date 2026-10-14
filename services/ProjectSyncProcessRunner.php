@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\GitSyncDiagnostics;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 
@@ -18,11 +19,17 @@ use app\models\ProjectSyncLog;
  *     Without this, an unreachable SCM host blocks the queue worker on
  *     `proc_close()` indefinitely (the original "stuck on syncing" bug).
  *
- *   - **Streamed log capture.** Every chunk read from either stream is
- *     appended to the `project_sync_log` table in real time so the UI can
- *     poll for progress while the sync runs. The accumulated stdout/stderr
- *     is also returned so the caller can fold them into RuntimeException
- *     messages on non-zero exit.
+ *   - **Streamed log capture.** What either stream writes is appended to
+ *     the `project_sync_log` table in real time so the UI can poll for
+ *     progress while the sync runs. The accumulated stdout/stderr is also
+ *     returned so the caller can fold them into RuntimeException messages
+ *     on non-zero exit.
+ *
+ * Every row it appends, and the output it returns, names URLs without their
+ * credentials (GitSyncDiagnostics::redactUrl): git's messages can name the
+ * repository URL, and the timeout names the command. A row ends at
+ * whitespace (or where the stream ends), which no URL holds, so that no URL
+ * is split across two rows where neither shows its credentials whole.
  *
  * Lives outside ProjectService so the proc_open + stream_select + signal
  * dance has its own home and ProjectService stays focused on credential
@@ -30,6 +37,26 @@ use app\models\ProjectSyncLog;
  */
 class ProjectSyncProcessRunner
 {
+    /**
+     * The row of the sync output, and the error, when git runs longer than
+     * the timeout; sprintf(): the timeout in seconds, then the command with
+     * its URL without credentials.
+     */
+    public const TIMED_OUT = 'git command timed out after %d seconds: %s';
+
+    /**
+     * What ends a row: whitespace. The output after the last whitespace is
+     * held back until more comes or the stream ends.
+     */
+    private const ROW_END = " \t\n\r\v\f";
+
+    /**
+     * A run without whitespace longer than this is written as it came, so
+     * that held output stays bounded. Only a URL across the end of such a
+     * run could be split across two rows; git writes no line that long.
+     */
+    private const MAX_HELD_BYTES = 8192;
+
     /**
      * Read buffer size for each stream chunk. 8 KiB matches the ansible
      * callback log chunking and is large enough that we rarely loop on
@@ -48,13 +75,25 @@ class ProjectSyncProcessRunner
     private int $sequence = 1;
 
     /**
-     * @param string[]              $cmd
+     * Per stream (ProjectSyncLog::STREAM_STDOUT, STREAM_STDERR), the output
+     * after its last whitespace, not written yet.
+     *
+     * @var array<string, string>
+     */
+    private array $held = [];
+
+    /**
+     * @param string[]              $cmd The command, the repository URL with its credentials included.
      * @param array<string, string> $env
-     * @return array{0: string, 1: string, 2: int}
+     * @return array{0: string, 1: string, 2: int} stdout and stderr without the credentials of URLs, the exit code.
      * @throws \RuntimeException on proc_open failure or timeout.
      */
-    public function run(Project $project, array $cmd, #[\SensitiveParameter] array $env, int $timeoutSeconds): array
-    {
+    public function run(
+        Project $project,
+        #[\SensitiveParameter] array $cmd,
+        #[\SensitiveParameter] array $env,
+        int $timeoutSeconds
+    ): array {
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
@@ -76,6 +115,7 @@ class ProjectSyncProcessRunner
 
         $this->stdout = '';
         $this->stderr = '';
+        $this->held = [];
         $this->sequence = $this->nextSequence($project);
         $deadline = microtime(true) + $timeoutSeconds;
         $timedOut = false;
@@ -95,10 +135,11 @@ class ProjectSyncProcessRunner
         if (is_resource($pipes[2])) {
             fclose($pipes[2]);
         }
+        $this->writeHeld($project);
 
         if ($timedOut) {
             $this->terminate($process);
-            $message = sprintf('git command timed out after %d seconds: %s', $timeoutSeconds, implode(' ', $cmd));
+            $message = sprintf(self::TIMED_OUT, $timeoutSeconds, GitSyncDiagnostics::redactUrl(implode(' ', $cmd)));
             $this->appendLog($project, ProjectSyncLog::STREAM_SYSTEM, $message . "\n");
             throw new \RuntimeException($message);
         }
@@ -106,7 +147,11 @@ class ProjectSyncProcessRunner
         return [$this->stdout, $this->stderr, proc_close($process)];
     }
 
-    public function appendSystem(Project $project, string $message): void
+    /**
+     * Appends a row to the sync output's system stream, without the
+     * credentials of URLs.
+     */
+    public function appendSystem(Project $project, #[\SensitiveParameter] string $message): void
     {
         $this->sequence = $this->nextSequence($project);
         $this->appendLog($project, ProjectSyncLog::STREAM_SYSTEM, $message);
@@ -161,7 +206,12 @@ class ProjectSyncProcessRunner
         }
     }
 
-    /** @param resource $stream */
+    /**
+     * Writes what a read brought, up to its last whitespace, with what was
+     * held back before it; holds back the rest.
+     *
+     * @param resource $stream
+     */
     private function absorbChunk(Project $project, $stream, bool $isStdout): void
     {
         $chunk = fread($stream, self::READ_CHUNK_BYTES);
@@ -169,17 +219,42 @@ class ProjectSyncProcessRunner
             return;
         }
 
-        if ($isStdout && strlen($this->stdout) < self::MAX_BUFFER_BYTES) {
-            $this->stdout .= $chunk;
-        } elseif (!$isStdout && strlen($this->stderr) < self::MAX_BUFFER_BYTES) {
-            $this->stderr .= $chunk;
+        $name = $isStdout ? ProjectSyncLog::STREAM_STDOUT : ProjectSyncLog::STREAM_STDERR;
+        $text = ($this->held[$name] ?? '') . $chunk;
+        $tail = strcspn(strrev($text), self::ROW_END);
+        if ($tail > self::MAX_HELD_BYTES) {
+            $tail = 0;
         }
+        $this->held[$name] = substr($text, strlen($text) - $tail);
+        $this->write($project, $name, substr($text, 0, strlen($text) - $tail));
+    }
 
-        $this->appendLog(
-            $project,
-            $isStdout ? ProjectSyncLog::STREAM_STDOUT : ProjectSyncLog::STREAM_STDERR,
-            $chunk,
-        );
+    /**
+     * Writes what is held back: the streams ended, or the run timed out.
+     */
+    private function writeHeld(Project $project): void
+    {
+        foreach ($this->held as $name => $text) {
+            $this->write($project, $name, $text);
+        }
+        $this->held = [];
+    }
+
+    /**
+     * Adds output of a stream to what run() returns and to the sync output,
+     * without the credentials of URLs.
+     */
+    private function write(Project $project, string $name, #[\SensitiveParameter] string $text): void
+    {
+        if ($text === '') {
+            return;
+        }
+        $text = $this->appendLog($project, $name, $text);
+        if ($name === ProjectSyncLog::STREAM_STDOUT && strlen($this->stdout) < self::MAX_BUFFER_BYTES) {
+            $this->stdout .= $text;
+        } elseif ($name === ProjectSyncLog::STREAM_STDERR && strlen($this->stderr) < self::MAX_BUFFER_BYTES) {
+            $this->stderr .= $text;
+        }
     }
 
     /**
@@ -224,14 +299,21 @@ class ProjectSyncProcessRunner
             ->max('sequence') + 1;
     }
 
-    private function appendLog(Project $project, string $stream, string $content): void
+    /**
+     * Appends a row to the sync output; the content it stored: $content
+     * without the credentials of URLs.
+     */
+    private function appendLog(Project $project, string $stream, #[\SensitiveParameter] string $content): string
     {
+        $shown = GitSyncDiagnostics::redactUrl($content);
         $log = new ProjectSyncLog();
         $log->project_id = $project->id;
         $log->stream = $stream;
-        $log->content = $content;
+        $log->content = $shown;
         $log->sequence = $this->sequence++;
         $log->created_at = time();
         $log->save(false);
+
+        return $shown;
     }
 }

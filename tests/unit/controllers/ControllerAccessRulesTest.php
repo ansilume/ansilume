@@ -339,6 +339,34 @@ class ControllerAccessRulesTest extends TestCase
         $this->assertActionIsPostOnly($verbs, 'launch');
     }
 
+    /**
+     * Every step change needs workflow-template.update, as the API's does:
+     * workflow-template.create alone creates a workflow but changes no
+     * steps (before 2.11 the create rule also listed add-step and
+     * remove-step).
+     */
+    public function testWorkflowTemplateStepActionsRequireUpdateOnly(): void
+    {
+        $rules = $this->getAccessRules(WorkflowTemplateController::class);
+        foreach (['add-step', 'edit-step', 'move-step', 'remove-step'] as $action) {
+            $this->assertActionRequiresRole($rules, $action, 'workflow-template.update');
+            foreach ($rules as $rule) {
+                if (in_array($action, $rule['actions'] ?? [], true)) {
+                    $this->assertSame(['workflow-template.update'], $rule['roles'] ?? null, "no other role grants '{$action}'");
+                }
+            }
+        }
+    }
+
+    public function testWorkflowTemplateStepWritesArePostOnlyAndTheEditPageTakesGetAndPost(): void
+    {
+        $verbs = $this->getVerbRules(WorkflowTemplateController::class);
+        foreach (['add-step', 'move-step', 'remove-step'] as $action) {
+            $this->assertActionIsPostOnly($verbs, $action);
+        }
+        $this->assertSame(['GET', 'POST'], $verbs['edit-step'] ?? null);
+    }
+
     // -------------------------------------------------------------------------
     // WorkflowJobController
     // -------------------------------------------------------------------------

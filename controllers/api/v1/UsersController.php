@@ -6,7 +6,12 @@ namespace app\controllers\api\v1;
 
 use app\models\AuditLog;
 use app\models\User;
+use app\models\UserForm;
+use app\services\AssignedRoles;
+use app\services\RoleGrantPolicy;
+use app\services\UserChangePolicy;
 use app\services\UserDeletionService;
+use app\services\UserPrivileges;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
 
@@ -21,9 +26,60 @@ use yii\web\NotFoundHttpException;
  *
  * Sensitive fields (password_hash, auth_key, totp_secret, recovery_codes)
  * are NEVER included in responses.
+ *
+ * A "role" in the body of POST and PUT that the user already has, one of
+ * the roles assigned to them, leaves every assigned role alone; another role
+ * replaces them all; no "role", null and '' leave them alone too. Any other
+ * value must name a role of the instance, compared exactly, else the request
+ * answers 422 (INVALID_ROLE) before anything is written.
+ *
+ * What the caller may give (RoleGrantPolicy), checked before anything is
+ * written: a role they may not assign answers 403
+ * (RoleGrantPolicy::ROLE_REFUSED), and an is_superadmin that would change
+ * the flag answers 403 (RoleGrantPolicy::SUPERADMIN_REFUSED) unless the
+ * caller is a superadmin. user.created and user.updated record the user's
+ * roles and superadmin flag as {from, to} when they change
+ * (UserPrivileges).
+ *
+ * Whom the caller may change (UserChangePolicy): PUT and DELETE of a user
+ * who is a superadmin, or who holds a role the caller may not assign, answer
+ * 403 (UserChangePolicy::CHANGE_REFUSED) for a caller who is no superadmin,
+ * or 403 (UserChangePolicy::ADMIN_ROLE_CHANGE_REFUSED) in its place where
+ * only the admin role refuses, whatever the teams; where the roles allow the
+ * change, of a user whose teams give them more access to a project than the
+ * caller's teams give the caller, 403 (UserChangePolicy::TEAM_ACCESS_REFUSED)
+ * for a caller who neither is a superadmin nor holds the admin role. They
+ * come after the 404 of a user that does not exist and before every other
+ * check.
+ *
+ * The only active superadmin (User::activeSuperadminExists()) changes their
+ * own account, but neither takes their superadmin flag
+ * (ONLY_SUPERADMIN_DEMOTED) nor deactivates it (ONLY_SUPERADMIN_DEACTIVATED),
+ * nor is deleted (ONLY_SUPERADMIN_DELETED). An inactive superadmin may be
+ * demoted, deactivated or deleted.
  */
 class UsersController extends BaseApiController
 {
+    /**
+     * The 422 of a "role" that names no role of the instance, also of one
+     * that is not a string. sprintf(): the names of the instance's roles,
+     * sorted by name and joined with ', ', e.g.
+     * "role must be one of: admin, operator, viewer."
+     */
+    public const INVALID_ROLE = 'role must be one of: %s.';
+
+    /** The 422 of PUT /api/v1/users/{id} that would take the superadmin flag from the only active superadmin. */
+    public const ONLY_SUPERADMIN_DEMOTED = 'Cannot demote the only active superadmin.';
+
+    /**
+     * The 422 of PUT /api/v1/users/{id} that would deactivate the only
+     * active superadmin (a status other than active).
+     */
+    public const ONLY_SUPERADMIN_DEACTIVATED = 'Cannot deactivate the only active superadmin.';
+
+    /** The 422 of DELETE /api/v1/users/{id} of the only active superadmin. */
+    public const ONLY_SUPERADMIN_DELETED = 'Cannot delete the only active superadmin.';
+
     protected function apiAccessRules(): array
     {
         return [
@@ -49,9 +105,11 @@ class UsersController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<User> $users */
+        $users = $dp->getModels();
 
         return $this->paginated(
-            array_map(fn ($u) => $this->serialize($u), $dp->getModels()),
+            $this->serializeAll($users),
             (int)$dp->totalCount,
             $page,
             25
@@ -66,10 +124,15 @@ class UsersController extends BaseApiController
         if (!$this->userCan('user.view')) {
             return $this->error('Forbidden.', 403);
         }
-        return $this->success($this->serialize($this->findModel($id)));
+        return $this->success($this->serializeOne($this->findModel($id)));
     }
 
     /**
+     * Creates the user. A "role" that names no role of the instance answers
+     * 422 (INVALID_ROLE); a role the caller may not assign, or is_superadmin
+     * true from a caller who is no superadmin, answers 403 (RoleGrantPolicy).
+     * Each creates nothing.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionCreate(): array
@@ -80,17 +143,24 @@ class UsersController extends BaseApiController
 
         $model = new User();
         $body = (array)\Yii::$app->request->bodyParams;
+        $grants = RoleGrantPolicy::forCurrentUser();
 
         // auth_source is set on insert and frozen thereafter — see actionUpdate.
         $authSource = isset($body['auth_source']) ? (string)$body['auth_source'] : User::AUTH_SOURCE_LOCAL;
         if (!in_array($authSource, [User::AUTH_SOURCE_LOCAL, User::AUTH_SOURCE_LDAP], true)) {
             return $this->error('Invalid auth_source. Must be "local" or "ldap".', 422);
         }
+        $err = $this->rejectUnknownRole($body['role'] ?? null)
+            ?? $this->refuseRoleGrant($grants, $body['role'] ?? null, []);
+        if ($err !== null) {
+            return $err;
+        }
 
         $this->applyBody($model, $body);
         $model->generateAuthKey();
 
-        $err = $this->applyAuthSourceOnCreate($model, $body, $authSource);
+        $err = $this->refuseSuperadminChange($grants, $model, false)
+            ?? $this->applyAuthSourceOnCreate($model, $body, $authSource);
         if ($err !== null) {
             return $err;
         }
@@ -102,17 +172,17 @@ class UsersController extends BaseApiController
             return $this->error('Failed to save user.', 422);
         }
 
-        $this->assignRole($model, $body);
+        $this->assignRole($model, $body, []);
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_USER_CREATED,
             'user',
             $model->id,
             null,
-            ['username' => $model->username, 'source' => 'api']
+            ['username' => $model->username, 'source' => 'api'] + UserPrivileges::of($model)->changesSince(null)
         );
 
-        return $this->success($this->serialize($model), 201);
+        return $this->success($this->serializeOne($model), 201);
     }
 
     /**
@@ -205,8 +275,14 @@ class UsersController extends BaseApiController
     }
 
     /**
-     * Updates the user. Taking the superadmin flag from the only superadmin
-     * answers 422 and changes nothing.
+     * Updates the user. A user the caller may not change answers 403
+     * (UserChangePolicy::refusalOf()) first. A "role" that names no role of
+     * the instance (INVALID_ROLE), or taking the superadmin flag from the
+     * only active superadmin or deactivating them, answers 422; a role the
+     * user does not have and the caller may not assign
+     * (RoleGrantPolicy::refusalOf()), or an is_superadmin that would change
+     * the flag, from a caller who is no superadmin, answers 403. Each changes
+     * nothing: neither the user nor their roles.
      *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
@@ -218,18 +294,21 @@ class UsersController extends BaseApiController
 
         $model = $this->findModel($id);
         $body = (array)\Yii::$app->request->bodyParams;
+        $grants = RoleGrantPolicy::forCurrentUser();
+        $before = UserPrivileges::of($model);
 
-        $err = $this->rejectAuthSourceChange($model, $body);
+        $err = $this->refuseChange($grants, $model)
+            ?? $this->rejectAuthSourceChange($model, $body)
+            ?? $this->rejectUnknownRole($body['role'] ?? null)
+            ?? $this->refuseRoleGrant($grants, $body['role'] ?? null, $before->roles);
         if ($err !== null) {
             return $err;
         }
 
         $this->applyBody($model, $body);
-        if ($this->demotesTheOnlySuperadmin($model)) {
-            return $this->error('Cannot demote the only superadmin.', 422);
-        }
-
-        $err = $this->applyPasswordOnUpdate($model, $body);
+        $err = $this->refuseSuperadminChange($grants, $model, $before->superadmin)
+            ?? $this->refuseLosingTheOnlySuperadmin($model)
+            ?? $this->applyPasswordOnUpdate($model, $body);
         if ($err !== null) {
             return $err;
         }
@@ -247,23 +326,26 @@ class UsersController extends BaseApiController
             return $this->error('Failed to save user.', 422);
         }
 
-        // Leaves the roles alone when the body names no role.
-        $this->assignRole($model, $body);
+        // Leaves the roles alone when the body names no role or one the user has.
+        $this->assignRole($model, $body, $before->roles);
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_USER_UPDATED,
             'user',
             $model->id,
             null,
-            ['username' => $model->username, 'source' => 'api']
+            ['username' => $model->username, 'source' => 'api'] + UserPrivileges::of($model)->changesSince($before)
         );
 
-        return $this->success($this->serialize($model));
+        return $this->success($this->serializeOne($model));
     }
 
     /**
-     * Deletes the user and their roles. A user whom other records still
-     * refer to answers 409 and stays, roles included.
+     * Deletes the user and their roles. A user the caller may not change
+     * answers 403 (UserChangePolicy::refusalOf()), after the 404 of a user
+     * that does not exist; one's own account and the only active superadmin
+     * answer 422. A user whom other records still refer to answers 409 and
+     * stays, roles included.
      *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
@@ -273,14 +355,18 @@ class UsersController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
 
+        $model = $this->findModel($id);
+        $err = $this->refuseChange(RoleGrantPolicy::forCurrentUser(), $model);
+        if ($err !== null) {
+            return $err;
+        }
+
         if ((int)\Yii::$app->user->id === $id) {
             return $this->error('Cannot delete your own account.', 422);
         }
 
-        $model = $this->findModel($id);
-
-        if ($model->is_superadmin && !$this->hasOtherSuperadmin($model)) {
-            return $this->error('Cannot delete the only superadmin.', 422);
+        if ($this->isTheOnlyActiveSuperadmin($model)) {
+            return $this->error(self::ONLY_SUPERADMIN_DELETED, 422);
         }
 
         $username = $model->username;
@@ -302,22 +388,83 @@ class UsersController extends BaseApiController
     }
 
     /**
-     * Whether saving $model would take the superadmin flag from the only
-     * user who has it.
+     * 403 when the caller, who gives what $grants allows, may not change
+     * $model, with why (UserChangePolicy::refusalOf()).
+     *
+     * @return array{error: array{message: string}}|null
      */
-    private function demotesTheOnlySuperadmin(User $model): bool
+    private function refuseChange(RoleGrantPolicy $grants, User $model): ?array
     {
-        return (bool)$model->getOldAttribute('is_superadmin')
-            && !$model->is_superadmin
-            && !$this->hasOtherSuperadmin($model);
+        $refusal = UserChangePolicy::of($grants)->refusalOf($model);
+
+        return $refusal === null ? null : $this->error($refusal, 403);
     }
 
-    private function hasOtherSuperadmin(User $model): bool
+    /**
+     * 422 when saving $model would take the superadmin flag from the only
+     * active superadmin (ONLY_SUPERADMIN_DEMOTED) or deactivate them
+     * (ONLY_SUPERADMIN_DEACTIVATED): from active to any other status.
+     *
+     * @return array{error: array{message: string}}|null
+     */
+    private function refuseLosingTheOnlySuperadmin(User $model): ?array
     {
-        return User::find()
-            ->where(['is_superadmin' => true])
-            ->andWhere(['!=', 'id', $model->id])
-            ->exists();
+        $demoted = !$model->is_superadmin;
+        $deactivated = (int)$model->status !== User::STATUS_ACTIVE;
+        if ((!$demoted && !$deactivated) || !$this->isTheOnlyActiveSuperadmin($model)) {
+            return null;
+        }
+
+        return $this->error($demoted ? self::ONLY_SUPERADMIN_DEMOTED : self::ONLY_SUPERADMIN_DEACTIVATED, 422);
+    }
+
+    /**
+     * Whether $model, as stored before the request (its old attributes), is
+     * the only active superadmin: a superadmin whose status is active while
+     * no other user is one (User::activeSuperadminExists()). An inactive
+     * superadmin, who cannot sign in, never is.
+     */
+    private function isTheOnlyActiveSuperadmin(User $model): bool
+    {
+        return (bool)$model->getOldAttribute('is_superadmin')
+            && (int)$model->getOldAttribute('status') === User::STATUS_ACTIVE
+            && !User::activeSuperadminExists((int)$model->id);
+    }
+
+    /**
+     * 403 (RoleGrantPolicy::SUPERADMIN_REFUSED) when the body changed the
+     * superadmin flag of $model from $before and the caller is no
+     * superadmin; a body that repeats the flag is no change.
+     *
+     * @return array{error: array{message: string}}|null
+     */
+    private function refuseSuperadminChange(RoleGrantPolicy $grants, User $model, bool $before): ?array
+    {
+        if ((bool)$model->is_superadmin === $before || $grants->isSuperadmin()) {
+            return null;
+        }
+
+        return $this->error(RoleGrantPolicy::SUPERADMIN_REFUSED, 403);
+    }
+
+    /**
+     * 403 (RoleGrantPolicy::refusalOf(): ROLE_REFUSED, or ADMIN_ROLE_REFUSED
+     * for the admin role or a role that contains it) when $role, the body's
+     * "role", which rejectUnknownRole() checked, is a role the user does not
+     * have ($assigned) and the caller may not assign. No "role", null, ''
+     * and a role the user has assign nothing.
+     *
+     * @param list<string> $assigned the roles assigned to the user; [] for a new user
+     * @return array{error: array{message: string}}|null
+     */
+    private function refuseRoleGrant(RoleGrantPolicy $grants, mixed $role, array $assigned): ?array
+    {
+        if (!is_string($role) || $role === '' || in_array($role, $assigned, true)) {
+            return null;
+        }
+        $refusal = $grants->refusalOf($role);
+
+        return $refusal === null ? null : $this->error($refusal, 403);
     }
 
     /**
@@ -339,12 +486,47 @@ class UsersController extends BaseApiController
     }
 
     /**
-     * @param array<string, mixed> $body
+     * 422 (INVALID_ROLE) when $role, the body's "role", is neither null nor ''
+     * (both leave the roles alone) and names no role of the instance: the
+     * roles the user form offers (UserForm::roleOptions()), compared
+     * exactly. A value that is not a string names none. Checked before
+     * anything is written.
+     *
+     * Regression: a role that named no role saved the user and left it
+     * without any role (assignRole() revoked them before it looked the role
+     * up), and a role that was not a string was ignored; both answered as if
+     * the role had been taken.
+     *
+     * @return array{error: array{message: string}}|null
      */
-    private function assignRole(User $model, #[\SensitiveParameter] array $body): void
+    private function rejectUnknownRole(mixed $role): ?array
+    {
+        if ($role === null || $role === '') {
+            return null;
+        }
+        $roles = UserForm::roleOptions();
+        if (is_string($role) && isset($roles[$role])) {
+            return null;
+        }
+        $names = array_map('strval', array_keys($roles));
+        sort($names, SORT_STRING);
+
+        return $this->error(sprintf(self::INVALID_ROLE, implode(', ', $names)), 422);
+    }
+
+    /**
+     * Replaces the roles assigned to $model with the body's "role", which
+     * rejectUnknownRole() and refuseRoleGrant() checked before anything was
+     * written. No "role", null, '' and a role of $assigned, a role the user
+     * already has, leave every assigned role alone.
+     *
+     * @param array<string, mixed> $body
+     * @param list<string> $assigned the roles assigned to $model before the request; [] for a new user
+     */
+    private function assignRole(User $model, #[\SensitiveParameter] array $body, array $assigned): void
     {
         $roleName = $body['role'] ?? null;
-        if (!is_string($roleName) || $roleName === '') {
+        if (!is_string($roleName) || $roleName === '' || in_array($roleName, $assigned, true)) {
             return;
         }
 
@@ -358,14 +540,49 @@ class UsersController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, username: string, email: string, status: int, is_superadmin: bool, totp_enabled: bool, role: string|null, auth_source: string, ldap_dn: string|null, ldap_uid: string|null, last_synced_at: int|null, created_at: int, updated_at: int}
+     * The users as the API answers them, with the roles of all of them read
+     * in one query.
+     *
+     * @param list<User> $users
+     * @return list<array{id: int, username: string, email: string, status: int, is_superadmin: bool, totp_enabled: bool, role: string|null, auth_source: string, ldap_dn: string|null, ldap_uid: string|null, last_synced_at: int|null, ldap_sync_disabled: bool, created_at: int, updated_at: int}>
      */
-    private function serialize(User $u): array
+    private function serializeAll(array $users): array
     {
-        /** @var \yii\rbac\ManagerInterface $auth */
-        $auth = \Yii::$app->authManager;
-        $roles = $auth->getRolesByUser((string)$u->id);
-        $roleName = !empty($roles) ? (string)array_key_first($roles) : null;
+        $roles = AssignedRoles::fromApp()->ofUsers(array_map(static fn (User $u): int => (int)$u->id, $users));
+
+        return array_map(fn (User $u): array => $this->serialize($u, $roles[(int)$u->id] ?? []), $users);
+    }
+
+    /**
+     * @return array{id: int, username: string, email: string, status: int, is_superadmin: bool, totp_enabled: bool, role: string|null, auth_source: string, ldap_dn: string|null, ldap_uid: string|null, last_synced_at: int|null, ldap_sync_disabled: bool, created_at: int, updated_at: int}
+     */
+    private function serializeOne(User $u): array
+    {
+        return $this->serialize($u, AssignedRoles::fromApp()->of((int)$u->id));
+    }
+
+    /**
+     * $u as the API answers it. Its role is the role assigned to the user,
+     * the first by name when several are, and null when none is. A default
+     * role, which every signed-in user holds, counts only when it is also
+     * assigned (AssignedRoles). A client that sends the role back unchanged
+     * keeps every role assigned to the user: a role the user has assigns
+     * nothing.
+     *
+     * ldap_sync_disabled is read-only: true when ldap/sync deactivated the
+     * account because the directory no longer had the user, so that an LDAP
+     * sign-in or an ldap/sync that finds the user activates it again. POST
+     * and PUT ignore it in the body, as they ignore totp_enabled,
+     * last_synced_at, created_at and updated_at; a PUT that changes the
+     * status clears it (LdapSyncDisabledBehavior, CLAUDE.md security rule
+     * 15).
+     *
+     * @param list<string> $roles the names of the roles assigned to $u, sorted by name
+     * @return array{id: int, username: string, email: string, status: int, is_superadmin: bool, totp_enabled: bool, role: string|null, auth_source: string, ldap_dn: string|null, ldap_uid: string|null, last_synced_at: int|null, ldap_sync_disabled: bool, created_at: int, updated_at: int}
+     */
+    private function serialize(User $u, array $roles): array
+    {
+        $roleName = $roles[0] ?? null;
 
         return [
             'id' => $u->id,
@@ -379,6 +596,7 @@ class UsersController extends BaseApiController
             'ldap_dn' => $u->ldap_dn,
             'ldap_uid' => $u->ldap_uid,
             'last_synced_at' => $u->last_synced_at !== null ? (int)$u->last_synced_at : null,
+            'ldap_sync_disabled' => (bool)$u->ldap_sync_disabled,
             'created_at' => $u->created_at,
             'updated_at' => $u->updated_at,
         ];

@@ -24,7 +24,8 @@ use yii\web\Response;
  * Regression: the job template and schedule forms (and a step posted to a
  * workflow) stored extra vars such as {"timeout_s": 1e999}, which PHP reads
  * as infinity, and then every launch was refused with "The extra vars
- * cannot be stored: they contain a number too large for JSON."
+ * cannot be stored: they contain a number too large for JSON." The step
+ * form no longer reads a variable mapping at all.
  */
 class ExtraVarsTooLargeForJsonFormTest extends WebControllerTestCase
 {
@@ -117,10 +118,12 @@ class ExtraVarsTooLargeForJsonFormTest extends WebControllerTestCase
     // -- Workflow step ------------------------------------------------------------
 
     /**
-     * The add-step form has no field for the mapping, but a posted one is
-     * loaded like every safe attribute.
+     * The add-step form has no field for the mapping, and the step form's
+     * reader (WorkflowStepCommand::fromForm()) never reads a posted one: the
+     * step is added without it, so no such number is stored. The API sets
+     * the mapping, and refuses such a number (WorkflowStepsInput).
      */
-    public function testAStepPostedWithSuchAnExtraVarsTemplateIsNotAdded(): void
+    public function testAStepPostedWithSuchAnExtraVarsTemplateIsAddedWithoutIt(): void
     {
         $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
         $this->setPost(['WorkflowStep' => [
@@ -140,8 +143,10 @@ class ExtraVarsTooLargeForJsonFormTest extends WebControllerTestCase
         };
         $ctrl->actionAddStep((int)$workflow->id);
 
-        $this->assertSame('Step not added: ' . self::MESSAGE, \Yii::$app->session->getFlash('danger'));
-        $this->assertFalse(WorkflowStep::find()->where(['workflow_template_id' => $workflow->id])->exists());
+        $this->assertNull(\Yii::$app->session->getFlash('danger'));
+        $step = WorkflowStep::findOne(['workflow_template_id' => $workflow->id, 'name' => 'inf-form-pause']);
+        $this->assertNotNull($step);
+        $this->assertNull($step->extra_vars_template, 'the posted mapping is not stored');
     }
 
     // -- Helpers ------------------------------------------------------------------

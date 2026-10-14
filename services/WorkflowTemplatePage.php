@@ -4,64 +4,42 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\WorkflowStepCommand;
+use app\components\WorkflowStepPosition;
 use app\models\ApprovalRule;
 use app\models\User;
+use app\models\WorkflowJob;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\runstate\RunState;
+use app\services\runstate\Viewer;
+use app\services\runstate\WorkflowRunStates;
 use yii\helpers\ArrayHelper;
 
 /**
- * The workflow template page (views/workflow-template/view.php) for one
- * user: what it shows them, the texts it shows, whether its add-step form
- * may add a step, and the step that form posts. WorkflowTemplateController
- * handles the requests.
+ * The workflow template page (views/workflow-template/view.php) and the
+ * page that edits one of its steps (edit-step.php), for one user: what they
+ * show the user, and the requests their step forms post.
+ * WorkflowTemplateController handles the requests; WorkflowStepWriteService
+ * changes the steps.
+ *
+ * Both pages build the route map of the workflow's steps once
+ * (WorkflowRouteMap::stepsOf(), fromModels()): the steps table
+ * (WorkflowStepsTable), the step form (WorkflowStepFormView) and the steps
+ * that route to an edited step (WorkflowStepRoutedBy) are read from it.
  *
  * Gated steps are for admins (approval-rule.update; ApprovalRuleAssignmentPolicy):
  * approval steps, and job steps whose job template has an approval rule.
- * The add-step form offers everyone else neither approval rules nor job
+ * The step form offers everyone else neither approval rules nor job
  * templates with an approval rule, and says why; on a workflow that has a
  * gated step they get a notice instead of the step controls. While a run of
- * the workflow is active, nobody changes its steps (WorkflowStepChangeGuard).
- *
- * The steps table labels each route. After a rejected, timed-out or canceled
- * approval a gated step follows only its On Failure route: left empty, the
- * run ends as failed, and the Always route is not taken. A gated job step
- * whose job ran and failed goes on as any job step does.
- *
- * The add-step form's Step Order is empty by default, and a step added with
- * it empty goes after the last step (STEP_ORDER_PLACEHOLDER, STEP_ORDER_HINT).
- * Regression (2.10.1): since 2.3.15 the form pre-filled the number of steps,
- * which sorts before the renumbered 10, 20, 30…, so such a step went first.
+ * the workflow is active, nobody changes its steps (WorkflowStepChangeGuard):
+ * the template page shows no step controls, and the edit page shows the
+ * runs and a form that cannot be sent.
  */
 final class WorkflowTemplatePage
 {
-    /** The label of an empty route that goes on with the next step. */
-    public const ROUTE_NEXT_STEP = '→ next step';
-
-    /** The label of a route that ends the run (WorkflowStep::END_WORKFLOW). */
-    public const ROUTE_END = 'end workflow';
-
-    /** The label of an approval step's empty On Failure route: a closed gate ends the run as failed. */
-    public const ROUTE_END_FAILED = 'end workflow (failed)';
-
-    /**
-     * The label of the empty On Failure route of a job step whose job
-     * template has an approval rule: a job that ran and failed goes on with
-     * the next step, a refused approval ends the run as failed.
-     */
-    public const GATED_JOB_FAILURE_ROUTE = '→ next step; end workflow (failed) after a refused approval';
-
-    /** The hover text of GATED_JOB_FAILURE_ROUTE. */
-    public const GATED_JOB_FAILURE_TITLE = 'After a rejected, timed-out or canceled approval, when the job never ran. '
-        . 'A job that ran and failed goes on with the next step.';
-
-    /** After the Always route of an approval step, which older versions saved: taken on approval only. */
-    public const APPROVAL_ALWAYS_NOTE = '(only on approval)';
-
-    /** After the Always route of a job step whose job template has an approval rule: taken only after its job ran. */
-    public const GATED_JOB_ALWAYS_NOTE = '(not after a rejected, timed-out or canceled approval)';
-
-    /** The hint under the add-step form's job templates, for users who may not add gated job steps. */
+    /** The hint under the step form's job templates, for users who may not add gated job steps. */
     public const GATED_TEMPLATES_HINT = 'Job templates with an approval rule are not listed: '
         . 'only admins may add a job step for them.';
 
@@ -72,102 +50,277 @@ final class WorkflowTemplatePage
      */
     public const STEPS_LOCKED_NOTE = 'You may still rename the workflow, launch it and manage its trigger token.';
 
-    /** The placeholder of the add-step form's Step Order, which is empty by default: then the step goes last. */
-    public const STEP_ORDER_PLACEHOLDER = 'At the end';
+    /** The first crumb of the edit page's breadcrumb: the list of workflow templates. */
+    public const TEMPLATES_CRUMB = 'Workflow Templates';
 
-    /** The hint below the steps table, for users who may change the steps. */
-    public const STEP_ORDER_HINT = 'Leave Step Order empty to add the step at the end. To put a step between two '
-        . 'others, enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every '
-        . 'add and move. '
-        . 'Use ▲ / ▼ to move a step.';
+    /** The permission that changes a workflow and its steps (WorkflowTemplateController's access rules). */
+    private const UPDATE_PERMISSION = 'workflow-template.update';
 
-    /** The routes the add-step form posts. */
-    private const ROUTE_FIELDS = ['on_success_step_id', 'on_failure_step_id', 'on_always_step_id'];
+    /** The permission that shows workflow runs (WorkflowJobController's access rules). */
+    private const RUNS_PERMISSION = 'workflow.view';
 
     public function __construct(private readonly int $userId)
     {
     }
 
     /**
-     * What the page shows the user for $model, which they may view:
-     * whether they may operate it (team scoping), the add-step form's job
-     * templates and approval rules, whether they may add gated steps, why
-     * they may not change the steps (null when they may), the active runs,
-     * which lock the steps for everyone, and whom the inbound trigger runs
-     * as (null without a token).
+     * What the template page shows the user for $model, which they may
+     * view: whether they may operate it (team scoping) and change it, the
+     * step form's job templates and approval rules, whether they may add
+     * gated steps, why they may not change the steps (null when they may),
+     * how many runs are active, which lock the steps for everyone, and the
+     * IDs of the oldest of them (at most
+     * WorkflowStepChangeGuard::RUN_LIST_LIMIT); to a user who may see runs
+     * (workflow.view) also these runs and what each active run is doing;
+     * whom the inbound trigger runs as (null without a token); the steps
+     * table (with the step actions when the user may change the steps, and
+     * how many runs wait at each step) and the Add Step form (null when they
+     * may not), whose position is after the step $after when the workflow
+     * has it (WorkflowStepFormView::forAdd()).
      *
-     * @return array{model: WorkflowTemplate, canOperate: bool, jobTemplateOptions: array<int, string>, approvalRuleOptions: array<int, string>, mayAssignRules: bool, stepsLock: string|null, activeRunIds: list<int>, triggerUser: User|null}
+     * @return array{
+     *     model: WorkflowTemplate,
+     *     canOperate: bool,
+     *     canChange: bool,
+     *     canChangeSteps: bool,
+     *     jobTemplateOptions: array<int, string>,
+     *     approvalRuleOptions: array<int, string>,
+     *     mayAssignRules: bool,
+     *     stepsLock: string|null,
+     *     activeRunIds: list<int>,
+     *     activeRuns: list<WorkflowJob>,
+     *     runStates: array<int, RunState>,
+     *     activeRunCount: int,
+     *     triggerUser: User|null,
+     *     stepsTable: WorkflowStepsTable,
+     *     stepForm: WorkflowStepFormView|null
+     * }
      */
-    public function viewParams(WorkflowTemplate $model): array
+    public function viewParams(WorkflowTemplate $model, ?int $after = null): array
+    {
+        $viewer = Viewer::of($this->userId);
+        $choices = $this->choices($model, $viewer);
+        $runs = self::activeRunsOf((int)$model->id);
+        $shownRuns = $viewer->may(self::RUNS_PERMISSION) ? $runs : [];
+        $runStates = $shownRuns === [] ? [] : self::runStates()->forRuns($shownRuns, $viewer);
+        $canChangeSteps = $choices['canChange'] && $choices['stepsLock'] === null && $runs === [];
+        $models = WorkflowRouteMap::stepsOf($model);
+        $map = WorkflowRouteMap::fromModels($models);
+
+        return [
+            'model' => $model,
+            'canOperate' => $choices['canOperate'],
+            'canChange' => $choices['canChange'],
+            'canChangeSteps' => $canChangeSteps,
+            'jobTemplateOptions' => $choices['jobTemplateOptions'],
+            'approvalRuleOptions' => $choices['approvalRuleOptions'],
+            'mayAssignRules' => $choices['mayAssignRules'],
+            'stepsLock' => $choices['stepsLock'],
+            'activeRunIds' => array_map(
+                static fn (WorkflowJob $run): int => (int)$run->id,
+                array_slice($runs, 0, WorkflowStepChangeGuard::RUN_LIST_LIMIT)
+            ),
+            'activeRuns' => array_slice($shownRuns, 0, WorkflowStepChangeGuard::RUN_LIST_LIMIT),
+            'runStates' => $runStates,
+            'activeRunCount' => count($runs),
+            'triggerUser' => self::triggerUser($model),
+            'stepsTable' => new WorkflowStepsTable($map, $models, $canChangeSteps, self::waitingSteps($runStates)),
+            'stepForm' => $canChangeSteps ? WorkflowStepFormView::forAdd($map, $after) : null,
+        ];
+    }
+
+    /**
+     * What the page that edits $step, a step of $model, shows the user, who
+     * may change its steps: its position, the step form (with $position, the
+     * Position posted on a re-render, selected when the form offers it,
+     * WorkflowStepFormView::forEdit()), the step the form shows ($posted, as
+     * the user filled it in when the change was refused, else $step as
+     * stored), the form's job templates and approval rules, why the change
+     * was refused ($error), the steps that route to it (exactly those that
+     * keep it from being removed, WorkflowStepChangeGuard::stepsRoutingTo(),
+     * each with a note when no run takes its branch here;
+     * WorkflowStepRoutedBy) and the active runs, which lock the steps. The
+     * step is read again with the workflow's steps (the route map's model,
+     * with its relations loaded).
+     *
+     * @param mixed $position the Position posted with a refused save; null for the page itself
+     * @throws WorkflowStepChangeRefusedException (404, WorkflowStepWriteService::STEP_NOT_FOUND)
+     *     when the workflow no longer has the step
+     *
+     * @return array{
+     *     model: WorkflowTemplate,
+     *     step: WorkflowStep,
+     *     position: int,
+     *     form: WorkflowStepFormView,
+     *     formModel: WorkflowStep,
+     *     jobTemplateOptions: array<int, string>,
+     *     approvalRuleOptions: array<int, string>,
+     *     mayAssignRules: bool,
+     *     error: string|null,
+     *     routedBy: list<array{label: string, note: string|null}>,
+     *     activeRunIds: list<int>
+     * }
+     */
+    public function editParams(
+        WorkflowTemplate $model,
+        WorkflowStep $step,
+        ?WorkflowStep $posted,
+        ?string $error,
+        mixed $position = null
+    ): array {
+        $models = WorkflowRouteMap::stepsOf($model);
+        $stepId = (int)$step->id;
+        $stored = self::find($models, $stepId);
+        if ($stored === null) {
+            throw new WorkflowStepChangeRefusedException(
+                sprintf(WorkflowStepWriteService::STEP_NOT_FOUND, (int)$model->id, $stepId),
+                WorkflowStepChangeRefusedException::NOT_FOUND
+            );
+        }
+        $map = WorkflowRouteMap::fromModels($models);
+        $choices = $this->choices($model, Viewer::of($this->userId));
+
+        return [
+            'model' => $model,
+            'step' => $stored,
+            'position' => (int)$map->position($stepId),
+            'form' => WorkflowStepFormView::forEdit($map, $stored, is_string($position) ? $position : null),
+            'formModel' => $posted ?? $stored,
+            'jobTemplateOptions' => $choices['jobTemplateOptions'],
+            'approvalRuleOptions' => $choices['approvalRuleOptions'],
+            'mayAssignRules' => $choices['mayAssignRules'],
+            'error' => $error,
+            'routedBy' => WorkflowStepRoutedBy::of($map, $stepId, array_map(
+                static fn (WorkflowStep $routing): int => (int)$routing->id,
+                self::guard()->stepsRoutingTo($stored)
+            )),
+            'activeRunIds' => self::guard()->activeRunIds((int)$model->id),
+        ];
+    }
+
+    /**
+     * What the step form posts (WorkflowStepCommand::fromForm()): its
+     * WorkflowStep fields $posted and its Position $position, for Add Step,
+     * or for Edit Step when $edit.
+     *
+     * @throws WorkflowStepChangeRefusedException (422) for a value the form does not offer
+     */
+    public static function formCommand(mixed $posted, mixed $position, bool $edit): WorkflowStepCommand
+    {
+        $command = WorkflowStepCommand::fromForm(is_array($posted) ? $posted : [], $position, $edit);
+        if (is_string($command)) {
+            throw self::invalid($command);
+        }
+
+        return $command;
+    }
+
+    /**
+     * Where a move sends a step: ▲ and ▼ post a direction ("up", "down"),
+     * the Move to… menu a Position ("start", "end", "after:<step ID>").
+     * Exactly one of them: neither, or both, is refused before anything is
+     * looked up, as WorkflowStepPosition::fromWeb() would read a missing
+     * Position as the end.
+     *
+     * @throws WorkflowStepChangeRefusedException (422)
+     */
+    public static function movePosition(mixed $direction, mixed $position): WorkflowStepPosition
+    {
+        $byDirection = $direction !== null && $direction !== '';
+        if ($byDirection === ($position !== null && $position !== '')) {
+            throw self::invalid(WorkflowStepPosition::FORM_INVALID);
+        }
+        $to = $byDirection
+            ? WorkflowStepPosition::fromDirection($direction)
+            : WorkflowStepPosition::fromWeb($position, false);
+        if (!$to instanceof WorkflowStepPosition) {
+            throw self::invalid($to ?? WorkflowStepPosition::FORM_INVALID);
+        }
+
+        return $to;
+    }
+
+    /**
+     * $stored as the edit form posted it ($posted, its WorkflowStep
+     * fields), for the form shown again after a refusal: the name and the
+     * targets as typed, and the branches as chosen, a branch the form left
+     * out or empty being none, as WorkflowStepCommand::fromForm() reads it.
+     * The type stays the stored one. $stored itself is not changed.
+     */
+    public static function postedStep(WorkflowStep $stored, mixed $posted): WorkflowStep
+    {
+        $posted = is_array($posted) ? $posted : [];
+        $step = clone $stored;
+        foreach (['name', 'job_template_id', 'approval_rule_id'] as $field) {
+            if (array_key_exists($field, $posted) && is_scalar($posted[$field])) {
+                $step->setAttribute($field, $posted[$field]);
+            }
+        }
+        foreach (WorkflowStepCommand::ROUTE_FIELDS as $field) {
+            $value = $posted[$field] ?? null;
+            $step->setAttribute($field, is_scalar($value) && $value !== '' ? $value : null);
+        }
+
+        return $step;
+    }
+
+    /**
+     * Step ID => how many of the runs $runStates wait at that step: their
+     * current step waits for an approval, a resume or a runner
+     * (RunState::$waitingFor). The steps table marks those steps.
+     *
+     * @param array<int, RunState> $runStates
+     * @return array<int, int>
+     */
+    public static function waitingSteps(array $runStates): array
+    {
+        $waiting = [];
+        foreach ($runStates as $state) {
+            $current = $state->current;
+            if ($current !== null && $current->waitingFor !== null && $current->workflowStepId !== null) {
+                $waiting[$current->workflowStepId] = ($waiting[$current->workflowStepId] ?? 0) + 1;
+            }
+        }
+
+        return $waiting;
+    }
+
+    /**
+     * What the step form offers the user for $model, and why they may not
+     * change its steps (null when they may).
+     *
+     * @return array{
+     *     canOperate: bool,
+     *     canChange: bool,
+     *     mayAssignRules: bool,
+     *     jobTemplateOptions: array<int, string>,
+     *     approvalRuleOptions: array<int, string>,
+     *     stepsLock: string|null
+     * }
+     */
+    private function choices(WorkflowTemplate $model, Viewer $viewer): array
     {
         $canOperate = self::workflows()->canOperateWorkflowTemplate($this->userId, (int)$model->id);
         $policy = self::policy();
         $mayAssignRules = $policy->mayAssign($this->userId);
 
         return [
-            'model' => $model,
             'canOperate' => $canOperate,
+            // Changing the workflow needs the RBAC permission and operator
+            // access to every job step's project.
+            'canChange' => $canOperate && $viewer->may(self::UPDATE_PERMISSION),
+            'mayAssignRules' => $mayAssignRules,
             'jobTemplateOptions' => $canOperate ? $this->jobTemplateOptions($mayAssignRules) : [],
             // Approval steps, and so their rules, are for admins.
             'approvalRuleOptions' => $canOperate && $mayAssignRules ? self::approvalRuleOptions() : [],
-            'mayAssignRules' => $mayAssignRules,
             // Why the user may not change the steps: the workflow has an
             // approval step or a gated job step. Admins may.
             'stepsLock' => $mayAssignRules ? null : $policy->workflowStepsChangeRefusal($this->userId, $model, false),
-            'activeRunIds' => self::guard()->activeRunIds((int)$model->id),
-            'triggerUser' => self::triggerUser($model),
         ];
     }
 
     /**
-     * Why the user may not add $step to $model (403), or null when they
-     * may: only admins add approval steps and gated job steps, or any step
-     * to a workflow that has one (ApprovalRuleAssignmentPolicy::stepsAddRefusal()).
-     * $step's job template ID must be the int the step stores ("05" is
-     * template 5 too).
-     */
-    public function addRefusal(WorkflowTemplate $model, WorkflowStep $step): ?string
-    {
-        return self::policy()->stepsAddRefusal($this->userId, $model, [$step]);
-    }
-
-    /**
-     * Complete $step, loaded from the add-step form, as the form means it.
-     * A route is null (next step) when $posted, the form's WorkflowStep
-     * fields, leaves it out or empty, and else the posted ID as an int:
-     * load() may turn an empty prompt value into null, which is right, but a
-     * posted "0" means "end workflow" (WorkflowStep::END_WORKFLOW) and must
-     * stay 0. A step keeps only the target of its type: the form posts the
-     * job and the approval dropdown for every type, and a job template left
-     * on a pause step would still decide who may see the workflow. A Step
-     * Order left empty or out (a JSON body may post an empty list) becomes
-     * null: the step goes after the last one, which the controller works
-     * out with the workflow locked.
-     *
-     * @param array<array-key, mixed> $posted
-     */
-    public static function completeFromForm(WorkflowStep $step, array $posted): void
-    {
-        if (in_array($step->getAttribute('step_order'), ['', []], true)) {
-            $step->setAttribute('step_order', null);
-        }
-        foreach (self::ROUTE_FIELDS as $field) {
-            if (!array_key_exists($field, $posted) || $posted[$field] === '') {
-                $step->$field = null;
-            } else {
-                $step->$field = (int)$posted[$field];
-            }
-        }
-        if ($step->step_type !== WorkflowStep::TYPE_JOB) {
-            $step->job_template_id = null;
-        }
-        if ($step->step_type !== WorkflowStep::TYPE_APPROVAL) {
-            $step->approval_rule_id = null;
-        }
-    }
-
-    /**
-     * The add-step form's job templates: those the user may operate (a step
+     * The step form's job templates: those the user may operate (a step
      * with any other one would be refused), and, unless they may add gated
      * job steps, only those without an approval rule.
      *
@@ -195,6 +348,40 @@ final class WorkflowTemplatePage
     }
 
     /**
+     * The active runs of the workflow $workflowTemplateId, oldest first, with
+     * the users who launched them.
+     *
+     * @return list<WorkflowJob>
+     */
+    private static function activeRunsOf(int $workflowTemplateId): array
+    {
+        /** @var list<WorkflowJob> $runs */
+        $runs = WorkflowJob::find()
+            ->where(['workflow_template_id' => $workflowTemplateId, 'status' => WorkflowJob::activeStatuses()])
+            ->with('launcher')
+            ->orderBy(['id' => SORT_ASC])
+            ->all();
+
+        return $runs;
+    }
+
+    /**
+     * The step $stepId among $models; null when they do not hold it.
+     *
+     * @param list<WorkflowStep> $models
+     */
+    private static function find(array $models, int $stepId): ?WorkflowStep
+    {
+        foreach ($models as $model) {
+            if ((int)$model->id === $stepId) {
+                return $model;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * The user the inbound trigger runs as: whoever generated the token, or
      * the creator for older tokens. Null when no token is configured.
      */
@@ -206,6 +393,11 @@ final class WorkflowTemplatePage
         /** @var User|null $user */
         $user = User::findOne($model->getTriggerUserId());
         return $user;
+    }
+
+    private static function invalid(string $message): WorkflowStepChangeRefusedException
+    {
+        return new WorkflowStepChangeRefusedException($message, WorkflowStepChangeRefusedException::INVALID);
     }
 
     private static function policy(): ApprovalRuleAssignmentPolicy
@@ -220,6 +412,13 @@ final class WorkflowTemplatePage
         /** @var WorkflowStepChangeGuard $guard */
         $guard = \Yii::$app->get('workflowStepChangeGuard');
         return $guard;
+    }
+
+    private static function runStates(): WorkflowRunStates
+    {
+        /** @var WorkflowRunStates $states */
+        $states = \Yii::$app->get('workflowRunStates');
+        return $states;
     }
 
     private static function workflows(): WorkflowAccessChecker

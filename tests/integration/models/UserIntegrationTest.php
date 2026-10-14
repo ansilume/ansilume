@@ -171,6 +171,67 @@ class UserIntegrationTest extends DbTestCase
         $this->assertNull(User::findByUsername($user->username));
     }
 
+    // -- activeSuperadminExists --------------------------------------------------
+
+    /**
+     * Only a superadmin whose status is active counts, as the only status
+     * that signs in: an inactive superadmin, and an active user without the
+     * flag, do not.
+     */
+    public function testActiveSuperadminExistsCountsOnlyActiveSuperadmins(): void
+    {
+        $inactive = $this->createUser('sa_inactive');
+        $this->createUser('not_sa');
+        $this->onlySuperadmins([$inactive]);
+        $inactive->status = User::STATUS_INACTIVE;
+        $inactive->save(false);
+
+        $this->assertFalse(User::activeSuperadminExists(), 'an inactive superadmin does not count');
+
+        $active = $this->createUser('sa_active');
+        $this->onlySuperadmins([$inactive, $active]);
+
+        $this->assertTrue(User::activeSuperadminExists());
+    }
+
+    /**
+     * With an ID, the user of that ID does not count: the only active
+     * superadmin has no other, while a second active superadmin is one for
+     * each of them; an inactive superadmin is one for nobody.
+     */
+    public function testActiveSuperadminExistsLeavesOutTheGivenUser(): void
+    {
+        $only = $this->createUser('sa_only_active');
+        $inactive = $this->createUser('sa_inactive');
+        $this->onlySuperadmins([$only, $inactive]);
+        $inactive->status = User::STATUS_INACTIVE;
+        $inactive->save(false);
+
+        $this->assertFalse(User::activeSuperadminExists((int)$only->id), 'no other active superadmin');
+        $this->assertTrue(User::activeSuperadminExists((int)$inactive->id), 'the active one is another');
+
+        $second = $this->createUser('sa_second_active');
+        $this->onlySuperadmins([$only, $inactive, $second]);
+
+        $this->assertTrue(User::activeSuperadminExists((int)$only->id));
+        $this->assertTrue(User::activeSuperadminExists((int)$second->id));
+    }
+
+    /**
+     * Makes $users the only superadmins, inside the test's transaction.
+     *
+     * @param list<User> $users
+     */
+    private function onlySuperadmins(array $users): void
+    {
+        User::updateAll(['is_superadmin' => 0], ['is_superadmin' => 1]);
+        foreach ($users as $user) {
+            $user->refresh();
+            $user->is_superadmin = true;
+            $user->save(false);
+        }
+    }
+
     // -- isActive ---------------------------------------------------------------
 
     public function testIsActiveReturnsFalseForInactiveStatus(): void

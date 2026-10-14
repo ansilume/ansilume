@@ -28,6 +28,7 @@ $config = [
         'api/v1/approval-rules' => 'app\controllers\api\v1\ApprovalRulesController',
         'api/v1/approvals' => 'app\controllers\api\v1\ApprovalsController',
         'api/v1/workflow-templates' => 'app\controllers\api\v1\WorkflowTemplatesController',
+        'api/v1/workflow-steps' => 'app\controllers\api\v1\WorkflowStepsController',
         'api/v1/trigger-tokens' => 'app\controllers\api\v1\TriggerTokensController',
         'api/v1/workflow-jobs' => 'app\controllers\api\v1\WorkflowJobsController',
         'api/v1/roles' => 'app\controllers\api\v1\RolesController',
@@ -139,8 +140,11 @@ $config = [
             ],
         ],
         'db' => $db,
+        // Every signed-in user holds the default role viewer. AuthManager
+        // gives it to user IDs that name a user only, never to a visitor who
+        // has not signed in (user ID null).
         'authManager' => [
-            'class' => 'yii\rbac\DbManager',
+            'class' => 'app\components\AuthManager',
             'defaultRoles' => ['viewer'],
         ],
         ...$services,
@@ -230,6 +234,11 @@ $config = [
                 ['pattern' => 'api/v1/workflow-templates/<id:\d+>', 'route' => 'api/v1/workflow-templates/delete', 'verb' => 'DELETE'],
                 ['pattern' => 'api/v1/workflow-templates/<id:\d+>/trigger-token', 'route' => 'api/v1/trigger-tokens/generate-for-workflow-template', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/workflow-templates/<id:\d+>/trigger-token', 'route' => 'api/v1/trigger-tokens/revoke-for-workflow-template', 'verb' => 'DELETE'],
+                // One step of a workflow template at a time (WorkflowStepsController)
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>/steps/<stepId:\d+>/move', 'route' => 'api/v1/workflow-steps/move', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>/steps/<stepId:\d+>', 'route' => 'api/v1/workflow-steps/update', 'verb' => 'PUT'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>/steps/<stepId:\d+>', 'route' => 'api/v1/workflow-steps/delete', 'verb' => 'DELETE'],
+                ['pattern' => 'api/v1/workflow-templates/<id:\d+>/steps', 'route' => 'api/v1/workflow-steps/create', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/workflow-templates', 'route' => 'api/v1/workflow-templates/create', 'verb' => 'POST'],
                 // Roles API

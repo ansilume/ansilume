@@ -13,23 +13,30 @@ declare(strict_types=1);
 /** @var int $onlineRunners */
 /** @var int $totalRunners */
 /** @var int $outdatedRunners */
-/** @var app\models\ApprovalRequest[] $pendingApprovals */
-/** @var app\models\WorkflowJob[] $runningWorkflows */
+/** @var list<app\models\ApprovalRequest> $pendingApprovals */
+/** @var array<int, app\services\runstate\RequestContext> $approvalContexts what each pending request is for, by request ID */
+/** @var list<app\models\WorkflowJob> $runningWorkflows */
+/** @var array<int, app\services\runstate\RunState> $runStates the state of each running workflow, by run ID */
 /** @var list<int> $resumableWorkflowTemplateIds workflow templates whose paused runs the user may resume */
+/** @var app\services\runstate\Viewer $viewer who looks at the dashboard */
 /** @var app\models\Schedule[] $upcomingSchedules */
 /** @var app\models\Project[] $syncErrors */
 /** @var bool $hasSchedules */
 
 use app\helpers\TimeHelper;
-use app\models\ApprovalRequest;
 use app\models\Job;
-use app\models\WorkflowJob;
-use app\models\WorkflowStep;
+use app\services\runstate\Texts;
 use yii\helpers\Html;
 use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = 'Dashboard';
+
+// How long from $from until $to (until now when null), in its two largest
+// units: unlike a clock time ('H:i:s'), it does not wrap after a day.
+$durationOf = static fn (mixed $from, mixed $to = null): string => empty($from)
+    ? '—'
+    : TimeHelper::duration((int)($to ?? time()) - (int)$from);
 ?>
 
 <!-- Stat cards -->
@@ -150,45 +157,12 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
 
 <!-- Pending Approvals (empty without approval.view) -->
 <?php if (!empty($pendingApprovals)) : ?>
-<div class="card mb-3 border-warning">
-    <div class="card-header text-bg-warning d-flex justify-content-between align-items-center">
-        <strong>Pending Approvals (<?= Html::encode((string)$stats['pending_approvals']) ?>)</strong>
-        <?= Html::a('All Approvals', Url::to(['/approval/index']), ['class' => 'btn btn-sm btn-outline-dark']) ?>
-    </div>
-    <div class="card-body p-0">
-        <table class="table table-sm table-hover mb-0">
-            <thead class="table-light">
-                <tr><th>Rule</th><th>Job</th><th>Requested</th><th>Expires</th><th></th></tr>
-            </thead>
-            <tbody>
-            <?php foreach ($pendingApprovals as $ar) : ?>
-                <tr>
-                    <td><?= Html::encode($ar->approvalRule->name ?? '—') ?></td>
-                    <td>
-                        <?php if ($ar->job !== null) : ?>
-                            <?= Html::a(
-                                '#' . $ar->job->id . ' ' . Html::encode($ar->job->jobTemplate->name ?? ''),
-                                Url::to(['/job/view', 'id' => $ar->job->id])
-                            ) ?>
-                        <?php else : ?>
-                            —
-                        <?php endif; ?>
-                    </td>
-                    <td class="text-nowrap"><?= date('Y-m-d H:i', $ar->requested_at) ?></td>
-                    <td class="text-nowrap">
-                        <?php if ($ar->expires_at !== null) : ?>
-                            <?= date('Y-m-d H:i', $ar->expires_at) ?>
-                        <?php else : ?>
-                            —
-                        <?php endif; ?>
-                    </td>
-                    <td><?= Html::a('Review', Url::to(['/approval/view', 'id' => $ar->id]), ['class' => 'btn btn-sm btn-outline-warning']) ?></td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-</div>
+    <?= $this->render('_pending-approvals', [
+        'pendingApprovals' => $pendingApprovals,
+        'approvalContexts' => $approvalContexts,
+        'pendingCount' => $stats['pending_approvals'],
+        'viewer' => $viewer,
+    ]) ?>
 <?php endif; ?>
 
 <!-- Charts -->
@@ -309,8 +283,8 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                     <td><?= Html::encode($job->jobTemplate->name ?? '—') ?></td>
                     <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                     <td><span class="small text-muted"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></span></td>
-                    <td><?= $job->started_at ? date('H:i:s', $job->started_at) : '—' ?></td>
-                    <td><?= $job->started_at ? gmdate('H:i:s', time() - $job->started_at) : '—' ?></td>
+                    <td class="text-nowrap"><?= $job->started_at ? Html::encode(TimeHelper::stamp((int)$job->started_at)) : '—' ?></td>
+                    <td class="text-nowrap"><?= Html::encode($durationOf($job->started_at)) ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -319,50 +293,13 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
 </div>
 <?php endif; ?>
 
-<!-- Running Workflows -->
+<!-- Running Workflows (empty without workflow.view) -->
 <?php if (!empty($runningWorkflows)) : ?>
-<div class="card mb-3 border-info">
-    <div class="card-header text-bg-info d-flex justify-content-between align-items-center">
-        <strong>Running Workflows (<?= count($runningWorkflows) ?>)</strong>
-        <?= Html::a('All Executions', Url::to(['/workflow-job/index']), ['class' => 'btn btn-sm btn-outline-dark']) ?>
-    </div>
-    <div class="card-body p-0">
-        <table class="table table-sm table-hover mb-0">
-            <thead class="table-light">
-                <tr><th>#</th><th>Workflow</th><th>Current Step</th><th>Launched by</th><th>Started</th><th>Running for</th><th></th></tr>
-            </thead>
-            <tbody>
-            <?php foreach ($runningWorkflows as $wf) : ?>
-                <?php
-                $isPaused = $wf->currentStep !== null
-                    && $wf->currentStep->step_type === WorkflowStep::TYPE_PAUSE;
-                ?>
-                <tr>
-                    <td><?= Html::a('#' . $wf->id, Url::to(['/workflow-job/view', 'id' => $wf->id])) ?></td>
-                    <td><?= Html::encode($wf->workflowTemplate->name ?? '—') ?></td>
-                    <td>
-                        <?= Html::encode($wf->currentStep->name ?? '—') ?>
-                        <?php if ($isPaused) : ?>
-                            <span class="badge text-bg-warning ms-1">paused</span>
-                        <?php endif; ?>
-                    </td>
-                    <td><?= Html::encode($wf->launcher->username ?? '—') ?></td>
-                    <td class="text-nowrap"><?= $wf->started_at ? date('H:i:s', $wf->started_at) : '—' ?></td>
-                    <td><?= $wf->started_at ? gmdate('H:i:s', time() - $wf->started_at) : '—' ?></td>
-                    <td>
-                        <?php if ($isPaused && in_array((int)$wf->workflow_template_id, $resumableWorkflowTemplateIds, true)) : ?>
-                            <form action="<?= Url::to(['/workflow-job/resume', 'id' => $wf->id]) ?>" method="post" class="d-inline">
-                                <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
-                                <button type="submit" class="btn btn-sm btn-success">Resume</button>
-                            </form>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-</div>
+    <?= $this->render('_running-workflows', [
+        'runningWorkflows' => $runningWorkflows,
+        'runStates' => $runStates,
+        'resumableWorkflowTemplateIds' => $resumableWorkflowTemplateIds,
+    ]) ?>
 <?php endif; ?>
 
 <!-- Failed Jobs (last 24h) -->
@@ -384,16 +321,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                     <td><?= Html::encode($job->jobTemplate->name ?? '—') ?></td>
                     <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                     <td class="text-nowrap"><?= $job->finished_at ? date('Y-m-d H:i', $job->finished_at) : '—' ?></td>
-                    <td class="text-nowrap">
-                        <?php
-                        if ($job->started_at !== null && $job->finished_at !== null) {
-                            $secs = $job->finished_at - $job->started_at;
-                            echo gmdate($secs >= 3600 ? 'H:i:s' : 'i:s', $secs);
-                        } else {
-                            echo '—';
-                        }
-                        ?>
-                    </td>
+                    <td class="text-nowrap"><?= $job->finished_at === null ? '—' : Html::encode($durationOf($job->started_at, $job->finished_at)) ?></td>
                 </tr>
             <?php endforeach; ?>
             </tbody>
@@ -424,18 +352,11 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                             <td><code><?= Html::encode($schedule->cron_expression) ?></code></td>
                             <td class="text-nowrap"><?= date('Y-m-d H:i', $schedule->next_run_at) ?></td>
                             <td class="text-nowrap">
-                                <?php
-                                $diff = $schedule->next_run_at - time();
-                                if ($diff <= 0) {
-                                    echo '<span class="badge text-bg-warning">due now</span>';
-                                } elseif ($diff < 3600) {
-                                    echo gmdate('i', $diff) . 'min';
-                                } elseif ($diff < 86400) {
-                                    echo gmdate('G\h i\m', $diff);
-                                } else {
-                                    echo floor($diff / 86400) . 'd ' . gmdate('G\h', $diff);
-                                }
-                                ?>
+                                <?php if ($schedule->next_run_at <= time()) : ?>
+                                    <span class="badge text-bg-warning">due now</span>
+                                <?php else : ?>
+                                    <?= Html::encode($durationOf(time(), $schedule->next_run_at)) ?>
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>
@@ -463,9 +384,16 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                 </thead>
                 <tbody>
                 <?php foreach ($recentJobs as $job) : ?>
+                    <?php
+                    // A job without a template is a purged template's, or the placeholder of an approval step.
+                    $execution = $job->job_template_id === null ? $job->workflowJobStep : null;
+                    $template = $execution !== null && $execution->isApprovalPlaceholder()
+                        ? sprintf(Texts::PLACEHOLDER_LABEL, $execution->stepName(), (int)$execution->workflow_job_id)
+                        : ($job->jobTemplate->name ?? '—');
+                    ?>
                     <tr>
                         <td><?= Html::a('#' . $job->id, Url::to(['/job/view', 'id' => $job->id])) ?></td>
-                        <td><?= Html::encode($job->jobTemplate->name ?? '—') ?></td>
+                        <td><?= Html::encode($template) ?></td>
                         <td>
                             <span class="badge text-bg-<?= Job::statusCssClass($job->status) ?>">
                                 <?= Html::encode(Job::statusLabel($job->status)) ?>
@@ -477,16 +405,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                         <td><?= Html::encode($job->launcher->username ?? '—') ?></td>
                         <td><span class="small text-muted"><?= $job->worker_id ? Html::encode($job->worker_id) : '—' ?></span></td>
                         <td class="text-nowrap"><?= TimeHelper::relative($job->started_at) ?></td>
-                        <td class="text-nowrap">
-                            <?php
-                            if ($job->started_at !== null && $job->finished_at !== null) {
-                                $secs = $job->finished_at - $job->started_at;
-                                echo gmdate($secs >= 3600 ? 'H:i:s' : 'i:s', $secs);
-                            } else {
-                                echo '—';
-                            }
-                            ?>
-                        </td>
+                        <td class="text-nowrap"><?= $job->finished_at === null ? '—' : Html::encode($durationOf($job->started_at, $job->finished_at)) ?></td>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
@@ -540,7 +459,7 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
                     { label: 'ok',          data: data.ok,          backgroundColor: '#198754', stack: 'tasks' },
                     { label: 'changed',     data: data.changed,     backgroundColor: '#ffc107', stack: 'tasks' },
                     { label: 'failed',      data: data.failed,      backgroundColor: '#dc3545', stack: 'tasks' },
-                    { label: 'unreachable', data: data.unreachable, backgroundColor: '#343a40', stack: 'tasks' },
+                    { label: 'unreachable', data: data.unreachable, backgroundColor: '#ea868f', stack: 'tasks' },
                     { label: 'skipped',     data: data.skipped,     backgroundColor: '#6c757d', stack: 'tasks' },
                 ]
             },
@@ -556,12 +475,18 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
     }
 
     function loadCharts(days) {
-        fetch(chartDataUrl + '?days=' + days)
-            .then(function (r) { return r.json(); })
+        // Asked for JSON, a signed-out fetch is answered 403, not sent to the
+        // login page, which would keep this address to return to after the
+        // next sign-in. An answer that is not OK, or no answer, leaves the
+        // charts as they are.
+        fetch(chartDataUrl + '?days=' + days, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : null; })
             .then(function (d) {
+                if (d === null) return;
                 buildJobChart(d.labels, d.jobs);
                 buildTaskChart(d.labels, d.tasks);
-            });
+            })
+            .catch(function () { /* the charts stay as they are */ });
     }
 
     loadCharts(30);

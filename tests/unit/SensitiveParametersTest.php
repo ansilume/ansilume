@@ -41,6 +41,15 @@ use yii\base\InvalidArgumentException;
  * git, vault passwords, the Redis password, the environment with the
  * server's secrets, and request bodies with passwords or credential secrets.
  * A failed reset link, for one, logged the first 15 characters of its token.
+ *
+ * Regression (wave 5d): the repository URL, credentials in its userinfo
+ * included, was unmarked on the runner's way to git (RunnerProjectSync,
+ * GitEnvBuilder), and so were the parameters of the notification channels'
+ * post() that carry channel secrets: the webhook URLs and header values,
+ * Telegram's URL with the bot token and PagerDuty's body with the routing
+ * key. GitSyncDiagnostics::redactUrl(), which every sync path hands the URL,
+ * the git command and git's output before it hides their credentials, was
+ * unmarked too.
  */
 class SensitiveParametersTest extends TestCase
 {
@@ -79,8 +88,12 @@ class SensitiveParametersTest extends TestCase
         'app\components\GitEnvBuilder::applyHttpsCredentialEnv($env)',
         'app\components\GitEnvBuilder::applyHttpsCredentialEnv($scmCredential)',
         'app\components\GitEnvBuilder::build($scmCredential)',
+        'app\components\GitEnvBuilder::build($scmUrl)',
         'app\components\GitEnvBuilder::buildCredentialHelperScript($secret)',
+        'app\components\GitEnvBuilder::isHttpsUrl($url)',
+        'app\components\GitEnvBuilder::isSshUrl($url)',
         'app\components\GitEnvBuilder::writeSshKeyFile($scmCredential)',
+        'app\components\GitSyncDiagnostics::redactUrl($text)',
         'app\components\OutputMasker::__construct($answers)',
         'app\components\OutputMasker::feed($bytes)',
         'app\components\OutputMasker::forms($answer)',
@@ -127,7 +140,13 @@ class SensitiveParametersTest extends TestCase
         'app\components\RunnerProcessExecutor::startProcess($env)',
         'app\components\RunnerProcessExecutor::startProcess($payload)',
         'app\components\RunnerProjectSync::buildGitEnv($scmCredential)',
-        'app\components\RunnerProjectSync::runGitCommand($scmCredential)',
+        'app\components\RunnerProjectSync::buildGitEnv($scmUrl)',
+        'app\components\RunnerProjectSync::gitCommands($scmUrl)',
+        'app\components\RunnerProjectSync::redactGitCmd($cmd)',
+        'app\components\RunnerProjectSync::runGitCommand($cmd)',
+        'app\components\RunnerProjectSync::runGitCommand($env)',
+        'app\components\RunnerProjectSync::runGitCommands($commands)',
+        'app\components\RunnerProjectSync::runGitCommands($env)',
         'app\components\RunnerProjectSync::sync($payload)',
         'app\components\RunnerSecretVars::answers($payload)',
         'app\components\RunnerSecretVars::prepare($payload)',
@@ -208,6 +227,8 @@ class SensitiveParametersTest extends TestCase
         'app\controllers\api\v1\CredentialsController::secretsFrom($body)',
         'app\controllers\api\v1\JobsController::buildOverrides($body)',
         'app\controllers\api\v1\JobsController::templateIdFrom($body)',
+        'app\controllers\api\v1\NotificationTemplatesController::applyBody($body)',
+        'app\controllers\api\v1\ProjectsController::applyBody($body)',
         'app\controllers\api\v1\SchedulesController::applyBody($body)',
         'app\controllers\api\v1\UsersController::applyAuthSourceOnCreate($body)',
         'app\controllers\api\v1\UsersController::applyBody($body)',
@@ -264,9 +285,16 @@ class SensitiveParametersTest extends TestCase
         'app\services\ProjectService::buildCredentialHelperScript($secret)',
         'app\services\ProjectService::cloneOrPull($env)',
         'app\services\ProjectService::gitClone($env)',
+        'app\services\ProjectService::gitClone($url)',
         'app\services\ProjectService::gitPull($env)',
+        'app\services\ProjectService::gitPull($url)',
+        'app\services\ProjectService::runGit($cmd)',
         'app\services\ProjectService::runGit($env)',
+        'app\services\ProjectSyncProcessRunner::appendLog($content)',
+        'app\services\ProjectSyncProcessRunner::appendSystem($message)',
+        'app\services\ProjectSyncProcessRunner::run($cmd)',
         'app\services\ProjectSyncProcessRunner::run($env)',
+        'app\services\ProjectSyncProcessRunner::write($text)',
         'app\services\RelaunchService::extraVars($secrets)',
         'app\services\ScheduleRunAs::canonical($text)',
         'app\services\ScheduleRunAs::varsKey($text)',
@@ -299,6 +327,12 @@ class SensitiveParametersTest extends TestCase
         'app\services\ldap\LdapConfig::fromArray($params)',
         'app\services\ldap\LdapService::authenticate($password)',
         'app\services\ldap\PhpLdapClient::bindAsUser($password)',
+        'app\services\notification\PagerDutyChannel::post($payload)',
+        'app\services\notification\SlackChannel::post($url)',
+        'app\services\notification\TeamsChannel::post($url)',
+        'app\services\notification\TelegramChannel::post($url)',
+        'app\services\notification\WebhookChannel::post($headers)',
+        'app\services\notification\WebhookChannel::post($url)',
     ];
 
     /**
@@ -327,7 +361,9 @@ class SensitiveParametersTest extends TestCase
         'app\commands\RunnerController' => ['payload', 'cmd', 'env'],
         'app\components\RunnerCommandBuilder' => ['payload', 'cmd'],
         'app\components\RunnerProcessExecutor' => ['cmd', 'payload', 'env', 'chunk', 'bytes', 'content'],
-        'app\components\RunnerProjectSync' => ['payload', 'scmCredential'],
+        // RunnerProjectSync: also the repository URL with the credentials of its userinfo, the git commands that
+        // hold it, and the environment with the SCM credential.
+        'app\components\RunnerProjectSync' => ['payload', 'scmCredential', 'scmUrl', 'cmd', 'commands', 'env'],
         'app\components\RunnerVaultMode' => ['payload', 'command', 'env'],
         'app\components\RunnerSecretVars' => ['payload', 'json', 'content'],
         'app\components\RunnerHttpClient' => ['token', 'body', 'extraHeaders'],
@@ -339,9 +375,13 @@ class SensitiveParametersTest extends TestCase
         // Decrypted credentials on their way to Ansible and git, and the files and environment made from them.
         'app\components\CredentialInjector' => ['credentialData', 'credentials', 'data', 'content'],
         'app\components\CredentialInjectionResult' => ['env'],
-        'app\components\GitEnvBuilder' => ['scmCredential', 'secret', 'env'],
-        'app\services\ProjectService' => ['secret', 'env'],
-        'app\services\ProjectSyncProcessRunner' => ['env'],
+        'app\components\GitEnvBuilder' => ['scmCredential', 'secret', 'env', 'scmUrl', 'url'],
+        // redactUrl($text): a URL, a git command or git's output with the credentials of its URLs, before it hides them.
+        'app\components\GitSyncDiagnostics' => ['text'],
+        // The repository URL with the credentials of its userinfo, the git command that holds it, and git's
+        // output before it is redacted (the sync output, which can name the URL).
+        'app\services\ProjectService' => ['secret', 'env', 'url', 'cmd'],
+        'app\services\ProjectSyncProcessRunner' => ['env', 'cmd', 'text', 'content', 'message'],
         'app\helpers\FileHelper' => ['content'],
         // The runner API: the claim payload, the bootstrap secret, the bearer token in $_SERVER, job output.
         'app\controllers\api\runner\BaseRunnerApiController' => ['data'],
@@ -415,9 +455,20 @@ class SensitiveParametersTest extends TestCase
         'app\controllers\api\v1\UsersController' => ['body'],
         'app\controllers\api\v1\CredentialsController' => ['body'],
         'app\controllers\api\v1\WebhooksController' => ['body'],
+        // Request bodies with the channel secrets of a notification template, or credentials in a repository URL.
+        'app\controllers\api\v1\NotificationTemplatesController' => ['body'],
+        'app\controllers\api\v1\ProjectsController' => ['body'],
         'app\controllers\api\v1\BaseApiController' => ['data'],
         'app\services\CredentialWriteService' => ['secretInput', 'provided'],
         'app\components\CredentialSecretPolicy' => ['input', 'provided'],
+        // Notification channels: what carries their channel secrets (NotificationTemplate::SECRET_CONFIG_KEYS,
+        // SECRET_CONFIG_MAPS): the webhook URLs, the webhook channel's header values, Telegram's URL with the
+        // bot token, and PagerDuty's body with the routing key.
+        'app\services\notification\SlackChannel' => ['url'],
+        'app\services\notification\TeamsChannel' => ['url'],
+        'app\services\notification\WebhookChannel' => ['url', 'headers'],
+        'app\services\notification\TelegramChannel' => ['url'],
+        'app\services\notification\PagerDutyChannel' => ['payload'],
     ];
 
     public function testEveryMarkedParameterIsListed(): void

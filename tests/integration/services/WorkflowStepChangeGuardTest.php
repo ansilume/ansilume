@@ -9,6 +9,7 @@ use app\models\WorkflowJob;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\WorkflowAccessChecker;
 use app\services\WorkflowStepChangeGuard;
 use app\services\WorkflowStepChangeRefusedException;
 use app\tests\integration\DbTestCase;
@@ -17,9 +18,11 @@ use yii\log\Logger;
 
 /**
  * WorkflowStepChangeGuard: every change of a workflow's steps runs with the
- * workflow's row locked, after the approval-step rule (403) and the
- * active-run check (409); removing a step that other steps route to is
- * refused (409). A refusal writes nothing.
+ * workflow's row locked, after the team scope (403), the approval-step rule
+ * (403) and the active-run check (409); removing a step that other steps
+ * route to is refused (409, assertNotRoutedTo(), which the step write
+ * service calls under the lock). A refusal writes nothing. The removal
+ * itself is WorkflowStepWriteService's (WorkflowStepWriteMoveRemoveTest).
  */
 class WorkflowStepChangeGuardTest extends DbTestCase
 {
@@ -191,6 +194,110 @@ class WorkflowStepChangeGuardTest extends DbTestCase
         }
     }
 
+    // -- The team scope, again under the lock ---------------------------------
+
+    /**
+     * regression: the team scope was checked only before the lock (the
+     * template page and the API ask it first). A step of a project the user
+     * may only view, added by another user between that check and the lock,
+     * did not stop the change. Under the lock, the guard now refuses a user
+     * who may not operate the project of every job step the workflow has
+     * (403, TEAM_SCOPE_REFUSED, the API's text), and the change does not run.
+     */
+    public function testRegressionTheTeamScopeWasNotCheckedAgainUnderTheLock(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps((int)$s['admin']->id, (int)$s['own']->id, (int)$s['open']->id);
+        $this->assertTrue($this->workflows()->canOperateWorkflowTemplate((int)$s['member']->id, (int)$workflow->id), 'the member may operate it at first');
+        // Another user's change, after the member's own check: a job step of a project the member may only view.
+        $this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_JOB, (int)$s['viewed']->id);
+        $called = false;
+
+        $refusal = $this->refusalOf(fn () => $this->guard()->change($workflow, (int)$s['member']->id, false, static function () use (&$called): void {
+            $called = true;
+        }));
+
+        $this->assertSame([403, WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED, []], [$refusal->status, $refusal->getMessage(), $refusal->details]);
+        $this->assertSame('Forbidden.', WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED);
+        $this->assertFalse($called, 'the change does not run');
+    }
+
+    /**
+     * A user who may operate the project of every job step changes the
+     * steps; an admin and a superadmin are not restricted by team scoping,
+     * and neither is anybody on a workflow without job steps.
+     */
+    public function testWhoMayOperateEveryJobStepChangesTheSteps(): void
+    {
+        $s = $this->teamScope();
+        $operable = $this->createWorkflowWithJobSteps((int)$s['admin']->id, (int)$s['own']->id, (int)$s['open']->id);
+        $foreign = $this->createWorkflowWithJobSteps((int)$s['admin']->id, (int)$s['own']->id, (int)$s['foreign']->id);
+        $pausesOnly = $this->createWorkflowTemplate((int)$s['admin']->id);
+        $this->createWorkflowStep((int)$pausesOnly->id, 10, WorkflowStep::TYPE_PAUSE);
+        $superadmin = $this->createUser('guard-superadmin');
+        $superadmin->is_superadmin = true;
+        $superadmin->save(false);
+
+        $this->assertSame('member', $this->guard()->change($operable, (int)$s['member']->id, false, static fn (): string => 'member'));
+        $this->assertSame('pauses', $this->guard()->change($pausesOnly, (int)$s['member']->id, false, static fn (): string => 'pauses'));
+        $this->assertSame('admin', $this->guard()->change($foreign, (int)$s['admin']->id, false, static fn (): string => 'admin'));
+        $this->assertSame('superadmin', $this->guard()->change($foreign, (int)$superadmin->id, false, static fn (): string => 'superadmin'));
+        foreach ([$s['member'], $s['outsider']] as $user) {
+            $this->assertSame(403, $this->refusalOf(fn () => $this->guard()->change($foreign, (int)$user->id, false, static fn (): bool => true))->status);
+        }
+    }
+
+    /**
+     * The order under the lock: 404 for a workflow deleted meanwhile first,
+     * then the team scope, before the rule of gated steps (403 with the
+     * policy's reason) and the active runs (409).
+     */
+    public function testTheTeamScopeComesAfterTheLockAndBeforeThePolicyAndTheRuns(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps((int)$s['admin']->id, (int)$s['viewed']->id);
+        $this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_APPROVAL, null, (int)$this->createApprovalRule((int)$s['admin']->id)->id);
+        $this->createWorkflowJob((int)$workflow->id, (int)$s['admin']->id);
+        $stale = WorkflowTemplate::findOne($workflow->id);
+        $this->assertNotNull($stale);
+
+        $refusal = $this->refusalOf(fn () => $this->guard()->change($workflow, (int)$s['member']->id, false, static fn (): bool => true));
+        $this->assertSame([403, WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED], [$refusal->status, $refusal->getMessage()], 'not the policy\'s reason, not 409');
+
+        $operable = $this->createWorkflowWithJobSteps((int)$s['admin']->id, (int)$s['own']->id);
+        $this->createWorkflowStep((int)$operable->id, 20, WorkflowStep::TYPE_APPROVAL, null, (int)$this->createApprovalRule((int)$s['admin']->id)->id);
+        $refusal = $this->refusalOf(fn () => $this->guard()->change($operable, (int)$s['member']->id, false, static fn (): bool => true));
+        $this->assertSame([403, ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED], [$refusal->status, $refusal->getMessage()], 'an operable workflow: the policy decides');
+
+        $this->assertTrue($workflow->softDelete());
+        $refusal = $this->refusalOf(fn () => $this->guard()->change($stale, (int)$s['member']->id, false, static fn (): bool => true));
+        $this->assertSame([404, sprintf(WorkflowStepChangeGuard::TEMPLATE_GONE, (int)$workflow->id)], [$refusal->status, $refusal->getMessage()]);
+    }
+
+    /**
+     * The team scope is read with the workflow's row locked: after the lock,
+     * before the policy's queries and the active-run check.
+     */
+    public function testTheTeamScopeIsReadWithTheRowLocked(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps((int)$s['admin']->id, (int)$s['own']->id);
+        $id = (int)$workflow->id;
+
+        $statements = $this->statementsOf(function () use ($workflow, $s): void {
+            $this->assertTrue($this->guard()->change($workflow, (int)$s['member']->id, false, static fn (): bool => true));
+        });
+
+        $lock = $this->indexOf($statements, '~^SELECT `deleted_at` FROM `workflow_template` WHERE `id` = ' . $id . ' FOR UPDATE$~');
+        $scope = $this->indexOf($statements, '~^SELECT DISTINCT `job_template_id` FROM `workflow_step` WHERE \(+`workflow_template_id`=' . $id . '\)~');
+        $policy = $this->indexOf($statements, '~^SELECT EXISTS\(SELECT \* FROM `workflow_step` WHERE \(`workflow_template_id`=' . $id . '\) AND \(CAST\(`step_type` AS BINARY\)~');
+        $runs = $this->indexOf($statements, '~^SELECT `id` FROM `workflow_job` WHERE .*`workflow_template_id`=' . $id . '~');
+        $this->assertTrue(
+            $lock < $scope && $scope < $policy && $policy < $runs,
+            "lock, team scope, policy, active runs:\n" . implode("\n", $statements)
+        );
+    }
+
     // -- Approval steps are for admins ---------------------------------------
 
     /**
@@ -215,13 +322,14 @@ class WorkflowStepChangeGuardTest extends DbTestCase
     {
         $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
         $approval = $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_APPROVAL, null, (int)$this->createApprovalRule((int)$this->admin->id)->id);
+        $remove = static fn (): int => WorkflowStep::deleteAll(['id' => $approval->id]);
 
-        $refusal = $this->refusalOf(fn () => $this->guard()->remove($workflow, (int)$this->operator->id, (int)$approval->id));
+        $refusal = $this->refusalOf(fn () => $this->guard()->change($workflow, (int)$this->operator->id, false, $remove));
         $this->assertSame(403, $refusal->status);
         $this->assertSame(ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED, $refusal->getMessage());
-        $this->assertNotNull(WorkflowStep::findOne($approval->id));
+        $this->assertNotNull(WorkflowStep::findOne($approval->id), 'the change did not run');
 
-        $this->assertNotNull($this->guard()->remove($workflow, (int)$this->admin->id, (int)$approval->id));
+        $this->assertSame(1, $this->guard()->change($workflow, (int)$this->admin->id, false, $remove));
         $this->assertNull(WorkflowStep::findOne($approval->id));
     }
 
@@ -236,7 +344,8 @@ class WorkflowStepChangeGuardTest extends DbTestCase
     }
 
     /**
-     * An API create: no row to lock and no runs, only the approval-step rule.
+     * An API create: no row to lock, no steps whose team scope to check and
+     * no runs, only the approval-step rule.
      */
     public function testANewWorkflowNeedsNoLockAndHasNoRuns(): void
     {
@@ -248,6 +357,7 @@ class WorkflowStepChangeGuardTest extends DbTestCase
         foreach ($statements as $statement) {
             $this->assertStringNotContainsString('FOR UPDATE', $statement);
             $this->assertStringNotContainsString('`workflow_job`', $statement);
+            $this->assertStringNotContainsString('SELECT DISTINCT `job_template_id`', $statement, 'no team scope to check');
         }
 
         $refusal = $this->refusalOf(fn () => $this->guard()->change($workflow, (int)$this->operator->id, true, static fn (): bool => true));
@@ -255,31 +365,7 @@ class WorkflowStepChangeGuardTest extends DbTestCase
         $this->assertSame(ApprovalRuleAssignmentPolicy::APPROVAL_STEP_ADD_REFUSED, $refusal->getMessage());
     }
 
-    // -- remove() -----------------------------------------------------------------
-
-    public function testRemoveDeletesTheStepAndReturnsIt(): void
-    {
-        $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
-        $step = $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_PAUSE);
-        $other = $this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_PAUSE);
-
-        $removed = $this->guard()->remove($workflow, (int)$this->operator->id, (int)$step->id);
-
-        $this->assertNotNull($removed);
-        $this->assertSame((int)$step->id, (int)$removed->id);
-        $this->assertNull(WorkflowStep::findOne($step->id));
-        $this->assertNotNull(WorkflowStep::findOne($other->id));
-    }
-
-    public function testRemoveIgnoresAStepTheWorkflowDoesNotHave(): void
-    {
-        $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
-        $foreign = $this->createWorkflowStep((int)$this->createWorkflowTemplate((int)$this->admin->id)->id, 10, WorkflowStep::TYPE_PAUSE);
-
-        $this->assertNull($this->guard()->remove($workflow, (int)$this->admin->id, 987654321));
-        $this->assertNull($this->guard()->remove($workflow, (int)$this->admin->id, (int)$foreign->id));
-        $this->assertNotNull(WorkflowStep::findOne($foreign->id), 'a step of another workflow is not removed');
-    }
+    // -- A step that other steps route to ------------------------------------------
 
     /**
      * @return array<string, array{0: string}>
@@ -310,18 +396,17 @@ class WorkflowStepChangeGuardTest extends DbTestCase
         $routing->setAttribute($route, (int)$target->id);
         $routing->save(false);
 
-        $refusal = $this->refusalOf(fn () => $this->guard()->remove($workflow, (int)$this->admin->id, (int)$target->id));
+        $refusal = $this->refusalOf(fn () => $this->guard()->assertNotRoutedTo($target, $this->positions($workflow)));
 
         $this->assertSame(409, $refusal->status);
         $this->assertSame(
-            sprintf(WorkflowStepChangeGuard::STEP_ROUTED_TO, '"Deploy \"prod\""', '#10 "Build"'),
+            sprintf(WorkflowStepChangeGuard::STEP_ROUTED_TO, '"Deploy \"prod\""', 'step 1 "Build"'),
             $refusal->getMessage()
         );
         $this->assertSame(['step_ids' => [(int)$routing->id]], $refusal->details);
-        $this->assertNotNull(WorkflowStep::findOne($target->id), 'not removed');
     }
 
-    public function testTheRefusalNamesEveryRoutingStepByStepOrder(): void
+    public function testTheRefusalNamesEveryRoutingStepByPosition(): void
     {
         $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
         $target = $this->createWorkflowStep((int)$workflow->id, 40, WorkflowStep::TYPE_PAUSE);
@@ -337,9 +422,67 @@ class WorkflowStepChangeGuardTest extends DbTestCase
             array_map(static fn (WorkflowStep $s): int => (int)$s->id, $this->guard()->stepsRoutingTo($target))
         );
         $this->assertStringContainsString(
-            '(#10 "step-10", #30 "step-30")',
-            $this->refusalOf(fn () => $this->guard()->remove($workflow, (int)$this->admin->id, (int)$target->id))->getMessage()
+            '(step 1 "step-10", step 2 "step-30")',
+            $this->refusalOf(fn () => $this->guard()->assertNotRoutedTo($target, $this->positions($workflow)))->getMessage()
         );
+    }
+
+    /**
+     * regression: the refusal to remove a routed-to step named the shifting
+     * step order ("#10"). step_order is an internal sort key that every
+     * change renumbers (and the API's bulk list writes 0, 1, 2…), so "#0"
+     * and "#7" named nothing the page shows. The steps that route to it are
+     * named by their positions now, and the advice is to edit them.
+     */
+    public function testRegressionTheRoutedToRefusalNamesPositionsNotTheShiftingStepOrder(): void
+    {
+        $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
+        $build = $this->createWorkflowStep((int)$workflow->id, 0, WorkflowStep::TYPE_PAUSE);
+        $retry = $this->createWorkflowStep((int)$workflow->id, 7, WorkflowStep::TYPE_PAUSE);
+        $deploy = $this->createWorkflowStep((int)$workflow->id, 30, WorkflowStep::TYPE_PAUSE);
+        foreach (['Build' => $build, 'Retry' => $retry, 'Deploy' => $deploy] as $name => $step) {
+            $step->name = $name;
+            $step->on_success_step_id = $name === 'Deploy' ? WorkflowStep::END_WORKFLOW : (int)$deploy->id;
+            $step->save(false);
+        }
+
+        /** @var \app\services\WorkflowStepWriteService $writer */
+        $writer = \Yii::$app->get('workflowStepWriteService');
+        $message = $this->refusalOf(fn () => $writer->remove($workflow, (int)$deploy->id, (int)$this->admin->id, 'web'))->getMessage();
+
+        $this->assertSame(
+            'Step "Deploy" was not removed: other steps route to it (step 1 "Build", step 2 "Retry"). '
+                . 'Edit those steps to lead elsewhere first, then remove it.',
+            $message
+        );
+        $this->assertStringNotContainsString('#', $message);
+        $this->assertNotNull(WorkflowStep::findOne($deploy->id), 'not removed');
+    }
+
+    /**
+     * routedToMessage() names each routing step by the position it is
+     * given, in the order given; assertNotRoutedTo() refuses with it.
+     */
+    public function testTheRoutedToMessageTakesThePositionsItIsGiven(): void
+    {
+        $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
+        $target = $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_PAUSE);
+        $first = $this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_PAUSE);
+        $second = $this->createWorkflowStep((int)$workflow->id, 30, WorkflowStep::TYPE_PAUSE);
+
+        $this->assertSame(
+            sprintf(WorkflowStepChangeGuard::STEP_ROUTED_TO, '"step-10"', 'step 4 "step-20", step 9 "step-30"'),
+            WorkflowStepChangeGuard::routedToMessage($target, [$first, $second], [(int)$first->id => 4, (int)$second->id => 9])
+        );
+        $this->assertSame('step 3 "Build \"x\""', sprintf(WorkflowStepChangeGuard::ROUTING_STEP_LABEL, 3, '"Build \"x\""'));
+
+        $this->guard()->assertNotRoutedTo($target, [(int)$target->id => 1]);
+        $second->on_always_step_id = (int)$target->id;
+        $second->save(false);
+        $refusal = $this->refusalOf(fn () => $this->guard()->assertNotRoutedTo($target, [(int)$second->id => 3]));
+        $this->assertSame(409, $refusal->status);
+        $this->assertSame(sprintf(WorkflowStepChangeGuard::STEP_ROUTED_TO, '"step-10"', 'step 3 "step-30"'), $refusal->getMessage());
+        $this->assertSame(['step_ids' => [(int)$second->id]], $refusal->details);
     }
 
     /**
@@ -360,30 +503,36 @@ class WorkflowStepChangeGuardTest extends DbTestCase
         $ending->on_success_step_id = WorkflowStep::END_WORKFLOW;
         $ending->save(false);
 
-        $this->assertNotNull($this->guard()->remove($workflow, (int)$this->admin->id, (int)$step->id));
-        $this->assertNull(WorkflowStep::findOne($step->id));
-    }
-
-    public function testRemoveIsRefusedWhileARunIsActive(): void
-    {
-        $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
-        $step = $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_PAUSE);
-        $run = $this->createWorkflowJob((int)$workflow->id, (int)$this->admin->id);
-
-        $refusal = $this->refusalOf(fn () => $this->guard()->remove($workflow, (int)$this->admin->id, (int)$step->id));
-
-        $this->assertSame(409, $refusal->status);
-        $this->assertSame(['workflow_job_ids' => [(int)$run->id]], $refusal->details);
-        $this->assertNotNull(WorkflowStep::findOne($step->id));
+        $this->assertSame([], $this->guard()->stepsRoutingTo($step), 'its own loop and another workflow\'s step do not count');
+        $this->guard()->assertNotRoutedTo($step, $this->positions($workflow));
+        $this->assertSame((int)$step->id, (int)$elsewhere->on_success_step_id, 'the other workflow\'s step does route to it');
     }
 
     // -- Helpers ------------------------------------------------------------------
+
+    /**
+     * @return array<int, int> the workflow's steps: step ID => position
+     */
+    private function positions(WorkflowTemplate $workflow): array
+    {
+        /** @var \app\services\WorkflowStepReorderService $placement */
+        $placement = \Yii::$app->get('workflowStepReorderService');
+
+        return $placement->positions((int)$workflow->id);
+    }
 
     private function guard(): WorkflowStepChangeGuard
     {
         /** @var WorkflowStepChangeGuard $guard */
         $guard = \Yii::$app->get('workflowStepChangeGuard');
         return $guard;
+    }
+
+    private function workflows(): WorkflowAccessChecker
+    {
+        /** @var WorkflowAccessChecker $workflows */
+        $workflows = \Yii::$app->get('workflowAccessChecker');
+        return $workflows;
     }
 
     private function refusalOf(callable $action): WorkflowStepChangeRefusedException

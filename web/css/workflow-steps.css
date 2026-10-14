@@ -1,0 +1,52 @@
+/*
+ * workflow-steps.css
+ *
+ * The steps table of the workflow template page
+ * (views/workflow-template/_steps.php).
+ */
+
+/* The row a step change landed on (view?id=…#step-<id>) stands out, through
+ * the cell state variable of Bootstrap's tables. */
+#workflow-steps-table tbody tr:target > * {
+    --bs-table-bg-state: rgba(var(--bs-warning-rgb), .18);
+}
+
+/* The browser scrolls to such a row only when it is below the fold, and then
+ * shows it near the bottom of the window, so the flashes at the top of the
+ * page stay in view. */
+#workflow-steps-table tbody tr {
+    scroll-margin-top: calc(100vh - 8rem);
+}
+
+/* Move to…: a <details> menu in the actions cell. It opens in the flow of the
+ * cell, so the table's scroll container does not clip it. */
+.wf-move-menu {
+    display: inline-block;
+    vertical-align: top;
+}
+
+.wf-move-menu > summary {
+    list-style: none;
+}
+
+.wf-move-menu > summary::-webkit-details-marker {
+    display: none;
+}
+
+.wf-move-menu[open] > summary {
+    margin-bottom: .25rem;
+}
+
+.wf-move-menu-items {
+    white-space: normal;
+    min-width: 14rem;
+    max-width: 22rem;
+    padding: .25rem .5rem;
+    border: 1px solid var(--bs-border-color);
+    border-radius: var(--bs-border-radius);
+    background-color: var(--bs-body-bg);
+}
+
+.wf-move-target + .wf-move-target {
+    margin-top: .25rem;
+}

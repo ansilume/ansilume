@@ -22,8 +22,10 @@ use yii\db\BaseActiveRecord;
 
 /**
  * How a run moves on: a branch to a step that is gone fails the run instead
- * of ending it as done; a step leaves running once, so a stale or concurrent
- * completion and a second resume route nothing; a run ends once.
+ * of ending it as done, naming the step's ID; an empty branch goes on with
+ * the next step in the run order (by step order, ties by ID); a step leaves
+ * running once, so a stale or concurrent completion and a second resume
+ * route nothing; a run ends once.
  */
 class WorkflowExecutionRoutingTest extends DbTestCase
 {
@@ -90,7 +92,26 @@ class WorkflowExecutionRoutingTest extends DbTestCase
             'the step keeps its outcome'
         );
         $this->assertSame(sprintf(WorkflowStepRouter::ROUTE_TARGET_MISSING, $removedId), $execution->error_message);
-        $this->assertSame("The next step #{$removedId} of this workflow no longer exists.", $execution->error_message);
+        $this->assertSame("The step this branch leads to no longer exists (step ID {$removedId}).", $execution->error_message);
+    }
+
+    /**
+     * Regression: the router error showed a step ID like a step number
+     * ("The next step #7 of this workflow no longer exists."), while "#N"
+     * names runs, jobs and requests, and "N." a step's position. It names
+     * the step ID as one now.
+     */
+    public function testRegressionTheRouterErrorShowedAStepIdLikeAStepNumber(): void
+    {
+        $workflow = $this->createWorkflowTemplate((int)$this->user->id);
+        $step = $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_PAUSE);
+        $this->branchTo($step, 'on_success_step_id', 7);
+
+        $route = (new WorkflowStepRouter())->route($step, true, false);
+
+        $this->assertNull($route['next']);
+        $this->assertSame('The step this branch leads to no longer exists (step ID 7).', $route['error']);
+        $this->assertStringNotContainsString('#7', (string)$route['error']);
     }
 
     /**
@@ -131,7 +152,7 @@ class WorkflowExecutionRoutingTest extends DbTestCase
         $this->decide($placeholder, ApprovalRequest::STATUS_REJECTED);
 
         $this->assertSame(
-            "Approval request #{$request->id} was rejected. The next step #987654321 of this workflow no longer exists.",
+            "Approval request #{$request->id} was rejected. The step this branch leads to no longer exists (step ID 987654321).",
             $this->executionOfStep($run, $gate)->error_message
         );
         $run->refresh();
@@ -162,6 +183,107 @@ class WorkflowExecutionRoutingTest extends DbTestCase
         $this->assertNull($this->runOf($run, $next));
         $run->refresh();
         $this->assertSame(WorkflowJob::STATUS_FAILED, $run->status);
+    }
+
+    // -- Empty branches follow the run order ------------------------------------------------
+
+    /**
+     * Regression: an empty route skipped a step that shares its step order.
+     * With X and Y at step order 10 and Z at 20, the run went from X
+     * straight to Z, the first step with a higher step order, and never ran
+     * Y. The run order breaks ties by ID: X, then Y, then Z.
+     */
+    public function testRegressionAnEmptyRouteSkippedAStepThatSharesItsStepOrder(): void
+    {
+        $workflow = $this->createWorkflowTemplate((int)$this->user->id);
+        $x = $this->jobStep($workflow, 10);
+        $y = $this->jobStep($workflow, 10);
+        $z = $this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_PAUSE);
+        $run = $this->engine()->launch($workflow, (int)$this->user->id);
+        $this->assertNotNull($this->runOf($run, $x), 'the run starts with X: the lowest step order, then the lowest ID');
+        $this->assertNull($this->runOf($run, $y));
+
+        $this->finishJob($this->jobOfStep($run, $x));
+
+        $this->assertNotNull($this->runOf($run, $y), 'X succeeded, so Y runs');
+        $this->assertNull($this->runOf($run, $z), 'Z waits for Y');
+
+        $this->finishJob($this->jobOfStep($run, $y));
+
+        $this->assertSame(WorkflowJobStep::STATUS_RUNNING, $this->executionOfStep($run, $z)->status, 'then Z');
+    }
+
+    /**
+     * A run whose last steps share their step order runs them both, in ID
+     * order, and ends with the outcome of the last one.
+     */
+    public function testARunWhoseLastStepsAreTiedRunsBothAndEndsAfterTheLast(): void
+    {
+        $workflow = $this->createWorkflowTemplate((int)$this->user->id);
+        $first = $this->jobStep($workflow, 5);
+        $second = $this->jobStep($workflow, 5);
+        $run = $this->engine()->launch($workflow, (int)$this->user->id);
+
+        $this->finishJob($this->jobOfStep($run, $first));
+        $run->refresh();
+        $this->assertSame(WorkflowJob::STATUS_RUNNING, $run->status, 'the second step runs');
+
+        $this->finishJob($this->jobOfStep($run, $second), Job::STATUS_FAILED);
+
+        $run->refresh();
+        $this->assertSame(WorkflowJob::STATUS_FAILED, $run->status, 'the run ends with the outcome of the last step');
+        $this->assertNull($this->executionOfStep($run, $second)->error_message);
+    }
+
+    /**
+     * @return array<string, array{0: list<int>, 1: list<int>}>
+     */
+    public static function runOrderProvider(): array
+    {
+        // The step orders of the steps, in the order they are created (by
+        // ID); the run order, as indexes into them.
+        return [
+            'sparse' => [[10, 20, 30], [0, 1, 2]],
+            'dense, as the API numbers steps' => [[0, 1, 2], [0, 1, 2]],
+            'all tied' => [[5, 5, 5], [0, 1, 2]],
+            'a tie, then a higher step order' => [[10, 10, 20], [0, 1, 2]],
+            'a higher step order first, then a tie' => [[20, 10, 10], [1, 2, 0]],
+            'created out of order' => [[30, 10, 20], [1, 2, 0]],
+        ];
+    }
+
+    /**
+     * An empty branch goes on with the next step in the run order (by step
+     * order, ties by ID), after a success and after a failure; after the
+     * last step the run ends.
+     *
+     * @dataProvider runOrderProvider
+     * @param list<int> $orders
+     * @param list<int> $runOrder
+     */
+    public function testAnEmptyBranchGoesOnWithTheNextStepInTheRunOrder(array $orders, array $runOrder): void
+    {
+        $workflow = $this->createWorkflowTemplate((int)$this->user->id);
+        $steps = [];
+        foreach ($orders as $order) {
+            $steps[] = $this->createWorkflowStep((int)$workflow->id, $order, WorkflowStep::TYPE_PAUSE);
+        }
+        $router = new WorkflowStepRouter();
+
+        $expected = [];
+        $actual = [];
+        foreach ($runOrder as $k => $index) {
+            $next = isset($runOrder[$k + 1]) ? (int)$steps[$runOrder[$k + 1]]->id : null;
+            foreach ([true, false] as $succeeded) {
+                $route = $router->route($steps[$index], $succeeded, false);
+                $this->assertNull($route['error']);
+                $expected[] = $next;
+                $actual[] = $route['next'] === null ? null : (int)$route['next']->id;
+            }
+        }
+
+        $this->assertSame($expected, $actual);
+        $this->assertSame((int)$steps[$runOrder[0]]->id, (int)$workflow->getStartStep()?->id, 'the run starts with the first');
     }
 
     // -- A step leaves running once ---------------------------------------------------------

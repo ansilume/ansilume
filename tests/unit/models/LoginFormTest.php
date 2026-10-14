@@ -38,7 +38,7 @@ class LoginFormTest extends TestCase
 
     public function testValidatePasswordFailsWhenUserNotFound(): void
     {
-        $form = new class extends LoginForm {
+        $form = new class () extends LoginForm {
             protected function getUser(): ?User
             {
                 return null;
@@ -76,13 +76,16 @@ class LoginFormTest extends TestCase
 
     public function testValidatePasswordPassesWhenPasswordCorrect(): void
     {
+        // An active local user: an inactive one is refused whatever the
+        // password (LoginFormInactiveAccountTest).
         $user = $this->getMockBuilder(User::class)
             ->disableOriginalConstructor()
-            ->onlyMethods(['validatePassword', 'isLocal', 'isLdap'])
+            ->onlyMethods(['validatePassword', 'isLocal', 'isLdap', 'isActive'])
             ->getMock();
         $user->method('validatePassword')->willReturn(true);
         $user->method('isLocal')->willReturn(true);
         $user->method('isLdap')->willReturn(false);
+        $user->method('isActive')->willReturn(true);
 
         $form = new LoginForm();
         $form->username = 'admin';
@@ -98,7 +101,7 @@ class LoginFormTest extends TestCase
 
     public function testRequiresTotpReturnsFalseWhenNoUser(): void
     {
-        $form = new class extends LoginForm {
+        $form = new class () extends LoginForm {
             protected function getUser(): ?User
             {
                 return null;

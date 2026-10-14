@@ -6,6 +6,7 @@ namespace app\tests\unit\services\ldap;
 
 use app\services\ldap\FakeLdapClient;
 use app\services\ldap\LdapConfig;
+use app\services\ldap\LdapLookupResult;
 use app\services\ldap\LdapService;
 use PHPUnit\Framework\TestCase;
 
@@ -178,6 +179,172 @@ class LdapServiceTest extends TestCase
             'baseDn' => 'dc=test',
         ], $this->fake());
         $this->assertNull($svc->lookupByUsername('ghost'));
+        $this->assertSame(LdapService::USER_NOT_FOUND, $svc->getLastError());
+    }
+
+    // ── lookup(): a missing user is not a failed lookup ──────────────────────
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function usableParams(): array
+    {
+        return [
+            'enabled' => true,
+            'host' => 'fake',
+            'baseDn' => 'dc=test',
+            'attrUsername' => 'uid',
+            'attrEmail' => 'mail',
+            'attrDisplayName' => 'displayName',
+            'attrUid' => 'entryUUID',
+            'roleMapping' => ['Admins' => 'admin'],
+            'defaultRole' => 'viewer',
+        ];
+    }
+
+    private function fakeWithJdoe(): FakeLdapClient
+    {
+        $client = $this->fake();
+        $client->addUser('jdoe', 'uid=jdoe,dc=test', 'pw', [
+            'uid' => 'jdoe',
+            'mail' => 'jdoe@example.com',
+            'displayName' => 'John Doe',
+            'entryUUID' => 'guid-123',
+        ]);
+        $client->addGroupMembership('uid=jdoe,dc=test', 'Admins');
+        return $client;
+    }
+
+    public function testLookupAnswersTheUserTheDirectoryHas(): void
+    {
+        $svc = $this->makeService($this->usableParams(), $this->fakeWithJdoe());
+
+        $lookup = $svc->lookup('jdoe');
+
+        $this->assertSame(LdapLookupResult::FOUND, $lookup->outcome);
+        $this->assertNull($lookup->error);
+        $this->assertNotNull($lookup->user);
+        $this->assertSame('uid=jdoe,dc=test', $lookup->user->dn);
+        $this->assertSame('guid-123', $lookup->user->uid);
+        $this->assertSame('jdoe@example.com', $lookup->user->email);
+        $this->assertSame('John Doe', $lookup->user->displayName);
+        $this->assertSame(['Admins'], $lookup->user->groups);
+        $this->assertSame(['admin'], $lookup->user->roles);
+        $this->assertNull($svc->getLastError());
+    }
+
+    public function testLookupOfAUserTheDirectoryDoesNotHaveIsMissing(): void
+    {
+        $svc = $this->makeService($this->usableParams(), $this->fakeWithJdoe());
+
+        $lookup = $svc->lookup('ghost');
+
+        $this->assertSame(LdapLookupResult::MISSING, $lookup->outcome);
+        $this->assertNull($lookup->user);
+        $this->assertNull($lookup->error, 'A missing user is no error.');
+        $this->assertSame(LdapService::USER_NOT_FOUND, $svc->getLastError());
+    }
+
+    /**
+     * A configuration that is not usable is no missing user: lookupByUsername()
+     * answered null for both, so ldap/sync disabled every LDAP account
+     * (regression test: LdapControllerTest).
+     */
+    public function testALookupWhileLdapIsNotUsableIsAFailure(): void
+    {
+        $svc = $this->makeService(['enabled' => true, 'baseDn' => 'dc=test'], $this->fakeWithJdoe());
+
+        $lookup = $svc->lookup('jdoe');
+
+        $this->assertSame(LdapLookupResult::NOT_USABLE, $lookup->outcome);
+        $this->assertSame(LdapService::NOT_USABLE, $lookup->error);
+        $this->assertSame(LdapService::NOT_USABLE, $svc->getLastError());
+    }
+
+    /**
+     * A failed service bind is no missing user: lookupByUsername() answered
+     * null for both, so ldap/sync disabled every LDAP account while the
+     * directory could not be reached (regression test: LdapControllerTest).
+     */
+    public function testALookupWhoseServiceBindFailsIsABindFailure(): void
+    {
+        $client = $this->fakeWithJdoe();
+        $client->failServiceBind(true);
+        $svc = $this->makeService($this->usableParams(), $client);
+
+        $lookup = $svc->lookup('jdoe');
+
+        $this->assertSame(LdapLookupResult::BIND_FAILED, $lookup->outcome);
+        $this->assertNull($lookup->user);
+        $this->assertSame(FakeLdapClient::SERVICE_BIND_FAILURE, $lookup->error);
+        $this->assertSame(FakeLdapClient::SERVICE_BIND_FAILURE, $svc->getLastError());
+    }
+
+    public function testALookupWhoseServiceBindFailsWithoutAReasonSaysSo(): void
+    {
+        $client = new class (LdapConfig::fromArray($this->usableParams())) extends FakeLdapClient {
+            public function bindServiceAccount(): bool
+            {
+                return false;
+            }
+        };
+        $svc = $this->makeService($this->usableParams(), $client);
+
+        $lookup = $svc->lookup('jdoe');
+
+        $this->assertSame(LdapLookupResult::BIND_FAILED, $lookup->outcome);
+        $this->assertSame(LdapService::SERVICE_BIND_FAILED, $lookup->error);
+    }
+
+    /**
+     * regression: a failed user search answered null like a user the
+     * directory does not have, so ldap/sync disabled the account.
+     */
+    public function testRegressionALookupWhoseSearchFailsIsAFailureNotAMissingUser(): void
+    {
+        $client = $this->fakeWithJdoe();
+        $client->failSearch(true);
+        $svc = $this->makeService($this->usableParams(), $client);
+
+        $this->assertNull($svc->lookupByUsername('jdoe'));
+        $this->assertSame('Simulated user search failure.', $svc->getLastError(), 'The diagnostics name the failed search, not a missing user.');
+
+        $lookup = $svc->lookup('jdoe');
+        $this->assertSame(LdapLookupResult::SEARCH_FAILED, $lookup->outcome);
+        $this->assertNull($lookup->user);
+        $this->assertSame(FakeLdapClient::SEARCH_FAILURE, $lookup->error);
+    }
+
+    /**
+     * regression: a failed group search answered the user with no groups, so
+     * ldap/sync revoked the roles their groups map to.
+     */
+    public function testRegressionALookupWhoseGroupSearchFailsIsAFailure(): void
+    {
+        $client = $this->fakeWithJdoe();
+        $client->failGroupSearch(true);
+        $svc = $this->makeService($this->usableParams(), $client);
+
+        $this->assertNull($svc->lookupByUsername('jdoe'), 'No user with the default role instead of their groups.');
+        $this->assertSame('Simulated group search failure.', $svc->getLastError());
+
+        $lookup = $svc->lookup('jdoe');
+        $this->assertSame(LdapLookupResult::GROUPS_FAILED, $lookup->outcome);
+        $this->assertNull($lookup->user);
+        $this->assertSame(FakeLdapClient::GROUP_SEARCH_FAILURE, $lookup->error);
+    }
+
+    public function testALookupAfterAFailedOneReportsOnlyItsOwnOutcome(): void
+    {
+        $client = $this->fakeWithJdoe();
+        $svc = $this->makeService($this->usableParams(), $client);
+        $client->failSearch(true);
+        $this->assertSame(LdapLookupResult::SEARCH_FAILED, $svc->lookup('ghost')->outcome);
+
+        $client->failSearch(false);
+        $this->assertSame(LdapLookupResult::MISSING, $svc->lookup('ghost')->outcome);
+        $this->assertSame(LdapLookupResult::FOUND, $svc->lookup('jdoe')->outcome);
+        $this->assertNull($svc->getLastError());
     }
 
     public function testMapGroupsToRolesIsCaseInsensitive(): void

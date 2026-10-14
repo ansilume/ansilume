@@ -22,19 +22,24 @@ use app\services\WorkflowStepChangeRefusedException;
 use app\services\WorkflowTemplateDeletionService;
 use app\tests\integration\controllers\WebControllerTestCase;
 use app\tests\integration\services\FailingWorkflowCancellation;
-use app\tests\integration\TeamScopeFixtures;
+use app\tests\integration\services\WorkflowStepWriteFixtures;
 use yii\web\NotFoundHttpException;
 
 /**
  * POST and PUT /api/v1/workflow-templates with steps, DELETE and launch:
  * gated steps (approval steps, and job steps whose job template has an
- * approval rule) are for admins (403), steps do not change while a run of
- * the workflow is active (409 with workflow_job_ids), a delete cancels the
+ * approval rule) are for admins (403), also when the workflow's steps, or
+ * the job template of a new job step, become gated between the
+ * controller's check and the lock, steps do not change while a run of the
+ * workflow is active (409 with workflow_job_ids), a delete cancels the
  * workflow's runs, and a launch takes extra_vars.
  */
 class WorkflowTemplatesStepGuardTest extends WebControllerTestCase
 {
-    use TeamScopeFixtures;
+    use WorkflowStepWriteFixtures;
+
+    /** The name of the workflow that the "steps" list of sendStepsList() creates. */
+    private const CREATED_NAME = 'api-wf-steps-list-race';
 
     private WorkflowTemplatesController $ctrl;
 
@@ -424,6 +429,176 @@ class WorkflowTemplatesStepGuardTest extends WebControllerTestCase
         $this->ctrl->actionUpdate($workflow->id);
     }
 
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function lockedMeanwhileProvider(): array
+    {
+        return [
+            'an approval step added' => ['approval step', ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED],
+            'the job template of a job step gated' => ['gated job template', ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED],
+        ];
+    }
+
+    /**
+     * The replacement checks the steps again while the workflow is locked
+     * (WorkflowStepChangeGuard, ApprovalRuleAssignmentPolicy::
+     * workflowStepsChangeRefusal()). The race replayed here: between the
+     * controller's check of the steps (stepsPolicyError()) and the lock, an
+     * admin adds an approval step, or gives the job template of a job step
+     * an approval rule, which makes the steps admin-only (rule 12). The
+     * member, who may operate the workflow and had no gated step to keep,
+     * gets the policy's 403 ("403 for steps locked meanwhile" in the spec's
+     * answer order), and nothing of the replacement is written.
+     *
+     * @dataProvider lockedMeanwhileProvider
+     */
+    public function testStepsLockedMeanwhileStopTheReplacement(string $lock, string $refusal): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id, $s['open']->id);
+        $before = $this->stepRows($workflow);
+        $this->authenticate($s['member']);
+        $this->setBody(['name' => 'renamed-meanwhile', 'steps' => [['name' => 'only', 'step_type' => 'pause']]]);
+        $locks = 0;
+        $addedIds = [];
+
+        $result = $this->meanwhile(
+            function () use ($lock, $s, $workflow, &$locks, &$addedIds): void {
+                $locks++;
+                if ($lock === 'gated job template') {
+                    $this->gate($s['own'], $s);
+                    return;
+                }
+                $rule = $this->createApprovalRule($s['admin']->id);
+                $addedIds[] = (int)$this->createWorkflowStep((int)$workflow->id, 2, WorkflowStep::TYPE_APPROVAL, null, (int)$rule->id)->id;
+            },
+            fn (): array => $this->ctrl->actionUpdate($workflow->id)
+        );
+
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => $refusal]], $result);
+        $this->assertSame(1, $locks, 'the steps were locked after the controller\'s check, right before the guard\'s lock');
+        $after = array_values(array_filter($this->stepRows($workflow), static fn (array $row): bool => !in_array((int)$row['id'], $addedIds, true)));
+        $this->assertSame($before, $after, 'nothing of the member\'s replacement was written');
+        $this->assertSame($workflow->name, WorkflowTemplate::findOne($workflow->id)?->name);
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_UPDATED, 'object_id' => $workflow->id])->exists());
+    }
+
+    /**
+     * Without the race, the same replacement goes through for the member:
+     * the refusal above is the check under the lock.
+     */
+    public function testWithoutTheRaceTheMemberReplacesTheSteps(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id, $s['open']->id);
+        $this->authenticate($s['member']);
+        $this->setBody(['name' => 'renamed-meanwhile', 'steps' => [['name' => 'only', 'step_type' => 'pause']]]);
+
+        /** @var list<array<string, mixed>> $steps */
+        $steps = $this->data($this->ctrl->actionUpdate($workflow->id))['steps'];
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertSame(['only'], array_column($steps, 'name'));
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function stepsListProvider(): array
+    {
+        return [
+            'POST /workflow-templates with steps' => ['create'],
+            'PUT /workflow-templates/{id} with steps' => ['update'],
+        ];
+    }
+
+    /**
+     * regression: a "steps" list was checked for gated job steps only
+     * before the lock (stepsPolicyError()). An approval rule that an admin
+     * assigned, between that check and the lock, to the job template of a
+     * new job step did not stop the write: the member added a gated job
+     * step, which is for admins (rule 12), while the guard under the lock
+     * looked only at the workflow's own steps. Now saveAll() checks the new
+     * steps again under the lock, as the per-step endpoints do: 403 with the
+     * policy's text, nothing written, no audit entry.
+     *
+     * @dataProvider stepsListProvider
+     */
+    public function testRegressionAJobTemplateGatedMeanwhileStopsTheStepsList(string $write): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
+        $before = $this->stepRows($workflow);
+        $this->authenticate($s['member']);
+        $gated = [];
+
+        $result = $this->meanwhile(
+            function () use ($s, &$gated): void {
+                $gated[] = $this->gate($s['open'], $s);
+            },
+            fn (): array => $this->sendStepsList($write, $workflow, $s)
+        );
+
+        $this->assertCount(1, $gated, 'the admin gated the job template between the controller\'s check and the lock');
+        $this->assertSame((int)$gated[0]->id, (int)JobTemplate::findOne($s['open']->id)?->approval_rule_id);
+        $this->assertSame(403, \Yii::$app->response->statusCode);
+        $this->assertSame(['error' => ['message' => ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED]], $result);
+        $this->assertSame($before, $this->stepRows($workflow), 'the steps are kept');
+        $this->assertSame($workflow->name, WorkflowTemplate::findOne($workflow->id)?->name, 'nothing of the update is written');
+        $this->assertFalse(WorkflowTemplate::findWithDeleted()->where(['name' => self::CREATED_NAME])->exists(), 'no workflow is created');
+        $this->assertSame([], $this->stepsListAudits($workflow));
+    }
+
+    /**
+     * An admin may add a gated job step: the same race writes the steps for
+     * an admin, with the job template that was gated meanwhile.
+     *
+     * @dataProvider stepsListProvider
+     */
+    public function testAnAdminWritesTheStepsListInTheSameRace(string $write): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
+        $this->authenticate($s['admin']);
+
+        /** @var array<string, mixed> $result */
+        $result = $this->meanwhile(
+            fn () => $this->gate($s['open'], $s),
+            fn (): array => $this->sendStepsList($write, $workflow, $s)
+        );
+
+        $this->assertSame($write === 'create' ? 201 : 200, \Yii::$app->response->statusCode);
+        /** @var list<array<string, mixed>> $steps */
+        $steps = $this->data($result)['steps'];
+        $this->assertSame([(int)$s['own']->id, (int)$s['open']->id], array_column($steps, 'job_template_id'));
+        $this->assertNotNull(JobTemplate::findOne($s['open']->id)?->approval_rule_id, 'a gated job step');
+        $this->assertCount(1, $this->stepsListAudits($workflow));
+    }
+
+    /**
+     * Without the race, the member writes the same steps list: the refusal
+     * above is the check under the lock.
+     *
+     * @dataProvider stepsListProvider
+     */
+    public function testWithoutTheRaceTheMemberWritesTheStepsList(string $write): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
+        $this->authenticate($s['member']);
+
+        $result = $this->sendStepsList($write, $workflow, $s);
+
+        $this->assertSame($write === 'create' ? 201 : 200, \Yii::$app->response->statusCode);
+        /** @var list<array<string, mixed>> $steps */
+        $steps = $this->data($result)['steps'];
+        $this->assertSame(['build', 'lint'], array_column($steps, 'name'));
+        $this->assertSame([(int)$s['own']->id, (int)$s['open']->id], array_column($steps, 'job_template_id'));
+        $this->assertCount(1, $this->stepsListAudits($workflow));
+    }
+
     // -- Delete -----------------------------------------------------------------
 
     /**
@@ -607,6 +782,51 @@ class WorkflowTemplatesStepGuardTest extends WebControllerTestCase
         JobTemplate::updateAll(['approval_rule_id' => $rule->id], ['id' => $template->id]);
 
         return $rule;
+    }
+
+    /**
+     * Send a "steps" list of build (job template own, of the member's team)
+     * and lint (job template open, of no team), as $write says: create the
+     * workflow CREATED_NAME with them, or replace the steps of $workflow
+     * (and rename it).
+     *
+     * @param array{own: JobTemplate, open: JobTemplate} $s
+     * @return array<string, mixed>
+     */
+    private function sendStepsList(string $write, WorkflowTemplate $workflow, array $s): array
+    {
+        $steps = [
+            ['name' => 'build', 'job_template_id' => $s['own']->id],
+            ['name' => 'lint', 'job_template_id' => $s['open']->id],
+        ];
+        if ($write === 'create') {
+            $this->setBody(['name' => self::CREATED_NAME, 'steps' => $steps]);
+
+            return $this->ctrl->actionCreate();
+        }
+        $this->setBody(['name' => 'renamed-by-steps-list', 'steps' => $steps]);
+
+        return $this->ctrl->actionUpdate($workflow->id);
+    }
+
+    /**
+     * The audit entries of what sendStepsList() wrote: the update of
+     * $workflow, or the creation of the workflow CREATED_NAME.
+     *
+     * @return list<AuditLog>
+     */
+    private function stepsListAudits(WorkflowTemplate $workflow): array
+    {
+        $createdIds = WorkflowTemplate::findWithDeleted()->select('id')->where(['name' => self::CREATED_NAME])->column();
+        /** @var list<AuditLog> $entries */
+        $entries = AuditLog::find()
+            ->where(['or',
+                ['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_UPDATED, 'object_id' => $workflow->id],
+                ['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_CREATED, 'object_id' => $createdIds],
+            ])
+            ->all();
+
+        return $entries;
     }
 
     /**

@@ -17,6 +17,8 @@ $credOptions = ['' => '— None (public repo) —'];
 foreach ($scmCredentials as $c) {
     $credOptions[$c->id] = $c->name . ' (' . Credential::typeLabel($c->credential_type) . ')';
 }
+// The form hides the Git fields, with the errors under them, for every type but Git.
+$hiddenGitFieldErrors = $model->scm_type !== Project::SCM_TYPE_GIT ? $model->gitFieldErrors() : [];
 ?>
 <div class="row justify-content-center">
 <div class="col-lg-7">
@@ -31,6 +33,17 @@ foreach ($scmCredentials as $c) {
 </nav>
 <h2><?= Html::encode($this->title) ?></h2>
 
+<?php if ($hiddenGitFieldErrors !== []) : ?>
+    <div class="alert alert-danger" id="project-git-field-errors" role="alert">
+        <p class="mb-1"><?= Html::encode(Project::GIT_FIELDS_REFUSED) ?></p>
+        <ul class="mb-0">
+            <?php foreach ($hiddenGitFieldErrors as $error) : ?>
+                <li><?= Html::encode($error) ?></li>
+            <?php endforeach; ?>
+        </ul>
+    </div>
+<?php endif; ?>
+
 <?php $form = ActiveForm::begin(['id' => 'project-form']); ?>
 
     <?= $form->field($model, 'name')->textInput(['maxlength' => 128, 'autofocus' => true]) ?>
@@ -43,12 +56,12 @@ foreach ($scmCredentials as $c) {
 
     <div id="git-fields" <?= $model->scm_type !== Project::SCM_TYPE_GIT ? 'style="display:none"' : '' // xss-ok: hardcoded attribute?>>
 
-        <?= $form->field($model, 'scm_url')->textInput(['maxlength' => 512, 'placeholder' => 'https://github.com/org/repo.git', 'id' => 'project-scm_url']) ?>
-        <?= $form->field($model, 'scm_branch')->textInput(['maxlength' => 128]) ?>
+        <?= $form->field($model, 'scm_url')->textInput(['maxlength' => true, 'placeholder' => 'https://github.com/org/repo.git', 'id' => 'project-scm_url']) ?>
+        <?= $form->field($model, 'scm_branch')->textInput(['maxlength' => true]) ?>
         <?= $form->field($model, 'scm_credential_id')->dropDownList(
             $credOptions,
             ['id' => 'project-scm_credential_id']
-        )->hint('SSH URLs require an SSH Key credential. HTTPS URLs require a Token or Username/Password credential.') ?>
+        )->hint(Html::encode(Project::SSH_URL_NEEDS_SSH_KEY . ' ' . Project::HTTPS_URL_NEEDS_TOKEN_OR_PASSWORD)) ?>
     </div>
 
     <div id="manual-fields" <?= $model->scm_type !== Project::SCM_TYPE_MANUAL ? 'style="display:none"' : '' // xss-ok: hardcoded attribute?>>

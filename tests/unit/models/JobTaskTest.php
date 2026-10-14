@@ -33,9 +33,13 @@ class JobTaskTest extends TestCase
         $this->assertSame('secondary', JobTask::statusCssClass(JobTask::STATUS_SKIPPED));
     }
 
+    /**
+     * regression: an unreachable task's badge was nearly invisible on the
+     * dark theme ("dark" on a background of the same colour).
+     */
     public function testStatusCssClassForUnreachable(): void
     {
-        $this->assertSame('dark', JobTask::statusCssClass(JobTask::STATUS_UNREACHABLE));
+        $this->assertSame('danger', JobTask::statusCssClass(JobTask::STATUS_UNREACHABLE));
     }
 
     public function testStatusCssClassForUnknownReturnsSecondary(): void

@@ -148,7 +148,7 @@ $active = fn (string $prefix): string =>
     <span class="nav-section">Workflows</span>
     <nav class="nav flex-column">
         <a class="nav-link<?= $active('workflow-template') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-template/index']) ?>">Workflow Templates</a>
-        <a class="nav-link<?= $active('workflow-job') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-job/index']) ?>">Executions</a>
+        <a class="nav-link<?= $active('workflow-job') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/workflow-job/index']) ?>">Workflow Jobs</a>
         <a class="nav-link<?= $active('approval-rule') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval-rule/index']) ?>">Approval Rules</a>
         <a class="nav-link<?= $active('approval') // xss-ok: hardcoded CSS class?>" href="<?= Url::to(['/approval/index']) ?>">Approval Requests</a>
     </nav>

@@ -13,17 +13,48 @@ namespace app\components;
  */
 final class GitSyncDiagnostics
 {
+    /**
+     * What ends the authority of a URL (user:password@host:port) for
+     * redactUrl(): its path, or whitespace in the text around it.
+     */
+    private const AUTHORITY_END = "/ \t\n\r\v\f";
+
     public function __construct(private readonly GitEnvBuilder $gitEnv = new GitEnvBuilder())
     {
     }
 
     /**
-     * Redact credentials (user:pass@) from a git URL so logs never
-     * contain tokens or passwords embedded in URLs.
+     * Redact the credentials of every URL in $text (a URL, a command line,
+     * git's output, a sync error), so logs and pages never show a token or
+     * password embedded in a URL: everything between "://" and the last "@"
+     * before the URL's path or the next whitespace becomes "***", as in
+     * https://***@git.example.com/org/repo.git.
+     *
+     * Up to the last "@": a password with a raw "@" (https://u:p@ss@host/r)
+     * is hidden whole. Git and curl split such a URL at its first "@", so
+     * git's own messages name the rest of the password as the user
+     * (https://ss@host/r/), which is hidden as well.
+     *
+     * Text without "://" keeps its shape, such as an scp-like address
+     * (git@host:org/repo.git), and so does a URL without credentials, an
+     * empty userinfo (https://@host/r) included; the user of an ssh:// URL
+     * (ssh://git@host/...) is hidden like any other.
+     * A linear scan without a regular expression, so no input can make it
+     * give up and return nothing.
      */
-    public static function redactUrl(string $url): string
+    public static function redactUrl(#[\SensitiveParameter] string $text): string
     {
-        return (string)preg_replace('#(://)[^/@\s]+@#', '$1***@', $url);
+        $parts = explode('://', $text);
+        $count = count($parts);
+        for ($i = 1; $i < $count; $i++) {
+            $authority = substr($parts[$i], 0, strcspn($parts[$i], self::AUTHORITY_END));
+            $at = strrpos($authority, '@');
+            if ($at !== false && $at > 0) {
+                $parts[$i] = '***' . substr($parts[$i], $at);
+            }
+        }
+
+        return implode('://', $parts);
     }
 
     /**

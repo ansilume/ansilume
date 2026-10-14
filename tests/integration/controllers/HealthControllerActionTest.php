@@ -8,6 +8,7 @@ use app\controllers\HealthController;
 use app\models\Runner;
 use app\models\RunnerGroup;
 use app\models\Schedule;
+use app\models\User;
 
 class HealthControllerActionTest extends WebControllerTestCase
 {
@@ -222,16 +223,34 @@ class HealthControllerActionTest extends WebControllerTestCase
         $this->assertTrue($result['checks']['rbac']['ok']);
     }
 
-    public function testUsersCheckReportsUserCount(): void
+    /**
+     * The users check reports every user ("total") and the superadmins who
+     * can sign in ("superadmins").
+     *
+     * regression (wave 5f): it counted inactive superadmins too, so /health
+     * showed "superadmins": N while none of them could sign in. It counts
+     * the active superadmins only; "total" still counts every user.
+     */
+    public function testRegressionTheUsersCheckCountsEveryUserAndOnlyActiveSuperadmins(): void
     {
         $this->createUser();
+        $before = $this->usersCheck();
+        $this->assertTrue($before['ok']);
+        $this->assertGreaterThanOrEqual(1, $before['total']);
 
-        $ctrl = new HealthController('health', \Yii::$app);
-        $result = $ctrl->actionIndex();
+        $this->createSuperadminWithStatus(User::STATUS_INACTIVE);
+        $inactiveAdded = $this->usersCheck();
 
-        $this->assertArrayHasKey('users', $result['checks']);
-        $this->assertTrue($result['checks']['users']['ok']);
-        $this->assertGreaterThanOrEqual(1, $result['checks']['users']['total']);
+        $this->assertSame($before['superadmins'], $inactiveAdded['superadmins'], 'an inactive superadmin is not counted');
+        $this->assertSame($before['total'] + 1, $inactiveAdded['total'], 'total counts every user, inactive ones too');
+        $this->assertTrue($inactiveAdded['ok']);
+
+        $this->createSuperadminWithStatus(User::STATUS_ACTIVE);
+        $activeAdded = $this->usersCheck();
+
+        $this->assertSame($before['superadmins'] + 1, $activeAdded['superadmins'], 'an active superadmin is counted');
+        $this->assertSame($before['total'] + 2, $activeAdded['total']);
+        $this->assertTrue($activeAdded['ok']);
     }
 
     public function testUsersCheckReportsNoUsersOnEmptyDb(): void
@@ -261,5 +280,32 @@ class HealthControllerActionTest extends WebControllerTestCase
         $result = $ctrl->actionIndex();
         $this->assertFalse($result['checks']['rbac']['ok']);
         $this->assertStringContainsString('Missing roles', $result['checks']['rbac']['error']);
+    }
+
+    /**
+     * The users check of GET /health.
+     *
+     * @return array{ok: bool, total: int, superadmins: int}
+     */
+    private function usersCheck(): array
+    {
+        $result = (new HealthController('health', \Yii::$app))->actionIndex();
+        $users = $result['checks']['users'] ?? null;
+        $this->assertIsArray($users);
+        $this->assertIsBool($users['ok'] ?? null);
+        $this->assertIsInt($users['total'] ?? null);
+        $this->assertIsInt($users['superadmins'] ?? null);
+
+        return ['ok' => $users['ok'], 'total' => $users['total'], 'superadmins' => $users['superadmins']];
+    }
+
+    private function createSuperadminWithStatus(int $status): User
+    {
+        $user = $this->createUser('health-superadmin');
+        $user->is_superadmin = true;
+        $user->status = $status;
+        $user->save(false);
+
+        return $user;
     }
 }

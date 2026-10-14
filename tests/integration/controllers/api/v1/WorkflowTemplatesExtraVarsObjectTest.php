@@ -157,15 +157,17 @@ class WorkflowTemplatesExtraVarsObjectTest extends WebControllerTestCase
     }
 
     /**
-     * An object JSON can hold is stored as its JSON text, on create and on
-     * update, and read back as the same mapping.
+     * An object of names is stored as its JSON text, on create and on
+     * update, and read back as the same mapping. (A mapping maps names to
+     * names: a number in it, such as 9007199254740993, is refused with
+     * WorkflowStepMapping::INVALID.)
      */
     public function testAnObjectJsonCanHoldIsStoredAsJsonText(): void
     {
         $s = $this->teamScope();
         $this->authenticate($s['member']);
         $this->setJsonBody(sprintf(
-            '{"name": "api-wf-object", "steps": [{"name": "object-step", "job_template_id": %d, "extra_vars_template": {"target_env": "build_env", "build_id": 9007199254740993}}]}',
+            '{"name": "api-wf-object", "steps": [{"name": "object-step", "job_template_id": %d, "extra_vars_template": {"target_env": "build_env", "build_id": "build_number"}}]}',
             $s['own']->id
         ));
 
@@ -174,8 +176,8 @@ class WorkflowTemplatesExtraVarsObjectTest extends WebControllerTestCase
         $this->assertSame(201, \Yii::$app->response->statusCode, (string)json_encode($created));
         $step = WorkflowStep::findOne(['name' => 'object-step']);
         $this->assertNotNull($step);
-        $this->assertSame('{"target_env":"build_env","build_id":9007199254740993}', $step->extra_vars_template);
-        $this->assertSame(['target_env' => 'build_env', 'build_id' => 9007199254740993], $created['data']['steps'][0]['extra_vars_template'] ?? null);
+        $this->assertSame('{"target_env":"build_env","build_id":"build_number"}', $step->extra_vars_template);
+        $this->assertSame(['target_env' => 'build_env', 'build_id' => 'build_number'], $created['data']['steps'][0]['extra_vars_template'] ?? null);
 
         $this->setJsonBody(sprintf(
             '{"steps": [{"name": "object-step-2", "job_template_id": %d, "extra_vars_template": {"app_env": "stage"}}]}',

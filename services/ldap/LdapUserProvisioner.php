@@ -18,8 +18,11 @@ use yii\base\Component;
  *    {@see LdapConfig::$autoProvision} is true.
  *  - Reconcile RBAC role assignments against the roles returned by the
  *    role-mapping logic, removing roles the directory no longer grants.
- *  - Re-activate accounts that were previously disabled by lifecycle
- *    sync if the user appears in the directory again.
+ *  - Re-activate an account that ldap/sync deactivated because the
+ *    directory no longer had the user ({@see User::$ldap_sync_disabled})
+ *    once the directory has the user again. An account deactivated in
+ *    Ansilume stays inactive whatever the directory says
+ *    ({@see staysInactive()}, CLAUDE.md security rule 15).
  *
  * The provisioner deliberately does NOT touch passwords. LDAP users
  * carry the {@see User::LDAP_PASSWORD_SENTINEL} hash so the local
@@ -88,13 +91,29 @@ class LdapUserProvisioner extends Component
         }
         $user->last_synced_at = time();
 
-        // Re-enable accounts disabled by an earlier lifecycle sweep — the
-        // directory has accepted them again, so they should not stay locked.
-        if ($previousStatus !== User::STATUS_ACTIVE) {
-            $user->status = User::STATUS_ACTIVE;
-            return true;
+        // Re-enable an account that ldap/sync deactivated because the
+        // directory no longer had the user: the directory has them again. An
+        // account deactivated in Ansilume stays inactive (staysInactive()).
+        if ($previousStatus === User::STATUS_ACTIVE || $this->staysInactive($user)) {
+            return false;
         }
-        return false;
+        $user->status = User::STATUS_ACTIVE;
+        $user->ldap_sync_disabled = false;
+        return true;
+    }
+
+    /**
+     * Whether the directory leaves $user inactive: an inactive account that
+     * ldap/sync did not deactivate (no {@see User::$ldap_sync_disabled}), so
+     * one deactivated in Ansilume (the status toggle, the Edit User form,
+     * PUT /api/v1/users/{id}) or by anything else. provisionOrUpdate() keeps
+     * such an account inactive, an LDAP sign-in refuses it and ldap/sync
+     * leaves it inactive; only a change of its status in Ansilume activates
+     * it. False for an active account and for one ldap/sync deactivated.
+     */
+    public function staysInactive(User $user): bool
+    {
+        return (int)$user->status !== User::STATUS_ACTIVE && !$user->ldap_sync_disabled;
     }
 
     /**
@@ -289,7 +308,9 @@ class LdapUserProvisioner extends Component
 
     /**
      * Mark a user as inactive after a sync confirms the directory no
-     * longer recognises them. Rotates auth_key (kills active sessions)
+     * longer recognises them, with {@see User::$ldap_sync_disabled} set in
+     * the same save, so that the directory activates the account again
+     * once it has the user again. Rotates auth_key (kills active sessions)
      * and deletes API tokens (kills programmatic access). Audited.
      *
      * Returns true if the user was disabled, false if the user was
@@ -301,6 +322,7 @@ class LdapUserProvisioner extends Component
             return false;
         }
         $user->status = User::STATUS_INACTIVE;
+        $user->ldap_sync_disabled = true;
         // Rotate auth_key so any browser session cookie tied to the
         // old key becomes invalid immediately on next request.
         $user->generateAuthKey();

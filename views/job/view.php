@@ -9,17 +9,24 @@ declare(strict_types=1);
 /** @var app\models\JobHostSummary[] $hostSummaries */
 /** @var app\models\JobArtifact[] $artifacts */
 /** @var list<array{id: int, name: string|null, credential_type: string|null, role: string, deleted: bool}> $jobCredentials  as launched, primary first */
+/** @var app\services\runstate\JobContext $context the workflow run and step the job was created for, and its approval request, as the viewer may see them */
 
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobLog;
 use app\models\JobTask;
+use app\services\runstate\Banner;
+use app\services\runstate\Texts;
 use yii\helpers\Html;
 use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = 'Job #' . $job->id;
 $isLive = !$job->isFinished();
+$origin = $context->origin;
+$approval = $context->approval;
+// The placeholder of an approval step only holds the step's approval request and never runs.
+$placeholderOrigin = $context->placeholder ? $origin : null;
 ?>
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
@@ -40,7 +47,9 @@ $isLive = !$job->isFinished();
             <?php endif; ?>
         </h2>
         <div class="text-muted small mt-1">
-            <?= Html::encode($job->jobTemplate->name ?? '—') ?> &mdash;
+            <?= Html::encode($placeholderOrigin === null
+                ? ($job->jobTemplate->name ?? '—')
+                : sprintf(Texts::PLACEHOLDER_SUBTITLE, $placeholderOrigin->stepName, $placeholderOrigin->workflowJobId)) ?> &mdash;
             launched by <?= Html::encode($job->launcher->username ?? '—') ?>
             <?= $job->started_at ? ' at ' . date('Y-m-d H:i:s', $job->started_at) : '' ?>
         </div>
@@ -61,6 +70,21 @@ $isLive = !$job->isFinished();
     </div>
 </div>
 
+<?php if ($approval !== null && $job->status === Job::STATUS_PENDING_APPROVAL) : ?>
+    <?php // The page's poll hides the note once the job no longer waits.?>
+<div class="alert alert-info" id="job-approval-note" role="status">
+    <div class="fw-semibold"><?= Html::encode(sprintf(Texts::JOB_APPROVAL_NOTE, $approval->requestId)) ?></div>
+    <ul class="small mt-1 mb-0">
+        <?php foreach (Banner::approvalFacts($approval, $approval->requestedAt, time()) as $fact) : ?>
+        <li><?= Html::encode($fact['text']) ?></li>
+        <?php endforeach; ?>
+    </ul>
+    <?php if ($approval->linkable) : ?>
+        <?= Html::a(Html::encode(Banner::REVIEW_LINK), Banner::requestUrl($approval->requestId), ['id' => 'job-approval-review', 'class' => 'btn btn-sm btn-primary mt-2']) ?>
+    <?php endif; ?>
+</div>
+<?php endif; ?>
+
 <div class="row g-3 mb-3">
     <div class="col-md-6">
         <div class="card">
@@ -75,6 +99,8 @@ $isLive = !$job->isFinished();
                             <?php else : ?>
                                 <?= Html::a(Html::encode($job->jobTemplate->name), ['/job-template/view', 'id' => $job->job_template_id]) ?>
                             <?php endif; ?>
+                        <?php elseif ($context->placeholder) : ?>
+                            <?= Html::encode(Texts::PLACEHOLDER_TEMPLATE) ?>
                         <?php else : ?>
                             —
                         <?php endif; ?>
@@ -83,6 +109,7 @@ $isLive = !$job->isFinished();
                     <dd class="col-7"><?= $this->render('/credential/_credential-list', ['credentials' => $jobCredentials, 'listId' => 'job-credentials']) ?></dd>
                     <dt class="col-5">Status</dt>
                     <dd class="col-7" id="detail-status"><?= Html::encode(Job::statusLabel($job->status)) ?></dd>
+                    <?= $this->render('_workflow-context', ['context' => $context]) ?>
                     <dt class="col-5">Queued</dt>
                     <dd class="col-7"><?= $job->queued_at ? date('Y-m-d H:i:s', $job->queued_at) : '—' ?></dd>
                     <dt class="col-5">Started</dt>
@@ -318,6 +345,12 @@ $isLive = !$job->isFinished();
 </div>
 <?php endif; ?>
 
+<?php if ($placeholderOrigin !== null) : ?>
+    <?php // A placeholder never runs, so it has no output: the note says what it is instead.?>
+<div class="alert alert-secondary" id="job-placeholder-note">
+    <?= Html::encode(sprintf(Texts::PLACEHOLDER_NOTE, $placeholderOrigin->stepName, $placeholderOrigin->workflowJobId)) ?>
+</div>
+<?php else : ?>
 <div class="card">
     <div class="card-header d-flex justify-content-between align-items-center">
         <span>Output</span>
@@ -329,6 +362,7 @@ $isLive = !$job->isFinished();
         <pre class="job-log m-0" id="job-log" style="min-height:200px;max-height:70vh;overflow-y:auto;"></pre>
     </div>
 </div>
+<?php endif; ?>
 
 <script src="/js/ansi_up.min.js"></script>
 <script>
@@ -340,9 +374,13 @@ _au.use_classes = false;
 _au.ansi_colors[0][0].rgb = [118, 118, 118]; // black  → visible grey
 _au.ansi_colors[0][4].rgb = [77,  159, 236]; // blue   → readable blue
 _au.ansi_colors[0][5].rgb = [198, 120, 221]; // magenta → softer purple
+// The page of a placeholder job has no Output card, and so no log element.
 var logEl  = document.getElementById('job-log');
 
 function appendAnsi(text) {
+    if (!logEl) {
+        return;
+    }
     var span = document.createElement('span');
     span.innerHTML = _au.ansi_to_html(text);
     logEl.appendChild(span);
@@ -352,7 +390,7 @@ function appendAnsi(text) {
 appendAnsi(<?= Json::htmlEncode($logEntry->content) ?>);
 <?php endforeach; ?>
 
-if (logEl.scrollHeight > logEl.clientHeight) {
+if (logEl && logEl.scrollHeight > logEl.clientHeight) {
     logEl.scrollTop = logEl.scrollHeight;
 }
 </script>
@@ -371,57 +409,183 @@ if (logEl.scrollHeight > logEl.clientHeight) {
 <script>
 (function () {
     var badgeEl   = document.getElementById('status-badge');
+    var detailStatusEl = document.getElementById('detail-status');
+    var approvalNoteEl = document.getElementById('job-approval-note');
+    var awaitingApproval = <?= Json::htmlEncode(Job::STATUS_PENDING_APPROVAL) ?>;
     var liveEl    = document.getElementById('live-indicator');
     var lastSeq   = <?= empty($logs) ? -1 : end($logs)->sequence ?>;
     var pollUrl   = <?= Json::htmlEncode(Url::to(['/job/log-poll', 'id' => $job->id])) ?>;
     var statusLabels = <?= Json::htmlEncode($statusLabels) ?>;
     var statusClasses = <?= Json::htmlEncode($statusClasses) ?>;
+    // A refused poll (401 or 403: signed out, or no access any more; 404:
+    // the job is gone) would be refused again: polling stops, the Live
+    // badge goes, and a note under the title asks for a reload.
+    var stopStatuses = [401, 403, 404];
+    var stoppedNote = <?= Json::htmlEncode(Texts::LIVE_STOPPED_JOB) ?>;
+    // The pace of the polls (pace()). The first poll comes 1.5 seconds after
+    // the page loaded. While the job runs, the next poll comes 2.5 seconds
+    // after each answer, so the log follows the run. While the job waits
+    // (for an approval, to be queued or for a runner: the status of the
+    // answer), an answer the same as the one before it (the same status and
+    // command, no new output) doubles the wait before the next poll, up to
+    // 30 seconds, and an answer that changed something brings it back to
+    // 2.5 seconds. A poll that failed (an error answer other than a refusal,
+    // a network error, an answer that is no JSON) doubles the wait as well,
+    // up to 30 seconds, as on a workflow run's page
+    // (web/js/workflow-run-live.js). While the page is hidden (another tab,
+    // a minimized window) it does not poll; shown again, it polls at once
+    // and starts again from 2.5 seconds.
+    var FIRST_POLL = 1500;
+    var INTERVAL = 2500;
+    var MAX_INTERVAL = 30000;
+    var waitingStatuses = <?= Json::htmlEncode(Job::waitingStatuses()) ?>;
+    // Whether polling stopped for good, the next poll's timer, whether a
+    // poll is on its way, the wait before the next poll, and the last answer.
+    var stopped = false;
+    var timer = null;
+    var polling = false;
+    var interval = INTERVAL;
+    var lastAnswer = null;
 
-    function poll() {
-        fetch(pollUrl + '&after=' + lastSeq)
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                data.chunks.forEach(function (chunk) {
-                    appendAnsi(chunk.content);
-                    lastSeq = chunk.sequence;
-                });
-                if (data.chunks.length) {
-                    logEl.scrollTop = logEl.scrollHeight;
-                }
-                badgeEl.textContent = statusLabels[data.status] || data.status;
-                badgeEl.className   = 'badge text-bg-' + (statusClasses[data.status] || 'secondary') + ' ms-2 fs-6';
-
-                if (data.execution_command && !document.getElementById('exec-cmd-display')) {
-                    var card = document.createElement('div');
-                    card.className = 'card mb-3';
-                    card.innerHTML = '<div class="card-header d-flex justify-content-between align-items-center">'
-                        + '<span>Execution Command</span>'
-                        + '<button type="button" id="btn-copy-cmd" class="btn btn-sm btn-outline-secondary"'
-                        + ' onclick="copyToClipboard(document.getElementById(\'exec-cmd-display\').textContent).then(function(){'
-                        + 'var btn=document.getElementById(\'btn-copy-cmd\');btn.textContent=\'Copied!\';btn.classList.replace(\'btn-outline-secondary\',\'btn-success\');'
-                        + 'setTimeout(function(){btn.textContent=\'Copy\';btn.classList.replace(\'btn-success\',\'btn-outline-secondary\');},2000);'
-                        + '}).catch(function(){alert(\'Copy failed — please copy manually.\');})">Copy</button></div>'
-                        + '<div class="card-body p-0">'
-                        + '<pre class="job-log m-0" id="exec-cmd-display" style="max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>'
-                        + '</div>';
-                    card.querySelector('#exec-cmd-display').textContent = data.execution_command;
-                    var cmdTarget = document.getElementById('exec-cmd-target');
-                    if (cmdTarget) {
-                        cmdTarget.appendChild(card);
-                    }
-                }
-
-                if (data.finished) {
-                    // Reload to show PLAY RECAP, tasks, and artifacts
-                    window.location.reload();
-                    return;
-                }
-                setTimeout(poll, 2500);
-            })
-            .catch(function () { setTimeout(poll, 5000); });
+    function stop() {
+        stopped = true;
+        if (liveEl && liveEl.parentNode) {
+            liveEl.parentNode.removeChild(liveEl);
+        }
+        var heading = badgeEl ? badgeEl.parentNode : null;
+        if (heading && heading.parentNode) {
+            var note = document.createElement('div');
+            note.id = 'live-stopped';
+            note.className = 'small text-body-secondary mt-1';
+            note.setAttribute('role', 'status');
+            note.textContent = stoppedNote;
+            heading.parentNode.appendChild(note);
+        }
     }
 
-    setTimeout(poll, 1500);
+    // One poll, unless polling stopped or the page is hidden (shown() polls once it is shown again).
+    function poll() {
+        timer = null;
+        if (stopped || document.hidden) {
+            return;
+        }
+        polling = true;
+        // Asked for JSON, a signed-out poll is answered 403, not sent to the
+        // login page, which would keep the poll as the address to return to.
+        fetch(pollUrl + '&after=' + lastSeq, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) {
+                if (stopStatuses.indexOf(r.status) !== -1) {
+                    stop();
+                    return null;
+                }
+                if (!r.ok) {
+                    throw new Error('poll failed: ' + r.status);
+                }
+                return r.json();
+            })
+            .then(function (data) {
+                if (data !== null) {
+                    show(data);
+                    pace(data);
+                }
+            })
+            .catch(function () {
+                // A failed poll counts as an answer that changed nothing.
+                pace(null);
+            })
+            .then(function () {
+                polling = false;
+                schedule();
+            });
+    }
+
+    // The next poll, after the current wait: none once polling stopped, and none while the page is hidden.
+    function schedule() {
+        if (stopped || document.hidden || timer !== null) {
+            return;
+        }
+        timer = setTimeout(poll, interval);
+    }
+
+    // The wait after an answer (data), or after a failed poll (null): 2.5
+    // seconds while the job runs or after a change, otherwise twice the last
+    // wait, at most MAX_INTERVAL.
+    function pace(data) {
+        var answer = data === null ? null : JSON.stringify([data.status, data.execution_command, data.chunks]);
+        if (answer !== null && (answer !== lastAnswer || waitingStatuses.indexOf(data.status) === -1)) {
+            lastAnswer = answer;
+            interval = INTERVAL;
+            return;
+        }
+        interval = Math.min(interval * 2, MAX_INTERVAL);
+    }
+
+    // The page is shown again (hidden, it does nothing): a poll at once, and from there as after a change.
+    function shown() {
+        if (stopped || document.hidden) {
+            return;
+        }
+        interval = INTERVAL;
+        lastAnswer = null;
+        if (polling) {
+            // The poll on its way schedules the next one.
+            return;
+        }
+        if (timer !== null) {
+            clearTimeout(timer);
+        }
+        poll();
+    }
+
+    // The answer on the page: the new output, the status and the execution command.
+    function show(data) {
+        data.chunks.forEach(function (chunk) {
+            appendAnsi(chunk.content);
+            lastSeq = chunk.sequence;
+        });
+        if (data.chunks.length && logEl) {
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        badgeEl.textContent = statusLabels[data.status] || data.status;
+        badgeEl.className   = 'badge text-bg-' + (statusClasses[data.status] || 'secondary') + ' ms-2 fs-6';
+        // The Details card shows the same status as the badge.
+        if (detailStatusEl) {
+            detailStatusEl.textContent = badgeEl.textContent;
+        }
+        // Approved, rejected or canceled: the job no longer waits for its request.
+        if (approvalNoteEl && data.status !== awaitingApproval) {
+            approvalNoteEl.hidden = true;
+        }
+
+        if (data.execution_command && !document.getElementById('exec-cmd-display')) {
+            var card = document.createElement('div');
+            card.className = 'card mb-3';
+            card.innerHTML = '<div class="card-header d-flex justify-content-between align-items-center">'
+                + '<span>Execution Command</span>'
+                + '<button type="button" id="btn-copy-cmd" class="btn btn-sm btn-outline-secondary"'
+                + ' onclick="copyToClipboard(document.getElementById(\'exec-cmd-display\').textContent).then(function(){'
+                + 'var btn=document.getElementById(\'btn-copy-cmd\');btn.textContent=\'Copied!\';btn.classList.replace(\'btn-outline-secondary\',\'btn-success\');'
+                + 'setTimeout(function(){btn.textContent=\'Copy\';btn.classList.replace(\'btn-success\',\'btn-outline-secondary\');},2000);'
+                + '}).catch(function(){alert(\'Copy failed — please copy manually.\');})">Copy</button></div>'
+                + '<div class="card-body p-0">'
+                + '<pre class="job-log m-0" id="exec-cmd-display" style="max-height:100px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></pre>'
+                + '</div>';
+            card.querySelector('#exec-cmd-display').textContent = data.execution_command;
+            var cmdTarget = document.getElementById('exec-cmd-target');
+            if (cmdTarget) {
+                cmdTarget.appendChild(card);
+            }
+        }
+
+        if (data.finished) {
+            // Reload to show PLAY RECAP, tasks, and artifacts
+            stopped = true;
+            window.location.reload();
+        }
+    }
+
+    document.addEventListener('visibilitychange', shown);
+    timer = setTimeout(poll, FIRST_POLL);
 })();
 </script>
 <?php endif; ?>
@@ -475,10 +639,20 @@ document.querySelectorAll('.artifact-preview-btn').forEach(function (btn) {
         }
         btn.disabled = true;
         btn.textContent = 'Loading\u2026';
-        fetch(url)
-            .then(function (r) { return r.json(); })
+        // Asked for JSON, a signed-out preview is answered 403, not sent to
+        // the login page, which would keep the artifact as the address to
+        // return to after the next sign-in. An answer that is not OK (signed
+        // out, no access any more, the artifact or its file gone) fails the
+        // preview; opened again, the preview is fetched again.
+        fetch(url, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) {
+                if (!r.ok) {
+                    throw new Error('preview failed: ' + r.status);
+                }
+                return r.json();
+            })
             .then(function (data) {
-                content.textContent = data.content || data.error || '';
+                content.textContent = data.content || '';
                 content.dataset.loaded = '1';
                 textWrap.classList.remove('d-none');
                 row.classList.remove('d-none');

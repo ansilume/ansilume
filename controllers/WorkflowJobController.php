@@ -7,8 +7,11 @@ namespace app\controllers;
 use app\components\WorkflowRunOperationFailure;
 use app\controllers\traits\TeamScopingTrait;
 use app\models\WorkflowJob;
-use app\models\WorkflowJobStep;
-use app\models\WorkflowStep;
+use app\models\WorkflowJobSearch;
+use app\services\runstate\Display;
+use app\services\runstate\PollPayload;
+use app\services\runstate\Viewer;
+use app\services\runstate\WorkflowRunStates;
 use app\services\WorkflowAccessDeniedException;
 use yii\data\ActiveDataProvider;
 use yii\db\Exception as DbException;
@@ -24,6 +27,15 @@ use yii\web\Response;
  * access to the project of every job step, canceling or resuming it operator
  * access to every one.
  *
+ * What a run and its steps are doing is derived, never stored
+ * (runstate\WorkflowRunStates): a run that waits for an approval, at a pause
+ * step or for a runner is stored as running and shows as Awaiting Approval,
+ * Paused or Queued. The list filters by it (?waiting_for=, WorkflowJobSearch;
+ * an invalid filter is ignored). The run page and its poll
+ * (/workflow-job/status) show the same data (runstate\PollPayload), with the
+ * banner that says what the run waits for; the page's script
+ * (web/js/workflow-run-live.js) redraws it from the poll.
+ *
  * A run keeps the history of its steps: an execution shows the name and type
  * its step had when it ran (WorkflowJobStep::stepName(), stepType()), also
  * once the step was removed from the workflow (workflow_step_id is then
@@ -38,6 +50,12 @@ use yii\web\Response;
 class WorkflowJobController extends BaseController
 {
     use TeamScopingTrait;
+
+    /** The success flash of a cancel. */
+    public const CANCELED = 'Workflow canceled.';
+
+    /** The success flash of a resume. */
+    public const RESUMED = 'Paused step resumed.';
 
     /**
      * @return array<int, array<string, mixed>>
@@ -59,9 +77,16 @@ class WorkflowJobController extends BaseController
         return ['cancel' => ['POST'], 'resume' => ['POST']];
     }
 
+    /**
+     * The runs the user may see, newest first, with what each waits for at
+     * its current step.
+     */
     public function actionIndex(): string
     {
-        $query = WorkflowJob::find()
+        $search = new WorkflowJobSearch();
+        $search->load((array)\Yii::$app->request->get(), '');
+        // The run table stays unaliased: the filters name workflow_job.
+        $query = $search->apply(WorkflowJob::find())
             ->with(['workflowTemplate', 'launcher'])
             ->orderBy(['workflow_job.id' => SORT_DESC]);
         $filter = $this->workflowChecker()->buildWorkflowTemplateFilter(
@@ -75,30 +100,49 @@ class WorkflowJobController extends BaseController
             'query' => $query,
             'pagination' => ['pageSize' => 20],
         ]);
-        return $this->render('index', ['dataProvider' => $dataProvider]);
+        /** @var list<WorkflowJob> $runs */
+        $runs = array_values($dataProvider->getModels());
+
+        return $this->render('index', [
+            'dataProvider' => $dataProvider,
+            'search' => $search,
+            'runStates' => $this->runStates()->forRuns($runs, Viewer::current()),
+        ]);
     }
 
     public function actionView(int $id): string
     {
         $model = $this->findModel($id);
         $this->requireWorkflowView((int)$model->workflow_template_id);
+        // One viewer for the request: each permission is checked once.
+        $viewer = Viewer::current();
+        $state = $this->runStates()->forRun($model, $viewer, true);
+        // The page renders the Resume form, hidden, also while the run is
+        // not paused: its script shows it once the run pauses.
+        [$mayResume, $mayCancel] = $this->mayResumeAndCancel($model, $viewer, true);
+
         return $this->render('view', [
             'model' => $model,
-            'canOperate' => $this->workflowChecker()->canOperateWorkflowTemplate(
-                (int)$this->currentUserId(),
-                (int)$model->workflow_template_id
-            ),
-            'currentExecutionId' => $this->currentExecutionId($model),
+            'mayResume' => $mayResume,
+            'mayCancel' => $mayCancel,
+            'payload' => (new PollPayload($mayResume, $mayCancel))->of($model, $state),
         ]);
     }
 
     /**
      * GET /workflow-job/status?id=N
      *
-     * JSON snapshot of a workflow job for the detail page's polling loop.
-     * Returns the overall status + per-step status so the client can
-     * update badges / the "current step" highlight in place without a
-     * full page reload.
+     * The run page's data as JSON, for its polling loop
+     * (web/js/workflow-run-live.js): the run's stored status and display
+     * state, its banner, which actions it offers now, and every step, so the
+     * page updates in place without a reload (runstate\PollPayload). The
+     * viewer's own relation to a request the run waits for is the banner's
+     * personal line.
+     *
+     * A poll checks only what its answer needs: one viewer for the request,
+     * the eligibility of the approvers once (ApprovalWaits), workflow.launch
+     * only while the run is paused (Resume is offered only then), and
+     * neither action's permissions once the run has finished.
      *
      * @return array<string, mixed>
      */
@@ -107,118 +151,36 @@ class WorkflowJobController extends BaseController
         $model = $this->findModel($id);
         $this->requireWorkflowView((int)$model->workflow_template_id);
         \Yii::$app->response->format = Response::FORMAT_JSON;
+        $viewer = Viewer::current();
+        $state = $this->runStates()->forRun($model, $viewer, true);
+        [$mayResume, $mayCancel] = $this->mayResumeAndCancel($model, $viewer, $state->state === Display::STATE_PAUSED);
+
+        return (new PollPayload($mayResume, $mayCancel))->of($model, $state);
+    }
+
+    /**
+     * Whether the viewer may resume and cancel the run: operator access to
+     * every job step's project, and workflow.launch or workflow.cancel.
+     * Neither for a finished run, which offers neither (nothing is checked
+     * then); Resume only when $withResume, else workflow.launch is not
+     * checked.
+     *
+     * @return array{0: bool, 1: bool}
+     */
+    private function mayResumeAndCancel(WorkflowJob $model, Viewer $viewer, bool $withResume): array
+    {
+        if ($model->isFinished()) {
+            return [false, false];
+        }
+        $canOperate = $this->workflowChecker()->canOperateWorkflowTemplate(
+            $viewer->userId,
+            (int)$model->workflow_template_id
+        );
 
         return [
-            'id' => (int)$model->id,
-            'status' => (string)$model->status,
-            'status_label' => WorkflowJob::statusLabel($model->status),
-            'status_css' => WorkflowJob::statusCssClass($model->status),
-            'is_finished' => $model->isFinished(),
-            'started_at' => $model->started_at !== null ? (int)$model->started_at : null,
-            'started_label' => $this->tsLabel($model->started_at, 'Y-m-d H:i:s'),
-            'finished_at' => $model->finished_at !== null ? (int)$model->finished_at : null,
-            'finished_label' => $this->tsLabel($model->finished_at, 'Y-m-d H:i:s'),
-            'current_step_id' => $model->current_step_id !== null ? (int)$model->current_step_id : null,
-            'steps' => $this->serializeSteps($model),
+            $canOperate && $withResume && $viewer->may('workflow.launch'),
+            $canOperate && $viewer->may('workflow.cancel'),
         ];
-    }
-
-    /**
-     * @return list<array<string, mixed>>
-     */
-    private function serializeSteps(WorkflowJob $model): array
-    {
-        $out = [];
-        $currentExecutionId = $this->currentExecutionId($model);
-        $now = time();
-        $index = 1;
-        foreach ($model->stepExecutions as $wjs) {
-            $duration = $this->stepDurationSeconds($wjs, $now);
-            $stepType = $wjs->stepType();
-            $out[] = [
-                // The execution's own ID keys the row: a step can run more
-                // than once in a run, and workflow_step_id is null once the
-                // step was removed from the workflow.
-                'id' => (int)$wjs->id,
-                'workflow_step_id' => $wjs->workflow_step_id !== null ? (int)$wjs->workflow_step_id : null,
-                // step_name + step_index let the polling JS build a brand-new
-                // row when a workflow advances and a previously-unrendered
-                // step starts running. Without these the client could only
-                // update existing rows and operators had to reload. Name and
-                // type are what the step was when it ran.
-                'step_name' => $wjs->stepName(),
-                'step_type' => $stepType,
-                'step_type_label' => $stepType === null ? '—' : (WorkflowStep::typeLabels()[$stepType] ?? $stepType),
-                'step_index' => $index++,
-                'job_id' => $wjs->job_id !== null ? (int)$wjs->job_id : null,
-                'is_current' => (int)$wjs->id === $currentExecutionId,
-                'status' => (string)$wjs->status,
-                'status_label' => WorkflowJobStep::statusLabel($wjs->status),
-                'status_css' => WorkflowJobStep::statusCssClass($wjs->status),
-                'started_at' => $wjs->started_at !== null ? (int)$wjs->started_at : null,
-                'started_label' => $this->tsLabel($wjs->started_at, 'H:i:s'),
-                'finished_at' => $wjs->finished_at !== null ? (int)$wjs->finished_at : null,
-                'finished_label' => $this->tsLabel($wjs->finished_at, 'H:i:s'),
-                'duration_seconds' => $duration,
-                'duration_label' => $this->durationLabel($duration, $wjs->finished_at !== null),
-                // Why a step failed without a job, e.g. no access to its job template.
-                'error_message' => $wjs->error_message,
-            ];
-        }
-        return $out;
-    }
-
-    /**
-     * The execution the page highlights: the newest one of the run's current
-     * step; null when no execution has that step (it was removed, or the run
-     * has not started one).
-     */
-    private function currentExecutionId(WorkflowJob $model): ?int
-    {
-        $currentStepId = $model->current_step_id !== null ? (int)$model->current_step_id : null;
-        $current = null;
-        foreach ($model->stepExecutions as $wjs) {
-            if ($currentStepId !== null && $wjs->workflow_step_id !== null && (int)$wjs->workflow_step_id === $currentStepId) {
-                $current = (int)$wjs->id;
-            }
-        }
-
-        return $current;
-    }
-
-    private function tsLabel(?int $ts, string $fmt): ?string
-    {
-        return $ts !== null ? date($fmt, $ts) : null;
-    }
-
-    /**
-     * Step elapsed time. Finished steps return finished-started; in-flight
-     * steps return now-started so the UI shows a live-updating duration.
-     * Steps that never started return null.
-     */
-    private function stepDurationSeconds(WorkflowJobStep $wjs, int $now): ?int
-    {
-        if ($wjs->started_at === null) {
-            return null;
-        }
-        $end = $wjs->finished_at !== null ? (int)$wjs->finished_at : $now;
-        return max(0, $end - (int)$wjs->started_at);
-    }
-
-    /**
-     * Human-readable duration ("2m 13s" / "running 0m 47s"). Kept on the
-     * server side so the polling JS can drop the value straight into the
-     * cell without re-implementing formatting.
-     */
-    private function durationLabel(?int $seconds, bool $finished): ?string
-    {
-        if ($seconds === null) {
-            return null;
-        }
-        $minutes = intdiv($seconds, 60);
-        $remaining = $seconds % 60;
-        $core = $minutes > 0 ? sprintf('%dm %02ds', $minutes, $remaining) : sprintf('%ds', $remaining);
-        return $finished ? $core : 'running ' . $core;
     }
 
     public function actionCancel(int $id): Response
@@ -241,7 +203,7 @@ class WorkflowJobController extends BaseController
             return $this->redirect(['view', 'id' => $id]);
         }
 
-        $this->session()->setFlash('success', 'Workflow canceled.');
+        $this->session()->setFlash('success', self::CANCELED);
         return $this->redirect(['view', 'id' => $id]);
     }
 
@@ -254,7 +216,7 @@ class WorkflowJobController extends BaseController
         $service = \Yii::$app->get('workflowExecutionService');
         try {
             $service->resume($model, (int)\Yii::$app->user->id);
-            $this->session()->setFlash('success', 'Paused step resumed.');
+            $this->session()->setFlash('success', self::RESUMED);
         } catch (DbException | \PDOException $e) {
             $failure = WorkflowRunOperationFailure::report(WorkflowRunOperationFailure::RESUME, $id, $e);
             $this->session()->setFlash('danger', $failure);
@@ -276,6 +238,14 @@ class WorkflowJobController extends BaseController
         if ($e instanceof WorkflowAccessDeniedException) {
             throw new ForbiddenHttpException($e->getMessage(), 0, $e);
         }
+    }
+
+    private function runStates(): WorkflowRunStates
+    {
+        /** @var WorkflowRunStates $states */
+        $states = \Yii::$app->get('workflowRunStates');
+
+        return $states;
     }
 
     private function findModel(int $id): WorkflowJob

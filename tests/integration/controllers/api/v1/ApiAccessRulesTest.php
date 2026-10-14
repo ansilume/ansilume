@@ -111,6 +111,11 @@ class ApiAccessRulesTest extends WebControllerTestCase
             'index' => 'workflow.view', 'view' => 'workflow.view',
             'cancel' => 'workflow.cancel', 'resume' => 'workflow.launch',
         ],
+        // The web's add-step, edit-step, move-step and remove-step need it too.
+        'WorkflowSteps' => [
+            'create' => 'workflow-template.update', 'update' => 'workflow-template.update',
+            'move' => 'workflow-template.update', 'delete' => 'workflow-template.update',
+        ],
         'WorkflowTemplates' => [
             'index' => 'workflow-template.view', 'view' => 'workflow-template.view',
             'create' => 'workflow-template.create', 'update' => 'workflow-template.update',

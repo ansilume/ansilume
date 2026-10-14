@@ -186,6 +186,7 @@ class E2eController extends Controller
         (new E2eSurveyEditorSeeder($logger))->seed($userId, $secretParents);
         (new E2eExtraVarsEditorSeeder($logger))->seed($userId, $secretParents);
         (new E2eCancelOnlyUserSeeder($logger))->seed();
+        (new E2eLdapStatusSeeder($logger))->seed();
 
         $runnerGroupId = $this->seedRunnerGroup($userId);
         $this->seedSecondRunnerGroup($userId);
@@ -215,7 +216,12 @@ class E2eController extends Controller
         (new E2eTeamScopingSeeder($logger))->seed($userId, $runnerGroupId);
         (new E2eWorkflowScopingSeeder($logger))->seed($userId);
         (new E2eWorkflowGateSeeder($logger))->seed($userId, $templateId);
+        (new E2eWorkflowUxSeeder($logger))->seed($userId, $templateId);
+        (new E2eWorkflowWaitSeeder($logger))->seed($userId, $templateId);
         (new E2eCustomRoleSeeder($logger))->seed(self::PREFIX);
+        (new E2eUserManagerSeeder($logger))->seed();
+        (new E2eRoleManagerSeeder($logger))->seed();
+        (new E2eAdminRoleSeeder($logger))->seed();
         (new E2eLdapUserSeeder($logger))->seed(self::PREFIX);
         (new E2eTotpUserSeeder($logger))->seed(self::PREFIX);
         (new E2eReferencedUserSeeder($logger))->seed();

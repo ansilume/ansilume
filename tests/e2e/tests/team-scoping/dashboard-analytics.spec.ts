@@ -1,5 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
-import { asAdmin, idWhere, indexRows, optionLabels } from '../../lib/scoping';
+import { REQUEST_RULE_COLUMN } from '../../lib/approvals';
+import { PAUSED, cancelRunIfActive } from '../../lib/runs';
+import { asAdmin, idWhere, indexRows, optionLabels, rowsWhere } from '../../lib/scoping';
 
 /**
  * Team scoping of the dashboard and of analytics: lists, counters, report
@@ -16,7 +18,11 @@ import { asAdmin, idWhere, indexRows, optionLabels } from '../../lib/scoping';
  * specs launching jobs before these push the seeded ones out of, and
  * workflow-jobs/resume.spec.ts resumes e2e-paused-workflow. So the role tests
  * first launch, as e2e-admin, what the role must not see, and check that the
- * admin's dashboard shows it.
+ * admin's dashboard shows it; the run they launch is canceled afterwards.
+ * Pending Approvals lists only the 5 newest pending requests, which the
+ * requests other specs leave pending can push e2e-beta-approval-rule's out
+ * of: its request is checked on the list of all pending requests
+ * (/approval/index?status=pending, the panel's "All pending").
  */
 const JOB_QUICK_LAUNCH = '#page-content form[action*="/job-template/launch"] select[name="id"]';
 const WORKFLOW_QUICK_LAUNCH = '#page-content form[action*="/workflow-template/launch"] select[name="id"]';
@@ -52,8 +58,8 @@ async function launchTemplate(page: Page, name: string): Promise<string> {
   return jobId as string;
 }
 
-/** Launches a workflow from its page. */
-async function launchWorkflow(page: Page, name: string): Promise<void> {
+/** Launches a workflow from its page; the run's ID. */
+async function launchWorkflow(page: Page, name: string): Promise<string> {
   // Columns of the index: Name, ...
   const id = idWhere(await indexRows(page, '/workflow-template/index'), 0, name);
   await page.goto(`/workflow-template/view?id=${id}`);
@@ -62,6 +68,12 @@ async function launchWorkflow(page: Page, name: string): Promise<void> {
     page.waitForURL(/\/workflow-job\/view\?id=\d+/),
     page.locator('#page-content form[action*="/workflow-template/launch"] button[type="submit"]').click(),
   ]);
+  return new URL(page.url()).searchParams.get('id') ?? '';
+}
+
+/** The pending requests on the rule `rule` that the user of `page` sees: every page of "All pending". */
+async function pendingRequestsOn(page: Page, rule: string): Promise<number> {
+  return rowsWhere(await indexRows(page, '/approval/index?status=pending'), REQUEST_RULE_COLUMN, rule).length;
 }
 
 /** Recent Jobs lists job #`jobId` of template `name`. */
@@ -108,13 +120,14 @@ test.describe('Team Scoping — Dashboard and Analytics', () => {
 
   test('operator dashboard shows no other team\'s runs, approvals or jobs', async ({ page, browser }, testInfo) => {
     // Positive control: a job of e2e-beta-tmpl launched now is the newest of
-    // all, and the admin's dashboard lists it with team-beta's waiting run.
+    // all, and the admin's dashboard lists it with team-beta's waiting run;
+    // the admin sees team-beta's pending request.
     const jobId = await asAdmin(browser, testInfo, async (admin) => {
       const id = await launchTemplate(admin, 'e2e-beta-tmpl');
       await admin.goto('/site/index');
       await expectRecentJob(admin, id, 'e2e-beta-tmpl');
       await expect(runningWorkflows(admin)).toContainText('e2e-beta-approval-wf');
-      await expect(pendingApprovals(admin)).toContainText('e2e-beta-approval-rule');
+      expect(await pendingRequestsOn(admin, 'e2e-beta-approval-rule'), 'the admin sees the pending request').toBe(1);
       return id;
     });
 
@@ -122,7 +135,7 @@ test.describe('Team Scoping — Dashboard and Analytics', () => {
     // Visible but not operable: listed without a Resume button.
     const viewedRun = runningWorkflows(page).locator('tbody tr', { hasText: 'e2e-alpha-viewed-wf' });
     await expect(viewedRun).toHaveCount(1);
-    await expect(viewedRun).toContainText('paused');
+    await expect(viewedRun.locator('[data-run-state]')).toHaveText(PAUSED);
     await expect(viewedRun.locator('form[action*="/workflow-job/resume"]')).toHaveCount(0);
 
     await expect(recentJobs(page)).toBeVisible();
@@ -131,6 +144,8 @@ test.describe('Team Scoping — Dashboard and Analytics', () => {
     await expect(content).not.toContainText('e2e-beta-approval-wf');
     await expect(content).not.toContainText('e2e-beta-approval-rule');
     await expect(content).not.toContainText('e2e-beta-tmpl');
+    // Nor do all the pending requests the panel links.
+    expect(await pendingRequestsOn(page, 'e2e-beta-approval-rule'), 'the operator sees no request of team-beta').toBe(0);
   });
 
   test('operator analytics filters and reports leave out other teams\' projects and templates', async ({ page }) => {
@@ -153,30 +168,21 @@ test.describe('Team Scoping — Dashboard and Analytics', () => {
     // Positive control: a new run of e2e-team's e2e-paused-workflow waits at
     // its pause step, a job of e2e-alpha-tmpl launched now is the newest of
     // all, and the admin's dashboard lists both with e2e-alpha-viewed-wf.
-    const jobId = await asAdmin(browser, testInfo, async (admin) => {
-      await launchWorkflow(admin, 'e2e-paused-workflow');
-      const id = await launchTemplate(admin, 'e2e-alpha-tmpl');
-      await admin.goto('/site/index');
-      await expectRecentJob(admin, id, 'e2e-alpha-tmpl');
-      await expect(runningWorkflows(admin)).toContainText('e2e-paused-workflow');
-      await expect(runningWorkflows(admin)).toContainText('e2e-alpha-viewed-wf');
-      return id;
-    });
-
-    await page.goto('/site/index');
-    await expect(runningWorkflows(page)).toContainText('e2e-beta-approval-wf');
-    await expect(pendingApprovals(page)).toContainText('e2e-beta-approval-rule');
-
-    await expect(recentJobs(page)).toBeVisible();
-    await expect(page.locator(`#page-content ${jobLink(jobId)}`)).toHaveCount(0);
-    const content = page.locator('#page-content');
-    await expect(content).not.toContainText('e2e-alpha-viewed-wf');
-    await expect(content).not.toContainText('e2e-paused-workflow');
-    await expect(content).not.toContainText('e2e-alpha-tmpl');
-    // No job.launch or workflow.launch: nothing to quick launch.
-    await expect(page.locator(JOB_QUICK_LAUNCH)).toHaveCount(0);
-    await expect(page.locator(WORKFLOW_QUICK_LAUNCH)).toHaveCount(0);
-    await expect(content.locator('.card', { hasText: 'Quick Launch' })).toContainText('No templates you can launch.');
+    const launched: { jobId: string; runId: string } = { jobId: '', runId: '' };
+    try {
+      await asAdmin(browser, testInfo, async (admin) => {
+        launched.runId = await launchWorkflow(admin, 'e2e-paused-workflow');
+        launched.jobId = await launchTemplate(admin, 'e2e-alpha-tmpl');
+        await admin.goto('/site/index');
+        await expectRecentJob(admin, launched.jobId, 'e2e-alpha-tmpl');
+        await expect(runningWorkflows(admin)).toContainText('e2e-paused-workflow');
+        await expect(runningWorkflows(admin)).toContainText('e2e-alpha-viewed-wf');
+      });
+      await expectViewerDashboard(page, launched.jobId);
+    } finally {
+      // The paused run would otherwise wait at e2e-paused-workflow's pause step for the specs after this one.
+      await asAdmin(browser, testInfo, (admin) => cancelRunIfActive(admin, launched.runId));
+    }
   });
 
   test('viewer analytics filters and reports leave out other teams\' projects and templates', async ({ page }) => {
@@ -205,7 +211,7 @@ test.describe('Team Scoping — Dashboard and Analytics', () => {
     expect(workflows).toEqual(expect.arrayContaining(['e2e-alpha-wf', 'e2e-beta-wf', 'e2e-mixed-wf', 'e2e-beta-approval-wf']));
     await expect(runningWorkflows(page)).toContainText('e2e-alpha-viewed-wf');
     await expect(runningWorkflows(page)).toContainText('e2e-beta-approval-wf');
-    await expect(pendingApprovals(page)).toContainText('e2e-beta-approval-rule');
+    expect(await pendingRequestsOn(page, 'e2e-beta-approval-rule')).toBe(1);
 
     const filters = await analytics(page);
     expect(filters.projects).toEqual(expect.arrayContaining(['e2e-alpha-proj', 'e2e-beta-proj']));
@@ -214,3 +220,25 @@ test.describe('Team Scoping — Dashboard and Analytics', () => {
     await expect(page.locator('#tab-templates')).toContainText('e2e-beta-tmpl');
   });
 });
+
+/**
+ * The viewer's dashboard shows team-beta's waiting run and its request, and
+ * nothing of the other teams: not the job #`otherJobId` of e2e-alpha-tmpl.
+ */
+async function expectViewerDashboard(page: Page, otherJobId: string): Promise<void> {
+  await page.goto('/site/index');
+  await expect(runningWorkflows(page)).toContainText('e2e-beta-approval-wf');
+  // The viewer sees the pending requests of team-beta only, and this is its one: the panel lists it.
+  await expect(pendingApprovals(page)).toContainText('e2e-beta-approval-rule');
+
+  await expect(recentJobs(page)).toBeVisible();
+  await expect(page.locator(`#page-content ${jobLink(otherJobId)}`)).toHaveCount(0);
+  const content = page.locator('#page-content');
+  await expect(content).not.toContainText('e2e-alpha-viewed-wf');
+  await expect(content).not.toContainText('e2e-paused-workflow');
+  await expect(content).not.toContainText('e2e-alpha-tmpl');
+  // No job.launch or workflow.launch: nothing to quick launch.
+  await expect(page.locator(JOB_QUICK_LAUNCH)).toHaveCount(0);
+  await expect(page.locator(WORKFLOW_QUICK_LAUNCH)).toHaveCount(0);
+  await expect(content.locator('.card', { hasText: 'Quick Launch' })).toContainText('No templates you can launch.');
+}

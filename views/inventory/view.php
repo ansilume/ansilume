@@ -229,28 +229,45 @@ document.getElementById('btn-parse-inventory').addEventListener('click', functio
     btn.textContent = 'Parsing…';
     container.innerHTML = '<p class="text-muted">Running ansible-inventory…</p>';
 
+    // The failure in the result card: its title, then the HTTP status and
+    // the detail where there are any, written as text.
     function renderFailure(title, detail, statusCode) {
         btn.disabled = false;
         btn.textContent = originalLabel;
-        var header = '<strong>' + escapeHtml(title) + '</strong>';
+        var failure = document.createElement('div');
+        failure.className = 'alert alert-danger mb-0';
+        failure.setAttribute('role', 'alert');
+        var heading = document.createElement('strong');
+        heading.textContent = title;
+        failure.appendChild(heading);
         if (statusCode) {
-            header += ' <span class="badge text-bg-danger">HTTP ' + statusCode + '</span>';
+            var badge = document.createElement('span');
+            badge.className = 'badge text-bg-danger';
+            badge.textContent = 'HTTP ' + statusCode;
+            failure.appendChild(document.createTextNode(' '));
+            failure.appendChild(badge);
         }
-        container.innerHTML =
-            '<div class="alert alert-danger mb-0" role="alert">' +
-                header +
-                '<pre class="mb-0 mt-2" style="white-space:pre-wrap;word-break:break-word;font-size:.85em">' +
-                    escapeHtml(detail) +
-                '</pre>' +
-            '</div>';
+        if (detail) {
+            var pre = document.createElement('pre');
+            pre.className = 'mb-0 mt-2';
+            pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:.85em';
+            pre.textContent = detail;
+            failure.appendChild(pre);
+        }
+        container.textContent = '';
+        container.appendChild(failure);
         container.scrollIntoView({behavior: 'smooth', block: 'center'});
         console.error('[parse-inventory]', title, '—', detail);
     }
 
+    // Asked for JSON, a signed-out request is refused with 403 instead of
+    // being sent to the login page. A refusal (401 or 403: signed out, or
+    // no access to the inventory) is said before the answer is read as JSON.
     fetch('{$parseUrl}', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json',
             'X-Requested-With': 'XMLHttpRequest'
         },
         body: '{$csrf}=' + encodeURIComponent('{$csrfToken}')
@@ -259,6 +276,10 @@ document.getElementById('btn-parse-inventory').addEventListener('click', functio
         return r.text().then(function(text) { return {status: r.status, text: text}; });
     })
     .then(function(resp) {
+        if (resp.status === 401 || resp.status === 403) {
+            renderFailure('The server refused the request (HTTP ' + resp.status + '): your session may have ended, or you are not allowed to do this; reload the page and sign in.', '', null);
+            return;
+        }
         var data;
         try {
             data = JSON.parse(resp.text);

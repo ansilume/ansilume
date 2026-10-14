@@ -11,6 +11,21 @@ use yii\base\Model;
 
 class LoginForm extends Model
 {
+    /**
+     * The one error of every refused sign-in, whatever the reason: the form
+     * never tells whether the username exists locally, exists in the
+     * directory, or is inactive.
+     */
+    public const INCORRECT_CREDENTIALS = 'Incorrect username or password.';
+
+    /**
+     * The reason ldap.login.failed records when the directory accepts the
+     * password of an LDAP account that was deactivated in Ansilume
+     * (LdapUserProvisioner::staysInactive()): the sign-in is refused and the
+     * account is left as it is (CLAUDE.md security rule 15).
+     */
+    public const DEACTIVATED_IN_ANSILUME = 'Account deactivated in Ansilume.';
+
     public string $username = '';
     public string $password = '';
     public bool $rememberMe = true;
@@ -47,10 +62,12 @@ class LoginForm extends Model
      *  - If no local user exists but LDAP is enabled, try LDAP and
      *    auto-provision on success (when the directory configuration
      *    allows it).
+     *  - An inactive local user is refused, also while LDAP is enabled
+     *    (getUser() resolves inactive users then).
      *
-     * The same generic error ("Incorrect username or password.") is used
-     * for every failure mode so the form does not leak whether the
-     * username exists locally, exists in LDAP, or is rejected by the
+     * The same generic error (INCORRECT_CREDENTIALS) is used for every
+     * failure mode so the form does not leak whether the username exists
+     * locally, exists in LDAP, is inactive, or is rejected by the
      * directory.
      */
     public function validatePassword(string $attribute): void
@@ -65,8 +82,11 @@ class LoginForm extends Model
         // model already returns false for LDAP users (defense-in-depth),
         // so the next branch handles LDAP-marked accounts.
         if ($user !== null && $user->isLocal()) {
-            if (!$user->validatePassword($this->password)) {
-                $this->addError($attribute, 'Incorrect username or password.');
+            // Regression: while LDAP was enabled, an inactive local user's
+            // right password passed, as getUser() resolves inactive users
+            // then; the session died on the next request.
+            if (!$user->validatePassword($this->password) || !$user->isActive()) {
+                $this->addError($attribute, self::INCORRECT_CREDENTIALS);
             }
             return;
         }
@@ -74,7 +94,7 @@ class LoginForm extends Model
         // LDAP path — either the local row says auth_source=ldap, OR there
         // is no local row at all and we may auto-provision one.
         if (!$this->validateViaLdap()) {
-            $this->addError($attribute, 'Incorrect username or password.');
+            $this->addError($attribute, self::INCORRECT_CREDENTIALS);
         }
     }
 
@@ -82,6 +102,14 @@ class LoginForm extends Model
      * Try to validate the credentials against the LDAP service and
      * provision/update a local user record on success. Returns false on any
      * failure mode — the caller is responsible for adding the generic error.
+     *
+     * An account deactivated in Ansilume stays inactive whatever the
+     * directory says: when the directory accepts the password of such an
+     * account (LdapUserProvisioner::staysInactive()), the sign-in is refused,
+     * nothing is written to the account, and ldap.login.failed records
+     * DEACTIVATED_IN_ANSILUME. Only an account that ldap/sync deactivated is
+     * activated again. A user the provisioner returns inactive, deactivated
+     * in Ansilume between the check and the save, is refused too.
      */
     private function validateViaLdap(): bool
     {
@@ -98,11 +126,20 @@ class LoginForm extends Model
         if ($provisioner === null) {
             return false;
         }
+        $existing = $provisioner->resolveUser($result);
+        if ($existing !== null && $provisioner->staysInactive($existing)) {
+            $this->logLdapFailure(self::DEACTIVATED_IN_ANSILUME);
+            return false;
+        }
         $persisted = $provisioner->provisionOrUpdate($result, $ldap->getConfig());
         if ($persisted === null) {
             // Directory accepts them but no local user exists and
             // auto-provisioning is off — refuse with the generic message.
             $this->logLdapFailure('Auto-provisioning disabled and no pre-created local user.');
+            return false;
+        }
+        if (!$persisted->isActive()) {
+            $this->logLdapFailure(self::DEACTIVATED_IN_ANSILUME);
             return false;
         }
 
@@ -148,9 +185,11 @@ class LoginForm extends Model
     /**
      * Lookup the local User row for the submitted username.
      *
-     * Includes inactive users when LDAP is enabled — a disabled LDAP
-     * account must still resolve so the LDAP path can re-enable it
-     * after a successful bind. For pure-local installs the active-only
+     * Includes inactive users when LDAP is enabled — an LDAP account that
+     * ldap/sync deactivated must still resolve so the LDAP path can
+     * re-enable it after a successful bind. validatePassword() refuses an
+     * inactive local user, and validateViaLdap() an LDAP account
+     * deactivated in Ansilume. For pure-local installs the active-only
      * filter from {@see User::findByUsername()} is preserved.
      */
     protected function getUser(): ?User

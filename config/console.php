@@ -61,9 +61,10 @@ return [
         // The same default roles as config/web.php: scheduled launches, approval
         // timeouts and workflow steps advanced here must see the permissions a
         // web request sees, or a launch and a vote could disagree on who may
-        // approve (app\services\ApproverEligibility).
+        // approve (app\services\ApproverEligibility). AuthManager gives the
+        // default role to user IDs that name a user only.
         'authManager' => [
-            'class' => 'yii\rbac\DbManager',
+            'class' => 'app\components\AuthManager',
             'defaultRoles' => ['viewer'],
         ],
         'mailer' => [

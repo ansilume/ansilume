@@ -49,6 +49,123 @@ class GitSyncDiagnosticsTest extends TestCase
         $this->assertSame($expected, GitSyncDiagnostics::redactUrl($url));
     }
 
+    /**
+     * regression: the userinfo ended at its first "@", so a password with a
+     * raw "@" showed its rest: https://u:p@ss@host/r became
+     * https://***@ss@host/r. Everything up to the last "@" before the path
+     * is hidden now, on the runner's job log, the project page and in the
+     * API alike. Git splits such a URL at the first "@" too, so its own
+     * messages name the rest of the password as the user
+     * (https://ss@host/r/): hidden as well.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function rawAtProvider(): array
+    {
+        return [
+            'password with an @' => ['https://deploy:p@ss-w5c-tail@git.example.com/org/repo.git', 'https://***@git.example.com/org/repo.git'],
+            'several @' => ['https://u:a@b@c-w5c-tail@git.example.com/r.git', 'https://***@git.example.com/r.git'],
+            'without a path' => ['https://u:p@ss-w5c-tail@git.example.com', 'https://***@git.example.com'],
+            'with a port' => ['https://u:p@ss-w5c-tail@git.example.com:8443/r.git', 'https://***@git.example.com:8443/r.git'],
+            'in a command line' => ['git clone -- https://u:p@ss-w5c-tail@git.example.com/r.git /dest', 'git clone -- https://***@git.example.com/r.git /dest'],
+            'in git remote -v' => ["origin\thttps://u:p@ss-w5c-tail@git.example.com/r.git (fetch)", "origin\thttps://***@git.example.com/r.git (fetch)"],
+        ];
+    }
+
+    /**
+     * @dataProvider rawAtProvider
+     */
+    public function testRegressionAPasswordWithARawAtShowedItsRest(string $text, string $expected): void
+    {
+        $redacted = GitSyncDiagnostics::redactUrl($text);
+
+        $this->assertSame($expected, $redacted);
+        $this->assertStringNotContainsString('w5c-tail', $redacted);
+    }
+
+    /**
+     * The rest of such a password as git names it (from the first "@" on),
+     * and a password with a query or fragment mark, are hidden too.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function namedByGitProvider(): array
+    {
+        return [
+            'as git names it' => ["fatal: unable to access 'https://ss-w5c-tail@git.example.com/r.git/': URL rejected: Bad hostname", "fatal: unable to access 'https://***@git.example.com/r.git/': URL rejected: Bad hostname"],
+            'a query or fragment mark in the password' => ['https://u:p?s#s-w5c-tail@git.example.com/r.git', 'https://***@git.example.com/r.git'],
+        ];
+    }
+
+    /**
+     * @dataProvider namedByGitProvider
+     */
+    public function testTheRestOfAPasswordAsGitNamesItIsHidden(string $text, string $expected): void
+    {
+        $redacted = GitSyncDiagnostics::redactUrl($text);
+
+        $this->assertSame($expected, $redacted);
+        $this->assertStringNotContainsString('w5c-tail', $redacted);
+    }
+
+    /**
+     * Only the userinfo goes: what follows the host keeps its shape, an "@"
+     * in the path included, and so does text without "://".
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function shapeProvider(): array
+    {
+        return [
+            'an @ in the path of a URL without credentials' => ['https://git.example.com/org/repo@v2.git', 'https://git.example.com/org/repo@v2.git'],
+            'an @ in the path of a URL with credentials' => ['ssh://git@git.example.com/org/repo@v2.git', 'ssh://***@git.example.com/org/repo@v2.git'],
+            'scp-like with an @ in the path' => ['git@git.example.com:org/repo@v2.git', 'git@git.example.com:org/repo@v2.git'],
+            'a file URL' => ['file:///srv/repos/team.git', 'file:///srv/repos/team.git'],
+            'an email after the URL' => ['see https://git.example.com/help or mail ops@example.com', 'see https://git.example.com/help or mail ops@example.com'],
+            'empty userinfo' => ['https://@git.example.com/r.git', 'https://@git.example.com/r.git'],
+            'redacted already' => ['https://***@git.example.com/r.git', 'https://***@git.example.com/r.git'],
+            'nothing after the scheme' => ['https://', 'https://'],
+            'empty' => ['', ''],
+        ];
+    }
+
+    /**
+     * @dataProvider shapeProvider
+     */
+    public function testRedactUrlKeepsTheShapeOfWhatIsNoCredential(string $text, string $expected): void
+    {
+        $this->assertSame($expected, GitSyncDiagnostics::redactUrl($text));
+    }
+
+    /**
+     * Every URL of a text is redacted, on every line, also two URLs that
+     * only a comma or a quote separates.
+     */
+    public function testEveryUrlOfATextIsRedacted(): void
+    {
+        $text = "Cloning https://u:one@a.example.com/r.git\n"
+            . "fatal: 'https://u:two@b.example.com','https://u:three@c.example.com/r'\ttab https://four@d.example.com\r\n";
+
+        $this->assertSame(
+            "Cloning https://***@a.example.com/r.git\n"
+            . "fatal: 'https://***@b.example.com','https://***@c.example.com/r'\ttab https://***@d.example.com\r\n",
+            GitSyncDiagnostics::redactUrl($text)
+        );
+    }
+
+    /**
+     * A long text whatever its content is redacted, not dropped: a regular
+     * expression that backtracks gives up on it and returns nothing.
+     */
+    public function testALongTextWithoutAPathIsRedactedWhole(): void
+    {
+        $text = 'https://u:p@' . str_repeat('h', 2000000) . ' and https://' . str_repeat('x', 2000000);
+
+        $redacted = GitSyncDiagnostics::redactUrl($text);
+
+        $this->assertSame('https://***@' . str_repeat('h', 2000000) . ' and https://' . str_repeat('x', 2000000), $redacted);
+    }
+
     public function testAMissingTargetAndParentAreDescribed(): void
     {
         $target = $this->dir . '/missing/checkout';

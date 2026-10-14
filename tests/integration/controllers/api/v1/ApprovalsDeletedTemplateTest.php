@@ -13,6 +13,8 @@ use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
+use app\models\WorkflowJobStep;
+use app\models\WorkflowStep;
 use app\services\ApprovalDecisionRefusedException;
 use app\services\JobCancellationService;
 use app\tests\integration\controllers\WebControllerTestCase;
@@ -70,6 +72,49 @@ class ApprovalsDeletedTemplateTest extends WebControllerTestCase
         $this->assertInstanceOf(AuditLog::class, $entry);
         $this->assertSame((int)$s['member']->id, (int)$entry->user_id);
         $this->assertSame(['reason' => JobCancellationService::REASON_TEMPLATE_DELETED], json_decode((string)$entry->metadata, true));
+    }
+
+    /**
+     * A request whose job's template was deleted is still read, on its own
+     * and in the list: the job of a gated job step still names its workflow
+     * run, step execution and step; a job outside workflows names none.
+     */
+    public function testARequestOfADeletedTemplatesJobIsStillReadWithItsWorkflowRun(): void
+    {
+        $s = $this->teamScope();
+        $plain = $this->request($s['own'], [$s['admin']]);
+        $gated = $this->request($s['open'], [$s['admin']]);
+        $workflow = $this->createWorkflowTemplate((int)$s['admin']->id);
+        $step = $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_JOB, (int)$s['open']->id);
+        $run = $this->createWorkflowJob((int)$workflow->id, (int)$s['admin']->id);
+        $execution = new WorkflowJobStep();
+        $execution->workflow_job_id = (int)$run->id;
+        $execution->workflow_step_id = (int)$step->id;
+        $execution->job_id = (int)$gated->job_id;
+        $execution->snapshotStep($step);
+        $execution->status = WorkflowJobStep::STATUS_RUNNING;
+        $execution->started_at = time();
+        $execution->save(false);
+        $this->assertTrue($s['own']->softDelete());
+        $this->assertTrue($s['open']->softDelete());
+        $this->authenticate($s['admin']);
+
+        $listed = array_column($this->controller()->actionIndex()['data'], null, 'id');
+        $plainView = $this->controller()->actionView((int)$plain->id);
+        $gatedView = $this->controller()->actionView((int)$gated->id);
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $none = ['workflow_job_id' => null, 'workflow_job_step_id' => null, 'workflow_template_id' => null, 'workflow_step_name' => null];
+        $ofRun = [
+            'workflow_job_id' => (int)$run->id,
+            'workflow_job_step_id' => (int)$execution->id,
+            'workflow_template_id' => (int)$workflow->id,
+            'workflow_step_name' => $step->name,
+        ];
+        $this->assertSame($none, array_intersect_key($plainView['data'], $none));
+        $this->assertSame($ofRun, array_intersect_key($gatedView['data'], $ofRun));
+        $this->assertSame($none, array_intersect_key($listed[(int)$plain->id], $none));
+        $this->assertSame($ofRun, array_intersect_key($listed[(int)$gated->id], $ofRun));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

@@ -170,6 +170,20 @@ class WorkflowCancellationService extends Component
     }
 
     /**
+     * The error messages of every step that a run cancel ended:
+     * STEP_RUN_CANCELED and STEP_TEMPLATE_DELETED. Such a step is stored as
+     * failed and reads Canceled (runstate\Display::STATE_CANCELED); a step
+     * the maintenance run ended for another reason
+     * (StrandedJobSweep::STEP_RUN_ENDED) still reads Failed.
+     *
+     * @return list<string>
+     */
+    public static function stepMessages(): array
+    {
+        return array_values(array_unique(array_column(self::REASONS, 'step')));
+    }
+
+    /**
      * The reason the jobs of a run canceled for $reason are canceled for
      * (JobCancellationService::cancelWithinWorkflow()).
      *

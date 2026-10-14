@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\GitSyncDiagnostics;
 use app\components\WorkerHeartbeat;
 use app\helpers\AppVersion;
 use app\models\AuditLog;
@@ -21,6 +22,13 @@ use yii\web\Response;
 
 class ProjectController extends BaseController
 {
+    /**
+     * The note of the project page's sync output once its poll
+     * (actionSyncStatus) was refused: 401 or 403 (signed out, or no access
+     * any more) or 404 (the project is gone). The page stops polling.
+     */
+    public const SYNC_LIVE_STOPPED = 'Live updates stopped. Reload the page to keep following the sync.';
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -240,6 +248,10 @@ class ProjectController extends BaseController
      * without reloading the page. Caller passes the highest sequence it
      * has rendered as `since`; the server sends only newer rows.
      *
+     * Every project viewer polls it: the rows and the error name URLs
+     * without their credentials (GitSyncDiagnostics::redactUrl), also those
+     * stored before the sync wrote them so.
+     *
      * @return array<string, mixed>
      */
     public function actionSyncStatus(int $id, int $since = 0): array
@@ -261,7 +273,7 @@ class ProjectController extends BaseController
             $logs[] = [
                 'sequence' => (int)$row->sequence,
                 'stream' => (string)$row->stream,
-                'content' => (string)$row->content,
+                'content' => GitSyncDiagnostics::redactUrl((string)$row->content),
                 'created_at' => (int)$row->created_at,
             ];
         }
@@ -272,7 +284,7 @@ class ProjectController extends BaseController
             'is_syncing' => $model->status === Project::STATUS_SYNCING,
             'sync_started_at' => $model->sync_started_at !== null ? (int)$model->sync_started_at : null,
             'last_synced_at' => $model->last_synced_at !== null ? (int)$model->last_synced_at : null,
-            'last_sync_error' => $model->last_sync_error !== null ? (string)$model->last_sync_error : null,
+            'last_sync_error' => $model->last_sync_error !== null ? GitSyncDiagnostics::redactUrl((string)$model->last_sync_error) : null,
             'logs' => $logs,
             'worker' => $this->workerSnapshot(),
         ];

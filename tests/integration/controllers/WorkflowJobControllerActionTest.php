@@ -164,7 +164,11 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $this->assertSame('1m 15s', $row['duration_label']);
     }
 
-    public function testStatusReturnsRunningPrefixForInFlightStep(): void
+    /**
+     * A paused step waits: its duration reads "waiting …" (it read "running …"
+     * before the run states).
+     */
+    public function testStatusReturnsWaitingPrefixForAPausedStep(): void
     {
         $user = $this->createUser();
         $this->loginAs($user);
@@ -180,7 +184,33 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
 
         $row = $this->stepRow($payload, (int)$wjs->id);
         $this->assertGreaterThanOrEqual(29, $row['duration_seconds']);
+        $this->assertStringStartsWith('waiting ', (string)$row['duration_label']);
+    }
+
+    public function testStatusReturnsRunningPrefixForAStepWhoseJobRuns(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+
+        $wf = $this->createWorkflowTemplate($user->id);
+        $template = $this->createJobTemplate(
+            (int)$this->createProject((int)$user->id)->id,
+            (int)$this->createInventory((int)$user->id)->id,
+            (int)$this->createRunnerGroup((int)$user->id)->id,
+            (int)$user->id
+        );
+        $step = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_JOB, (int)$template->id);
+        $wj = $this->createWfJobForTemplate($user, $wf);
+        $wjs = $this->seedJobStep($wj->id, $step->id, time() - 30, null, WorkflowJobStep::STATUS_RUNNING);
+        $wjs->job_id = (int)$this->createJob((int)$template->id, (int)$user->id, \app\models\Job::STATUS_RUNNING)->id;
+        $wjs->save(false);
+
+        $payload = $this->makeController()->actionStatus((int)$wj->id);
+
+        $row = $this->stepRow($payload, (int)$wjs->id);
+        $this->assertGreaterThanOrEqual(29, $row['duration_seconds']);
         $this->assertStringStartsWith('running ', (string)$row['duration_label']);
+        $this->assertSame('Running', $row['state_label']);
     }
 
     public function testStatusReturnsNullDurationForStepThatNeverStarted(): void
@@ -364,7 +394,7 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
         $this->loginAs($s['member']);
         $ctrl = $this->makeController();
         $ctrl->actionView((int)$run->id);
-        $this->assertSame((int)$pause->id, $ctrl->capturedParams['currentExecutionId']);
+        $this->assertSame((int)$pause->id, $ctrl->capturedParams['payload']['current_execution_id']);
 
         $html = $this->renderPage($ctrl->capturedParams);
 
@@ -549,10 +579,12 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
 
         $ctrl = $this->makeController();
         $this->assertSame('rendered:view', $ctrl->actionView((int)$own->id));
-        $this->assertTrue($ctrl->capturedParams['canOperate']);
+        $this->assertTrue($ctrl->capturedParams['mayResume']);
+        $this->assertTrue($ctrl->capturedParams['mayCancel']);
 
         $this->assertSame('rendered:view', $ctrl->actionView((int)$viewed->id));
-        $this->assertFalse($ctrl->capturedParams['canOperate'], 'viewer role: no Cancel or Resume button');
+        $this->assertFalse($ctrl->capturedParams['mayResume'], 'viewer role: no Resume button');
+        $this->assertFalse($ctrl->capturedParams['mayCancel'], 'viewer role: no Cancel button');
     }
 
     /**
@@ -644,7 +676,8 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
 
         $this->loginAs($s['member']);
         $this->makeController()->actionCancel((int)$own->id);
-        $this->assertSame('Workflow canceled.', \Yii::$app->session->getAllFlashes(true)['success'] ?? null);
+        $this->assertSame(WorkflowJobController::CANCELED, \Yii::$app->session->getAllFlashes(true)['success'] ?? null);
+        $this->assertSame('Workflow canceled.', WorkflowJobController::CANCELED);
 
         $this->loginAs($s['admin']);
         $this->makeController()->actionCancel((int)$foreign->id);
@@ -740,7 +773,8 @@ class WorkflowJobControllerActionTest extends WebControllerTestCase
 
         $pause->refresh();
         $this->assertSame(WorkflowJobStep::STATUS_SUCCEEDED, $pause->status);
-        $this->assertSame('Paused step resumed.', \Yii::$app->session->getAllFlashes()['success'] ?? null);
+        $this->assertSame(WorkflowJobController::RESUMED, \Yii::$app->session->getAllFlashes()['success'] ?? null);
+        $this->assertSame('Paused step resumed.', WorkflowJobController::RESUMED);
     }
 
     public function testResumeWithoutAPausedStepShowsAMessage(): void

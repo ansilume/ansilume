@@ -5,10 +5,15 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\NotificationTemplate $model */
 
+use app\components\NotificationConfigSecrets;
+use app\components\SurveySecrets;
 use app\models\NotificationTemplate;
 use yii\helpers\Html;
 
 $this->title = $model->name;
+// The config with the placeholder for every channel secret: every user who
+// may view the template sees this page (the default role viewer).
+$shownConfig = $model->getRedactedConfig();
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -62,7 +67,12 @@ $this->title = $model->name;
             </tr>
             <tr>
                 <th>Config</th>
-                <td><pre class="mb-0 font-monospace" style="white-space:pre-wrap"><?= Html::encode((string)$model->config) ?></pre></td>
+                <td>
+                    <pre class="mb-0 font-monospace" style="white-space:pre-wrap" data-testid="notification-template-config"><?= Html::encode($model->getRedactedConfigJson()) ?></pre>
+                    <?php if ($shownConfig !== $model->getParsedConfig()) : ?>
+                        <div class="form-text" data-testid="notification-template-secret-note"><?= sprintf(Html::encode(NotificationConfigSecrets::PAGE_NOTE), Html::tag('code', Html::encode(SurveySecrets::PLACEHOLDER))) ?></div>
+                    <?php endif; ?>
+                </td>
             </tr>
             <tr>
                 <th>Created</th>

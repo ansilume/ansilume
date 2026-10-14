@@ -7,7 +7,10 @@ namespace app\controllers\api\v1;
 use app\components\WorkflowRunOperationFailure;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use app\models\WorkflowJob;
-use app\models\WorkflowJobStep;
+use app\models\WorkflowJobSearch;
+use app\services\runstate\ApiFields;
+use app\services\runstate\Viewer;
+use app\services\runstate\WorkflowRunStates;
 use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
@@ -22,6 +25,16 @@ use yii\web\NotFoundHttpException;
  * workflow_template_id (deleted templates included): seeing a run needs view
  * access to the project of every job step, canceling or resuming it operator
  * access to every one.
+ *
+ * A run that waits stays stored as running: every answer adds what it waits
+ * for (waiting_for: approval, resume or runner; null when it does not wait)
+ * and its current step execution (current_step; null between two steps and
+ * once the run finished), as WorkflowRunStates derives them (ApiFields). The
+ * run detail adds the same per step execution, with its job's status and
+ * the approval request it waits or waited for, null where the caller may
+ * not see that request. The list takes ?waiting_for=, ?workflow_template_id=
+ * and ?status= (WorkflowJobSearch); a value it does not know answers 422
+ * with the filter's error, so a typo never passes for "no filter".
  */
 class WorkflowJobsController extends BaseApiController
 {
@@ -38,12 +51,22 @@ class WorkflowJobsController extends BaseApiController
     }
 
     /**
-     * Only the runs of workflow templates the caller may view.
+     * Only the runs of workflow templates the caller may view, newest first,
+     * filtered by ?waiting_for=, ?workflow_template_id= and ?status=. An
+     * invalid filter answers 422 with its error (WorkflowJobSearch::errorOf()),
+     * before anything is read. The cost does not grow with the number of
+     * runs on the page (WorkflowRunStates::forRuns()).
      *
-     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
+     * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}|array{error: array{message: string}}
      */
     public function actionIndex(): array
     {
+        $search = new WorkflowJobSearch();
+        $search->load((array)\Yii::$app->request->get(), '');
+        if (!$search->validate()) {
+            return $this->error((string)current($search->getFirstErrors()), 422);
+        }
+        // Unaliased: the filters name workflow_job.id and workflow_job.status.
         $query = WorkflowJob::find()->orderBy(['workflow_job.id' => SORT_DESC]);
         $filter = $this->workflows()->buildWorkflowTemplateFilter(
             $this->currentUserId(),
@@ -53,12 +76,14 @@ class WorkflowJobsController extends BaseApiController
             $query->andWhere($filter);
         }
         $runs = new ActiveDataProvider([
-            'query' => $query,
+            'query' => $search->apply($query),
             'pagination' => ['pageSize' => 25],
         ]);
+        /** @var list<WorkflowJob> $models */
+        $models = array_values($runs->getModels());
 
         return $this->paginated(
-            array_map(fn ($run) => $this->serialize($run), $runs->getModels()),
+            $this->serializeAll($models),
             (int)$runs->totalCount,
             $this->requestedPage(),
             25
@@ -66,6 +91,10 @@ class WorkflowJobsController extends BaseApiController
     }
 
     /**
+     * The run with its launch extra vars and every step execution, oldest
+     * first (ApiFields::runDetail()); the pending approval request of the
+     * current step carries how many approvers may still decide.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionView(int $id): array
@@ -74,7 +103,7 @@ class WorkflowJobsController extends BaseApiController
         if (!$this->may($run, false)) {
             return $this->error('Forbidden.', 403);
         }
-        return $this->success($this->serializeDetailed($run));
+        return $this->success(ApiFields::runDetail($run, $this->runStates()->forRun($run, Viewer::current())));
     }
 
     /**
@@ -111,7 +140,9 @@ class WorkflowJobsController extends BaseApiController
      * is in no state for it. A refusal by the service (access lost since the
      * check) names the job templates only to a caller who may see the run.
      * A database error answers 500 with WorkflowRunOperationFailure's
-     * message for $name (CANCEL or RESUME), logged without values.
+     * message for $name (CANCEL or RESUME), logged without values. Done, the
+     * answer is the run as it stands now: canceled, or at the step a resume
+     * led to.
      *
      * @param callable(WorkflowExecutionService, WorkflowJob, int): void $operation
      * @return array{data: mixed}|array{error: array<string, mixed>}
@@ -140,7 +171,7 @@ class WorkflowJobsController extends BaseApiController
         }
 
         $run->refresh();
-        return $this->success($this->serialize($run));
+        return $this->success($this->serializeAll([$run])[0]);
     }
 
     /**
@@ -161,52 +192,18 @@ class WorkflowJobsController extends BaseApiController
     }
 
     /**
-     * @return array<string, mixed>
+     * $runs as the list, cancel and resume answer them (ApiFields::run()):
+     * their states are read for all of them at once, so the cost does not
+     * grow with their number.
+     *
+     * @param list<WorkflowJob> $runs
+     * @return list<array<string, mixed>>
      */
-    private function serialize(WorkflowJob $m): array
+    private function serializeAll(array $runs): array
     {
-        return [
-            'id' => $m->id,
-            'workflow_template_id' => $m->workflow_template_id,
-            'status' => $m->status,
-            'launched_by' => $m->launched_by,
-            'started_at' => $m->started_at,
-            'finished_at' => $m->finished_at,
-            'created_at' => $m->created_at,
-        ];
-    }
+        $states = $this->runStates()->forRuns($runs, Viewer::current());
 
-    /**
-     * The run with its launch extra vars and its step executions.
-     *
-     * extra_vars: the vars the run was launched with, which every job step
-     * received, each password answer as $encrypted$; null when there were
-     * none. The sealed answers are never returned.
-     *
-     * Each execution names the step as it was when it ran (step_name,
-     * step_type); workflow_step_id is null once the step was removed from the
-     * workflow.
-     *
-     * @return array<string, mixed>
-     */
-    private function serializeDetailed(WorkflowJob $m): array
-    {
-        $data = $this->serialize($m);
-        $extraVars = $m->launchExtraVars();
-        $data['extra_vars'] = $extraVars === [] ? null : (object)$extraVars;
-        $data['steps'] = array_map(static fn (WorkflowJobStep $s): array => [
-            'id' => $s->id,
-            'workflow_step_id' => $s->workflow_step_id,
-            'step_name' => $s->stepName(),
-            'step_type' => $s->stepType(),
-            'job_id' => $s->job_id,
-            'status' => $s->status,
-            'started_at' => $s->started_at,
-            'finished_at' => $s->finished_at,
-            // Why the step failed without a job, e.g. no access to its job template.
-            'error' => $s->error_message,
-        ], $m->stepExecutions);
-        return $data;
+        return array_map(static fn (WorkflowJob $run): array => ApiFields::run($run, $states[(int)$run->id]), $runs);
     }
 
     private function findModel(int $id): WorkflowJob
@@ -224,5 +221,12 @@ class WorkflowJobsController extends BaseApiController
         /** @var WorkflowAccessChecker $checker */
         $checker = \Yii::$app->get('workflowAccessChecker');
         return $checker;
+    }
+
+    private function runStates(): WorkflowRunStates
+    {
+        /** @var WorkflowRunStates $states */
+        $states = \Yii::$app->get('workflowRunStates');
+        return $states;
     }
 }

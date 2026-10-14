@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\NotificationConfigSecrets;
 use yii\db\ActiveQuery;
 use yii\db\ActiveRecord;
 
@@ -12,7 +13,8 @@ use yii\db\ActiveRecord;
  * @property string      $name
  * @property string|null $description
  * @property string      $channel          email, slack, teams, webhook, telegram, pagerduty
- * @property string|null $config           JSON channel config
+ * @property string|null $config           JSON channel config; pages and the API show its secrets
+ *                                         (SECRET_CONFIG_KEYS, SECRET_CONFIG_MAPS) only as SurveySecrets::PLACEHOLDER
  * @property string|null $subject_template
  * @property string|null $body_template
  * @property string      $events           Comma-separated event names
@@ -65,6 +67,34 @@ class NotificationTemplate extends ActiveRecord
     // Webhooks
     public const EVENT_WEBHOOK_INVALID_TOKEN = 'webhook.invalid_token';
 
+    // -- Channel secrets -------------------------------------------------------
+
+    /**
+     * The keys of a channel's config whose values are secrets, as the channels
+     * of services/notification/ read them. The template page, the edit form
+     * and the API show SurveySecrets::PLACEHOLDER instead; a config submitted
+     * with the placeholder keeps the stored value (NotificationConfigSecrets).
+     * A key that is a secret for one channel is redacted in every config.
+     */
+    public const SECRET_CONFIG_KEYS = [
+        self::CHANNEL_EMAIL => [],
+        self::CHANNEL_SLACK => ['webhook_url'],
+        self::CHANNEL_TEAMS => ['webhook_url'],
+        self::CHANNEL_WEBHOOK => ['url'],
+        self::CHANNEL_TELEGRAM => ['bot_token'],
+        self::CHANNEL_PAGERDUTY => ['routing_key'],
+    ];
+
+    /**
+     * The keys of a channel's config whose every value is a secret: the
+     * webhook channel's custom headers (WebhookChannel sends them, so they
+     * carry authorization tokens). Their names are shown. A header keeps its
+     * stored value only while the channel's secret keys (the url) keep theirs.
+     */
+    public const SECRET_CONFIG_MAPS = [
+        self::CHANNEL_WEBHOOK => ['headers'],
+    ];
+
     public static function tableName(): string
     {
         return '{{%notification_template}}';
@@ -83,6 +113,8 @@ class NotificationTemplate extends ActiveRecord
             [['description'], 'string', 'max' => 1000],
             [['body_template'], 'string', 'max' => 65535],
             [['channel'], 'in', 'range' => array_keys(self::channelLabels())],
+            // Before the other config rules, which check the config as stored.
+            [['config'], 'restoreSecretConfig'],
             [['config'], 'string', 'max' => 4096],
             [['config'], 'validateJson'],
             [['config'], 'validateChannelConfig'],
@@ -100,6 +132,19 @@ class NotificationTemplate extends ActiveRecord
             if (json_last_error() !== JSON_ERROR_NONE) {
                 $this->addError($attribute, ucfirst($attribute) . ' must be valid JSON.');
             }
+        }
+    }
+
+    /**
+     * Puts the stored value back in place of every placeholder at a secret's
+     * place of the submitted config, or reports why it cannot
+     * (NotificationConfigSecrets::restore()).
+     */
+    public function restoreSecretConfig(string $attribute): void
+    {
+        $error = (new NotificationConfigSecrets($this))->restore();
+        if ($error !== null) {
+            $this->addError($attribute, $error);
         }
     }
 
@@ -345,6 +390,28 @@ class NotificationTemplate extends ActiveRecord
         }
         $decoded = json_decode($this->config, true);
         return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * The config as the template page, the edit form and the API show it:
+     * SurveySecrets::PLACEHOLDER for every secret (NotificationConfigSecrets).
+     *
+     * @return array<int|string, mixed>
+     */
+    public function getRedactedConfig(): array
+    {
+        return (new NotificationConfigSecrets($this))->redacted();
+    }
+
+    /**
+     * getRedactedConfig() as JSON, as the edit form's script writes it; ''
+     * for an empty config.
+     */
+    public function getRedactedConfigJson(): string
+    {
+        $config = $this->getRedactedConfig();
+
+        return $config === [] ? '' : (string)json_encode($config, NotificationConfigSecrets::JSON_FLAGS);
     }
 
     public function getCreator(): ActiveQuery

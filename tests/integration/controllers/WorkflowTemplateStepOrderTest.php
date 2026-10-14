@@ -4,31 +4,33 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\components\WorkflowStepPosition;
 use app\controllers\WorkflowTemplateController;
 use app\models\ApprovalRule;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\services\WorkflowStepChangeGuard;
+use app\services\WorkflowStepChangeSummary;
 use app\services\WorkflowStepReorderService;
-use app\services\WorkflowTemplatePage;
 use app\tests\integration\TeamScopeFixtures;
 use yii\base\Module;
 use yii\web\Response;
 
 /**
- * Where the add-step form of the workflow template page puts a new step.
+ * Where the Add Step form of the workflow template page puts a new step.
  *
  * Regression (fixed in 2.10.1): since 2.3.15 every add and every move
  * renumbers a workflow's steps to 10, 20, 30…, but the form still pre-filled
  * Step Order with the number of steps (0, 1, 2…), which sorts before 10. A
  * step added with that default landed first and became the start step:
  * steps added in turn ran in reverse, and a job step added to a workflow
- * that starts with an approval step ran before it, without approval. A Step
- * Order left empty answered 500, one left out put the step first.
+ * that starts with an approval step ran before it, without approval.
  *
- * Now the field is empty by default, and a Step Order left empty or out puts
- * the step after the current last step, worked out with the workflow locked.
- * A typed number places the step as before.
+ * Since 2.11 the form has no Step Order. Its Position is "At the end" by
+ * default, and the step goes where the Position says, worked out with the
+ * workflow locked. A posted step_order (a forged field, or a form of an
+ * older page) is ignored, whatever its value: it never decides where the
+ * step goes, and never answers 500.
  */
 class WorkflowTemplateStepOrderTest extends WebControllerTestCase
 {
@@ -58,10 +60,10 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
 
     /**
      * regression: a step added with the default order landed first. For a
-     * workflow with the steps #10 and #20 the form pre-filled 2, and the new
-     * step became #10, the start step.
+     * workflow with two steps the form pre-filled 2, and the new step became
+     * the start step. The default Position puts it after the last step.
      */
-    public function testRegressionAStepAddedWithTheDefaultOrderLandedFirst(): void
+    public function testRegressionAStepAddedWithTheDefaultPositionLandedFirst(): void
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowTemplate($s['admin']->id);
@@ -79,7 +81,7 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
      * regression: a step added with the default order landed first, so
      * Build, Test and Deploy, added in turn, ran as Deploy, Test, Build.
      */
-    public function testRegressionStepsAddedInTurnWithTheDefaultOrderKeepTheirOrder(): void
+    public function testRegressionStepsAddedInTurnWithTheDefaultPositionKeepTheirOrder(): void
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowTemplate($s['admin']->id);
@@ -95,10 +97,10 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
 
     /**
      * regression: a job step added with the default order ran before the
-     * approval step. With the approval step at #10 the form pre-filled 1:
-     * the job step became #10, the start step, and ran without approval.
+     * approval step. With the approval step first the form pre-filled 1: the
+     * job step became the start step and ran without approval.
      */
-    public function testRegressionAJobStepAddedWithTheDefaultOrderRanBeforeTheApprovalStep(): void
+    public function testRegressionAJobStepAddedWithTheDefaultPositionRanBeforeTheApprovalStep(): void
     {
         $s = $this->teamScope();
         $rule = $this->createApprovalRule(
@@ -121,52 +123,47 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
         $this->assertSame(['next' => null, 'error' => null], $router->route($gate, false, true), 'and not after a refusal');
     }
 
-    // -- A Step Order left empty or out ---------------------------------------------
+    // -- A Position left empty or out -----------------------------------------------
 
     /**
      * @return array<string, array{0: array<string, mixed>, 1: bool}>
      */
-    public static function emptyStepOrderProvider(): array
+    public static function emptyPositionProvider(): array
     {
         return [
-            // regression: answered 500, '' became NULL in a NOT NULL column
-            'left empty in the form' => [['step_order' => ''], false],
-            // regression: the column's default 0 put the step first
+            'left empty in the form' => [['position' => ''], false],
             'left out' => [[], false],
-            // regression: answered 500 as an emptied field did
-            'null in a JSON body' => [['step_order' => null], true],
-            // regression: stored as 0, which put the step first
-            'an empty list in a JSON body' => [['step_order' => []], true],
+            'null in a JSON body' => [['position' => null], true],
         ];
     }
 
     /**
-     * regression: a Step Order left empty answered 500, and one left out put
-     * the step first. Both put it after the current last step now.
+     * A Position left empty or out puts the step after the current last
+     * step.
      *
-     * @dataProvider emptyStepOrderProvider
-     * @param array<string, mixed> $order
+     * @dataProvider emptyPositionProvider
+     * @param array<string, mixed> $position
      */
-    public function testAStepOrderLeftEmptyOrOutPutsTheStepAtTheEnd(array $order, bool $json): void
+    public function testAPositionLeftEmptyOrOutPutsTheStepAtTheEnd(array $position, bool $json): void
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowTemplate($s['admin']->id);
         $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_PAUSE);
         $this->createWorkflowStep((int)$workflow->id, 20, WorkflowStep::TYPE_PAUSE);
         $this->loginAs($s['admin']);
-        $this->postStep(['name' => 'added', 'step_type' => WorkflowStep::TYPE_PAUSE] + $order, $json);
+        $this->post(['WorkflowStep' => ['name' => 'added', 'step_type' => WorkflowStep::TYPE_PAUSE]] + $position, $json);
 
         $this->makeController()->actionAddStep((int)$workflow->id);
 
-        $this->assertSame(['success' => 'Step "added" added.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertAdded('added', 3, 3, 'step-20');
         $this->assertSame(['step-10' => 10, 'step-20' => 20, 'added' => 30], $this->runOrder($workflow));
     }
 
     /**
      * The end is after the last step whatever the numbering: a workflow
      * without steps, steps numbered by the API (0, 1, 2), the gap a removed
-     * step left, and a highest Step Order set by hand to the largest the
-     * column holds, where the new step ties and goes after it.
+     * step left, and a highest step_order set by hand to the largest the
+     * column holds.
      */
     public function testTheEndIsAfterTheLastStepWhateverTheNumbering(): void
     {
@@ -176,7 +173,7 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
             'no steps' => [[], ['added' => 10]],
             'numbered by the API' => [[0, 1, 2], ['step-0' => 10, 'step-1' => 20, 'step-2' => 30, 'added' => 40]],
             'a gap' => [[10, 30], ['step-10' => 10, 'step-30' => 20, 'added' => 30]],
-            'the largest order' => [[2147483647], ['step-2147483647' => 10, 'added' => 20]],
+            'the largest order' => [[WorkflowStep::MAX_STEP_ORDER], ['step-' . WorkflowStep::MAX_STEP_ORDER => 10, 'added' => 20]],
         ];
 
         foreach ($layouts as $label => [$orders, $expected]) {
@@ -184,11 +181,12 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
             foreach ($orders as $order) {
                 $this->createWorkflowStep((int)$workflow->id, $order, WorkflowStep::TYPE_PAUSE);
             }
-            $this->postStep(['name' => 'added', 'step_type' => WorkflowStep::TYPE_PAUSE, 'step_order' => ''], false);
+            $this->post(['WorkflowStep' => ['name' => 'added', 'step_type' => WorkflowStep::TYPE_PAUSE], 'position' => WorkflowStepPosition::KIND_END], false);
 
             $this->makeController()->actionAddStep((int)$workflow->id);
 
-            $this->assertSame(['success' => 'Step "added" added.'], \Yii::$app->session->getAllFlashes(true), $label);
+            $names = array_keys($expected);
+            $this->assertAdded('added', count($names), count($names), $names[count($names) - 2] ?? null);
             $this->assertSame($expected, $this->runOrder($workflow), $label);
         }
     }
@@ -196,7 +194,6 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
     /**
      * Steps added at the same time go one after the other: the end is worked
      * out with the workflow locked, after the add that held the lock first.
-     * Read before the lock, it was 12 here (2 + 10): the step landed second.
      */
     public function testTheEndIsWorkedOutWithTheWorkflowLocked(): void
     {
@@ -217,48 +214,61 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
                     $first->step_type = WorkflowStep::TYPE_PAUSE;
                     $first->step_order = 3;
                     $first->save(false);
-                    (new WorkflowStepReorderService())->resequence($template);
+                    (new WorkflowStepReorderService())->renumber((int)$template->id);
 
                     return $change();
                 });
             }
         });
         $this->loginAs($s['admin']);
-        $this->postStep(['name' => 'added second', 'step_type' => WorkflowStep::TYPE_PAUSE, 'step_order' => ''], false);
+        $this->post(['WorkflowStep' => ['name' => 'added second', 'step_type' => WorkflowStep::TYPE_PAUSE]], false);
 
         $this->makeController()->actionAddStep((int)$workflow->id);
 
-        $this->assertSame(['success' => 'Step "added second" added.'], \Yii::$app->session->getAllFlashes(true));
+        $this->assertAdded('added second', 5, 5, 'added first');
         $this->assertSame(
             ['step-0' => 10, 'step-1' => 20, 'step-2' => 30, 'added first' => 40, 'added second' => 50],
             $this->runOrder($workflow)
         );
     }
 
-    // -- A typed Step Order ---------------------------------------------------------
+    // -- A posted step_order ----------------------------------------------------------
 
     /**
-     * @return array<string, array{0: string, 1: list<string>}>
+     * @return array<string, array{0: mixed, 1: bool}>
      */
-    public static function typedStepOrderProvider(): array
+    public static function postedStepOrderProvider(): array
     {
         return [
-            'between two steps' => ['15', ['step-10', 'added', 'step-20', 'step-30']],
-            'the number of a step: after that step' => ['20', ['step-10', 'step-20', 'added', 'step-30']],
-            'below the first step' => ['0', ['added', 'step-10', 'step-20', 'step-30']],
-            'above the last step' => ['99', ['step-10', 'step-20', 'step-30', 'added']],
+            // regression: a typed Step Order still decided where the step went
+            'below the first step' => ['0', false],
+            'between two steps' => ['15', false],
+            'the order of a step' => ['20', false],
+            'above the last step' => ['99', false],
+            // regression: answered 500 before 2.10.1
+            'left empty' => ['', false],
+            'below 0' => ['-1', false],
+            'not a number' => ['abc', false],
+            'a fraction' => ['1.5', false],
+            // regression: answered 500, the value was out of range for the column
+            'more than the column holds' => ['2147483648', false],
+            'true in a JSON body' => [true, true],
+            'null in a JSON body' => [null, true],
+            'an empty list in a JSON body' => [[], true],
+            // regression: answered 500
+            'a number the column cannot hold, in a JSON body' => [3000000000, true],
         ];
     }
 
     /**
-     * A typed Step Order places the step as before: a number between those
-     * of two steps puts it between them, the number of a step after that
-     * step. Then the steps are renumbered 10, 20, 30…
+     * regression: a posted Step Order still decided where the step went.
+     * The form has no Step Order since 2.11, and a posted one, whatever its
+     * value, is ignored: the step goes where the Position says (the end
+     * here), and nothing answers 500.
      *
-     * @dataProvider typedStepOrderProvider
-     * @param list<string> $expected
+     * @dataProvider postedStepOrderProvider
      */
-    public function testATypedStepOrderPlacesTheStepAsBefore(string $order, array $expected): void
+    public function testRegressionAPostedStepOrderIsIgnoredNeverA500(mixed $order, bool $json): void
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowTemplate($s['admin']->id);
@@ -266,125 +276,101 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
             $this->createWorkflowStep((int)$workflow->id, $existing, WorkflowStep::TYPE_PAUSE);
         }
         $this->loginAs($s['admin']);
-        $this->postStep(['name' => 'added', 'step_type' => WorkflowStep::TYPE_PAUSE, 'step_order' => $order], false);
+        $this->post(['WorkflowStep' => ['name' => 'added', 'step_type' => WorkflowStep::TYPE_PAUSE, 'step_order' => $order]], $json);
 
         $this->makeController()->actionAddStep((int)$workflow->id);
 
-        $this->assertSame(['success' => 'Step "added" added.'], \Yii::$app->session->getAllFlashes(true));
-        $this->assertSame(array_combine($expected, [10, 20, 30, 40]), $this->runOrder($workflow));
-    }
-
-    /**
-     * @return array<string, array{0: mixed, 1: bool, 2: string}>
-     */
-    public static function refusedStepOrderProvider(): array
-    {
-        return [
-            'below 0' => ['-1', false, 'Step Order must be no less than 0.'],
-            'not a number' => ['abc', false, 'Step Order must be an integer.'],
-            'a fraction' => ['1.5', false, 'Step Order must be an integer.'],
-            // regression: answered 500, the value was out of range for the column
-            'more than the column holds' => ['2147483648', false, 'Step Order must be no greater than 2147483647.'],
-            'true in a JSON body' => [true, true, 'Step Order must be an integer.'],
-            // regression: answered 500
-            'a number the column cannot hold, in a JSON body' => [3000000000, true, 'Step Order must be no greater than 2147483647.'],
-        ];
-    }
-
-    /**
-     * A Step Order the step cannot have is refused with a danger flash, and
-     * nothing is added.
-     *
-     * @dataProvider refusedStepOrderProvider
-     */
-    public function testAStepOrderTheStepCannotHaveIsRefused(mixed $order, bool $json, string $message): void
-    {
-        $s = $this->teamScope();
-        $workflow = $this->createWorkflowTemplate($s['admin']->id);
-        $this->createWorkflowStep((int)$workflow->id, 10, WorkflowStep::TYPE_PAUSE);
-        $this->loginAs($s['admin']);
-        $this->postStep(['name' => 'refused', 'step_type' => WorkflowStep::TYPE_PAUSE, 'step_order' => $order], $json);
-
-        $this->makeController()->actionAddStep((int)$workflow->id);
-
-        $this->assertSame(
-            ['danger' => WorkflowTemplateController::FLASH_STEP_NOT_ADDED . $message],
-            \Yii::$app->session->getAllFlashes(true)
-        );
-        $this->assertSame(['step-10' => 10], $this->runOrder($workflow));
+        $this->assertSame(['step-10' => 10, 'step-20' => 20, 'step-30' => 30, 'added' => 40], $this->runOrder($workflow));
+        $this->assertAdded('added', 4, 4, 'step-30');
     }
 
     // -- The page ----------------------------------------------------------------------
 
     /**
-     * The add-step form leaves Step Order empty, says that empty means at
-     * the end, and takes no number below 0; the hint below the steps table
-     * says how to place a step.
+     * The Add Step form has no Step Order: its Position offers the end (the
+     * default), the start and after each step but the last, which is the
+     * end. A workflow without steps has no Position: the new step is the
+     * only one.
      */
-    public function testTheFormLeavesStepOrderEmptyAndSaysWhereTheStepGoes(): void
+    public function testTheFormHasNoStepOrderAndAddsAtTheEndByDefault(): void
     {
         $s = $this->teamScope();
         $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id, $s['open']->id);
+        $steps = $workflow->getSteps()->all();
         $this->loginAs($s['admin']);
 
         $html = $this->renderPage($workflow);
 
-        $input = $this->stepOrderInput($html);
-        $this->assertStringNotContainsString(' value=', $input, 'no value: left empty, the step goes at the end');
-        $this->assertStringContainsString(' type="number"', $input);
-        $this->assertStringContainsString(' id="workflowstep-step_order"', $input);
-        $this->assertStringContainsString(' min="0"', $input);
-        $this->assertStringContainsString(' placeholder="' . WorkflowTemplatePage::STEP_ORDER_PLACEHOLDER . '"', $input);
-        $this->assertSame([WorkflowTemplatePage::STEP_ORDER_HINT], $this->hints($html));
-        $this->assertStringNotContainsString('auto-spaced', $html, 'the old hint is gone');
+        $this->assertStringNotContainsString('WorkflowStep[step_order]', $html);
+        $this->assertSame(WorkflowStepPosition::KIND_END, $this->defaultPosition($html));
+        $this->assertEqualsCanonicalizing(
+            [
+                WorkflowStepPosition::KIND_END,
+                WorkflowStepPosition::KIND_START,
+                WorkflowStepPosition::WEB_AFTER_PREFIX . $steps[0]->id,
+            ],
+            $this->positionOptions($html)
+        );
+
+        $empty = $this->renderPage($this->createWorkflowTemplate($s['admin']->id));
+        $this->assertStringContainsString('id="add-step-form"', $empty);
+        $this->assertSame('', $this->defaultPosition($empty), 'no Position: the new step is the only one');
+        $this->assertStringNotContainsString('WorkflowStep[step_order]', $empty);
     }
 
     /**
-     * The hint is shown as before: when the workflow has steps and the user
-     * may change them.
+     * "+ Insert below" opens the page with the step to place it after
+     * (view?id=W&after=S); the form's Position is after that step. A step
+     * the workflow does not have changes nothing.
      */
-    public function testTheHintIsShownOnlyWithStepsTheUserMayChange(): void
+    public function testInsertBelowPreselectsThePositionAfterTheStep(): void
     {
         $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id, $s['open']->id);
+        $first = $workflow->getSteps()->one();
+        $this->assertInstanceOf(WorkflowStep::class, $first);
+        $elsewhere = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id)->getSteps()->one();
+        $this->assertInstanceOf(WorkflowStep::class, $elsewhere);
         $this->loginAs($s['admin']);
 
-        $html = $this->renderPage($this->createWorkflowTemplate($s['admin']->id));
-        $this->assertSame([], $this->hints($html), 'no steps yet');
-        $this->assertStringContainsString(
-            ' placeholder="' . WorkflowTemplatePage::STEP_ORDER_PLACEHOLDER . '"',
-            $this->stepOrderInput($html),
-            'the form is there'
-        );
-
-        $running = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
-        $this->createWorkflowJob((int)$running->id, $s['admin']->id);
-        $html = $this->renderPage($running);
-        $this->assertSame([], $this->hints($html), 'a run is active');
-        $this->assertStringNotContainsString('WorkflowStep[step_order]', $html);
-
-        $this->loginAs($s['member']);
-        $html = $this->renderPage($this->createWorkflowWithJobSteps($s['admin']->id, $s['viewed']->id));
-        $this->assertSame([], $this->hints($html), 'the user may only view the workflow');
-        $this->assertStringNotContainsString('WorkflowStep[step_order]', $html);
+        $this->assertSame(WorkflowStepPosition::WEB_AFTER_PREFIX . $first->id, $this->defaultPosition($this->renderPage($workflow, (int)$first->id)));
+        $this->assertSame(WorkflowStepPosition::KIND_END, $this->defaultPosition($this->renderPage($workflow, (int)$elsewhere->id)));
+        $this->assertSame(WorkflowStepPosition::KIND_END, $this->defaultPosition($this->renderPage($workflow, 987654321)));
     }
 
     // -- Helpers ------------------------------------------------------------------------
 
     /**
-     * Add a step as a user who leaves Step Order as the form shows it: render
-     * the page, read the value the add-step form pre-fills (none: then a
-     * browser posts it empty) and post the form with it.
+     * Add a step as a user who leaves Position as the form shows it: render
+     * the page, read the Position the add-step form preselects and post the
+     * form with it.
      *
      * @param array<string, string> $fields the step's type and target
      */
     private function addWithTheFormsDefault(WorkflowTemplate $workflow, string $name, array $fields): void
     {
-        $order = $this->prefilledValue($this->stepOrderInput($this->renderPage($workflow)));
-        $this->postStep(['name' => $name, 'step_order' => $order] + $fields, false);
+        $position = $this->defaultPosition($this->renderPage($workflow));
+        $names = array_keys($this->runOrder($workflow));
+        $this->post(['WorkflowStep' => ['name' => $name] + $fields, 'position' => $position], false);
 
         $this->makeController()->actionAddStep((int)$workflow->id);
 
-        $this->assertSame(['success' => "Step \"{$name}\" added."], \Yii::$app->session->getAllFlashes(true));
+        $this->assertAdded($name, count($names) + 1, count($names) + 1, $names === [] ? null : $names[count($names) - 1]);
+    }
+
+    /**
+     * The success flash of an add: the step, its position, the number of
+     * steps and the step it comes after (none for the only step).
+     */
+    private function assertAdded(string $name, int $position, int $count, ?string $after): void
+    {
+        $flashes = \Yii::$app->session->getAllFlashes(true);
+        $where = $after === null ? '' : sprintf(WorkflowStepChangeSummary::AFTER, $after);
+        $this->assertStringStartsWith(
+            sprintf(WorkflowStepChangeSummary::ADDED, $name, $position, $count, $where),
+            (string)($flashes['success'] ?? ''),
+            (string)json_encode($flashes)
+        );
     }
 
     /**
@@ -396,32 +382,28 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
     }
 
     /**
-     * Post the add-step form's fields, as a form does or as a JSON body.
+     * Post the add-step form, as a form does or as a JSON body.
      *
-     * @param array<string, mixed> $fields
+     * @param array<string, mixed> $body
      */
-    private function postStep(array $fields, bool $json): void
+    private function post(array $body, bool $json): void
     {
         if ($json) {
-            $this->sendJson(['WorkflowStep' => $fields]);
+            $this->sendJson($body);
             return;
         }
-        $this->setPost(['WorkflowStep' => $fields]);
+        $this->setPost($body);
     }
 
     /**
-     * The steps of $workflow in the order runs take them: name => Step Order.
+     * The steps of $workflow in the order runs take them: name => step_order.
      *
      * @return array<string, int>
      */
     private function runOrder(WorkflowTemplate $workflow): array
     {
         $orders = [];
-        $steps = WorkflowStep::find()
-            ->where(['workflow_template_id' => $workflow->id])
-            ->orderBy(['step_order' => SORT_ASC, 'id' => SORT_ASC])
-            ->all();
-        foreach ($steps as $step) {
+        foreach ($workflow->getSteps()->all() as $step) {
             $orders[(string)$step->name] = (int)$step->step_order;
         }
 
@@ -429,44 +411,48 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
     }
 
     /**
-     * The Step Order input of the page's add-step form.
+     * The options of the Position select of the page's add-step form; null
+     * when the form has none.
      */
-    private function stepOrderInput(string $html): string
+    private function positionSelect(string $html): ?string
     {
-        $found = preg_match_all('#<input[^>]*\sname="WorkflowStep\[step_order\]"[^>]*>#', $html, $inputs);
-        $this->assertSame(1, $found, 'the add-step form has one Step Order');
+        $this->assertStringContainsString('id="add-step-form"', $html);
+        $found = preg_match_all('#<select\b[^>]*\bname="position"[^>]*>(.*?)</select>#s', $html, $selects);
+        $this->assertLessThanOrEqual(1, $found, 'the add-step form has one Position at most');
 
-        return $inputs[0][0];
+        return $selects[1][0] ?? null;
     }
 
     /**
-     * The value an input is pre-filled with; '' without one.
-     */
-    private function prefilledValue(string $input): string
-    {
-        return preg_match('#\svalue="([^"]*)"#', $input, $value) === 1 ? html_entity_decode($value[1]) : '';
-    }
-
-    /**
-     * The texts of the step order hints below the steps table, whitespace
-     * collapsed.
+     * The values of the Position options, in order.
      *
      * @return list<string>
      */
-    private function hints(string $html): array
+    private function positionOptions(string $html): array
     {
-        preg_match_all('#<p class="form-text small mb-3" id="ws-step-order-hint">(.*?)</p>#s', $html, $hints);
+        preg_match_all('#<option\b[^>]*\bvalue="([^"]*)"#', (string)$this->positionSelect($html), $values);
 
-        return array_map(
-            static fn (string $hint): string => (string)preg_replace('/\s+/', ' ', trim(html_entity_decode(strip_tags($hint)))),
-            $hints[1]
-        );
+        return array_map(static fn (string $value): string => html_entity_decode($value), $values[1]);
+    }
+
+    /**
+     * The Position a browser posts when the user leaves it: the selected
+     * option, else the first one; '' when the form has no Position.
+     */
+    private function defaultPosition(string $html): string
+    {
+        $select = (string)$this->positionSelect($html);
+        if (preg_match('#<option\b[^>]*\bvalue="([^"]*)"[^>]*\bselected\b#', $select, $selected) === 1) {
+            return html_entity_decode($selected[1]);
+        }
+
+        return $this->positionOptions($html)[0] ?? '';
     }
 
     /**
      * The workflow template page as the user sees it.
      */
-    private function renderPage(WorkflowTemplate $workflow): string
+    private function renderPage(WorkflowTemplate $workflow, ?int $after = null): string
     {
         $app = \Yii::$app;
         $this->assertInstanceOf(Module::class, $app);
@@ -480,7 +466,7 @@ class WorkflowTemplateStepOrderTest extends WebControllerTestCase
         return $this->withRealViews(
             $ctrl,
             '/workflow-template/view?id=' . $workflow->id,
-            static fn (): string => $ctrl->actionView((int)$workflow->id)
+            static fn (): string => $ctrl->actionView((int)$workflow->id, $after)
         );
     }
 

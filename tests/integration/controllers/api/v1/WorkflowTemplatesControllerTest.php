@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers\api\v1;
 
+use app\components\WorkflowStepMapping;
 use app\controllers\api\v1\WorkflowTemplatesController;
 use app\models\ApiToken;
+use app\models\ApprovalRequest;
+use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\models\JobTemplate;
 use app\models\User;
 use app\models\WorkflowJob;
+use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\services\WorkflowExecutionService;
@@ -170,9 +175,30 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $this->assertSame(['build', 'approve', 'wait', 'deploy'], array_column($data['steps'], 'name'));
         $this->assertSame(['job', 'approval', 'pause', 'job'], array_column($data['steps'], 'step_type'));
         $this->assertSame([0, 1, 2, 3], array_column($data['steps'], 'step_order'));
+        $this->assertSame([1, 2, 3, 4], array_column($data['steps'], 'position'));
+        $this->assertSame([true, false, false, false], array_column($data['steps'], 'is_start'));
+        $this->assertSame([true, true, true, true], array_column($data['steps'], 'reachable'));
+        $this->assertSame([null, null, null, null], array_column($data['steps'], 'cannot_run'));
         $this->assertSame([$s['own']->id, null, null, $s['open']->id], array_column($data['steps'], 'job_template_id'));
         $this->assertSame([null, $rule->id, null, null], array_column($data['steps'], 'approval_rule_id'));
         $this->assertSame(['env' => 'target_env'], $data['steps'][0]['extra_vars_template']);
+        $ids = array_column($data['steps'], 'id');
+        $this->assertSame($ids[0], $data['start_step_id']);
+        $this->assertSame(['step_ids' => $ids, 'end' => 'succeeds', 'loop_to_step_id' => null, 'missing_step_id' => null], $data['success_path']);
+        $this->assertSame(
+            [
+                'success' => ['kind' => 'step', 'via' => 'next', 'step_id' => $ids[2], 'position' => 3, 'run_outcome' => null, 'loop' => false],
+                'failure' => null,
+                'closed_gate' => ['kind' => 'end', 'via' => 'on_failure', 'step_id' => null, 'position' => null, 'run_outcome' => 'fails', 'loop' => false],
+            ],
+            $data['steps'][1]['routes'],
+            'the approval step: approved goes on, a closed gate ends the run as failed'
+        );
+        $this->assertSame(
+            ['kind' => 'end', 'via' => 'next', 'step_id' => null, 'position' => null, 'run_outcome' => 'fails', 'loop' => false],
+            $data['steps'][3]['routes']['failure'],
+            'after the last step, a failure ends the run as failed'
+        );
 
         $audit = AuditLog::findOne(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_CREATED, 'object_id' => $data['id']]);
         $this->assertNotNull($audit);
@@ -540,6 +566,34 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $this->assertSame($workflow->name, WorkflowTemplate::findOne($workflow->id)?->name);
     }
 
+    /**
+     * Decision 16, unchanged in 2.11.0 and documented: a "steps" list
+     * replaces every step. The new steps get new IDs and no branches, as
+     * the list does not read them; the per-step endpoints
+     * (WorkflowStepsController) change one step and keep both. A change of
+     * this behaviour must be a decision, not an accident.
+     */
+    public function testAStepsListReplacesEveryStepWithNewIdsAndNoBranches(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id, $s['own']->id);
+        [$first, $second] = WorkflowStep::find()->where(['workflow_template_id' => $workflow->id])->orderBy(['id' => SORT_ASC])->all();
+        $first->on_failure_step_id = (int)$second->id;
+        $first->save(false);
+        $this->authenticate($s['member']);
+        $this->setBody(['steps' => [
+            ['name' => 'step-0', 'job_template_id' => $s['own']->id, 'on_failure_step_id' => (int)$second->id],
+            ['name' => 'step-1', 'job_template_id' => $s['own']->id],
+        ]]);
+
+        $steps = $this->data($this->ctrl->actionUpdate($workflow->id))['steps'];
+
+        $this->assertSame(['step-0', 'step-1'], array_column($steps, 'name'));
+        $this->assertSame([], array_intersect(array_column($steps, 'id'), [(int)$first->id, (int)$second->id]), 'new IDs');
+        $this->assertSame([null, null], array_column($steps, 'on_failure_step_id'), 'no branches');
+        $this->assertSame('next', $steps[0]['routes']['failure']['via'] ?? null);
+    }
+
     public function testUpdateWithoutStepsKeepsThemAndAnEmptyListRemovesThem(): void
     {
         $s = $this->teamScope();
@@ -554,7 +608,88 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $this->setBody(['steps' => []]);
         $data = $this->data($this->ctrl->actionUpdate($workflow->id));
         $this->assertSame([], $data['steps']);
+        $this->assertNull($data['start_step_id']);
+        $this->assertSame(['step_ids' => [], 'end' => null, 'loop_to_step_id' => null, 'missing_step_id' => null], $data['success_path']);
         $this->assertSame([], $this->stepNames($workflow->id));
+    }
+
+    // -- Variable mapping -------------------------------------------------------
+
+    /**
+     * Variable mappings that are no JSON object of extra var names to the
+     * names of output variables, as a value of the body or as JSON text.
+     *
+     * @return array<string, array{0: mixed}>
+     */
+    public static function noMappingProvider(): array
+    {
+        return [
+            'a list of names' => [['build_version']],
+            'a list of names as text' => ['["build_version"]'],
+            'a list of numbers as text' => ['[1,2]'],
+            'a number as text' => ['5'],
+            'a JSON string as text' => ['"text"'],
+            'a number as a value' => [['a' => 1]],
+            'an object as a value' => [['a' => ['b' => 'c']]],
+            'true' => [true],
+            'a key PHP reads as a number, as text' => ['{"0": "build_version"}'],
+            'an empty key' => [['' => 'build_version']],
+        ];
+    }
+
+    /**
+     * regression: the steps list stored any JSON as a step's variable
+     * mapping, such as ["build_version"], which made the extra vars of the
+     * runs' jobs a JSON list that Ansible refuses, or {"a": 1}, which the
+     * API then answered in a shape its schema does not have. A create and an
+     * update answer 422 now, in the words of the list's errors
+     * (steps[<n>]: ...), and write nothing.
+     *
+     * @dataProvider noMappingProvider
+     */
+    public function testRegressionAStepsListWithAMappingOfAnotherShapeIs422(mixed $mapping): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
+        $this->authenticate($s['member']);
+        $steps = [
+            ['name' => 'kept', 'job_template_id' => $s['own']->id, 'extra_vars_template' => ['app_version' => 'build_version']],
+            ['name' => 'mapped', 'step_type' => 'pause', 'extra_vars_template' => $mapping],
+        ];
+
+        $this->setBody(['name' => 'api-wf-mapping', 'steps' => $steps]);
+        $created = $this->ctrl->actionCreate();
+        $createdStatus = \Yii::$app->response->statusCode;
+        $this->setBody(['name' => 'api-wf-mapping-renamed', 'steps' => $steps]);
+        $updated = $this->ctrl->actionUpdate($workflow->id);
+
+        $this->assertSame([422, 422], [$createdStatus, \Yii::$app->response->statusCode], (string)json_encode([$created, $updated]));
+        $refusal = ['error' => ['message' => 'steps[1]: ' . WorkflowStepMapping::INVALID]];
+        $this->assertSame([$refusal, $refusal], [$created, $updated]);
+        $this->assertFalse(WorkflowTemplate::findWithDeleted()->where(['name' => 'api-wf-mapping'])->exists());
+        $this->assertSame(['step-0'], $this->stepNames($workflow->id));
+        $this->assertSame($workflow->name, WorkflowTemplate::findOne($workflow->id)?->name);
+    }
+
+    /**
+     * No mapping, in any form, is stored as null and answered as []; a
+     * mapping is stored as sent.
+     */
+    public function testAStepsListStoresNoMappingAsNull(): void
+    {
+        $s = $this->teamScope();
+        $this->authenticate($s['member']);
+        $none = [[], '[]', '{}', 'null', '', null];
+        $steps = array_map(static fn (mixed $mapping): array => ['name' => 'none', 'step_type' => 'pause', 'extra_vars_template' => $mapping], $none);
+        $steps[] = ['name' => 'mapped', 'step_type' => 'pause', 'extra_vars_template' => '{"app_version": "build_version"}'];
+        $this->setBody(['name' => 'api-wf-no-mapping', 'steps' => $steps]);
+
+        $data = $this->data($this->ctrl->actionCreate());
+
+        $this->assertSame(201, \Yii::$app->response->statusCode);
+        $this->assertSame([[], [], [], [], [], [], ['app_version' => 'build_version']], array_column($data['steps'], 'extra_vars_template'));
+        $stored = WorkflowStep::find()->select('extra_vars_template')->where(['workflow_template_id' => $data['id']])->orderBy(['step_order' => SORT_ASC])->column();
+        $this->assertSame([null, null, null, null, null, null, '{"app_version": "build_version"}'], $stored);
     }
 
     public function testAdminMayUpdateWorkflowOfAnotherTeam(): void
@@ -609,6 +744,68 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
         $audit = AuditLog::findOne(['action' => AuditLog::ACTION_WORKFLOW_LAUNCHED, 'object_id' => $run->id]);
         $this->assertNotNull($audit);
         $this->assertSame('api', json_decode((string)$audit->metadata, true)['source'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function startStepProvider(): array
+    {
+        return [
+            'an approval step' => ['approval', 'approval'],
+            'a gated job step' => ['gated job', 'approval'],
+            'a pause step' => ['pause', 'resume'],
+            'a job step' => ['job', 'runner'],
+        ];
+    }
+
+    /**
+     * The launch answers what the new run waits for at its start step
+     * (waiting_for) and the approval request it waits for
+     * (approval_request_id): an approval step's or a gated job step's, as
+     * the run page shows them.
+     *
+     * @dataProvider startStepProvider
+     */
+    public function testTheLaunchSaysWhatTheRunWaitsFor(string $start, string $waitingFor): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowTemplate($s['admin']->id);
+        $rule = $this->createApprovalRule($s['admin']->id, ApprovalRule::APPROVER_TYPE_USERS, (string)json_encode(['user_ids' => [$s['admin']->id]]));
+        match ($start) {
+            'approval' => $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_APPROVAL, null, $rule->id),
+            'gated job' => $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_JOB, $this->gatedTemplate($s['own'], $rule->id)),
+            'pause' => $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_PAUSE),
+            default => $this->createWorkflowStep($workflow->id, 0, WorkflowStep::TYPE_JOB, $s['own']->id),
+        };
+        $this->authenticate($s['member']);
+
+        $data = $this->data($this->ctrl->actionLaunch($workflow->id));
+
+        $this->assertSame(201, \Yii::$app->response->statusCode);
+        $this->assertSame(['workflow_job_id', 'waiting_for', 'approval_request_id'], array_keys($data));
+        $this->assertSame($waitingFor, $data['waiting_for']);
+        $execution = WorkflowJobStep::findOne(['workflow_job_id' => $data['workflow_job_id']]);
+        $this->assertNotNull($execution);
+        $request = ApprovalRequest::findOne(['job_id' => $execution->job_id]);
+        $this->assertSame($waitingFor === 'approval' ? (int)$request?->id : null, $data['approval_request_id']);
+    }
+
+    /**
+     * A run that does not wait at its start step, such as one whose start
+     * step cannot run, answers null for both.
+     */
+    public function testALaunchThatDoesNotWaitAnswersNullForBoth(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowTemplate($s['admin']->id);
+        $this->createWorkflowStep($workflow->id, 0, 'JOB');
+        $this->authenticate($s['member']);
+
+        $data = $this->data($this->ctrl->actionLaunch($workflow->id));
+
+        $this->assertSame(201, \Yii::$app->response->statusCode);
+        $this->assertSame([null, null], [$data['waiting_for'], $data['approval_request_id']]);
     }
 
     public function testLaunchOfViewedOnlyWorkflowIsForbiddenAndAudited(): void
@@ -746,6 +943,18 @@ class WorkflowTemplatesControllerTest extends WebControllerTestCase
             ->orderBy(['step_order' => SORT_ASC, 'id' => SORT_ASC])
             ->column();
         return $names;
+    }
+
+    /**
+     * A job template in the project of $like, gated by the approval rule
+     * $ruleId; its ID.
+     */
+    private function gatedTemplate(JobTemplate $like, int $ruleId): int
+    {
+        $template = $this->createJobTemplate((int)$like->project_id, (int)$like->inventory_id, (int)$like->runner_group_id, (int)$like->created_by);
+        JobTemplate::updateAll(['approval_rule_id' => $ruleId], ['id' => $template->id]);
+
+        return (int)$template->id;
     }
 
     private function pauseOnlyWorkflow(int $createdBy): WorkflowTemplate

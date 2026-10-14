@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\components\ErrorText;
+use app\components\ShownSecretField;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\services\NotificationDispatcher;
@@ -79,7 +80,7 @@ class NotificationTemplateController extends BaseController
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', ['model' => $model, 'config' => $this->shownConfig($model)]);
     }
 
     public function actionUpdate(int $id): Response|string
@@ -96,7 +97,7 @@ class NotificationTemplateController extends BaseController
             $this->session()->setFlash('success', "Notification template \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
-        return $this->render('form', ['model' => $model]);
+        return $this->render('form', ['model' => $model, 'config' => $this->shownConfig($model)]);
     }
 
     /**
@@ -192,6 +193,15 @@ class NotificationTemplateController extends BaseController
         );
         $this->session()->setFlash('success', "Notification template \"{$name}\" deleted.");
         return $this->redirect(['index']);
+    }
+
+    /**
+     * The config the edit form shows: as this request submitted it, else as
+     * stored with the placeholder for every secret (ShownSecretField).
+     */
+    private function shownConfig(NotificationTemplate $model): string
+    {
+        return ShownSecretField::value($model, 'config', $model->getRedactedConfigJson());
     }
 
     private function findModel(int $id): NotificationTemplate

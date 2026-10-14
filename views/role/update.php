@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\RoleForm $form */
 /** @var array{name: string, description: string, isSystem: bool, directPermissions: string[], effectivePermissions: string[], userIds: int[]} $role */
+/** @var array<string, bool> $grantable permission name => whether the signed-in user may grant it */
 
 use yii\helpers\Html;
 
@@ -19,4 +20,4 @@ $this->title = 'Edit Role: ' . $role['name'];
 </nav>
 <h2><?= Html::encode($this->title) ?></h2>
 
-<?= $this->render('_form', ['form' => $form]) ?>
+<?= $this->render('_form', ['form' => $form, 'grantable' => $grantable]) ?>

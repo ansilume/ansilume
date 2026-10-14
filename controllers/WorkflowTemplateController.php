@@ -5,14 +5,20 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\components\ErrorText;
+use app\components\WorkflowStepChange;
 use app\controllers\traits\TeamScopingTrait;
 use app\models\AuditLog;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\runstate\Display;
+use app\services\runstate\Viewer;
+use app\services\runstate\WorkflowRunStates;
 use app\services\TriggerTokenService;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowStepChangeGuard;
 use app\services\WorkflowStepChangeRefusedException;
+use app\services\WorkflowStepChangeSummary;
+use app\services\WorkflowStepWriteService;
 use app\services\WorkflowTemplateDeletionService;
 use app\services\WorkflowTemplatePage;
 use yii\data\ActiveDataProvider;
@@ -25,19 +31,30 @@ use yii\web\Response;
  *
  * Team scoping: a workflow belongs to the projects of its job steps. Seeing
  * it needs view access to every job step's project; changing, deleting and
- * launching it, and managing its trigger token, need operator access to
- * every one. A new job step may only use a job template the user may operate.
+ * launching it, managing its trigger token and changing its steps need
+ * operator access to every one. A job step may only get a job template the
+ * user may operate.
  *
- * Steps change through WorkflowStepChangeGuard (add, remove, move): with the
- * workflow locked, gated steps are for admins (approval-rule.update, a 403
- * otherwise; ApprovalRuleAssignmentPolicy): approval steps, and job steps
- * whose job template has an approval rule. A change while a run of the
- * workflow is active, or the removal of a step that other steps route to, is
- * refused with a danger flash. Deleting the workflow cancels its active runs
+ * Steps: add-step, edit-step, move-step and remove-step need
+ * workflow-template.update (the access rules) and operator access to every
+ * job step's project (requireWorkflowOperate()), checked before anything is
+ * written. Then WorkflowStepWriteService changes the step, with the
+ * workflow locked: gated steps are for admins (approval-rule.update, a 403
+ * otherwise; ApprovalRuleAssignmentPolicy), approval steps and job steps
+ * whose job template has an approval rule; a change while a run of the
+ * workflow is active, or the removal of a step that other steps route to,
+ * is refused. The controller turns what the service did into a success
+ * flash and warning flashes (WorkflowStepChangeSummary), a refusal into a
+ * 403, a 404 or a danger flash; the edit page shows its refusal in the form
+ * instead. A user who lost operator access meanwhile, which the service
+ * finds with the workflow locked, gets the text of requireWorkflowOperate()
+ * (MODIFY_FORBIDDEN), not the API's
+ * (WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED). The service audits every
+ * change. Deleting the workflow cancels its active runs
  * (WorkflowTemplateDeletionService).
  *
- * What the template page shows a user, its texts, whether its add-step form
- * may add a step and the step that form posts are WorkflowTemplatePage's.
+ * What the pages show a user and the requests their step forms post are
+ * WorkflowTemplatePage's.
  */
 class WorkflowTemplateController extends BaseController
 {
@@ -56,8 +73,14 @@ class WorkflowTemplateController extends BaseController
     public const FLASH_DELETED_RUNS_FAILED = 'Workflow template "%s" deleted. %d running run(s) were canceled; '
         . '%d could not be canceled, the maintenance run retries them (see the application log).';
 
-    /** The prefix of every refusal flash of add-step. */
+    /** The prefix of every refusal flash of add-step (409, 422). */
     public const FLASH_STEP_NOT_ADDED = 'Step not added: ';
+
+    /** The prefix of every refusal flash of move-step (409, 422). */
+    public const FLASH_STEP_NOT_MOVED = 'Step not moved: ';
+
+    /** The prefix of every refusal of edit-step (409, 422), which the edit page shows above its form. */
+    public const FLASH_STEP_NOT_SAVED = 'Step not saved: ';
 
     /**
      * A danger flash. sprintf(): why the launch failed, as ErrorText words
@@ -67,15 +90,18 @@ class WorkflowTemplateController extends BaseController
     public const FLASH_LAUNCH_FAILED = 'Launch failed: %s';
 
     /**
+     * Every step change needs workflow-template.update, as the API's does:
+     * workflow-template.create alone creates a workflow, but changes no steps.
+     *
      * @return array<int, array<string, mixed>>
      */
     protected function accessRules(): array
     {
         return [
             ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['workflow-template.view']],
-            ['actions' => ['create', 'add-step', 'remove-step'], 'allow' => true, 'roles' => ['workflow-template.create']],
+            ['actions' => ['create'], 'allow' => true, 'roles' => ['workflow-template.create']],
             [
-                'actions' => ['update', 'add-step', 'remove-step', 'move-step',
+                'actions' => ['update', 'add-step', 'edit-step', 'move-step', 'remove-step',
                               'generate-trigger-token', 'revoke-trigger-token'],
                 'allow' => true,
                 'roles' => ['workflow-template.update'],
@@ -94,8 +120,9 @@ class WorkflowTemplateController extends BaseController
             'delete' => ['POST'],
             'launch' => ['POST'],
             'add-step' => ['POST'],
-            'remove-step' => ['POST'],
+            'edit-step' => ['GET', 'POST'],
             'move-step' => ['POST'],
+            'remove-step' => ['POST'],
             'generate-trigger-token' => ['POST'],
             'revoke-trigger-token' => ['POST'],
         ];
@@ -116,15 +143,21 @@ class WorkflowTemplateController extends BaseController
         return $this->render('index', [
             'dataProvider' => $dataProvider,
             'operableIds' => $this->operableIds($dataProvider, $userId),
+            'stepCounts' => $this->stepCounts($dataProvider),
         ]);
     }
 
-    public function actionView(int $id): string
+    /**
+     * The template page. $after: the step after which the Add Step form
+     * places a new step ("+ Insert below"); ignored when the workflow has no
+     * such step.
+     */
+    public function actionView(int $id, ?int $after = null): string
     {
         $model = $this->findModel($id);
         $this->requireWorkflowView((int)$model->id);
 
-        return $this->render('view', (new WorkflowTemplatePage((int)$this->currentUserId()))->viewParams($model));
+        return $this->render('view', (new WorkflowTemplatePage((int)$this->currentUserId()))->viewParams($model, $after));
     }
 
     public function actionCreate(): Response|string
@@ -203,7 +236,9 @@ class WorkflowTemplateController extends BaseController
      * (FLASH_LAUNCH_FAILED); a database error shows there only as its class,
      * SQLSTATE and driver error code (ErrorText). A yii\db\Exception is no
      * RuntimeException: it reaches the error page (500), and WebErrorHandler
-     * logs it without its message.
+     * logs it without its message. The success flash names the step the
+     * new run waits at, when it waits for an approval or is paused
+     * (Display::launchFlash()).
      */
     public function actionLaunch(): Response
     {
@@ -222,214 +257,139 @@ class WorkflowTemplateController extends BaseController
             $this->session()->setFlash('danger', sprintf(self::FLASH_LAUNCH_FAILED, ErrorText::of($e)));
             return $this->redirect(['/workflow-template/view', 'id' => $id]);
         }
-        $this->session()->setFlash('success', "Workflow \"{$model->name}\" launched.");
+        /** @var WorkflowRunStates $states */
+        $states = \Yii::$app->get('workflowRunStates');
+        $state = $states->forRuns([$wfJob], Viewer::current())[(int)$wfJob->id];
+        $this->session()->setFlash('success', Display::launchFlash((string)$model->name, $state));
         return $this->redirect(['/workflow-job/view', 'id' => $wfJob->id]);
     }
 
+    /**
+     * Add the step the Add Step form posts (WorkflowStep[...] and position,
+     * the end by default; a posted step_order is ignored), then show it on
+     * the page (#step-<id>). A refusal (409, 422) is a danger flash, shown
+     * at the form (#add-step).
+     */
     public function actionAddStep(int $id): Response
     {
         $model = $this->findModel($id);
         $this->requireWorkflowOperate((int)$model->id);
-        $step = new WorkflowStep();
-
-        if ($step->load((array)\Yii::$app->request->post())) {
-            // Not mass-assignable; set again from the URL after load() so no
-            // form field can put the step into another workflow.
-            $step->workflow_template_id = (int)$model->id;
-            // The routes ("0" ends the workflow) and the target of the step's
-            // type, as the form means them.
-            WorkflowTemplatePage::completeFromForm($step, (array)\Yii::$app->request->post('WorkflowStep', []));
-            $this->addStep($model, $step);
-        }
-        return $this->redirect(['view', 'id' => $id]);
-    }
-
-    /**
-     * Add $step to the workflow, answering in the order the API does: 403
-     * when the user may not (only admins add approval steps and gated job
-     * steps, or any step to a workflow that has one); a danger flash for an
-     * invalid step; then, with the workflow locked, the rule again and a
-     * danger flash while a run of the workflow is active.
-     *
-     * @throws ForbiddenHttpException
-     */
-    private function addStep(WorkflowTemplate $model, WorkflowStep $step): void
-    {
-        $addsApprovalStep = $step->step_type === WorkflowStep::TYPE_APPROVAL;
-        // The job template as the int the step stores, before the policy
-        // asks whether it has an approval rule: "05" is template 5 too.
-        $this->normalizeSubmittedId($step, 'job_template_id');
-        $refusal = (new WorkflowTemplatePage((int)$this->currentUserId()))->addRefusal($model, $step);
-        if ($refusal !== null) {
-            throw new ForbiddenHttpException($refusal);
-        }
-        $error = $this->stepTemplateExists($step) ? null : 'The selected job template does not exist.';
-        if ($error === null && !$step->validate()) {
-            $error = array_values($step->getFirstErrors())[0] ?? 'Validation failed.';
-        }
-        if ($error !== null) {
-            $this->session()->setFlash('danger', self::FLASH_STEP_NOT_ADDED . $error);
-            return;
-        }
-        $added = $this->guarded(self::FLASH_STEP_NOT_ADDED, fn (): bool => $this->stepGuard()->change(
+        $request = \Yii::$app->request;
+        $added = $this->changed(fn (WorkflowStepWriteService $writer): WorkflowStepChange => $writer->add(
             $model,
+            WorkflowTemplatePage::formCommand($request->post('WorkflowStep'), $request->post('position'), false),
             (int)$this->currentUserId(),
-            $addsApprovalStep,
-            fn (): bool => $this->saveNewStep($model, $step)
+            WorkflowStepWriteService::SOURCE_WEB
         ));
-        if ($added === true) {
-            $this->auditStep(AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_ADDED, $model, $step);
-            $this->session()->setFlash('success', "Step \"{$step->name}\" added.");
+        if (!$added instanceof WorkflowStepChange) {
+            $this->session()->setFlash('danger', self::FLASH_STEP_NOT_ADDED . $added);
+            return $this->redirect(['view', 'id' => $id, '#' => 'add-step']);
         }
+        return $this->redirect(['view', 'id' => $id, '#' => 'step-' . $added->step->id]);
     }
 
     /**
-     * Save a step from the add-step form, inside the guard's transaction. It
-     * is validated again with the workflow locked: a step it routes to may
-     * have been removed meanwhile. A step whose Step Order was left empty
-     * goes after the last step, worked out here, with the workflow locked,
-     * so that steps added at the same time go one after the other.
-     *
-     * @throws WorkflowStepChangeRefusedException (422) for a step that cannot be saved
+     * The page that edits the step $step of the workflow $id (GET), and its
+     * save (POST: WorkflowStep[...] without the type, which cannot change,
+     * and position, kept by default). The step keeps its ID, so the branches
+     * that lead to it and its run history stay. 404 when the workflow has no
+     * such step, 403 when the user may not change its steps; a saved step is
+     * shown on the template page (#step-<id>), a refused one (409, 422) here
+     * again, with what the user typed.
      */
-    private function saveNewStep(WorkflowTemplate $model, WorkflowStep $step): bool
+    public function actionEditStep(int $id, int $step): Response|string
     {
-        /** @var \app\services\WorkflowStepReorderService $reorder */
-        $reorder = \Yii::$app->get('workflowStepReorderService');
-        if ($step->getAttribute('step_order') === null) {
-            $step->step_order = $reorder->endOrder($model);
+        $model = $this->findModel($id);
+        $this->requireWorkflowOperate((int)$model->id);
+        /** @var WorkflowStep|null $stored */
+        $stored = WorkflowStep::findOne(['id' => $step, 'workflow_template_id' => (int)$model->id]);
+        if ($stored === null) {
+            throw new NotFoundHttpException(sprintf(WorkflowStepWriteService::STEP_NOT_FOUND, (int)$model->id, $step));
         }
-        if (!$step->save()) {
-            throw new WorkflowStepChangeRefusedException(
-                array_values($step->getFirstErrors())[0] ?? 'Validation failed.',
-                WorkflowStepChangeRefusedException::INVALID
-            );
+        $userId = (int)$this->currentUserId();
+        /** @var \app\services\ApprovalRuleAssignmentPolicy $policy */
+        $policy = \Yii::$app->get('approvalRuleAssignmentPolicy');
+        $lock = $policy->workflowStepsChangeRefusal($userId, $model, false);
+        if ($lock !== null) {
+            throw new ForbiddenHttpException($lock);
         }
-        // Renumber the whole template to a sparse 10/20/30 layout so a
-        // user-typed step_order=15 keeps room for future inserts and
-        // future ▲/▼ moves stay deterministic.
-        $reorder->resequence($model);
-
-        return true;
-    }
-
-    /**
-     * Run a step change through WorkflowStepChangeGuard ($change calls it)
-     * and answer its refusal, after which nothing was written: 403 when the
-     * user may not change these steps, 404 when the workflow was deleted
-     * meanwhile, a danger flash ($flashPrefix and the reason) otherwise.
-     * Returns what $change returned, or null after a flash.
-     *
-     * @template T
-     * @param callable(): T $change
-     * @return T|null
-     * @throws ForbiddenHttpException
-     * @throws NotFoundHttpException
-     */
-    private function guarded(string $flashPrefix, callable $change): mixed
-    {
+        $request = \Yii::$app->request;
+        $refusal = null;
+        if ($request->isPost) {
+            $saved = $this->changed(fn (WorkflowStepWriteService $writer): WorkflowStepChange => $writer->update(
+                $model,
+                $step,
+                WorkflowTemplatePage::formCommand($request->post('WorkflowStep'), $request->post('position'), true),
+                $userId,
+                WorkflowStepWriteService::SOURCE_WEB
+            ));
+            if ($saved instanceof WorkflowStepChange) {
+                return $this->redirect(['view', 'id' => $id, '#' => 'step-' . $step]);
+            }
+            $refusal = self::FLASH_STEP_NOT_SAVED . $saved;
+        }
         try {
-            return $change();
+            $params = (new WorkflowTemplatePage($userId))->editParams(
+                $model,
+                $stored,
+                $refusal === null ? null : WorkflowTemplatePage::postedStep($stored, $request->post('WorkflowStep')),
+                $refusal,
+                $refusal === null ? null : $request->post('position')
+            );
         } catch (WorkflowStepChangeRefusedException $e) {
-            if ($e->status === WorkflowStepChangeRefusedException::FORBIDDEN) {
-                throw new ForbiddenHttpException($e->getMessage(), 0, $e);
-            }
-            if ($e->status === WorkflowStepChangeRefusedException::NOT_FOUND) {
-                throw new NotFoundHttpException($e->getMessage(), 0, $e);
-            }
-            $this->session()->setFlash('danger', $flashPrefix . $e->getMessage());
-            return null;
+            // Another request removed the step after it was looked up.
+            throw new NotFoundHttpException($e->getMessage(), 0, $e);
         }
+        return $this->render('edit-step', $params);
     }
 
     /**
-     * False when the posted job template does not exist for the user:
-     * unknown, deleted, or in a project the user may not see. The ID is
-     * checked as the int the step stores; values the step's integer rule
-     * rejects pass here and fail validation.
-     *
-     * @throws ForbiddenHttpException when the user may see the job template but not operate it
+     * Move the step step_id: one place with ▲ and ▼ (direction=up|down), or
+     * anywhere with Move to… (position=start|end|after:<step ID>), exactly
+     * one of them. A move to where the step stands writes nothing, and says
+     * so (an info flash). A refusal (409, 422) is a danger flash. The page
+     * shows the step (#step-<id>).
      */
-    private function stepTemplateExists(WorkflowStep $step): bool
+    public function actionMoveStep(int $id): Response
     {
-        $id = $this->normalizeSubmittedId($step, 'job_template_id');
-        if ($id === null) {
-            return true;
+        $model = $this->findModel($id);
+        $this->requireWorkflowOperate((int)$model->id);
+        $request = \Yii::$app->request;
+        $stepId = (int)$request->post('step_id');
+        $moved = $this->changed(fn (WorkflowStepWriteService $writer): WorkflowStepChange => $writer->move(
+            $model,
+            $stepId,
+            WorkflowTemplatePage::movePosition($request->post('direction'), $request->post('position')),
+            (int)$this->currentUserId(),
+            WorkflowStepWriteService::SOURCE_WEB
+        ));
+        if (!$moved instanceof WorkflowStepChange) {
+            $this->session()->setFlash('danger', self::FLASH_STEP_NOT_MOVED . $moved);
         }
-        $found = $this->workflowChecker()->classifyStepTemplateIds((int)$this->currentUserId(), [$id]);
-        if ($found['forbidden'] !== []) {
-            throw new ForbiddenHttpException('You may not use this job template in a workflow: that needs operator access to its project.');
-        }
-
-        return $found['missing'] === [];
+        return $this->redirect(['view', 'id' => $id, '#' => 'step-' . $stepId]);
     }
 
     /**
-     * Only admins change the steps of a workflow that has an approval step
-     * or a gated job step (403). Refused with a danger flash while a run of
-     * the workflow is active, or while other steps route to the step. Runs
-     * keep the history of a removed step. An unknown step is ignored.
+     * Remove the step step_id. A refusal (409: a run is active, or other
+     * steps route to it) is a danger flash; runs keep the history of a
+     * removed step; an unknown step is ignored. The page shows the steps
+     * (#workflow-steps).
      */
     public function actionRemoveStep(int $id): Response
     {
         $model = $this->findModel($id);
         $this->requireWorkflowOperate((int)$model->id);
         $stepId = (int)\Yii::$app->request->post('step_id');
-        $removed = $this->guarded('', fn (): ?WorkflowStep => $this->stepGuard()->remove(
+        $removed = $this->changed(fn (WorkflowStepWriteService $writer): ?WorkflowStepChange => $writer->remove(
             $model,
+            $stepId,
             (int)$this->currentUserId(),
-            $stepId
+            WorkflowStepWriteService::SOURCE_WEB
         ));
-        if ($removed instanceof WorkflowStep) {
-            $this->auditStep(AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_REMOVED, $model, $removed);
-            $this->session()->setFlash('success', 'Step removed.');
+        if (is_string($removed)) {
+            $this->session()->setFlash('danger', $removed);
         }
-        return $this->redirect(['view', 'id' => $id]);
-    }
-
-    /**
-     * Move a step up or down by one slot inside its workflow template.
-     * direction=up swaps with the immediate predecessor, direction=down
-     * with the successor. Hitting the top/bottom is a soft no-op (no
-     * flash, no redirect change) so the caller doesn't need to special-case
-     * boundary rows. Guarded as remove-step is: 403 for a workflow with an
-     * approval step or a gated job step unless the user is an admin, a
-     * danger flash while a run is active.
-     */
-    public function actionMoveStep(int $id): Response
-    {
-        $model = $this->findModel($id);
-        $this->requireWorkflowOperate((int)$model->id);
-        $stepId = (int)\Yii::$app->request->post('step_id');
-        $direction = (string)\Yii::$app->request->post('direction', '');
-
-        if (!in_array($direction, ['up', 'down'], true)) {
-            $this->session()->setFlash('danger', 'Invalid move direction.');
-            return $this->redirect(['view', 'id' => $id]);
-        }
-
-        $moved = $this->guarded('', fn (): ?WorkflowStep => $this->stepGuard()->change(
-            $model,
-            (int)$this->currentUserId(),
-            false,
-            static function () use ($model, $stepId, $direction): ?WorkflowStep {
-                /** @var WorkflowStep|null $step */
-                $step = WorkflowStep::findOne(['id' => $stepId, 'workflow_template_id' => $model->id]);
-                if ($step === null) {
-                    throw new NotFoundHttpException("Step #{$stepId} not found in workflow #{$model->id}.");
-                }
-                /** @var \app\services\WorkflowStepReorderService $reorder */
-                $reorder = \Yii::$app->get('workflowStepReorderService');
-                $moved = $direction === 'up' ? $reorder->moveUp($step) : $reorder->moveDown($step);
-
-                return $moved ? $step : null;
-            }
-        ));
-        if ($moved instanceof WorkflowStep) {
-            $this->auditStep(AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_MOVED, $model, $moved, ['direction' => $direction]);
-            $this->session()->setFlash('success', "Step \"{$moved->name}\" moved {$direction}.");
-        }
-        return $this->redirect(['view', 'id' => $id]);
+        return $this->redirect(['view', 'id' => $id, '#' => 'workflow-steps']);
     }
 
     /**
@@ -457,23 +417,45 @@ class WorkflowTemplateController extends BaseController
     }
 
     /**
-     * @param array<string, mixed> $context
+     * Run $change, one call of the step write service, and flash what it
+     * did: its summary as a success flash (an info flash when it changed
+     * nothing), then one warning flash per warning
+     * (WorkflowStepChangeSummary). A refusal wrote nothing: a 403 or 404
+     * answers as such, the team scope's 403 under the lock
+     * (WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED) with MODIFY_FORBIDDEN;
+     * the reason of a 409 or 422 is returned, for the action to show. Null
+     * when there was nothing to change (a remove of a step the workflow
+     * does not have).
+     *
+     * @param callable(WorkflowStepWriteService): ?WorkflowStepChange $change
+     * @throws ForbiddenHttpException
+     * @throws NotFoundHttpException
      */
-    private function auditStep(string $action, WorkflowTemplate $model, WorkflowStep $step, array $context = []): void
+    private function changed(callable $change): WorkflowStepChange|string|null
     {
-        \Yii::$app->get('auditService')->log(
-            $action,
-            'workflow_template',
-            (int)$model->id,
-            $this->currentUserId(),
-            array_merge([
-                'step_id' => (int)$step->id,
-                'step_name' => (string)$step->name,
-                'step_type' => (string)$step->step_type,
-                'job_template_id' => $step->job_template_id === null ? null : (int)$step->job_template_id,
-                'approval_rule_id' => $step->approval_rule_id === null ? null : (int)$step->approval_rule_id,
-            ], $context)
-        );
+        /** @var WorkflowStepWriteService $writer */
+        $writer = \Yii::$app->get('workflowStepWriteService');
+        try {
+            $done = $change($writer);
+        } catch (WorkflowStepChangeRefusedException $e) {
+            if ($e->status === WorkflowStepChangeRefusedException::FORBIDDEN) {
+                // The team scope, checked again under the lock: in the words of requireWorkflowOperate().
+                $teamScope = $e->getMessage() === WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED;
+                throw new ForbiddenHttpException($teamScope ? self::MODIFY_FORBIDDEN : $e->getMessage(), 0, $e);
+            }
+            if ($e->status === WorkflowStepChangeRefusedException::NOT_FOUND) {
+                throw new NotFoundHttpException($e->getMessage(), 0, $e);
+            }
+            return $e->getMessage();
+        }
+        if ($done !== null) {
+            $summary = WorkflowStepChangeSummary::of($done);
+            $this->session()->setFlash($summary->isInfo() ? 'info' : 'success', $summary->message());
+            foreach ($summary->warnings() as $warning) {
+                $this->session()->addFlash('warning', $warning);
+            }
+        }
+        return $done;
     }
 
     /**
@@ -495,11 +477,26 @@ class WorkflowTemplateController extends BaseController
             ->column());
     }
 
-    private function stepGuard(): WorkflowStepChangeGuard
+    /**
+     * The number of steps of each listed workflow template, by its ID, in
+     * one query, however many are listed; a template without steps is
+     * missing.
+     *
+     * @return array<int, int>
+     */
+    private function stepCounts(ActiveDataProvider $dataProvider): array
     {
-        /** @var WorkflowStepChangeGuard $guard */
-        $guard = \Yii::$app->get('workflowStepChangeGuard');
-        return $guard;
+        $rows = WorkflowStep::find()
+            ->select(['workflow_template_id', 'steps' => 'COUNT(*)'])
+            ->where(['workflow_template_id' => $dataProvider->getKeys()])
+            ->groupBy('workflow_template_id')
+            ->asArray()
+            ->all();
+        $counts = [];
+        foreach ($rows as $row) {
+            $counts[(int)$row['workflow_template_id']] = (int)$row['steps'];
+        }
+        return $counts;
     }
 
     private function findModel(int $id): WorkflowTemplate

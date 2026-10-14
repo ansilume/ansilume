@@ -10,6 +10,7 @@ import {
   requestStatus,
   resolvedMessage,
 } from '../../lib/approvals';
+import { cancelJobIfActive } from '../../lib/runs';
 
 /**
  * An approval request whose job's job template was deleted while the job
@@ -23,11 +24,20 @@ import {
  * the deleted e2e-deleted-gate-template that e2e-operator launched, gated by
  * e2e-approval-rule, and its pending request, right before each test
  * (commands/E2eDeletedTemplateApprovalSeeder.php). e2e-admin, the rule's
- * other approver, opens it.
+ * other approver, opens it. A job a test leaves waiting is canceled after it,
+ * which closes its request.
  */
 test.describe('Approval of a job of a deleted job template', () => {
+  let waiting = '';
+
+  test.afterEach(async ({ page }) => {
+    await cancelJobIfActive(page, waiting);
+    waiting = '';
+  });
+
   test('the request page offers no vote and says why the job no longer waits', async ({ page, request, baseURL }) => {
     const { jobId, requestId } = await deletedTemplateRequest(request, baseURL, 'e2e-operator');
+    waiting = jobId;
 
     await page.goto(`/job/view?id=${jobId}`);
     await expect(page.locator('#status-badge')).toHaveText('Awaiting Approval');

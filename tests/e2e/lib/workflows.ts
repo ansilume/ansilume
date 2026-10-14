@@ -3,8 +3,9 @@ import { expectFlash, submitForm } from './helpers';
 import { indexRows, rowsWhere } from './scoping';
 
 /**
- * Fixtures of commands/E2eWorkflowGateSeeder.php, restored by every seed,
- * and helpers for the workflow template and run pages.
+ * Fixtures of commands/E2eWorkflowGateSeeder.php and
+ * commands/E2eWorkflowUxSeeder.php, restored by every seed, and helpers for
+ * the workflow template and run pages.
  */
 
 /** Never launched: the job steps e2e-steps-build and e2e-steps-cleanup; the build step's On Failure leads to the cleanup step. */
@@ -83,6 +84,61 @@ export const LATE_GATE_TEMPLATE = 'e2e-late-gate-template';
 export const LATE_GATE_JOB = 'e2e-late-gate-job';
 
 /**
+ * commands/E2eWorkflowUxSeeder.php: every kind of route cell. In this order:
+ * build (job; On Failure → cleanup), approve (approval step on
+ * e2e-gate-rule), deploy (job on e2e-gated-job-template: a gated job step),
+ * verify (job; On Failure ↺ deploy), wait (pause), cleanup (job; both
+ * branches end the workflow), spare (job; no branch leads to it).
+ */
+export const ROUTES_WORKFLOW = 'e2e-routes-workflow';
+export const ROUTES_STEPS = {
+  build: 'e2e-routes-build',
+  approve: 'e2e-routes-approve',
+  deploy: 'e2e-routes-deploy',
+  verify: 'e2e-routes-verify',
+  wait: 'e2e-routes-wait',
+  cleanup: 'e2e-routes-cleanup',
+  spare: 'e2e-routes-spare',
+} as const;
+
+/**
+ * commands/E2eWorkflowUxSeeder.php: steps older versions could save, in this
+ * order: start (job; On Success to step ID LEGACY_MISSING_STEP_ID, which
+ * does not exist), gone (job on the soft-deleted e2e-routes-gone-template),
+ * pause (pause with an Always branch to end), end (job).
+ */
+export const LEGACY_WORKFLOW = 'e2e-routes-legacy-workflow';
+export const LEGACY_STEPS = {
+  start: 'e2e-legacy-start',
+  gone: 'e2e-legacy-gone',
+  pause: 'e2e-legacy-pause',
+  end: 'e2e-legacy-end',
+} as const;
+export const LEGACY_MISSING_STEP_ID = 999999999;
+
+/**
+ * commands/E2eWorkflowUxSeeder.php: check (job; On Failure ↺ itself), then
+ * retry (job; On Success ↺ check, On Failure ends the workflow).
+ */
+export const LOOP_WORKFLOW = 'e2e-routes-loop-workflow';
+export const LOOP_CHECK = 'e2e-loop-check';
+export const LOOP_RETRY = 'e2e-loop-retry';
+
+/** commands/E2eWorkflowUxSeeder.php: build (job; On Failure → deploy), test (job), deploy (job). */
+export const EDIT_STEPS_WORKFLOW = 'e2e-edit-steps-workflow';
+export const EDIT_BUILD = 'e2e-edit-build';
+export const EDIT_TEST = 'e2e-edit-test';
+export const EDIT_DEPLOY = 'e2e-edit-deploy';
+
+/** commands/E2eWorkflowUxSeeder.php: two job steps, which e2e-operator edits, moves and inserts below. */
+export const EDIT_OPERATOR_WORKFLOW = 'e2e-edit-operator-workflow';
+export const EDIT_OPERATOR_FIRST = 'e2e-edit-operator-first';
+export const EDIT_OPERATOR_SECOND = 'e2e-edit-operator-second';
+
+/** The job template of every other job step of the fixtures. */
+export const JOB_TEMPLATE = 'e2e-template';
+
+/**
  * Only admins (approval-rule.update) add approval steps and job steps whose
  * job template has an approval rule ("gated job steps"), and change the steps
  * of a workflow that has either (services/ApprovalRuleAssignmentPolicy.php).
@@ -113,53 +169,308 @@ export function stepsLockedNotice(reason: string): string {
 }
 
 /**
- * The labels of the routes in the steps table of a workflow template page
- * (services/WorkflowTemplatePage.php): an empty route goes on with the next
- * step (ROUTE_NEXT_STEP); "end" ends the run (ROUTE_END); the empty On
- * Failure route of an approval step ends the run as failed (ROUTE_END_FAILED).
+ * services/WorkflowStepChangeGuard.php RUNS_ACTIVE, for the runs `runs`
+ * ("#12, #15"): why the steps cannot change.
  */
-export const ROUTE_NEXT_STEP = '→ next step';
-export const ROUTE_END = 'end workflow';
-export const ROUTE_END_FAILED = 'end workflow (failed)';
+export function runsActive(runs: string): string {
+  return `Steps cannot change while run(s) ${runs} of this workflow are active: wait for them to finish or cancel them.`;
+}
 
 /**
- * services/WorkflowTemplatePage.php GATED_JOB_FAILURE_ROUTE and
- * GATED_JOB_FAILURE_TITLE: the empty On Failure route of a job step whose job
- * template has an approval rule. A job that ran and failed goes on with the
- * next step; after a rejected, timed-out or canceled approval, when the job
- * never ran, the run ends as failed. Its hover text says so in full.
+ * The texts of the steps table (services/WorkflowStepsTable.php). A step is
+ * named by its position in the run order: "3. Deploy" (STEP_LABEL), 'step 3
+ * "Deploy"' (STEP_REFERENCE).
  */
-export const GATED_JOB_FAILURE_ROUTE = `${ROUTE_NEXT_STEP}; ${ROUTE_END_FAILED} after a refused approval`;
-export const GATED_JOB_FAILURE_TITLE = 'After a rejected, timed-out or canceled approval, when the job never ran. '
-  + 'A job that ran and failed goes on with the next step.';
+export const ROUTE_END_SUCCEEDS = 'end · run succeeds';
+export const ROUTE_END_FAILS = 'end · run fails';
+/** A branch the step never takes, and an empty Always branch. */
+export const ROUTE_UNUSED = '—';
+export const ROUTE_ALSO_AFTER_FAILURE = ', also after a failure';
+export const ROUTE_ALSO_AFTER_FAILED_JOB = ', also after a failed job';
+export const ROUTE_AFTER_REFUSED_APPROVAL = ' after a refused approval';
+export const PART_SEPARATOR = '; ';
+export const APPROVAL_STEP_SUFFIX = ' (approval step)';
+export const PAUSE_ALWAYS_NOTE = '(on Resume)';
+export const START_BADGE = 'Start';
+export const START_TITLE = 'Runs start with this step.';
+export const UNREACHABLE_BADGE = 'unreachable';
+/** No branch a run takes leads to the step: not from a reachable step, nor from a step that cannot run, where runs fail. */
+export const UNREACHABLE_TITLE = 'No branch that a run takes leads to this step, so runs never start it.';
+export const GATED_BADGE = 'needs approval';
+export const POSITION_TITLE = 'Position: runs start with step 1.';
+export const NEXT_TITLE = 'This branch is empty: the run goes on with the next step in the list, so where it leads changes when steps move.';
+export const LOOP_TITLE = 'Leads back to this step or an earlier one: the run repeats steps until a branch leads elsewhere.';
+export const ALWAYS_WINS_TITLE = 'Not used: the Always branch is taken instead.';
+export const PAUSE_FAILURE_TITLE = 'Not used: a pause step does not fail; Resume continues with On Success.';
+export const CANNOT_RUN_TITLE = 'Not used: this step cannot run, so a run fails when it reaches it.';
+export const MISSING_TITLE = 'The step this branch leads to no longer exists: the run fails here. Edit the step to choose another one.';
+export const REFUSED_APPROVAL_TITLE = 'A refused approval was rejected, timed out or canceled: the job never ran, '
+  + 'only On Failure is followed, and Always is not.';
+export const SUCCESS_PATH_LOOP_NOTE = 'When every step succeeds, the run repeats these steps until one fails or the run is canceled.';
+export const LEGEND = 'A run starts with step 1. An empty branch goes on with the next step in the list, marked (next), '
+  + 'and changes when steps move. ↺ marks a branch back to the same or an earlier step.';
+export const MOVE_TO_START = 'To the start';
+export const MOVE_TO_END = 'To the end';
+/** MOVE_MENU_LIMIT: above this many steps, Move to… links to the step's edit page, at its Position field, instead of a menu. */
+export const MOVE_MENU_LIMIT = 20;
+/** The id of the Position field of the step form (WorkflowStepFormView::POSITION_FIELD_ID), where that link leads. */
+export const POSITION_FIELD_ID = 'ws-position-field';
+/** The column headings of the steps table; the Actions column only for users who may change the steps. */
+export const STEPS_COLUMNS = ['#', 'Name', 'Type', 'Target', 'On Success', 'On Failure', 'Always'];
+
+/** GATED_TITLE: the hover text of the "needs approval" badge of a step whose job template has the rule `rule`. */
+export function gatedTitle(rule: string): string {
+  return `Its job template has the approval rule "${rule}": the job waits for an approval before it runs.`;
+}
+
+/** STEP_LABEL: the step at `position` named `name`, "3. Deploy". */
+export function stepLabel(position: number, name: string): string {
+  return `${position}. ${name}`;
+}
+
+/** STEP_REFERENCE: 'step 3 "Deploy"', as the action labels and refusals name a step. */
+export function stepReference(position: number, name: string): string {
+  return `step ${position} "${name}"`;
+}
+
+/** ROUTE_TO: an explicit branch to a later step. */
+export function routeTo(position: number, name: string): string {
+  return `→ ${stepLabel(position, name)}`;
+}
+
+/** ROUTE_TO_NEXT: an empty branch, which goes on with the next step in the list. */
+export function routeNext(position: number, name: string): string {
+  return `→ ${stepLabel(position, name)} (next)`;
+}
+
+/** ROUTE_LOOP: a branch back to the step itself or an earlier one. */
+export function routeLoop(position: number, name: string): string {
+  return `↺ ${stepLabel(position, name)}`;
+}
+
+/** ROUTE_MISSING: a branch to a step that no longer exists. */
+export function routeMissing(stepId: number | string): string {
+  return `missing step (ID ${stepId}) · run fails`;
+}
+
+/** The success path above the steps table: its parts joined by " → " (SUCCESS_PATH_SEPARATOR). */
+export function successPath(...parts: string[]): string {
+  return parts.join(' → ');
+}
 
 /**
- * The Step Order field of the add-step form. It is empty by default, and an
- * empty Step Order adds the step after the current last step; its
- * placeholder says so (services/WorkflowTemplatePage.php
- * STEP_ORDER_PLACEHOLDER). A typed number puts the step after the steps with
- * a lower or equal number.
+ * The texts of the step form (services/WorkflowStepFormView.php): the
+ * Position select, its preview and warnings, and the branch choices.
  */
-export const STEP_ORDER_INPUT = '#workflowstep-step_order';
-export const STEP_ORDER_PLACEHOLDER = 'At the end';
+export const POSITION_SELECT = '#ws-position';
+export const POSITION_PREVIEW = '#ws-position-preview';
+export const POSITION_WARNING = '#ws-position-warning';
+export const POSITION_START = 'At the start (runs will start with this step)';
+export const END_SUCCEEDS_OPTION = 'End the workflow: the run succeeds';
+export const END_FAILS_OPTION = 'End the workflow: the run fails';
+export const NEXT_OPTION_NONE_SUCCEEDS = 'Next in the list: none, the run succeeds';
+export const NEXT_OPTION_NONE_FAILS = 'Next in the list: none, the run fails';
+export const ALWAYS_NONE_OPTION = 'Not set: On Success or On Failure decides';
+export const SUCCESS_LABEL = 'On Success → go to';
+export const SUCCESS_LABEL_PAUSE = 'After Resume → go to';
+export const FAILURE_DEFAULT_NOTE = 'A new job step ends the workflow when it fails. Choose "Next in the list" to go on instead.';
+export const TYPE_LOCKED = "A step's type cannot change: add a new step and remove this one.";
+export const LEGACY_ALWAYS_NOTE = 'This step has an Always branch from an older version, which runs follow when it succeeds. '
+  + 'It shows under On Success now and is saved there.';
+export const TEMPLATE_GONE_HINT = 'The job template of this step no longer exists: choose another one.';
+export const ROUTED_BY_NONE = 'No other step routes here.';
+/** The notes under a step of "Steps that route here" whose branch to the step no run takes. */
+export const ROUTED_BY_ALWAYS_WINS = 'Not used: its Always branch is taken instead.';
+export const ROUTED_BY_PAUSE_FAILURE = 'Not used: a pause step does not fail. Saving that step clears its On Failure.';
+/** THIS_APPROVAL_OFF_PATH: the Position warning of an approval step that no success would lead to. */
+export const THIS_APPROVAL_OFF_PATH = 'This approval step will not be on the success path: '
+  + 'runs whose steps all succeed will not wait for it.';
+
+/** POSITION_END: the Position choice after the last step, named by its label. */
+export function positionEnd(lastLabel: string): string {
+  return `At the end (after ${lastLabel})`;
+}
+
+/** POSITION_AFTER: the Position choice after a step, named by its label. */
+export function positionAfter(label: string): string {
+  return `After ${label}`;
+}
+
+/** POSITION_KEEP: Edit Step's default Position. */
+export function positionKeep(position: number): string {
+  return `Keep at position ${position}`;
+}
+
+/** NEXT_OPTION: the empty On Success choice, which goes on with `name`. */
+export function nextOption(name: string): string {
+  return `Next in the list: "${name}"`;
+}
+
+/** NEXT_FAILURE_OPTION: the empty On Failure choice of a job step, which goes on with `name`. */
+export function nextFailureOption(name: string): string {
+  return `Next in the list: "${name}", also after a failure`;
+}
+
+/** WILL_START_THIS: a Position warning; `start` is the step runs start with now. */
+export function willStartThis(start: string): string {
+  return `Runs will start with this step instead of "${start}".`;
+}
+
+/** THIS_WILL_PRECEDE_APPROVAL: a Position warning for a job step placed before the approval step `approval`. */
+export function thisWillPrecedeApproval(approval: string): string {
+  return `This job step will run before the approval step "${approval}", without waiting for it.`;
+}
+
+/** WILL_START (WorkflowStepsTable): a Move to… hint. */
+export function willStart(newStart: string, oldStart: string): string {
+  return `Runs will start with "${newStart}" instead of "${oldStart}".`;
+}
+
+/** WILL_PRECEDE_APPROVAL (WorkflowStepsTable): a Move to… hint. */
+export function willPrecedeApproval(job: string, approval: string): string {
+  return `Job step "${job}" will run before the approval step "${approval}", without waiting for it.`;
+}
+
+/** WILL_SKIP_APPROVAL (WorkflowStepsTable): a Move to… hint, the approval step would be off the success path. */
+export function willSkipApproval(approval: string): string {
+  return `The approval step "${approval}" will not be on the success path: runs whose steps all succeed will not wait for it.`;
+}
+
+/** PREVIEW_SKIPPED_TO: the Position preview below `before`, whose success goes on with `next`. */
+export function previewSkippedTo(before: string, next: string): string {
+  return `Listed after "${before}", but a successful "${before}" goes on with "${next}", skipping this step.`;
+}
 
 /**
- * services/WorkflowTemplatePage.php STEP_ORDER_HINT: the hint below the
- * steps table, shown when the workflow has steps and the user may change
- * them.
+ * The flashes of a step change (services/WorkflowStepChangeSummary.php): the
+ * success flash, then one warning flash per warning.
  */
-export const STEP_ORDER_HINT = 'Leave Step Order empty to add the step at the end. To put a step between two others, '
-  + 'enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every add and move. '
-  + 'Use ▲ / ▼ to move a step.';
+export function stepAdded(name: string, position: number, count: number, after?: string): string {
+  return `Step "${name}" added at position ${position} of ${count}${placedWhere(position, count, after)}.`;
+}
 
-/** The "#" (step order) cells of the steps table of the open workflow template page, in table order. */
-export function templateStepNumbers(page: Page): Locator {
-  return page.locator('#workflow-steps-table tbody tr td:nth-child(1)');
+export function stepMoved(name: string, position: number, count: number, after?: string): string {
+  return `Step "${name}" moved to position ${position} of ${count}${placedWhere(position, count, after)}.`;
+}
+
+/** SAVED: `fields` are the labels of the changed fields ("name", "On Failure"). */
+export function stepSaved(name: string, ...fields: string[]): string {
+  return `Step "${name}" saved: ${fields.join(', ')} changed.`;
+}
+
+/** SAVED_MOVED: the changed fields, then where the step is now. */
+export function stepSavedMoved(name: string, fields: string[], position: number, count: number, after?: string): string {
+  return `Step "${name}" saved: ${fields.join(', ')} changed; it is now at position ${position} of ${count}`
+    + `${placedWhere(position, count, after)}.`;
+}
+
+export function stepRemoved(name: string, position: number, count: number): string {
+  return `Step "${name}" removed; it was at position ${position} of ${count}.`;
+}
+
+export function stepStays(name: string, position: number): string {
+  return `Step "${name}" stays at position ${position}.`;
+}
+
+/** UNCHANGED: an edit that changes nothing (an info flash). */
+export function stepUnchanged(name: string): string {
+  return `Step "${name}" is unchanged.`;
+}
+
+/** NOW_ENDS: an empty branch of `name` now ends the run, which led to `was`. */
+export function nowEnds(name: string, was: string): string {
+  return `"${name}" now ends the run (was "${was}").`;
+}
+
+/** START_CHANGED: a warning flash. */
+export function startChanged(now: string, was: string): string {
+  return `Runs now start with "${now}" (was "${was}").`;
+}
+
+/** JOB_BEFORE_APPROVAL: a warning flash. */
+export function jobBeforeApproval(job: string, approval: string): string {
+  return `Job step "${job}" now runs before the approval step "${approval}": runs start it without waiting for that approval.`;
+}
+
+/** APPROVAL_OFF_SUCCESS_PATH: a warning flash, runs whose steps all succeed do not pass the approval step. */
+export function approvalOffSuccessPath(approval: string): string {
+  return `The approval step "${approval}" is not on the success path: runs whose steps all succeed do not wait for it.`;
+}
+
+/** AT_START or AFTER of a change message; nothing for the only step. */
+function placedWhere(position: number, count: number, after?: string): string {
+  if (count < 2) {
+    return '';
+  }
+  return position === 1 ? ', at the start' : `, after "${after ?? ''}"`;
+}
+
+/**
+ * services/WorkflowStepChangeGuard.php STEP_ROUTED_TO: why the step `name`
+ * was not removed; `routing` are the steps that route to it, by position
+ * ('step 1 "Build"', stepReference()).
+ */
+export function stepRoutedTo(name: string, ...routing: string[]): string {
+  return `Step "${name}" was not removed: other steps route to it (${routing.join(', ')}). `
+    + 'Edit those steps to lead elsewhere first, then remove it.';
+}
+
+/**
+ * services/WorkflowStepReorderService.php AFTER_STEP_MISSING: a Position
+ * after a step that was removed meanwhile.
+ */
+export function afterStepMissing(stepId: number | string): string {
+  return `The step to place it after (step ID ${stepId}) is not part of this workflow. `
+    + 'Load the workflow again and choose another position.';
+}
+
+/** The refusal prefixes of WorkflowTemplateController. */
+export const STEP_NOT_ADDED = 'Step not added: ';
+export const STEP_NOT_MOVED = 'Step not moved: ';
+export const STEP_NOT_SAVED = 'Step not saved: ';
+
+/**
+ * The warning flashes of the open page, in the order they were set. A flash
+ * is dismissible: the run page's banner and the job page's notes are
+ * warning or info alerts too, but no flashes.
+ */
+export const WARNING_FLASH = '#page-content > .alert-warning.alert-dismissible';
+
+/** Asserts that the open page shows exactly one warning flash `text`. */
+export async function expectWarningFlash(page: Page, text: string): Promise<void> {
+  const flash = page.locator(WARNING_FLASH).filter({ hasText: text });
+  await expect(flash, `a warning flash: ${text}`).toHaveCount(1);
+  await expect(flash).toHaveText(text);
+}
+
+/** The "#" (position) cells' numbers of the steps table of the open workflow template page, in table order. */
+export function templateStepPositions(page: Page): Locator {
+  return page.locator('#workflow-steps-table tbody tr [data-position]');
 }
 
 /** The Name cells of the steps table of the open workflow template page, in table order. */
 export function templateStepNames(page: Page): Locator {
   return page.locator('#workflow-steps-table tbody tr td:nth-child(2)');
+}
+
+/**
+ * The type badge of a row of the steps table: the Type cell can also hold
+ * the "needs approval" badge and how many runs wait at the step.
+ */
+export function typeBadge(row: Locator): Locator {
+  return row.locator('td:nth-child(3) > .badge:first-child');
+}
+
+/** The route cell `route` (success, failure, always) of a row of the steps table. */
+export function routeCell(row: Locator, route: 'success' | 'failure' | 'always'): Locator {
+  return row.locator(`td[data-route="${route}"]`);
+}
+
+/** The ID of the step named `name` of the open workflow template page. */
+export async function templateStepId(page: Page, name: string): Promise<string> {
+  const id = (await templateStepRow(page, name).getAttribute('data-step-id')) ?? '';
+  expect(id, `the ID of step ${name}`).toMatch(/^\d+$/);
+  return id;
 }
 
 /** A step for addStepThroughForm(). */
@@ -168,36 +479,122 @@ export interface FormStep {
   type: 'job' | 'approval' | 'pause';
   /** The label of the job template of a job step, or of the approval rule of an approval step. */
   target?: string;
-  /** Typed into Step Order; left out, the field stays as the form shows it. */
-  order?: string;
+  /** The Position to choose, by its value or label; left out, the form's default (the end). */
+  position?: string;
+  /** The On Failure choice of a job step, by its label; left out, the form's default (the end of the workflow). */
+  onFailure?: string;
 }
 
 /**
  * Adds `step` through the add-step form of the open workflow template page,
- * which shows the workflow again afterwards with the success flash.
+ * which shows the workflow again afterwards, at the new step, with the
+ * success flash. Returns the new step's ID.
  */
-export async function addStepThroughForm(page: Page, step: FormStep): Promise<void> {
+export async function addStepThroughForm(page: Page, step: FormStep): Promise<string> {
   await page.locator('#workflowstep-name').fill(step.name);
   await page.locator('#ws-step-type').selectOption(step.type);
-  if (step.order !== undefined) {
-    await page.locator(STEP_ORDER_INPUT).fill(step.order);
+  if (step.position !== undefined) {
+    await page.locator(POSITION_SELECT).selectOption(step.position);
   }
   if (step.type === 'job') {
     await page.locator('#workflowstep-job_template_id').selectOption({ label: step.target ?? '' });
+    if (step.onFailure !== undefined) {
+      await page.locator('#workflowstep-on_failure_step_id').selectOption({ label: step.onFailure });
+    }
   } else if (step.type === 'approval') {
     await page.locator('#workflowstep-approval_rule_id').selectOption({ label: step.target ?? '' });
   }
   await submitForm(page, 'Add Step');
   // The form was sent: no field, hidden or not, refused it.
   expect(await addStepFormErrors(page)).toEqual([]);
-  await expectFlash(page, 'success', `Step "${step.name}" added.`);
+  await expectFlash(page, 'success', `Step "${step.name}" added at position `);
+  const id = await templateStepId(page, step.name);
+  await expect(page).toHaveURL(new RegExp(`/workflow-template/view\\?id=\\d+#step-${id}$`));
+  return id;
+}
+
+/** What editStepThroughForm() changes; every choice by its label. */
+export interface StepEdit {
+  name?: string;
+  /** The job template of a job step, or the approval rule of an approval step. */
+  target?: string;
+  position?: string;
+  onSuccess?: string;
+  onFailure?: string;
+  always?: string;
+}
+
+/**
+ * Opens the edit page of the step named `name` of the open workflow template
+ * page with its Edit button, changes what `edit` names, and saves. The
+ * template page shows the step again afterwards (#step-<id>) with the
+ * success flash, which is returned.
+ */
+export async function editStepThroughForm(page: Page, name: string, edit: StepEdit): Promise<string> {
+  const id = await templateStepId(page, name);
+  await templateStepRow(page, name).locator('a[data-action="edit"]').click();
+  await expect(page).toHaveURL(new RegExp(`/workflow-template/edit-step\\?id=\\d+&step=${id}$`));
+  await fillStepForm(page, edit);
+  await submitForm(page, 'Save Step');
+  await expect(page).toHaveURL(new RegExp(`/workflow-template/view\\?id=\\d+#step-${id}$`));
+  const flash = page.locator('#page-content > .alert-success.alert-dismissible, #page-content > .alert-info.alert-dismissible');
+  await expect(flash).toHaveCount(1);
+  return ((await flash.textContent()) ?? '').trim();
+}
+
+/** Fills what `edit` names into the step form of the open page. */
+export async function fillStepForm(page: Page, edit: StepEdit): Promise<void> {
+  if (edit.name !== undefined) {
+    await page.locator('#workflowstep-name').fill(edit.name);
+  }
+  if (edit.target !== undefined) {
+    const target = page.locator('#workflowstep-job_template_id:enabled, #workflowstep-approval_rule_id:enabled');
+    await target.selectOption({ label: edit.target });
+  }
+  if (edit.position !== undefined) {
+    await page.locator(POSITION_SELECT).selectOption(edit.position);
+  }
+  const routes: [string | undefined, string][] = [
+    [edit.onSuccess, '#workflowstep-on_success_step_id'],
+    [edit.onFailure, '#workflowstep-on_failure_step_id'],
+    [edit.always, '#workflowstep-on_always_step_id'],
+  ];
+  for (const [label, select] of routes) {
+    if (label !== undefined) {
+      await page.locator(select).selectOption({ label });
+    }
+  }
+}
+
+/**
+ * Moves the step named `name` of the open workflow template page with its
+ * Move to… menu: opens it and clicks the choice `itemLabel` ("To the start",
+ * "After 2. Build", "To the end"). The page shows the step again afterwards
+ * (#step-<id>).
+ */
+export async function moveStepTo(page: Page, name: string, itemLabel: string): Promise<void> {
+  const id = await templateStepId(page, name);
+  const menu = templateStepRow(page, name).locator('details[data-action="move-to"]');
+  // A click on the summary opens the menu, and closes it when it is open.
+  if (!(await menu.evaluate((details) => (details as HTMLDetailsElement).open))) {
+    await menu.locator('summary').click();
+  }
+  const item = menu.locator('button[name="position"]', { hasText: exactly(itemLabel) });
+  await expect(item).toBeVisible();
+  await Promise.all([
+    page.waitForURL(new RegExp(`/workflow-template/view\\?id=\\d+#step-${id}$`)),
+    item.click(),
+  ]);
 }
 
 /** Removes the step named `name` with its Remove button on the open workflow template page. */
 export async function removeTemplateStep(page: Page, name: string): Promise<void> {
   page.once('dialog', (dialog) => dialog.accept());
-  await templateStepRow(page, name).locator('form[action*="/workflow-template/remove-step"] button').click();
-  await expectFlash(page, 'success', 'Step removed.');
+  await Promise.all([
+    page.waitForURL(/\/workflow-template\/view\?id=\d+#workflow-steps$/),
+    templateStepRow(page, name).locator('button[data-action="remove"]').click(),
+  ]);
+  await expectFlash(page, 'success', `Step "${name}" removed; it was at position `);
   await expect(templateStepRow(page, name)).toHaveCount(0);
 }
 
@@ -224,12 +621,51 @@ export async function removingSteps(page: Page, names: string[], use: () => Prom
   await removeListed();
 }
 
-/** Columns of the run index: #, Workflow, Status, Launched By, Started, Finished. */
+/** Creates the workflow template `name` through the form; its ID. Its page, without steps, is open then. */
+export async function createWorkflow(page: Page, name: string): Promise<string> {
+  await page.goto('/workflow-template/create');
+  await page.locator('#workflowtemplate-name').fill(name);
+  await submitForm(page);
+  await expectFlash(page, 'success', `Workflow template "${name}" created.`);
+  await expect(page).toHaveURL(/\/workflow-template\/view\?id=\d+$/);
+  await expect(page.locator('#wf-no-steps')).toHaveText('No steps defined yet.');
+  return new URL(page.url()).searchParams.get('id') ?? '';
+}
+
+/** Deletes the workflow template #`id` named `name` from its page; that cancels its active runs. */
+export async function deleteWorkflow(page: Page, id: string, name: string): Promise<void> {
+  await page.goto(`/workflow-template/view?id=${id}`);
+  page.once('dialog', (dialog) => dialog.accept());
+  await Promise.all([
+    page.waitForURL(/\/workflow-template\/index/),
+    page.locator('#wf-delete-form button[type="submit"]').click(),
+  ]);
+  await expectFlash(page, 'success', `Workflow template "${name}" deleted.`);
+}
+
+/**
+ * Runs `use` on the new workflow template `name`, whose page is open then,
+ * and deletes it afterwards, which cancels the runs `use` left. When `use`
+ * fails, the workflow is still deleted if that works; the E2E teardown
+ * removes what is left.
+ */
+export async function withNewWorkflow(page: Page, name: string, use: (id: string) => Promise<void>): Promise<void> {
+  const id = await createWorkflow(page, name);
+  try {
+    await use(id);
+  } catch (error) {
+    await deleteWorkflow(page, id, name).catch(() => undefined);
+    throw error;
+  }
+  await deleteWorkflow(page, id, name);
+}
+
+/** Columns of the run index: #, Workflow, Status, Current Step, Launched By, Started, Finished. */
 const RUN_INDEX = '/workflow-job/index';
 const RUN_WORKFLOW = 1;
 
 /** A regular expression that matches exactly `text`. */
-function exactly(text: string): RegExp {
+export function exactly(text: string): RegExp {
   return new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 }
 
@@ -264,9 +700,13 @@ export async function runCount(page: Page, workflow: string): Promise<number> {
   return rowsWhere(await indexRows(page, RUN_INDEX), RUN_WORKFLOW, workflow).length;
 }
 
-/** The ID of the job a step row of the open run page links to. */
+/**
+ * The ID of the job a step row of the open run page links to: the job link
+ * only, as the cell also links the approval request of a step that waits
+ * for one ("Request #R").
+ */
 export async function stepJobId(row: Locator): Promise<string> {
-  const link = row.locator('[data-wjs-job-cell] a');
+  const link = row.locator('[data-wjs-job-link]');
   await expect(link).toHaveText(/^#\d+$/);
   return ((await link.textContent()) ?? '').trim().slice(1);
 }

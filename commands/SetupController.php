@@ -15,7 +15,19 @@ use yii\console\ExitCode;
 class SetupController extends Controller
 {
     /**
-     * Creates the first admin user.
+     * What setup/admin prints, with a newline, when it aborts: an active
+     * superadmin exists (User::activeSuperadminExists()). bin/quickstart
+     * reads "already exists" in it as an admin who is there already.
+     */
+    public const ACTIVE_SUPERADMIN_EXISTS = 'An active superadmin already exists. Aborting.';
+
+    /**
+     * Creates a superadmin with the admin role: the first user, or, while no
+     * active superadmin exists, a new one, so that a superadmin can sign in
+     * again when every superadmin is inactive or none is left. Aborts while
+     * an active superadmin exists (ACTIVE_SUPERADMIN_EXISTS). Only the first
+     * setup, run while no user exists, runs the deferred seed migrations: a
+     * later run leaves the seeded projects, inventories and templates alone.
      *
      * Usage: php yii setup/admin [username] [email] [password]
      */
@@ -24,10 +36,11 @@ class SetupController extends Controller
         string $email = 'admin@example.com',
         #[\SensitiveParameter] string $password = ''
     ): int {
-        if (User::find()->where(['is_superadmin' => true])->exists()) {
-            $this->stdout("A superadmin already exists. Aborting.\n");
+        if (User::activeSuperadminExists()) {
+            $this->stdout(self::ACTIVE_SUPERADMIN_EXISTS . "\n");
             return ExitCode::UNSPECIFIED_ERROR;
         }
+        $firstSetup = !User::find()->exists();
 
         if ($password === '') {
             /** @var \yii\base\Security $security */
@@ -72,7 +85,9 @@ class SetupController extends Controller
 
         $this->stdout("Admin user '{$username}' created with ID {$user->id}.\n");
 
-        $this->applyDeferredSeeds();
+        if ($firstSetup) {
+            $this->applyDeferredSeeds();
+        }
 
         return ExitCode::OK;
     }
@@ -81,6 +96,10 @@ class SetupController extends Controller
      * Seed migrations that require a user to exist are skipped during the
      * initial container startup (no users yet). Re-mark them as pending and
      * re-run migrate so they execute now that the first admin user exists.
+     * Only for the first setup: run again, they would create the Selftest
+     * and Demo content an operator removed (and queue a clone of the demo
+     * repository) and give the default runner group to seeded templates
+     * whose runner group is gone.
      */
     private function applyDeferredSeeds(): void
     {

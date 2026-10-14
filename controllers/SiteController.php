@@ -21,13 +21,20 @@ use app\models\User;
 use app\models\WorkflowJob;
 use app\models\WorkflowTemplate;
 use app\controllers\traits\TeamScopingTrait;
+use app\services\runstate\ApprovalRequestContexts;
+use app\services\runstate\Viewer;
+use app\services\runstate\WorkflowRunStates;
 use yii\db\ActiveQuery;
+use yii\db\Query;
 use yii\web\BadRequestHttpException;
 use yii\web\Response;
 
 class SiteController extends BaseController
 {
     use TeamScopingTrait;
+
+    /** The dashboard's link to the list of workflow runs. */
+    public const ALL_WORKFLOW_JOBS = 'All Workflow Jobs';
 
     /**
      * @return array<int, array<string, mixed>>
@@ -49,7 +56,9 @@ class SiteController extends BaseController
      * The dashboard. Team scoping applies to every list and counter: only
      * jobs, schedules, workflows, approval requests and projects the user may
      * see. Panels for a permission the user lacks stay empty. Runners are
-     * shared infrastructure and stay unscoped.
+     * shared infrastructure and stay unscoped. What the running workflows
+     * wait for (WorkflowRunStates) and what the pending requests are for
+     * (ApprovalRequestContexts) are read for all of them at once.
      */
     public function actionIndex(): string
     {
@@ -58,13 +67,25 @@ class SiteController extends BaseController
         $approvals = $this->pendingApprovalQuery();
         $schedules = $this->scheduleQuery();
         $runningWorkflows = $this->runningWorkflows();
+        /** @var list<ApprovalRequest> $pendingApprovals */
+        $pendingApprovals = $approvals === null ? [] : (clone $approvals)
+            ->with(['approvalRule'])
+            ->orderBy(['requested_at' => SORT_DESC])
+            ->limit(5)
+            ->all();
+        /** @var ApprovalRequestContexts $contexts */
+        $contexts = \Yii::$app->get('approvalRequestContexts');
+        /** @var WorkflowRunStates $runStates */
+        $runStates = \Yii::$app->get('workflowRunStates');
+        $viewer = Viewer::current();
         $cutoff = time() - RunnerGroup::STALE_AFTER;
 
         return $this->render('index', [
             'stats' => $this->buildStatCards($today, $jobFilter, $approvals),
             'statusCounts' => $this->buildStatusCounts((int)strtotime('-6 days', $today), $jobFilter),
             'recentJobs' => $this->jobs($jobFilter)
-                ->with(['jobTemplate', 'launcher'])
+                // The execution of a placeholder job names its approval step (Texts::PLACEHOLDER_LABEL).
+                ->with(['jobTemplate', 'launcher', 'workflowJobStep.workflowStep'])
                 ->orderBy(['id' => SORT_DESC])
                 ->limit(10)
                 ->all(),
@@ -78,12 +99,11 @@ class SiteController extends BaseController
             'onlineRunners' => (int)Runner::find()->where(['>=', 'last_seen_at', $cutoff])->count(),
             'totalRunners' => (int)Runner::find()->count(),
             'outdatedRunners' => $this->countOutdatedRunners(),
-            'pendingApprovals' => $approvals === null ? [] : (clone $approvals)
-                ->with(['approvalRule', 'job.jobTemplate'])
-                ->orderBy(['requested_at' => SORT_DESC])
-                ->limit(5)
-                ->all(),
+            'pendingApprovals' => $pendingApprovals,
+            'approvalContexts' => $contexts->forRequests($pendingApprovals, $viewer),
             'runningWorkflows' => $runningWorkflows,
+            'runStates' => $runStates->forRuns($runningWorkflows, $viewer),
+            'viewer' => $viewer,
             'resumableWorkflowTemplateIds' => $this->resumableWorkflowTemplateIds($runningWorkflows),
             'upcomingSchedules' => $schedules === null ? [] : (clone $schedules)
                 ->with(['jobTemplate'])
@@ -231,17 +251,17 @@ class SiteController extends BaseController
     /**
      * Running workflows whose every job step the user may see.
      *
-     * @return WorkflowJob[]
+     * @return list<WorkflowJob>
      */
     private function runningWorkflows(): array
     {
         if (!$this->userMay('workflow.view')) {
             return [];
         }
-        /** @var WorkflowJob[] $running */
+        /** @var list<WorkflowJob> $running */
         $running = self::restrict(
             WorkflowJob::find()
-                ->with(['workflowTemplate', 'launcher', 'currentStep'])
+                ->with(['workflowTemplate', 'launcher'])
                 ->where(['status' => WorkflowJob::STATUS_RUNNING])
                 ->orderBy(['id' => SORT_DESC]),
             $this->workflowChecker()->buildWorkflowTemplateFilter($this->currentUserId(), 'workflow_job.workflow_template_id')
@@ -252,9 +272,11 @@ class SiteController extends BaseController
 
     /**
      * The workflow templates among $running whose paused runs the user may
-     * resume: workflow.launch and operator access to every job step.
+     * resume: workflow.launch and operator access to every job step, as
+     * WorkflowAccessChecker::canOperateWorkflowTemplate() decides it, in one
+     * query for all of them.
      *
-     * @param WorkflowJob[] $running
+     * @param list<WorkflowJob> $running
      * @return list<int>
      */
     private function resumableWorkflowTemplateIds(array $running): array
@@ -263,13 +285,15 @@ class SiteController extends BaseController
         if ($userId === null || $running === [] || !$this->userMay('workflow.launch')) {
             return [];
         }
-        $ids = array_unique(array_map(static fn (WorkflowJob $wf): int => (int)$wf->workflow_template_id, $running));
-        $access = $this->workflowChecker();
+        $ids = array_values(array_unique(array_map(static fn (WorkflowJob $wf): int => (int)$wf->workflow_template_id, $running)));
+        $operable = $this->workflowChecker()->buildWorkflowTemplateFilter($userId, 'wt.id', true);
 
-        return array_values(array_filter(
-            $ids,
-            static fn (int $id): bool => $access->canOperateWorkflowTemplate($userId, $id)
-        ));
+        return $operable === null ? $ids : array_map('intval', (new Query())
+            ->select('wt.id')
+            ->from(['wt' => WorkflowTemplate::tableName()])
+            ->where(['wt.id' => $ids])
+            ->andWhere($operable)
+            ->column());
     }
 
     private function countOutdatedRunners(): int

@@ -87,4 +87,65 @@ class TimeHelperTest extends TestCase
         $result = TimeHelper::ago(time() + 10);
         $this->assertSame('in a moment', $result);
     }
+
+    /**
+     * @return array<string, array{0: int, 1: string}>
+     */
+    public static function durationData(): array
+    {
+        return [
+            'nothing' => [0, '0s'],
+            'seconds' => [45, '45s'],
+            'last second of a minute' => [59, '59s'],
+            'one minute' => [60, '1m 00s'],
+            'minutes and seconds' => [75, '1m 15s'],
+            'seconds padded' => [125, '2m 05s'],
+            'last second of an hour' => [3599, '59m 59s'],
+            'one hour' => [3600, '1h 00m'],
+            'hours and minutes' => [7980, '2h 13m'],
+            'minutes padded' => [3900, '1h 05m'],
+            'last second of a day' => [86399, '23h 59m'],
+            'one day' => [86400, '1d 0h'],
+            'days and hours' => [273600, '3d 4h'],
+            'many days' => [3 * 86400 * 10 + 7200, '30d 2h'],
+            'a clock that went back' => [-5, '0s'],
+        ];
+    }
+
+    /**
+     * Hours and days, not minutes only ("133m 00s" for 7980 s), and no
+     * wrap after 24 hours as gmdate('H:i:s') wraps.
+     *
+     * @dataProvider durationData
+     */
+    public function testDurationShowsItsTwoLargestUnits(int $seconds, string $expected): void
+    {
+        $this->assertSame($expected, TimeHelper::duration($seconds));
+    }
+
+    public function testStampShowsOnlyTheTimeOnTheSameDay(): void
+    {
+        $now = (int)mktime(18, 30, 0, 10, 13, 2026);
+        $morning = (int)mktime(0, 0, 5, 10, 13, 2026);
+
+        $this->assertSame('00:00:05', TimeHelper::stamp($morning, $now));
+        $this->assertSame('18:30:00', TimeHelper::stamp($now, $now));
+    }
+
+    public function testStampShowsTheDateForAnotherDay(): void
+    {
+        $now = (int)mktime(0, 0, 1, 10, 13, 2026);
+
+        $this->assertSame('2026-10-12 23:59:59', TimeHelper::stamp((int)mktime(23, 59, 59, 10, 12, 2026), $now));
+        $this->assertSame('2026-10-14 00:00:00', TimeHelper::stamp((int)mktime(0, 0, 0, 10, 14, 2026), $now));
+        $this->assertSame('2025-10-13 00:00:01', TimeHelper::stamp((int)mktime(0, 0, 1, 10, 13, 2025), $now));
+    }
+
+    public function testStampComparesWithTheCurrentTimeByDefault(): void
+    {
+        $twoDaysAgo = time() - 2 * 86400;
+
+        $this->assertSame(date('Y-m-d H:i:s', $twoDaysAgo), TimeHelper::stamp($twoDaysAgo));
+        $this->assertMatchesRegularExpression('/^\d{2}:\d{2}:\d{2}$/', TimeHelper::stamp(time()));
+    }
 }

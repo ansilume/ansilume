@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectFlash, expectForbidden } from '../../lib/helpers';
 import { asAdmin, forgePost, idWhere, indexRows, optionLabels, rowsWhere } from '../../lib/scoping';
+import { LEGEND, templateStepPositions } from '../../lib/workflows';
 
 /**
  * Team scoping of workflow templates. A workflow belongs to the projects of
@@ -100,7 +101,53 @@ test.describe('Team Scoping — Workflow Templates', () => {
     await expect(page.locator('#add-step-form')).toHaveCount(0);
     await expect(content.locator('form[action*="/workflow-template/move-step"]')).toHaveCount(0);
     await expect(content.locator('form[action*="/workflow-template/remove-step"]')).toHaveCount(0);
+    // No Edit, + Insert below or Move to… either: no step action at all.
+    await expect(content.locator('[data-action="edit"], [data-action="insert-below"], [data-action="move-to"]')).toHaveCount(0);
+    await expect(content.locator('[data-action]')).toHaveCount(0);
+    // The positions and the legend are for everyone who may view it.
+    await expect(templateStepPositions(page)).toHaveText(['1', '2']);
+    await expect(page.locator('#wf-steps-legend')).toHaveText(LEGEND);
     await expect(content.locator('.card', { hasText: 'Inbound Trigger' })).toHaveCount(0);
+  });
+
+  // Every step action checks operator access to the project of every job
+  // step before anything is written, the edit page included (the checker's
+  // proof of wave 2, kept as a browser test).
+  test('operator gets 403 on the edit page and every forged step change of a workflow they may only view', async ({ page }) => {
+    const id = await openWorkflow(page, 'e2e-alpha-viewed-wf');
+    const rows = page.locator('#workflow-steps-table tbody tr');
+    // Each step's ID, position and name.
+    const steps = () => rows.evaluateAll((trs) => trs.map((tr) => [
+      tr.getAttribute('data-step-id'),
+      tr.getAttribute('data-position'),
+      (tr.querySelector('td:nth-child(2)')?.textContent ?? '').trim(),
+    ].join(' ')));
+    const before = await steps();
+    const stepId = (await rows.first().getAttribute('data-step-id')) ?? '';
+    expect(stepId).toMatch(/^\d+$/);
+    const refusal = 'You do not have permission to modify this resource.';
+    const edit = `/workflow-template/edit-step?id=${id}&step=${stepId}`;
+
+    const response = await page.goto(edit);
+    expect(response?.status()).toBe(403);
+    await expect(page.locator('body')).toContainText(refusal);
+
+    // Real form posts with a valid CSRF token: only the access checks may stop them.
+    const changes: [string, Record<string, string>, RegExp][] = [
+      [edit, { 'WorkflowStep[name]': 'e2e-forged-name', position: 'keep' }, /\/workflow-template\/edit-step/],
+      [`/workflow-template/add-step?id=${id}`, { 'WorkflowStep[name]': 'e2e-forged-step', 'WorkflowStep[step_type]': 'pause' }, /\/workflow-template\/add-step/],
+      [`/workflow-template/move-step?id=${id}`, { step_id: stepId, position: 'end' }, /\/workflow-template\/move-step/],
+      [`/workflow-template/remove-step?id=${id}`, { step_id: stepId }, /\/workflow-template\/remove-step/],
+    ];
+    for (const [action, fields, landsOn] of changes) {
+      await page.goto('/workflow-template/index');
+      await forgePost(page, action, fields, landsOn);
+      await expectForbidden(page);
+      await expect(page.locator('body')).toContainText(refusal);
+    }
+
+    await openWorkflow(page, 'e2e-alpha-viewed-wf');
+    expect(await steps()).toEqual(before);
   });
 
   test('operator may change and launch a workflow whose every step their team operates', async ({ page }) => {

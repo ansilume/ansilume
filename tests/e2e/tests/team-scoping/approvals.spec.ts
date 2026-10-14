@@ -1,4 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
+import { REQUEST_JOB_COLUMN, REQUEST_RULE_COLUMN, REQUEST_STATUS_COLUMN } from '../../lib/approvals';
 import { expectForbidden } from '../../lib/helpers';
 import { asAdmin, forgePost, indexRows, rowsWhere } from '../../lib/scoping';
 
@@ -15,15 +16,15 @@ import { asAdmin, forgePost, indexRows, rowsWhere } from '../../lib/scoping';
  */
 const INDEX = '/approval/index';
 const RULE = 'e2e-beta-approval-rule';
-// Columns of the index: #, Job, Rule, Status, Requested, Resolved.
-const RULE_COLUMN = 2;
-const STATUS_COLUMN = 3;
+// Columns of the index: #, Job, For, Rule, Status, Requested, Expires, Resolved.
+const RULE_COLUMN = REQUEST_RULE_COLUMN;
+const STATUS_COLUMN = REQUEST_STATUS_COLUMN;
 
 /** The beta request and its placeholder job, looked up as e2e-admin. */
 async function betaRequest(page: Page): Promise<{ id: string; jobId: string }> {
   const rows = rowsWhere(await indexRows(page, INDEX), RULE_COLUMN, RULE);
   expect(rows, `one request on ${RULE}`).toHaveLength(1);
-  return { id: rows[0].id, jobId: rows[0].cells[1].replace('#', '') };
+  return { id: rows[0].id, jobId: rows[0].cells[REQUEST_JOB_COLUMN].replace('#', '') };
 }
 
 async function expectNoDecisionForms(page: Page) {

@@ -15,6 +15,8 @@ use app\services\JobCancellationService;
 use app\services\JobLaunchInput;
 use app\services\JobLaunchRejectedException;
 use app\services\JobLaunchService;
+use app\services\runstate\ApprovalRequestContexts;
+use app\services\runstate\Viewer;
 use app\services\WorkflowAccessChecker;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use yii\web\NotFoundHttpException;
@@ -27,6 +29,10 @@ use yii\web\NotFoundHttpException;
  * POST /api/v1/jobs            — launch (body: {"job_template_id": N, "extra_vars": {...}, "limit": "..."});
  *                                "template_id" is still accepted as an alias
  * POST /api/v1/jobs/{id}/cancel
+ *
+ * The detail, the launch and the cancel answer a JobDetail, which links the
+ * job to its approval request and to the workflow run and step execution
+ * it was created for, as far as the caller may see them (serializeJob()).
  */
 class JobsController extends BaseApiController
 {
@@ -59,6 +65,9 @@ class JobsController extends BaseApiController
     public $enableCsrfValidation = false;
 
     /**
+     * The jobs the caller may see, newest first. Their artifacts are counted
+     * in one query for the page, not one per job.
+     *
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
     public function actionIndex(): array
@@ -67,13 +76,24 @@ class JobsController extends BaseApiController
         $search->teamFilter = $this->checker()->buildJobFilter($this->currentUserId());
         $dp = $search->search(\Yii::$app->request->queryParams);
 
+        /** @var list<Job> $jobs */
         $jobs = $dp->getModels();
+        $artifactCounts = array_map('intval', array_column(
+            JobArtifact::find()
+                ->select(['job_id', 'artifacts' => 'COUNT(*)'])
+                ->where(['job_id' => array_map(static fn (Job $job): int => (int)$job->id, $jobs)])
+                ->groupBy('job_id')
+                ->asArray()
+                ->all(),
+            'artifacts',
+            'job_id'
+        ));
         $total = $dp->totalCount;
         $page = $this->requestedPage();
         $per = 25;
 
         return $this->paginated(
-            array_map(fn ($j) => $this->serializeJob($j), $jobs),
+            array_map(fn (Job $j) => $this->serializeJob($j, false, $artifactCounts[(int)$j->id] ?? 0), $jobs),
             (int)$total,
             $page,
             $per
@@ -408,12 +428,18 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * $withCredentials adds the job's credentials (names and roles, never
-     * secrets). Single-job responses only, so the list needs no extra queries.
+     * The Job fields; $detail adds those of JobDetail: the job's credentials
+     * (names and roles, never secrets), its approval request
+     * (approval_request_id), and the workflow run and step execution it was
+     * created for (workflow_job_id, workflow_job_step_id), each null when
+     * there is none or the caller may not see it
+     * (ApprovalRequestContexts::forJob()). Single-job responses only, so the
+     * list needs no extra queries. $artifactCount: the job's artifacts as the
+     * list counted them for all its jobs at once; null counts them here.
      *
      * @return array<string, mixed>
      */
-    private function serializeJob(Job $job, bool $withCredentials = false): array
+    private function serializeJob(Job $job, bool $detail = false, ?int $artifactCount = null): array
     {
         $data = [
             'id' => $job->id,
@@ -427,16 +453,19 @@ class JobsController extends BaseApiController
             'check_mode' => (bool)$job->check_mode,
             'exit_code' => $job->exit_code,
             'execution_command' => $job->execution_command,
-            'artifact_count' => (int)$job->getArtifacts()->count(),
+            'artifact_count' => $artifactCount ?? (int)$job->getArtifacts()->count(),
             'queued_at' => $job->queued_at,
             'started_at' => $job->started_at,
             'finished_at' => $job->finished_at,
             'created_at' => $job->created_at,
         ];
-        if ($withCredentials) {
+        if ($detail) {
             /** @var \app\services\JobCredentialResolver $resolver */
             $resolver = \Yii::$app->get('jobCredentialResolver');
             $data['credentials'] = $resolver->describe($job->decodedRunnerPayload());
+            /** @var ApprovalRequestContexts $contexts */
+            $contexts = \Yii::$app->get('approvalRequestContexts');
+            $data += $contexts->forJob($job, Viewer::current())->apiFields();
         }
 
         return $data;

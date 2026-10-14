@@ -41,6 +41,54 @@ class FakeLdapClientTest extends TestCase
         $this->assertSame('Simulated service bind failure.', $client->getLastError());
     }
 
+    public function testFailSearchMakesAUserSearchFailWithAnError(): void
+    {
+        $client = new FakeLdapClient($this->makeConfig());
+        $client->addUser('jdoe', 'uid=jdoe,dc=test', 'pw');
+        $client->failSearch(true);
+
+        $this->assertNull($client->findUser('jdoe'));
+        $this->assertSame(FakeLdapClient::SEARCH_FAILURE, $client->getLastError());
+
+        $client->failSearch(false);
+        $this->assertNotNull($client->findUser('jdoe'));
+        $this->assertNull($client->getLastError(), 'A search reports only its own outcome.');
+    }
+
+    public function testFailGroupSearchMakesAGroupSearchFailWithAnError(): void
+    {
+        $client = new FakeLdapClient($this->makeConfig());
+        $client->addGroupMembership('uid=jdoe,dc=test', 'Admins');
+        $client->failGroupSearch(true);
+
+        $this->assertSame([], $client->findUserGroups('uid=jdoe,dc=test'));
+        $this->assertSame(FakeLdapClient::GROUP_SEARCH_FAILURE, $client->getLastError());
+
+        $client->failGroupSearch(false);
+        $this->assertSame(['Admins'], $client->findUserGroups('uid=jdoe,dc=test'));
+        $this->assertNull($client->getLastError());
+    }
+
+    public function testASearchThatFindsNoEntryReportsNoErrorAfterAFailedBind(): void
+    {
+        $client = new FakeLdapClient($this->makeConfig());
+        $client->failServiceBind(true);
+        $this->assertFalse($client->bindServiceAccount());
+
+        $client->failServiceBind(false);
+        $this->assertNull($client->findUser('ghost'));
+        $this->assertNull($client->getLastError(), 'The directory has no such user: no error.');
+    }
+
+    public function testAGroupSearchWhoseServiceBindFailsReportsTheBindError(): void
+    {
+        $client = new FakeLdapClient($this->makeConfig());
+        $client->failServiceBind(true);
+
+        $this->assertSame([], $client->findUserGroups('uid=jdoe,dc=test'));
+        $this->assertSame(FakeLdapClient::SERVICE_BIND_FAILURE, $client->getLastError());
+    }
+
     public function testFindUserReturnsRegisteredEntry(): void
     {
         $client = new FakeLdapClient($this->makeConfig());

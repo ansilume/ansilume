@@ -33,7 +33,8 @@ test.describe('Delete a workflow template', () => {
     const gone = await page.goto(`/workflow-template/view?id=${id}`);
     expect(gone?.status()).toBe(404);
 
-    // The run ended as canceled, and its paused step says why.
+    // The run ended as canceled, and its paused step says why: the delete
+    // canceled it (stored as failed, shown as Canceled).
     await page.goto(`/workflow-job/view?id=${runId}`);
     await expect(page.locator('#wj-status')).toHaveText('Canceled');
     await expect(page.locator('#wj-live')).toHaveCount(0);
@@ -41,7 +42,7 @@ test.describe('Delete a workflow template', () => {
     await expect(page.locator('form[action*="/workflow-job/cancel"]')).toHaveCount(0);
     const pause = runStepRow(page, DELETE_PAUSE);
     await expect(pause.locator('[data-wjs-type-cell]')).toHaveText('Pause');
-    await expect(pause.locator('[data-wjs-status-cell] .badge')).toHaveText('Failed');
+    await expect(pause.locator('[data-wjs-status-cell] .badge')).toHaveText('Canceled');
     await expect(pause.locator('[data-wjs-error]')).toHaveText('Not finished: the run was canceled because its workflow template was deleted.');
     await expect(page.locator('#wj-steps-table tbody tr')).toHaveCount(1);
   });

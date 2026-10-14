@@ -8,13 +8,19 @@ declare(strict_types=1);
 /** @var array    $tree       Directory tree nodes */
 /** @var array<string, mixed> $vault  VaultOverviewService::forProject() */
 
+use app\components\GitSyncDiagnostics;
 use app\components\LintVerdict;
+use app\controllers\ProjectController;
 use app\models\Project;
 use yii\helpers\Html;
 use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = $model->name;
+// Everyone who may view the project sees this page: the repository URL, its
+// sync output and its sync error show the URL without the credentials of its
+// userinfo (GitSyncDiagnostics::redactUrl). The edit form shows it in full to
+// those who may update the project.
 ?>
 <div class="d-flex justify-content-between align-items-start mb-3">
     <div>
@@ -53,7 +59,7 @@ $this->title = $model->name;
 <div class="alert alert-danger d-flex align-items-start gap-2">
     <div>
         <strong>Last sync failed</strong><br>
-        <code class="user-select-all" style="white-space:pre-wrap;"><?= Html::encode($model->last_sync_error) ?></code>
+        <code class="user-select-all" style="white-space:pre-wrap;"><?= Html::encode(GitSyncDiagnostics::redactUrl($model->last_sync_error)) ?></code>
     </div>
 </div>
 <?php endif; ?>
@@ -93,8 +99,10 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
     </div>
     <div class="card-body p-0">
         <pre class="job-log m-0" id="sync-log-output" style="max-height:300px;overflow-y:auto;"><?php
+        // The clone command and a timeout name the repository URL: without
+        // the credentials of its userinfo, as on the rest of the page.
         foreach ($initialLogs as $logRow) {
-            echo Html::encode($logRow->content);
+            echo Html::encode(GitSyncDiagnostics::redactUrl($logRow->content));
         }
         ?></pre>
     </div>
@@ -106,6 +114,7 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
 <script>
 (function () {
     var statusUrl = <?= Json::htmlEncode(Url::to(['sync-status', 'id' => $model->id])) // xss-ok: hex-escaped JSON?>;
+    var card = document.getElementById('sync-log-card');
     var output = document.getElementById('sync-log-output');
     var badge = document.getElementById('sync-status-badge');
     var startedAt = document.getElementById('sync-started-at');
@@ -113,7 +122,26 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
     var lastSeq = <?= Json::htmlEncode((int)($initialLogs ? end($initialLogs)->sequence : 0)) // xss-ok: int?>;
     var initialStatus = <?= Json::htmlEncode($model->status) // xss-ok: hex-escaped JSON?>;
     var pollIntervalMs = 2000;
+    var timer = null;
     var stopOnTerminal = function () { /* set after first poll resolves */ };
+    // A refused poll (401 or 403: signed out, or no access any more; 404:
+    // the project is gone) would be refused again: polling stops, and a note
+    // under the sync output asks for a reload.
+    var stopStatuses = [401, 403, 404];
+    var stoppedNote = <?= Json::htmlEncode(ProjectController::SYNC_LIVE_STOPPED) // xss-ok: hex-escaped JSON?>;
+    var stopped = false;
+
+    function stop() {
+        if (timer) { clearInterval(timer); timer = null; }
+        if (stopped) return;
+        stopped = true;
+        var note = document.createElement('div');
+        note.id = 'sync-live-stopped';
+        note.className = 'card-footer py-1 px-2 small text-body-secondary';
+        note.setAttribute('role', 'status');
+        note.textContent = stoppedNote;
+        card.appendChild(note);
+    }
 
     function statusBadge(status) {
         var map = {synced: 'success', syncing: 'primary', error: 'danger', new: 'secondary'};
@@ -188,9 +216,22 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
     }
 
     function poll() {
-        fetch(statusUrl + '&since=' + lastSeq, {credentials: 'same-origin'})
-            .then(function (r) { return r.json(); })
+        if (stopped) return;
+        // Asked for JSON, a signed-out poll is answered 403, not sent to the
+        // login page, which would keep the poll as the address to return to.
+        fetch(statusUrl + '&since=' + lastSeq, { headers: { 'Accept': 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) {
+                if (stopStatuses.indexOf(r.status) !== -1) {
+                    stop();
+                    return null;
+                }
+                if (!r.ok) {
+                    throw new Error('poll failed: ' + r.status);
+                }
+                return r.json();
+            })
             .then(function (data) {
+                if (data === null) return;
                 if (Array.isArray(data.logs) && data.logs.length > 0) {
                     var atBottom = output.scrollTop + output.clientHeight >= output.scrollHeight - 4;
                     data.logs.forEach(function (line) {
@@ -219,7 +260,6 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
     // health at a glance regardless of the current sync.
     poll();
 
-    var timer = null;
     if (initialStatus === 'syncing') {
         timer = setInterval(poll, pollIntervalMs);
         stopOnTerminal = function () {
@@ -252,7 +292,7 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
                     <dd class="col-sm-8"><?= Html::encode(strtoupper($model->scm_type)) ?></dd>
                     <?php if ($model->scm_url) : ?>
                         <dt class="col-sm-4">URL</dt>
-                        <dd class="col-sm-8"><code><?= Html::encode($model->scm_url) ?></code></dd>
+                        <dd class="col-sm-8"><code><?= Html::encode(GitSyncDiagnostics::redactUrl($model->scm_url)) ?></code></dd>
                         <dt class="col-sm-4">Branch</dt>
                         <dd class="col-sm-8"><code><?= Html::encode($model->scm_branch) ?></code></dd>
                     <?php endif; ?>

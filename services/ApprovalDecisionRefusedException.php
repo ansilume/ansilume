@@ -17,8 +17,10 @@ use app\models\ApprovalRequest;
  * - its job no longer waits for approval, or the job's workflow step or run
  *   has ended, or its job template was deleted (the request is closed as
  *   canceled then, and a job still pending_approval is canceled): 409
- * - the voter launched the job (for a workflow approval step: started the
- *   run): 403
+ * - the voter launched the job: 403 LAUNCHER_REFUSED; for the job of a
+ *   workflow step (the placeholder of an approval step, or the job of a job
+ *   step whose template is gated), whose run the voter started:
+ *   LAUNCHER_REFUSED_RUN
  * - the voter is not an eligible approver: 403
  * - the voter has already voted: 422
  * - the decision cannot be stored, e.g. a comment that is too long: 422
@@ -59,6 +61,13 @@ final class ApprovalDecisionRefusedException extends \RuntimeException
         . 'its job #%d no longer waits for approval.';
 
     public const LAUNCHER_REFUSED = 'You launched this job; another approver must decide.';
+
+    /**
+     * The launcher's refusal for the job of a workflow step: the placeholder
+     * of an approval step, or the job of a job step whose template is gated.
+     * The voter started the run, and the run created the job.
+     */
+    public const LAUNCHER_REFUSED_RUN = 'You launched this workflow run; another approver must decide.';
 
     public const NOT_ELIGIBLE = 'You are not eligible to decide on this request.';
 
@@ -119,9 +128,18 @@ final class ApprovalDecisionRefusedException extends \RuntimeException
         );
     }
 
-    public static function launcher(ApprovalRequest $request): self
+    /**
+     * The voter launched the request's job: LAUNCHER_REFUSED, or
+     * LAUNCHER_REFUSED_RUN when the job belongs to a workflow step
+     * ($workflowRun), whose run the voter started.
+     */
+    public static function launcher(ApprovalRequest $request, bool $workflowRun = false): self
     {
-        return new self(self::REASON_LAUNCHER, self::LAUNCHER_REFUSED, (string)$request->status);
+        return new self(
+            self::REASON_LAUNCHER,
+            $workflowRun ? self::LAUNCHER_REFUSED_RUN : self::LAUNCHER_REFUSED,
+            (string)$request->status
+        );
     }
 
     public static function notEligible(ApprovalRequest $request): self

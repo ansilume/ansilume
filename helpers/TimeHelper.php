@@ -11,6 +11,56 @@ use yii\helpers\Html;
  */
 class TimeHelper
 {
+    /** duration() under a minute; sprintf(): the seconds. */
+    public const DURATION_SECONDS = '%ds';
+
+    /** duration() under an hour; sprintf(): the minutes, the seconds. */
+    public const DURATION_MINUTES = '%dm %02ds';
+
+    /** duration() under a day; sprintf(): the hours, the minutes. */
+    public const DURATION_HOURS = '%dh %02dm';
+
+    /** duration() of a day or more; sprintf(): the days, the hours. */
+    public const DURATION_DAYS = '%dd %dh';
+
+    /** stamp() of a time of the same day: date() format. */
+    public const STAMP_TODAY = 'H:i:s';
+
+    /** stamp() of a time of another day: date() format. */
+    public const STAMP_OTHER_DAY = 'Y-m-d H:i:s';
+
+    /**
+     * A duration in its two largest units: '45s', '1m 15s', '2h 13m',
+     * '3d 4h'. A negative duration (a clock that went back) reads '0s'.
+     */
+    public static function duration(int $seconds): string
+    {
+        $seconds = max(0, $seconds);
+        if ($seconds < 60) {
+            return sprintf(self::DURATION_SECONDS, $seconds);
+        }
+        if ($seconds < 3600) {
+            return sprintf(self::DURATION_MINUTES, intdiv($seconds, 60), $seconds % 60);
+        }
+        if ($seconds < 86400) {
+            return sprintf(self::DURATION_HOURS, intdiv($seconds, 3600), intdiv($seconds % 3600, 60));
+        }
+
+        return sprintf(self::DURATION_DAYS, intdiv($seconds, 86400), intdiv($seconds % 86400, 3600));
+    }
+
+    /**
+     * An absolute time: 'H:i:s' when it is on the same day as $now (the
+     * current time by default), else 'Y-m-d H:i:s'; the server's timezone,
+     * as every time label.
+     */
+    public static function stamp(int $timestamp, ?int $now = null): string
+    {
+        $sameDay = date('Y-m-d', $timestamp) === date('Y-m-d', $now ?? time());
+
+        return date($sameDay ? self::STAMP_TODAY : self::STAMP_OTHER_DAY, $timestamp);
+    }
+
     /**
      * Render a unix timestamp as a relative "time ago" string wrapped in a
      * <time> element whose title shows the absolute date/time.

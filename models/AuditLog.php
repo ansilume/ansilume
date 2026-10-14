@@ -129,6 +129,8 @@ class AuditLog extends ActiveRecord
     public const ACTION_WORKFLOW_TEMPLATE_STEP_ADDED = 'workflow-template.step.added';
     public const ACTION_WORKFLOW_TEMPLATE_STEP_REMOVED = 'workflow-template.step.removed';
     public const ACTION_WORKFLOW_TEMPLATE_STEP_MOVED = 'workflow-template.step.moved';
+    /** A step was edited in place: it keeps its ID; the entry lists what changed (WorkflowStepWriteService). */
+    public const ACTION_WORKFLOW_TEMPLATE_STEP_UPDATED = 'workflow-template.step.updated';
     public const ACTION_WORKFLOW_LAUNCH_DENIED = 'workflow.launch.denied';
     public const ACTION_WORKFLOW_STEP_DENIED = 'workflow.step.denied';
     public const ACTION_TRIGGER_DENIED = 'trigger.denied';

@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\RoleForm $form */
+/** @var array<string, bool> $grantable permission name => whether the signed-in user may grant it (app\services\RoleChangePolicy) */
 
 use app\helpers\PermissionCatalog;
+use app\models\RoleForm;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
 
@@ -30,6 +32,9 @@ $selected = array_flip($form->permissions);
     <?= $af->field($form, 'description')->textInput(['maxlength' => 255]) ?>
 
     <label class="form-label mt-3">Permissions</label>
+    <?php if (in_array(false, $grantable, true)) : ?>
+        <div class="form-text mt-0 mb-2 role-permissions-hint"><?= Html::encode(RoleForm::NOT_HELD_HINT) ?></div>
+    <?php endif; ?>
     <div class="row">
         <?php foreach (PermissionCatalog::groups() as $group) : ?>
             <div class="col-lg-4 col-md-6 mb-3">
@@ -43,14 +48,12 @@ $selected = array_flip($form->permissions);
                         <?php foreach ($group['permissions'] as $perm) : ?>
                             <li class="list-group-item py-1">
                                 <label class="form-check-label w-100">
-                                    <input
-                                        type="checkbox"
-                                        class="form-check-input me-1 role-permission"
-                                        name="RoleForm[permissions][]"
-                                        value="<?= Html::encode($perm['name']) ?>"
-                                        data-domain="<?= Html::encode($group['domain']) ?>"
-                                        <?= isset($selected[$perm['name']]) ? 'checked' : '' ?>
-                                    >
+                                    <?= Html::input('checkbox', 'RoleForm[permissions][]', $perm['name'], [
+                                        'class' => 'form-check-input me-1 role-permission',
+                                        'data-domain' => $group['domain'],
+                                        'checked' => isset($selected[$perm['name']]),
+                                        'disabled' => !($grantable[$perm['name']] ?? false),
+                                    ]) ?>
                                     <?= Html::encode($perm['label']) ?>
                                     <code class="text-muted small"><?= Html::encode($perm['name']) ?></code>
                                 </label>
@@ -81,7 +84,7 @@ document.querySelectorAll('.role-group-toggle').forEach(function (link) {
     link.addEventListener('click', function (e) {
         e.preventDefault();
         var domain = this.getAttribute('data-domain');
-        var boxes = document.querySelectorAll('.role-permission[data-domain="' + domain + '"]');
+        var boxes = document.querySelectorAll('.role-permission[data-domain="' + domain + '"]:not(:disabled)');
         var allChecked = Array.prototype.every.call(boxes, function (b) { return b.checked; });
         boxes.forEach(function (b) { b.checked = !allChecked; });
     });

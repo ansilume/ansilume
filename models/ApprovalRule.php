@@ -41,6 +41,23 @@ class ApprovalRule extends ActiveRecord
     public const LAUNCHER_NOTE = 'The user who launches a job never approves it: a launch is refused '
         . 'unless enough other approvers may decide.';
 
+    /**
+     * The hint under Role on the rule form: a role rule counts the users
+     * assigned the role directly (resolveRoleIds()), and of them those that
+     * ApproverEligibility lets decide can approve.
+     */
+    public const ROLE_HINT = 'Approvers are the users assigned this role directly, not through another role, nor as the '
+        . 'default role every signed-in user holds. Those of them who are active, hold approval.decide '
+        . '(or are superadmins) and may see the job can approve, never the user who launched it.';
+
+    /**
+     * The hint under Team on the rule form: a team rule counts every member
+     * of the team (resolveTeamIds()), and of them those that
+     * ApproverEligibility lets decide can approve.
+     */
+    public const TEAM_HINT = 'Approvers are the members of this team. Those of them who are active, hold approval.decide '
+        . '(or are superadmins) and may see the job can approve, never the user who launched it.';
+
     /** Validation message of an approver config that is no valid JSON; sprintf(): the attribute's label. */
     public const INVALID_JSON = '%s must be valid JSON.';
 

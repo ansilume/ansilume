@@ -14,10 +14,20 @@ namespace app\services\ldap;
  *
  * Behaviour parity with PhpLdapClient is intentional: same return
  * types, same null-on-not-found semantics, same "wrong password
- * returns false (not exception)" contract.
+ * returns false (not exception)" contract, and the same last error after
+ * a search that fails ({@see failSearch()}, {@see failGroupSearch()}).
  */
 class FakeLdapClient implements LdapClientInterface
 {
+    /** The last error of a service bind that {@see failServiceBind()} makes fail. */
+    public const SERVICE_BIND_FAILURE = 'Simulated service bind failure.';
+
+    /** The last error of a user search that {@see failSearch()} makes fail. */
+    public const SEARCH_FAILURE = 'Simulated user search failure.';
+
+    /** The last error of a group search that {@see failGroupSearch()} makes fail. */
+    public const GROUP_SEARCH_FAILURE = 'Simulated group search failure.';
+
     private LdapConfig $config;
 
     /** @var array<string, array{dn: string, password: string, attributes: array<string, list<string>>}> */
@@ -29,6 +39,10 @@ class FakeLdapClient implements LdapClientInterface
     private bool $serviceBound = false;
 
     private bool $serviceBindShouldFail = false;
+
+    private bool $searchShouldFail = false;
+
+    private bool $groupSearchShouldFail = false;
 
     private ?string $lastError = null;
 
@@ -98,6 +112,25 @@ class FakeLdapClient implements LdapClientInterface
         $this->serviceBindShouldFail = $fail;
     }
 
+    /**
+     * Make every user search fail after a successful service bind, as a
+     * directory does that cannot answer it. Used by tests to tell a failed
+     * search from a user the directory does not have.
+     */
+    public function failSearch(bool $fail = true): void
+    {
+        $this->searchShouldFail = $fail;
+    }
+
+    /**
+     * Make every group search fail after a successful service bind. Used by
+     * tests to tell a failed group search from a user in no group.
+     */
+    public function failGroupSearch(bool $fail = true): void
+    {
+        $this->groupSearchShouldFail = $fail;
+    }
+
     public function bindServiceAccount(): bool
     {
         if (!$this->config->isUsable()) {
@@ -105,7 +138,7 @@ class FakeLdapClient implements LdapClientInterface
             return false;
         }
         if ($this->serviceBindShouldFail) {
-            $this->lastError = 'Simulated service bind failure.';
+            $this->lastError = self::SERVICE_BIND_FAILURE;
             $this->serviceBound = false;
             return false;
         }
@@ -116,7 +149,12 @@ class FakeLdapClient implements LdapClientInterface
 
     public function findUser(string $username): ?LdapEntry
     {
+        $this->lastError = null;
         if (!$this->serviceBound && !$this->bindServiceAccount()) {
+            return null;
+        }
+        if ($this->searchShouldFail) {
+            $this->lastError = self::SEARCH_FAILURE;
             return null;
         }
         $key = strtolower($username);
@@ -150,7 +188,12 @@ class FakeLdapClient implements LdapClientInterface
 
     public function findUserGroups(string $userDn): array
     {
+        $this->lastError = null;
         if (!$this->serviceBound && !$this->bindServiceAccount()) {
+            return [];
+        }
+        if ($this->groupSearchShouldFail) {
+            $this->lastError = self::GROUP_SEARCH_FAILURE;
             return [];
         }
         return $this->groupMemberships[$userDn] ?? [];

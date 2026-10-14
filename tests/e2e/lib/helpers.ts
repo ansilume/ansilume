@@ -2,10 +2,34 @@ import { APIResponse, expect, Page } from '@playwright/test';
 import { idWhere, indexRows } from './scoping';
 import { FLASH_SUCCESS, FLASH_DANGER, FORM_SUBMIT } from './selectors';
 
+/** The flash types the layout prints (components/FlashAlerts.php). */
+export type FlashType = 'success' | 'danger' | 'warning' | 'info';
+
 /**
- * Assert a flash message of the given type contains the expected text.
+ * The warning and info flashes. The layout prints every flash as a
+ * dismissible alert (role=alert) right in #page-content; the run page's
+ * banner and the job page's notes are warning and info alerts there too,
+ * but no flashes, so a flash matcher must require the dismissible class.
+ * A page can show several flashes of one type: each warning of a step
+ * change is a flash of its own.
  */
-export async function expectFlash(page: Page, type: 'success' | 'danger', text?: string) {
+const NOTICE_FLASHES: Record<'warning' | 'info', string> = {
+  warning: '#page-content > .alert-warning.alert-dismissible',
+  info: '#page-content > .alert-info.alert-dismissible',
+};
+
+/**
+ * Assert a flash message of the given type contains the expected text: the
+ * first success or danger flash; for a warning or info flash, any flash of
+ * that type, as a page can show several.
+ */
+export async function expectFlash(page: Page, type: FlashType, text?: string) {
+  if (type === 'warning' || type === 'info') {
+    const flashes = page.locator(NOTICE_FLASHES[type]);
+    const flash = text ? flashes.filter({ hasText: text }).first() : flashes.first();
+    await expect(flash, `a ${type} flash${text ? `: ${text}` : ''}`).toBeVisible({ timeout: 5_000 });
+    return;
+  }
   const selector = type === 'success' ? FLASH_SUCCESS : FLASH_DANGER;
   const flash = page.locator(selector).first();
   await expect(flash).toBeVisible({ timeout: 5_000 });

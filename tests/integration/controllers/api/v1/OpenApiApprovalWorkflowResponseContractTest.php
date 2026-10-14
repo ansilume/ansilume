@@ -10,6 +10,7 @@ use app\controllers\api\v1\ApprovalsController;
 use app\controllers\api\v1\JobTemplatesController;
 use app\controllers\api\v1\WorkflowJobsController;
 use app\controllers\api\v1\WorkflowTemplatesController;
+use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\models\Job;
 use app\models\JobTemplate;
@@ -42,6 +43,7 @@ use yii\web\Request;
 class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
 {
     use OpenApiSchemaAssertions;
+    use OpenApiWorkflowAssertions;
     use TeamScopeFixtures;
     use CancellationFixtures;
 
@@ -135,7 +137,10 @@ class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
     /**
      * GET /api/v1/approvals/{id} returns exactly the ApprovalRequest
      * schema, launched_by included, and the schema's statuses are the
-     * model's.
+     * model's. Its decisions, every vote, are ApprovalDecision objects.
+     *
+     * Regression (wave 5, W5-API-4): the API answered decisions, which the
+     * schema did not have.
      */
     public function testApprovalRequestSchemaMatchesTheResponse(): void
     {
@@ -155,10 +160,34 @@ class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
 
         $this->assertMatchesSchema('ApprovalRequest', $data);
         $this->assertSame((int)$job->launched_by, $data['launched_by'], 'launched_by is the user who launched the job.');
+        $this->assertSame(
+            ['workflow_job_id' => null, 'workflow_job_step_id' => null, 'workflow_template_id' => null, 'workflow_step_name' => null],
+            array_intersect_key($data, array_flip(['workflow_job_id', 'workflow_job_step_id', 'workflow_template_id', 'workflow_step_name'])),
+            'The request of a job template launched outside workflows names no workflow run (2.11.0).'
+        );
         $this->assertSame(ApprovalRequest::statuses(), $this->properties('ApprovalRequest')['status']['enum'] ?? null);
         $this->assertSame([], array_diff(array_keys($data), $this->required('ApprovalRequest')), 'Every field is always returned.');
         $this->assertDocumentedData('/api/v1/approvals/{id}', 'get', '200', 'ApprovalRequest');
         $this->assertMatchesSchema('ApprovalRequest', $this->listItem($ctrl->actionIndex(), (int)$request->id));
+
+        // Wave 5 (W5-API-4): every vote, as ApprovalDecision documents it.
+        $this->assertSame([], $data['decisions'], 'A request without votes lists none.');
+        $vote = new ApprovalDecision();
+        $vote->approval_request_id = (int)$request->id;
+        $vote->user_id = (int)$this->admin->id;
+        $vote->decision = ApprovalDecision::DECISION_APPROVED;
+        $vote->comment = null;
+        $vote->created_at = time();
+        $this->assertTrue($vote->save(false));
+        $voted = $this->data($ctrl->actionView((int)$request->id));
+        $this->assertMatchesSchema('ApprovalRequest', $voted);
+        $this->assertIsArray($voted['decisions']);
+        $this->assertCount(1, $voted['decisions']);
+        $this->assertIsArray($voted['decisions'][0]);
+        $this->assertMatchesSchema('ApprovalDecision', $voted['decisions'][0]);
+        $this->assertSame([], array_diff(array_keys($voted['decisions'][0]), $this->required('ApprovalDecision')), 'Every field of a vote is always returned.');
+        $this->assertSame([ApprovalDecision::DECISION_APPROVED, ApprovalDecision::DECISION_REJECTED], $this->properties('ApprovalDecision')['decision']['enum'] ?? null);
+        $this->assertSame('#/components/schemas/ApprovalDecision', $this->properties('ApprovalRequest')['decisions']['items']['$ref'] ?? null);
     }
 
     /**
@@ -265,12 +294,18 @@ class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
 
         $this->assertMatchesSchema('WorkflowJobDetail', $data);
         $this->assertEquals((object)['env' => 'prod'], $data['extra_vars']);
+        // 2.11.0: a finished run waits for nothing and is at no step; its
+        // steps wait for nothing, and these had no job and no request.
+        $this->assertSame([null, null], [$data['waiting_for'], $data['current_step']]);
+        $this->assertMatchesNested('WorkflowJobDetail', 'current_step', $data['current_step']);
         $steps = $data['steps'];
         $this->assertIsArray($steps);
         $this->assertCount(2, $steps);
         foreach ($steps as $step) {
             $this->assertIsArray($step);
             $this->assertMatchesSchema('WorkflowJobStep', $step);
+            $this->assertSame([null, null, null, null], [$step['waiting_for'], $step['job_status'], $step['approval_request_id'], $step['approval']]);
+            $this->assertMatchesNested('WorkflowJobStep', 'approval', $step['approval']);
         }
         $this->assertNull($steps[1]['workflow_step_id'], 'null once the step was removed');
         $this->assertSame($removed->name, $steps[1]['step_name'], 'The name it had when it ran.');

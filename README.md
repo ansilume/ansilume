@@ -55,7 +55,7 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Live job output** — streaming stdout/stderr with ANSI colors, per-task progress, and full play recap per host
 - **Host summaries & task results** — structured results captured via a custom Ansible callback plugin
 - **Job templates** — reusable launch configs with extra vars, verbosity, become, forks, limits, tags, and survey fields for launch-time input; answers to password fields are stored encrypted and shown as `$encrypted$`
-- **Workflows** — chain multiple templates with on-success / on-failure / always branches and manual approval gates; a rejected gate ends the run as failed unless an on-failure branch continues it, launch extra vars reach every job step, and runs keep their history when the steps change
+- **Workflows** — chain job templates, approval steps and pause steps; place each step by position (at the start, at the end or after another step), add, edit, move or remove it in one action in the UI or the API, and see where every on-success / on-failure / always branch leads; a run that waits says what for (Awaiting Approval, Paused, Queued) and links its approval request; a rejected gate ends the run as failed unless an on-failure branch continues it, launch extra vars reach every job step, and runs keep their history when the steps change ([guide](docs/workflows.md))
 - **Pull-based runners** — lightweight agents self-register via bootstrap token; isolate execution from the control plane
 - **Runner groups** — logical grouping with per-group tokens, health tracking, and a selftest playbook
 - **Cancel & timeout** — in-flight jobs can be canceled; configurable per-template execution timeouts
@@ -144,13 +144,15 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 
 - Credentials are AES-256-CBC encrypted at rest — raw secrets never appear in logs or HTML
 - Answers to password survey fields are encrypted with the same key — pages, the API and the stored command line show `$encrypted$`; re-launches and schedules reuse them without showing them
+- Channel secrets of notification templates (bot tokens, webhook URLs and header values, routing keys) show as `$encrypted$` on every page and in the API, and the signing secrets of outbound webhooks on their edit form; a save that sends `$encrypted$` back keeps the stored value. A project's page, its sync output and errors, the logs and the notifications show its repository URL without the credentials in it, and so does the API to those who may not update the project
 - Runners get password answers in a `0600` file instead of on the command line and mask them in job output (best effort); older runners get them inline with the verbosity capped so that Ansible does not print them. Each job's answers file, task records and static inventory live in a directory of the job that only the runner's user can open, removed when the job ends
 - TOTP secrets are AES-256-CBC encrypted at rest — the same key used for credentials
 - RBAC roles: `viewer` (read-only) · `operator` (launch + manage) · `admin` (full access) — plus custom roles; approval rules are created, changed and assigned by admins only (`approval-rule.update`), and only admins change what a job template with an approval rule runs
 - Approvals: the user who launched a job never approves it, admins included, and only active approvers who hold `approval.decide` (or are superadmins) and may see the job count; a launch is refused when too few of them remain besides the launcher
-- Team-based resource isolation: projects and all child resources (templates, inventories, jobs, schedules, approval requests, analytics) restricted to team members, workflows to members who may access the project of every job step; viewer role grants read-only access, operator role grants full CRUD + launch
+- Team-based resource isolation: projects and all child resources (templates, inventories, jobs, schedules, approval requests, analytics) restricted to team members, workflows to members who may access the project of every job step; viewer role grants read-only access, operator role grants full CRUD + launch; only admins and superadmins manage teams, and a project that no team has is open to every signed-in user
 - Schedules, triggers and workflow steps launch as a recorded user (for a schedule, the user who last changed what or when it runs, or enabled it; the user who generated the trigger token; the workflow's launcher), who never approves these jobs, and are refused once that user is disabled or may no longer launch the template
-- Superadmin flag (`is_superadmin`) bypasses all team-scoped restrictions
+- Superadmin flag (`is_superadmin`) bypasses all team-scoped restrictions; only a superadmin sets or clears it, and a role is assigned only by a superadmin or a user who holds every permission the role grants, the `admin` role, and a role that contains it, only by a superadmin or an admin; a user who is no superadmin changes or deletes only users who are no superadmins, whose roles they may assign and, unless they are admins, whose teams give them no project beyond their own, nor a higher role on one, and gives a role only permissions they hold and changes or deletes only roles they may assign
+- Signed-out visitors reach only the login, password-reset and error pages, the trigger endpoint and the health and metrics endpoints; the default `viewer` role applies to signed-in users only. In development mode (`YII_ENV=dev`) the debug and gii modules answer everyone who reaches the stack, so a dev stack must never be reachable by others
 - All state-changing actions require explicit authorization
 - Optional TOTP 2FA per user — disabling requires a current authenticator code or recovery code
 - Recovery codes are bcrypt-hashed; rate limiting (5 attempts, 5 min lockout) on TOTP verification
@@ -168,8 +170,12 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 | | |
 |---|---|
 | [Installation](docs/installation.md) | Quickstart, manual setup, external DB, configuration reference |
+| [Updating](docs/updating.md) | Before you update, quickstart and manual updates, verifying the update, what changes after updating from an older release, rollback, automated updates |
 | [Runners](docs/runners.md) | Runner setup, groups, selftest |
+| [Credentials](docs/credentials.md) | Credential types, attaching credentials to a job template, token env vars, vault passwords and vault files, security model, password survey answers, secrets in inventories and extra vars |
+| [Workflows](docs/workflows.md) | Building workflows, positions and branches, editing steps, waiting runs and approvals, API |
 | [Artifacts](docs/artifacts.md) | Producing artifacts in playbooks, where they appear, retention |
+| [LDAP / Active Directory](docs/ldap.md) | Optional directory login: the container images that support it, how it works, configuration for Active Directory and OpenLDAP, console commands, REST API, account lifecycle, security model |
 | [Deployment](docs/deployment.md) | Production Ansible role |
 | [Monitoring](docs/monitoring.md) | Prometheus metrics, health endpoint |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and the diagnostics script |

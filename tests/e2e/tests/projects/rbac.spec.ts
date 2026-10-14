@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectFlash, expectForbidden } from '../../lib/helpers';
+import { asAdmin, forgePost } from '../../lib/scoping';
 import { BTN_CREATE } from '../../lib/selectors';
 
 // Fixtures from commands/E2eVaultScanSeeder.php: an open project (no team),
@@ -19,6 +20,38 @@ async function openVaultProject(page: Page): Promise<string> {
     }
   }
   throw new Error(`Project ${VAULT_PROJECT} is not listed`);
+}
+
+const PROJECT_PAGE = /\/project\/view\?id=(\d+)/;
+
+/**
+ * Creates an open git project (no team) whose repository URL carries
+ * credentials, through a real form post of the open (admin) page, and waits
+ * until its sync has failed: the URL points at a port nothing listens on.
+ * Returns its id. The credentials are a fixture, not a secret.
+ */
+async function createProjectWithUrlCredentials(admin: Page, name: string, url: string): Promise<string> {
+  await admin.goto('/project/index');
+  await forgePost(admin, '/project/create', {
+    'Project[name]': name,
+    'Project[scm_type]': 'git',
+    'Project[scm_url]': url,
+    'Project[scm_branch]': 'main',
+  }, PROJECT_PAGE);
+  const id = admin.url().match(PROJECT_PAGE)?.[1] ?? '';
+  expect(id, 'the new project opens').toBeTruthy();
+  // The sync output of a running sync reaches the page through its poll;
+  // the page is checked once the sync has ended.
+  await expect.poll(async () => {
+    const answer = await admin.request.get(`/project/sync-status?id=${id}&since=0`);
+    return answer.ok() ? (await answer.json()).is_syncing : true;
+  }, { timeout: 60_000, message: 'the sync of the new project ends' }).toBe(false);
+  return id;
+}
+
+async function deleteProject(admin: Page, id: string): Promise<void> {
+  await admin.goto(`/project/view?id=${id}`);
+  await forgePost(admin, `/project/delete?id=${id}`, {}, /\/project\/index/);
 }
 
 async function expectVaultCard(page: Page) {
@@ -152,5 +185,41 @@ test.describe('Projects RBAC', () => {
     ]);
 
     await expectForbidden(page);
+  });
+
+  // Regression: the project page showed the repository URL with the
+  // credentials of its userinfo to everyone who may view the project, and
+  // its sync output showed them in the clone command.
+  test('viewer sees the repository URL without its credentials', async ({ page, browser }, testInfo) => {
+    const suffix = `${Date.now()}`;
+    const token = `e2e-scm-token-${suffix}`;
+    const id = await asAdmin(browser, testInfo, (admin) => createProjectWithUrlCredentials(
+      admin,
+      `e2e-scm-url-${suffix}`,
+      `https://e2e-user:${token}@127.0.0.1:1/org/e2e-repo.git`,
+    ));
+    try {
+      await page.goto(`/project/view?id=${id}`);
+      await expect(page.locator('h2').first()).toHaveText(`e2e-scm-url-${suffix}`);
+
+      await expect(page.locator('#page-content dt:has-text("URL") + dd')).toHaveText('https://***@127.0.0.1:1/org/e2e-repo.git');
+      await expect(page.locator('#sync-log-output')).toContainText('git clone');
+      await expect(page.locator('#sync-log-output')).toContainText('https://***@127.0.0.1:1/org/e2e-repo.git');
+      const html = await page.content();
+      expect(html.split(token).length - 1, 'occurrences of the URL credentials in the page').toBe(0);
+      expect(html.split('e2e-user:').length - 1, 'occurrences of the URL user in the page').toBe(0);
+
+      // Regression: the page's poll of its sync output (/project/sync-status)
+      // answered the rows and the error with the credentials.
+      const polled = await page.request.get(`/project/sync-status?id=${id}&since=0`, { headers: { Accept: 'application/json' } });
+      expect(polled.status()).toBe(200);
+      const answer = (await polled.json()) as { logs: Array<{ content: string }>; last_sync_error: string | null };
+      const answered = JSON.stringify(answer);
+      expect(answered.split(token).length - 1, 'occurrences of the URL credentials in the poll').toBe(0);
+      expect(answered.split('e2e-user:').length - 1, 'occurrences of the URL user in the poll').toBe(0);
+      expect(answer.logs.map((row) => row.content).join('')).toContain('https://***@127.0.0.1:1/org/e2e-repo.git');
+    } finally {
+      await asAdmin(browser, testInfo, (admin) => deleteProject(admin, id));
+    }
   });
 });

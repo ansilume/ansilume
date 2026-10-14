@@ -249,8 +249,12 @@ class LdapUserProvisionerTest extends DbTestCase
 
     public function testProvisionReEnablesPreviouslyDisabledUser(): void
     {
+        // Deactivated by ldap/sync, which sets the mark in the same save: an
+        // account deactivated in Ansilume stays inactive
+        // (LdapDeactivationStaysTest).
         $user = $this->makeLdapUser();
         $user->status = User::STATUS_INACTIVE;
+        $user->ldap_sync_disabled = true;
         $user->save(false);
 
         $result = $this->makeResult([
@@ -262,6 +266,7 @@ class LdapUserProvisionerTest extends DbTestCase
         $persisted = $this->provisioner->provisionOrUpdate($result, $config);
         $this->assertNotNull($persisted);
         $this->assertSame(User::STATUS_ACTIVE, (int)$persisted->status);
+        $this->assertFalse((bool)User::findOne($user->id)?->ldap_sync_disabled, 'activated again: the mark is cleared');
 
         $entry = AuditLog::find()
             ->where(['action' => AuditLog::ACTION_LDAP_USER_REENABLED, 'object_id' => $user->id])

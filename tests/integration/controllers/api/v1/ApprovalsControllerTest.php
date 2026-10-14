@@ -94,9 +94,18 @@ class ApprovalsControllerTest extends WebControllerTestCase
         $this->assertSame(ApprovalRequest::STATUS_PENDING, $result['data']['status']);
         $this->assertSame($request->launcherId(), $result['data']['launched_by']);
         $this->assertSame(
-            ['id', 'job_id', 'launched_by', 'approval_rule_id', 'status', 'requested_at', 'resolved_at', 'expires_at', 'approval_count', 'rejection_count'],
+            [
+                'id', 'job_id', 'launched_by', 'approval_rule_id', 'status', 'requested_at', 'resolved_at', 'expires_at', 'approval_count', 'rejection_count',
+                'decisions', 'workflow_job_id', 'workflow_job_step_id', 'workflow_template_id', 'workflow_step_name',
+            ],
             array_keys($result['data'])
         );
+        // No vote yet (ApprovalsDecisionsApiTest has the votes).
+        $this->assertSame([], $result['data']['decisions']);
+        // The job of a job template outside any workflow: no workflow run to name.
+        foreach (['workflow_job_id', 'workflow_job_step_id', 'workflow_template_id', 'workflow_step_name'] as $field) {
+            $this->assertNull($result['data'][$field], $field);
+        }
     }
 
     public function testViewOfAMissingRequestIs404(): void

@@ -10,6 +10,8 @@ use app\models\ApprovalRequest;
 use app\models\User;
 use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalService;
+use app\services\runstate\RequestContext;
+use app\services\runstate\Viewer;
 use app\tests\integration\TeamScopeFixtures;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
@@ -104,6 +106,29 @@ class ApprovalControllerActionTest extends WebControllerTestCase
 
         $this->assertSame('rendered:index', $result);
         $this->assertInstanceOf(ActiveDataProvider::class, $ctrl->capturedParams['dataProvider']);
+        $this->assertNull($ctrl->capturedParams['activeStatus'], 'no filter: every request');
+        $this->assertInstanceOf(Viewer::class, $ctrl->capturedParams['viewer']);
+        $listed = array_map(static fn (ApprovalRequest $r): int => (int)$r->id, $ctrl->capturedParams['dataProvider']->getModels());
+        $this->assertSame($listed, array_keys($ctrl->capturedParams['contexts']), 'what each listed request is for, by request ID');
+    }
+
+    public function testIndexFiltersByAValidStatus(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $pending = $this->createRequest($user);
+        $approved = $this->createRequest($user);
+        $approved->status = ApprovalRequest::STATUS_APPROVED;
+        $approved->save(false);
+        $this->setQueryParams(['status' => ApprovalRequest::STATUS_APPROVED]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionIndex();
+
+        $this->assertSame(ApprovalRequest::STATUS_APPROVED, $ctrl->capturedParams['activeStatus']);
+        $listed = array_map(static fn (ApprovalRequest $r): int => (int)$r->id, $ctrl->capturedParams['dataProvider']->getModels());
+        $this->assertContains((int)$approved->id, $listed);
+        $this->assertNotContains((int)$pending->id, $listed);
     }
 
     // ── actionView() ─────────────────────────────────────────────────────────
@@ -119,6 +144,11 @@ class ApprovalControllerActionTest extends WebControllerTestCase
 
         $this->assertSame('rendered:view', $result);
         $this->assertSame($req->id, $ctrl->capturedParams['model']->id);
+        $context = $ctrl->capturedParams['context'];
+        $this->assertInstanceOf(RequestContext::class, $context);
+        $this->assertSame((int)$req->id, $context->requestId);
+        $this->assertNull($context->origin, 'a job outside workflows');
+        $this->assertInstanceOf(Viewer::class, $ctrl->capturedParams['viewer']);
     }
 
     public function testViewThrowsNotFound(): void

@@ -158,6 +158,31 @@ class RolesControllerTest extends WebControllerTestCase
         $this->cleanupRole('test-api-role');
     }
 
+    /**
+     * regression: a permission listed twice was added twice, and the second
+     * insert hit the primary key of auth_item_child: the request answered
+     * 500, and the role stayed behind, half created and without an audit
+     * entry. It is created with each permission once.
+     */
+    public function testRegressionCreateWithAPermissionListedTwiceCreatesTheRoleOnce(): void
+    {
+        $this->authenticateWithAdmin();
+        $name = 'test-api-dup-' . substr(md5(uniqid('', true)), 0, 6);
+        $this->setBody(['name' => $name, 'permissions' => ['job.view', 'project.view', 'job.view']]);
+
+        $data = $this->callSuccess($this->ctrl->actionCreate());
+
+        $this->assertSame(201, \Yii::$app->response->statusCode);
+        /** @var array<string, mixed> $role */
+        $role = $data;
+        $this->assertSame(['job.view', 'project.view'], $role['direct_permissions']);
+        $log = \app\models\AuditLog::find()->where(['action' => \app\models\AuditLog::ACTION_ROLE_CREATED])->orderBy(['id' => SORT_DESC])->one();
+        $this->assertNotNull($log);
+        $metadata = json_decode((string)$log->metadata, true);
+        $this->assertSame($name, $metadata['name']);
+        $this->assertSame(['job.view', 'project.view'], $metadata['permissions']);
+    }
+
     public function testCreateRejectsInvalidName(): void
     {
         $this->authenticateWithAdmin();

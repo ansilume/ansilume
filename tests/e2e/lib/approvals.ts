@@ -33,18 +33,34 @@ export const DUAL_TEMPLATE = 'e2e-dual-gated-template';
 /** The disabled schedule of the soft-deleted job template e2e-deleted-template. */
 export const DELETED_TEMPLATE_SCHEDULE = 'e2e-deleted-template-schedule';
 
-/** Columns of /approval/index: #, Job, Rule, Status, Requested, Resolved. */
+/**
+ * Columns of /approval/index (controllers/ApprovalController.php
+ * LIST_COLUMNS): #, Job, For, Rule, Status, Requested, Expires, Resolved.
+ */
 export const REQUEST_JOB_COLUMN = 1;
-export const REQUEST_RULE_COLUMN = 2;
-export const REQUEST_STATUS_COLUMN = 3;
+export const REQUEST_FOR_COLUMN = 2;
+export const REQUEST_RULE_COLUMN = 3;
+export const REQUEST_STATUS_COLUMN = 4;
+export const REQUEST_EXPIRES_COLUMN = 6;
+export const REQUEST_LIST_COLUMNS = ['#', 'Job', 'For', 'Rule', 'Status', 'Requested', 'Expires', 'Resolved'];
+
+/** controllers/ApprovalController.php EXPIRES_NEVER: the Expires cell of a pending request without a timeout. */
+export const EXPIRES_NEVER = 'Never';
 
 /** The label of a rule in the job template form and on the template page (JobTemplateRuleAssignment::label()). */
 export function ruleLabel(name: string, approvals = 1): string {
   return `${name} (${approvals} approval(s))`;
 }
 
-/** services/ApprovalDecisionRefusedException.php LAUNCHER_REFUSED */
+/** services/ApprovalDecisionRefusedException.php LAUNCHER_REFUSED: the launcher of a job of a job template. */
 export const LAUNCHER_REFUSED = 'You launched this job; another approver must decide.';
+
+/**
+ * services/ApprovalDecisionRefusedException.php LAUNCHER_REFUSED_RUN: the
+ * launcher of a workflow run, on the request of an approval step or of a
+ * gated job step.
+ */
+export const LAUNCHER_REFUSED_RUN = 'You launched this workflow run; another approver must decide.';
 
 /** services/ApprovalDecisionRefusedException.php RESOLVED; the status in words: approved, rejected, timed out, canceled. */
 export function resolvedMessage(requestId: string, status: string): string {
@@ -108,14 +124,31 @@ export function flash(page: Page, type: 'success' | 'danger' | 'warning' | 'info
   return page.locator(`#page-content > .alert-${type}[role="alert"]`);
 }
 
+/**
+ * The row of the open approval request page whose heading is `heading`. By
+ * the heading only: the For row names workflows and steps, whose names may
+ * contain any heading.
+ */
+function requestRow(page: Page, heading: string): Locator {
+  return page.locator('#page-content table').first().locator('tr')
+    .filter({ has: page.locator('th', { hasText: new RegExp(`^${heading}$`) }) });
+}
+
 /** The status badge of the open approval request page. */
 export function requestStatus(page: Page): Locator {
-  return page.locator('#page-content table').first().locator('tr', { hasText: 'Status' }).locator('.badge');
+  return requestRow(page, 'Status').locator('.badge');
 }
 
 /** The Approvals cell of the open approval request page: "<counted approvals> / <required approvals>". */
 export function approvalsCount(page: Page): Locator {
-  return page.locator('#page-content table').first().locator('tr', { hasText: 'Approvals' }).locator('td');
+  return requestRow(page, 'Approvals').locator('td');
+}
+
+/** The ID of the job of the open approval request page, from its Job row. */
+export async function requestJobId(page: Page): Promise<string> {
+  const link = requestRow(page, 'Job').locator('td a');
+  await expect(link).toHaveText(/^#\d+$/);
+  return ((await link.textContent()) ?? '').trim().slice(1);
 }
 
 /** The rows of the Decisions table of the open approval request page. */
@@ -143,27 +176,15 @@ export async function launchTemplate(page: Page, name: string): Promise<string> 
 }
 
 /**
- * The ID of the approval request of job #`jobId`, from the approval list,
- * which shows the newest request first.
+ * The ID of the approval request of job #`jobId`, from the job page's
+ * Approval Request row (#detail-approval), which links the request for a
+ * user with approval.view.
  */
-export async function requestOfJob(page: Page, jobId: string, maxPages = 30): Promise<string> {
-  let previousFirst = '';
-  for (let pageNo = 1; pageNo <= maxPages; pageNo++) {
-    await page.goto(`/approval/index?page=${pageNo}`);
-    const rows = await page.locator('#page-content table.table tbody tr').evaluateAll((trs) => trs.map((tr) => {
-      const cells = Array.from(tr.querySelectorAll('td')).map((td) => (td.textContent ?? '').trim());
-      return { id: cells[0] ?? '', job: cells[1] ?? '' };
-    }));
-    const match = rows.find((row) => row.job === `#${jobId}`);
-    if (match !== undefined) {
-      return match.id;
-    }
-    if (rows.length === 0 || rows[0].id === previousFirst) {
-      break;
-    }
-    previousFirst = rows[0].id;
-  }
-  throw new Error(`No approval request of job #${jobId} is listed`);
+export async function requestOfJob(page: Page, jobId: string): Promise<string> {
+  await page.goto(`/job/view?id=${jobId}`);
+  const link = page.locator('#detail-approval a');
+  await expect(link, `job #${jobId} links its approval request`).toHaveAttribute('href', /\/approval\/view\?id=\d+$/);
+  return ((await link.getAttribute('href')) ?? '').match(/id=(\d+)$/)?.[1] ?? '';
 }
 
 /** Runs `use` with a page signed in as e2e-operator, in a browser context of its own. */

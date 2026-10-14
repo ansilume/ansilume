@@ -54,7 +54,7 @@ $this->title = 'Webhooks';
                             <span class="badge text-bg-secondary me-1"><?= Html::encode($event) ?></span>
                         <?php endforeach; ?>
                     </td>
-                    <td><?= !empty($model->secret) ? '<span class="badge text-bg-success">Yes</span>' : '<span class="badge text-bg-light text-muted">No</span>' ?></td>
+                    <td><?= !empty($model->secret) ? '<span class="badge text-bg-success">Yes</span>' : '<span class="badge text-bg-secondary">No</span>' ?></td>
                     <td>
                         <?= $model->enabled
                             ? '<span class="badge text-bg-success">Enabled</span>'

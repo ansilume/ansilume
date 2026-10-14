@@ -42,6 +42,9 @@ return [
     'workflowStepReorderService' => [
         'class' => 'app\services\WorkflowStepReorderService',
     ],
+    'workflowStepWriteService' => [
+        'class' => 'app\services\WorkflowStepWriteService',
+    ],
     'lintService' => [
         'class' => 'app\services\LintService',
     ],
@@ -172,5 +175,14 @@ return [
     ],
     'strandedJobSweep' => [
         'class' => 'app\services\StrandedJobSweep',
+    ],
+    'workflowRunStates' => [
+        'class' => 'app\services\runstate\WorkflowRunStates',
+    ],
+    'approvalWaits' => [
+        'class' => 'app\services\runstate\ApprovalWaits',
+    ],
+    'approvalRequestContexts' => [
+        'class' => 'app\services\runstate\ApprovalRequestContexts',
     ],
 ];

@@ -17,9 +17,13 @@ use yii\base\Model;
  * approval or pause; step_order is the step's index in the list. A job step
  * needs job_template_id, an approval step approval_rule_id. Only the target
  * of the step's type is read, so a pause step never carries a job template
- * that would restrict who may see the workflow. extra_vars_template is JSON
- * text or a JSON object. Routes (on_success, on_failure, on_always) are not
- * read: the API cannot set them.
+ * that would restrict who may see the workflow. extra_vars_template, the
+ * variable mapping, is JSON text or a JSON object of extra var names to the
+ * names of output variables (WorkflowStepMapping), or none. Routes
+ * (on_success, on_failure, on_always) are not read: the list replaces every
+ * step, and the new steps get new IDs. The per-step endpoints set routes
+ * (WorkflowStepCommand::fromApi(), which reads IDs and the variable mapping
+ * with toId() and extraVarsTemplate()).
  */
 final class WorkflowStepsInput
 {
@@ -77,11 +81,12 @@ final class WorkflowStepsInput
         $step->name = self::text($data['name'] ?? '');
         $step->step_type = array_key_exists('step_type', $data) ? self::text($data['step_type']) : WorkflowStep::TYPE_JOB;
         $step->step_order = $index;
-        $unencodable = self::readExtraVarsTemplate($step, $data['extra_vars_template'] ?? null);
+        $extraVars = self::extraVarsTemplate($data['extra_vars_template'] ?? null);
+        $step->extra_vars_template = $extraVars['value'];
         $step->validate(['name', 'step_type', 'step_order', 'extra_vars_template']);
-        if ($unencodable !== null) {
+        if ($extraVars['error'] !== null) {
             // After the errors of the other attributes, as for JSON text.
-            $step->addError('extra_vars_template', $unencodable);
+            $step->addError('extra_vars_template', $extraVars['error']);
         }
         if ($step->hasErrors()) {
             return self::firstError($step);
@@ -113,32 +118,41 @@ final class WorkflowStepsInput
     }
 
     /**
-     * Set the step's extra_vars_template from the request: JSON text as
-     * stored, or a JSON object, encoded. Returns why an object cannot be
-     * encoded, or null: 1e999 arrives as infinity, and a form-encoded body
-     * can carry text that is not UTF-8. The message is the launch's, which
-     * WorkflowStep::validateJson() gives such a number in JSON text too.
+     * A step's extra_vars_template from a request: JSON text as stored, a
+     * JSON object encoded, and null for none (WorkflowStepMapping::isNone():
+     * null, empty text, [] and {}, as an array or as JSON text). The value to
+     * store, and why an object cannot be encoded, or null: 1e999 arrives as
+     * infinity, and a form-encoded body can carry text that is not UTF-8. The
+     * message is the launch's, which WorkflowStep::validateJson() gives such
+     * a number in JSON text too. The value is null when there is an error.
+     * Its shape is the model's rule (WorkflowStep::validateMapping()).
+     *
+     * Regression: a step without a mapping, which the API answers as [],
+     * got the text "[]" when a client sent that back.
+     *
+     * @return array{value: string|null, error: string|null}
      */
-    private static function readExtraVarsTemplate(WorkflowStep $step, mixed $value): ?string
+    public static function extraVarsTemplate(mixed $value): array
     {
         if (!is_array($value)) {
-            $step->extra_vars_template = $value === null ? null : self::text($value);
-            return null;
+            $text = $value === null ? null : self::text($value);
+
+            return ['value' => WorkflowStepMapping::isNone($text) ? null : $text, 'error' => null];
         }
         $json = json_encode($value);
         if ($json === false) {
-            return SurveySecrets::unencodable(JobLaunchSecrets::EXTRA_VARS, json_last_error());
+            return ['value' => null, 'error' => SurveySecrets::unencodable(JobLaunchSecrets::EXTRA_VARS, json_last_error())];
         }
-        $step->extra_vars_template = $json;
 
-        return null;
+        return ['value' => WorkflowStepMapping::isNone($json) ? null : $json, 'error' => null];
     }
 
     /**
      * A positive ID from the request: integers and digit strings only, as
-     * filter_var() alone also takes true and 1.0 for 1.
+     * filter_var() alone also takes true and 1.0 for 1. Null for anything
+     * else, which the model's rules then report as missing.
      */
-    private static function toId(mixed $value): ?int
+    public static function toId(mixed $value): ?int
     {
         if (!is_int($value) && !is_string($value)) {
             return null;

@@ -125,9 +125,9 @@ class ProjectSyncTest extends TestCase
                 }
             }
 
-            protected function gitPull(\app\models\Project $project, string $dest, string $branch, array $env): void
+            protected function gitPull(\app\models\Project $project, string $url, string $dest, string $branch, array $env): void
             {
-                $this->pullCalls[] = ['dest' => $dest, 'branch' => $branch];
+                $this->pullCalls[] = ['url' => $url, 'dest' => $dest, 'branch' => $branch];
                 if ($this->failGit) {
                     throw new \RuntimeException('git fetch failed (exit 1): network error');
                 }
@@ -192,6 +192,22 @@ class ProjectSyncTest extends TestCase
         $this->assertSame('main', $service->pullCalls[0]['branch']);
         $this->assertEmpty($service->cloneCalls);
         $this->assertSame(Project::STATUS_SYNCED, $project->status);
+    }
+
+    /**
+     * An existing checkout is pulled from the project's current URL, not
+     * from the origin it was cloned with (ProjectSyncRepositoryUrlChangeTest
+     * runs it with real git).
+     */
+    public function testAnExistingCheckoutIsPulledFromTheCurrentUrl(): void
+    {
+        $project = $this->makeProject(['scm_url' => 'https://deploy:rotated@example.com/moved/repo.git']);
+        $service = $this->makeService(simulateExistingClone: true);
+
+        $service->sync($project);
+
+        $this->assertSame('https://deploy:rotated@example.com/moved/repo.git', $service->pullCalls[0]['url'] ?? null);
+        $this->assertSame($service->localPath($project), $service->pullCalls[0]['dest']);
     }
 
     // -------------------------------------------------------------------------
@@ -343,7 +359,7 @@ class ProjectSyncTest extends TestCase
                 throw $this->toThrow;
             }
 
-            protected function gitPull(\app\models\Project $project, string $dest, string $branch, array $env): void
+            protected function gitPull(\app\models\Project $project, string $url, string $dest, string $branch, array $env): void
             {
                 throw $this->toThrow;
             }

@@ -34,7 +34,7 @@ export default defineConfig({
         storageState: '.auth/admin.json',
       },
       dependencies: ['setup'],
-      testIgnore: /auth\.setup\.ts|rbac\.spec\.ts|login\.spec\.ts|site\/forgot-password\.spec\.ts|site\/totp-login\.spec\.ts|trigger\/fire\.spec\.ts/,
+      testIgnore: /auth\.setup\.ts|rbac\.spec\.ts|login\.spec\.ts|site\/forgot-password\.spec\.ts|site\/totp-login\.spec\.ts|trigger\/fire\.spec\.ts|guest\/guest-access\.spec\.ts/,
     },
 
     // Operator and viewer tests: the rbac specs and the team scoping specs
@@ -67,7 +67,7 @@ export default defineConfig({
     {
       name: 'unauthenticated',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: /login\.spec\.ts|forgot-password\.spec\.ts|totp-login\.spec\.ts|fire\.spec\.ts/,
+      testMatch: /login\.spec\.ts|forgot-password\.spec\.ts|totp-login\.spec\.ts|fire\.spec\.ts|guest\/guest-access\.spec\.ts/,
     },
   ],
 });

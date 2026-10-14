@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\NotificationTemplate $model */
+/** @var string $config The config the form shows: as submitted, else as stored with the placeholder for every secret */
 
+use app\components\NotificationConfigSecrets;
+use app\components\SurveySecrets;
 use app\models\NotificationTemplate;
 use yii\helpers\Html;
 use yii\helpers\Json;
@@ -55,6 +58,12 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
         NotificationTemplate::channelLabels(),
         ['id' => 'nt-channel']
     ) ?>
+
+    <?php if (!$model->isNewRecord) : ?>
+        <div class="form-text mb-3" data-testid="notification-template-secret-hint">
+            <?= sprintf(Html::encode(NotificationConfigSecrets::FORM_HINT), Html::tag('code', Html::encode(SurveySecrets::PLACEHOLDER))) ?>
+        </div>
+    <?php endif; ?>
 
     <div id="config-email" class="channel-config">
         <div class="card card-body bg-transparent border-secondary mb-3">
@@ -120,7 +129,7 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
         </div>
     </div>
 
-    <?= $form->field($model, 'config')->hiddenInput(['id' => 'nt-config'])->label(false) ?>
+    <?= $form->field($model, 'config')->hiddenInput(['id' => 'nt-config', 'value' => $config])->label(false) ?>
 
     <h5 class="mt-3 text-muted">Events</h5>
     <div class="mb-2">

@@ -140,9 +140,15 @@ class ApprovalRequest extends ActiveRecord
         return $this->hasOne(ApprovalRule::class, ['id' => 'approval_rule_id']);
     }
 
+    /**
+     * The votes on this request in the order cast, as the API answers them
+     * (runstate\ApprovalVotes): without an order, MariaDB reads them through
+     * the unique index (approval_request_id, user_id), by user ID.
+     */
     public function getDecisions(): ActiveQuery
     {
-        return $this->hasMany(ApprovalDecision::class, ['approval_request_id' => 'id']);
+        return $this->hasMany(ApprovalDecision::class, ['approval_request_id' => 'id'])
+            ->orderBy(['id' => SORT_ASC]);
     }
 
     public static function statusLabel(string $status): string
@@ -164,9 +170,52 @@ class ApprovalRequest extends ActiveRecord
             self::STATUS_APPROVED => 'success',
             self::STATUS_REJECTED => 'danger',
             self::STATUS_TIMED_OUT => 'secondary',
-            self::STATUS_CANCELED => 'dark',
+            // Not "dark": the layout's dark theme draws a dark badge on a background of the same colour.
+            self::STATUS_CANCELED => 'secondary',
             default => 'secondary',
         };
+    }
+
+    /**
+     * The approvals and rejections that count on each request of
+     * $requestIds, without the votes of the user who launched its job (as
+     * approvalCount() and rejectionCount() count): one query for all of
+     * them. Every given ID is a key, with zeros for a request without votes
+     * (or one that does not exist).
+     *
+     * @param list<int> $requestIds
+     * @return array<int, array{approved: int, rejected: int}>
+     */
+    public static function countedDecisionsOf(array $requestIds): array
+    {
+        $counts = [];
+        foreach ($requestIds as $requestId) {
+            $counts[(int)$requestId] = ['approved' => 0, 'rejected' => 0];
+        }
+        if ($counts === []) {
+            return [];
+        }
+        /** @var list<array{request_id: int|string, decision: string, votes: int|string}> $rows */
+        $rows = (new Query())
+            ->select(['request_id' => 'd.approval_request_id', 'decision' => 'd.decision', 'votes' => 'COUNT(*)'])
+            ->from(['d' => ApprovalDecision::tableName()])
+            ->innerJoin(['r' => self::tableName()], '[[r.id]] = [[d.approval_request_id]]')
+            ->leftJoin(['j' => Job::tableName()], '[[j.id]] = [[r.job_id]]')
+            ->where([
+                'd.approval_request_id' => array_keys($counts),
+                // Compared as approvalCount() compares them, in the column's collation.
+                'd.decision' => [ApprovalDecision::DECISION_APPROVED, ApprovalDecision::DECISION_REJECTED],
+            ])
+            // The launcher's votes never count; a request whose job is gone has no launcher.
+            ->andWhere(['or', ['j.launched_by' => null], '[[d.user_id]] <> [[j.launched_by]]'])
+            ->groupBy(['d.approval_request_id', 'd.decision'])
+            ->all();
+        foreach ($rows as $row) {
+            $kind = strtolower($row['decision']) === ApprovalDecision::DECISION_APPROVED ? 'approved' : 'rejected';
+            $counts[(int)$row['request_id']][$kind] += (int)$row['votes'];
+        }
+
+        return $counts;
     }
 
     /**

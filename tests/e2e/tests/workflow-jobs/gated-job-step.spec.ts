@@ -1,8 +1,10 @@
 import { test, expect, Browser, Page, TestInfo } from '@playwright/test';
 import { newestJobId, templateId } from '../../lib/helpers';
+import { REQUEST_JOB_COLUMN } from '../../lib/approvals';
 import { idWhere, indexRows } from '../../lib/scoping';
 import { E2E_OPERATOR, asUser } from '../../lib/session';
 import { openWorkflowTemplate } from '../../lib/triggers';
+import { AWAITING_APPROVAL, QUEUED, cancelRunIfActive, requestLabel, stepBadge, stepRequestId } from '../../lib/runs';
 import {
   GATED_JOB_AFTER,
   GATED_JOB_STEP,
@@ -23,9 +25,13 @@ import {
  * job step e2e-gated-job-step on e2e-gated-job-template, which e2e-gate-rule
  * gates, then the pause step e2e-gated-job-after. e2e-admin launches;
  * e2e-operator, the rule's other approver, decides. No runner serves the
- * template's runner group, so an approved job stays queued.
+ * template's runner group, so an approved job stays queued. Every test
+ * cancels the run it started unless it has finished.
  */
 const LAUNCH_BUTTON = '#page-content form[action*="/workflow-template/launch"] button';
+
+/** The run the running test started; afterEach cancels it unless it has finished. */
+let started = '';
 
 /** Launches the workflow as e2e-admin; the run and the job of its gated job step, which waits for approval. */
 async function launch(page: Page): Promise<{ runId: string; jobId: string }> {
@@ -36,18 +42,20 @@ async function launch(page: Page): Promise<{ runId: string; jobId: string }> {
     page.locator(LAUNCH_BUTTON).click(),
   ]);
   const runId = new URL(page.url()).searchParams.get('id') ?? '';
+  started = runId;
   const step = runStepRow(page, GATED_JOB_STEP);
   await expect(step.locator('[data-wjs-type-cell]')).toHaveText('Job');
-  await expect(step.locator('[data-wjs-status-cell] .badge')).toHaveText('Running');
+  await expect(stepBadge(step)).toHaveText(AWAITING_APPROVAL);
   const jobId = await stepJobId(step);
+  // The job and its request, both named in the Job / Request cell.
+  await expect(step.locator('[data-wjs-job-cell]')).toHaveText(`#${jobId} · ${requestLabel(await stepRequestId(step))}`);
   expect(await newestJobId(page, await templateId(page, GATED_JOB_TEMPLATE), 'pending_approval')).toBe(jobId);
   return { runId, jobId };
 }
 
 /** e2e-operator decides on the approval request of the job; the request's ID. */
 async function decide(browser: Browser, testInfo: TestInfo, page: Page, jobId: string, decision: 'approve' | 'reject'): Promise<string> {
-  // Columns of the request index: #, Job, Rule, Status, ...
-  const requestId = idWhere(await indexRows(page, '/approval/index'), 1, `#${jobId}`);
+  const requestId = idWhere(await indexRows(page, '/approval/index'), REQUEST_JOB_COLUMN, `#${jobId}`);
   await asUser(browser, testInfo, E2E_OPERATOR, async (operator) => {
     await operator.goto(`/approval/view?id=${requestId}`);
     await expect(operator.locator('#approval-rule')).toHaveText('e2e-gate-rule');
@@ -59,6 +67,11 @@ async function decide(browser: Browser, testInfo: TestInfo, page: Page, jobId: s
 }
 
 test.describe('Gated job step', () => {
+  test.afterEach(async ({ page }) => {
+    await cancelRunIfActive(page, started);
+    started = '';
+  });
+
   // Regression: approving the job of a gated job step marked it succeeded
   // without running it, and the run went on.
   test('an approved job is queued, and its step waits for it', async ({ page, browser }, testInfo) => {
@@ -68,11 +81,11 @@ test.describe('Gated job step', () => {
 
     expect(await newestJobId(page, await templateId(page, GATED_JOB_TEMPLATE), 'queued')).toBe(jobId);
     await page.goto(`/workflow-job/view?id=${runId}`);
-    await expect(page.locator('#wj-status')).toHaveText('Running');
+    await expect(page.locator('#wj-status')).toHaveText(QUEUED);
     const step = runStepRow(page, GATED_JOB_STEP);
-    await expect(step.locator('[data-wjs-status-cell] .badge')).toHaveText('Running');
+    await expect(stepBadge(step)).toHaveText(QUEUED);
     await expect(step.locator('[data-wjs-error]')).toHaveCount(0);
-    await expect(step.locator('[data-wjs-job-cell]')).toHaveText(`#${jobId}`);
+    await expect(step.locator('[data-wjs-job-link]')).toHaveText(`#${jobId}`);
     await expect(runStepRow(page, GATED_JOB_AFTER), 'the next step waits for the job').toHaveCount(0);
   });
 

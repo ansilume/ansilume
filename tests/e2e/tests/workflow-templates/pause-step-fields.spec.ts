@@ -1,12 +1,20 @@
 import { test, expect } from '@playwright/test';
 import { openWorkflowTemplate } from '../../lib/triggers';
-import { STEPS_WORKFLOW } from '../../lib/workflows';
+import {
+  END_FAILS_OPTION,
+  NEXT_OPTION_NONE_FAILS,
+  STEPS_WORKFLOW,
+  SUCCESS_LABEL,
+  SUCCESS_LABEL_PAUSE,
+} from '../../lib/workflows';
 
 // The step editor shows the routing fields that apply to the chosen step
 // type, and disables the hidden ones, so a value chosen before the type
 // changed is not posted:
-// - job: On Success, On Failure and Always;
-// - pause: only On Success, labelled "Next step" (a pause resumes as success);
+// - job: On Success, On Failure and Always; a new job step ends the
+//   workflow when it fails, so On Failure starts at "End the workflow";
+// - pause: only On Success, labelled "After Resume → go to" (a pause
+//   resumes as success);
 // - approval: On Success and On Failure, whose empty choice ends the run as
 //   failed; no Always, because a rejection would continue past it.
 // The page script does this, so only a browser can check it. Fixture:
@@ -32,10 +40,14 @@ test.describe('Workflow step editor — routing fields per step type', () => {
 
     await typeSelect.selectOption('job');
     await expect(success).toBeVisible();
-    await expect(successLabel).toHaveText('On Success → go to');
+    await expect(successLabel).toHaveText(SUCCESS_LABEL);
     await expect(failure).toBeVisible();
     await expect(failureSelect).toBeEnabled();
-    await expect(failurePrompt).toHaveText('— next step (default) —');
+    // Empty, On Failure goes on with the next step: here none, the run fails.
+    await expect(failurePrompt).toHaveText(NEXT_OPTION_NONE_FAILS);
+    // A new job step ends the workflow when it fails.
+    await expect(failureSelect).toHaveValue('0');
+    await expect(failureSelect.locator('option:checked')).toHaveText(END_FAILS_OPTION);
     await expect(always).toBeVisible();
     await expect(alwaysSelect).toBeEnabled();
     await expect(help('job')).toBeVisible();
@@ -52,12 +64,15 @@ test.describe('Workflow step editor — routing fields per step type', () => {
 
     await typeSelect.selectOption('pause');
     await expect(success).toBeVisible();
-    await expect(successLabel).toHaveText('Next step →');
+    await expect(successLabel).toHaveText(SUCCESS_LABEL_PAUSE);
     await expect(failure).toBeHidden();
     await expect(failureSelect).toBeDisabled();
     await expect(always).toBeHidden();
     await expect(alwaysSelect).toBeDisabled();
     await expect(help('pause')).toBeVisible();
+    await expect(help('pause')).toContainText(
+      `only the "${SUCCESS_LABEL_PAUSE}" field applies. On Failure and Always are ignored for pause.`,
+    );
     await expect(help('job')).toBeHidden();
     await expect(page.locator('#ws-target-job')).toBeHidden();
     await expect(page.locator('#ws-target-approval')).toBeHidden();
@@ -65,10 +80,10 @@ test.describe('Workflow step editor — routing fields per step type', () => {
     // An approval step: On Failure stays, and its empty choice ends the run
     // as failed; Always is gone (the server refuses one, END included).
     await typeSelect.selectOption('approval');
-    await expect(successLabel).toHaveText('On Success → go to');
+    await expect(successLabel).toHaveText(SUCCESS_LABEL);
     await expect(failure).toBeVisible();
     await expect(failureSelect).toBeEnabled();
-    await expect(failurePrompt).toHaveText('— end workflow as failed (default) —');
+    await expect(failurePrompt).toHaveText(END_FAILS_OPTION);
     await expect(always).toBeHidden();
     await expect(alwaysSelect).toBeDisabled();
     await expect(help('approval')).toBeVisible();
@@ -79,10 +94,12 @@ test.describe('Workflow step editor — routing fields per step type', () => {
     await expect(page.locator('#ws-target-approval')).toBeVisible();
     await expect(page.locator('#ws-target-job')).toBeHidden();
 
-    // Back to a job step: every field is offered and posted again.
+    // Back to a job step: every field is offered and posted again, and On
+    // Failure ends the workflow again.
     await typeSelect.selectOption('job');
     await expect(failureSelect).toBeEnabled();
-    await expect(failurePrompt).toHaveText('— next step (default) —');
+    await expect(failurePrompt).toHaveText(NEXT_OPTION_NONE_FAILS);
+    await expect(failureSelect).toHaveValue('0');
     await expect(always).toBeVisible();
     await expect(alwaysSelect).toBeEnabled();
   });

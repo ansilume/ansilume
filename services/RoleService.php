@@ -21,6 +21,11 @@ use yii\rbac\Role;
  * System roles (viewer/operator/admin) may have their direct permissions
  * edited but cannot be renamed or deleted. Custom roles are flat — they
  * carry permissions only, never child roles.
+ *
+ * Every write is made as the user of a RoleChangePolicy, who must be allowed
+ * to: a role is created only with permissions they hold, and changed or
+ * deleted only when they may assign it, adding only permissions they hold.
+ * A refusal throws RoleChangeRefusedException before anything is written.
  */
 class RoleService extends Component
 {
@@ -120,35 +125,39 @@ class RoleService extends Component
     }
 
     /**
-     * Create a new custom role with the given permissions.
+     * Create a new custom role with the given permissions, as $policy's user
+     * may: only with permissions they hold (RoleChangePolicy). False when the
+     * form does not validate.
+     *
+     * @throws RoleChangeRefusedException when the form lists a permission the
+     *     user may not grant (RoleChangePolicy::PERMISSION_REFUSED); nothing
+     *     is written
      */
-    public function createRole(RoleForm $form, ?int $actorId): bool
+    public function createRole(RoleForm $form, RoleChangePolicy $policy): bool
     {
         if (!$form->validate()) {
             return false;
         }
+        // Each permission once: a second addChild() of one would hit the
+        // primary key of auth_item_child after the role was added.
+        $permissions = array_values(array_unique($form->permissions));
+        $this->refuseUngrantable($policy, $permissions);
 
         $auth = $this->auth();
         $role = $auth->createRole($form->name);
         $role->description = $form->description;
         $auth->add($role);
-
-        foreach ($form->permissions as $permName) {
-            $perm = $auth->getPermission($permName);
-            if ($perm !== null) {
-                $auth->addChild($role, $perm);
-            }
-        }
+        $this->addPermissions($role, $permissions);
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_ROLE_CREATED,
             'role',
             null,
-            $actorId,
+            $policy->actorId(),
             [
                 'name' => $form->name,
                 'description' => $form->description,
-                'permissions' => $form->permissions,
+                'permissions' => $permissions,
             ]
         );
 
@@ -158,15 +167,24 @@ class RoleService extends Component
     /**
      * Update a role: description + direct permissions. Name is immutable for
      * both system and custom roles via this service (simpler and avoids
-     * cascading rename concerns).
+     * cascading rename concerns). $policy's user must be allowed to assign
+     * the role as it is, and to grant every permission the change adds
+     * (RoleChangePolicy); removing permissions needs no more. False when the
+     * role does not exist or the form does not validate.
+     *
+     * @throws RoleChangeRefusedException when the user may not change the
+     *     role (RoleChangePolicy::CHANGE_REFUSED, before the form is
+     *     validated) or grant a permission it adds (PERMISSION_REFUSED);
+     *     nothing is written
      */
-    public function updateRole(string $name, RoleForm $form, ?int $actorId): bool
+    public function updateRole(string $name, RoleForm $form, RoleChangePolicy $policy): bool
     {
         $auth = $this->auth();
         $role = $auth->getRole($name);
         if ($role === null) {
             return false;
         }
+        $this->refuseChange($policy, $name);
 
         // Name field is read-only in the form for system roles; for custom
         // roles we also keep it fixed here and reject any mismatch, so the
@@ -179,34 +197,23 @@ class RoleService extends Component
             return false;
         }
 
+        $current = $this->directPermissions($name);
+        $target = array_values(array_unique($form->permissions));
+        $toAdd = array_values(array_diff($target, $current));
+        $toRemove = array_values(array_diff($current, $target));
+        $this->refuseUngrantable($policy, $toAdd);
+
         $oldDescription = (string)$role->description;
         $role->description = $form->description;
         $auth->update($name, $role);
-
-        $current = $this->directPermissions($name);
-        $target = array_values(array_unique($form->permissions));
-
-        $toAdd = array_values(array_diff($target, $current));
-        $toRemove = array_values(array_diff($current, $target));
-
-        foreach ($toRemove as $permName) {
-            $perm = $auth->getPermission($permName);
-            if ($perm !== null) {
-                $auth->removeChild($role, $perm);
-            }
-        }
-        foreach ($toAdd as $permName) {
-            $perm = $auth->getPermission($permName);
-            if ($perm !== null) {
-                $auth->addChild($role, $perm);
-            }
-        }
+        $this->removePermissions($role, $toRemove);
+        $this->addPermissions($role, $toAdd);
 
         \Yii::$app->get('auditService')->log(
             AuditLog::ACTION_ROLE_UPDATED,
             'role',
             null,
-            $actorId,
+            $policy->actorId(),
             [
                 'name' => $name,
                 'description_changed' => $oldDescription !== $form->description,
@@ -221,11 +228,14 @@ class RoleService extends Component
     /**
      * Delete a custom role. System roles cannot be deleted. Users that held
      * the role keep their account; their assignment row is cascaded away by
-     * the auth_assignment FK and they are left without a role.
+     * the auth_assignment FK and they are left without a role. $policy's
+     * user must be allowed to assign the role as it is (RoleChangePolicy).
      *
      * @return bool true if deleted, false if not found or refused (system role)
+     * @throws RoleChangeRefusedException when the user may not change the
+     *     role (RoleChangePolicy::CHANGE_REFUSED); nothing is written
      */
-    public function deleteRole(string $name, ?int $actorId): bool
+    public function deleteRole(string $name, RoleChangePolicy $policy): bool
     {
         if ($this->isSystemRole($name)) {
             return false;
@@ -236,6 +246,7 @@ class RoleService extends Component
         if ($role === null) {
             return false;
         }
+        $this->refuseChange($policy, $name);
 
         $affectedUsers = $this->usersWithRole($name);
 
@@ -247,7 +258,7 @@ class RoleService extends Component
             AuditLog::ACTION_ROLE_DELETED,
             'role',
             null,
-            $actorId,
+            $policy->actorId(),
             [
                 'name' => $name,
                 'affected_users' => $affectedUsers,
@@ -255,6 +266,58 @@ class RoleService extends Component
         );
 
         return true;
+    }
+
+    /**
+     * @throws RoleChangeRefusedException (RoleChangePolicy::CHANGE_REFUSED)
+     *     when $policy's user may not change the role $name
+     */
+    private function refuseChange(RoleChangePolicy $policy, string $name): void
+    {
+        if (!$policy->mayChange($name)) {
+            throw new RoleChangeRefusedException(RoleChangePolicy::CHANGE_REFUSED);
+        }
+    }
+
+    /**
+     * @param array<int, string> $permissions what a save would grant
+     * @throws RoleChangeRefusedException (RoleChangePolicy::PERMISSION_REFUSED)
+     *     naming the first of $permissions $policy's user may not grant
+     */
+    private function refuseUngrantable(RoleChangePolicy $policy, array $permissions): void
+    {
+        $refused = $policy->firstRefused($permissions);
+        if ($refused !== null) {
+            throw new RoleChangeRefusedException(sprintf(RoleChangePolicy::PERMISSION_REFUSED, $refused));
+        }
+    }
+
+    /**
+     * @param array<int, string> $permissions
+     */
+    private function addPermissions(Role $role, array $permissions): void
+    {
+        $auth = $this->auth();
+        foreach ($permissions as $permName) {
+            $perm = $auth->getPermission($permName);
+            if ($perm !== null) {
+                $auth->addChild($role, $perm);
+            }
+        }
+    }
+
+    /**
+     * @param array<int, string> $permissions
+     */
+    private function removePermissions(Role $role, array $permissions): void
+    {
+        $auth = $this->auth();
+        foreach ($permissions as $permName) {
+            $perm = $auth->getPermission($permName);
+            if ($perm !== null) {
+                $auth->removeChild($role, $perm);
+            }
+        }
     }
 
     private function auth(): \yii\rbac\ManagerInterface

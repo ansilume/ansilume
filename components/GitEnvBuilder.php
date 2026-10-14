@@ -5,9 +5,9 @@ declare(strict_types=1);
 namespace app\components;
 
 /**
- * Build the environment variable set the runner needs for a `git clone`
- * or `git pull` subprocess, including SSH-key materialisation and HTTPS
- * credential-helper injection.
+ * Build the environment variable set the runner needs for its git
+ * subprocesses (a clone, or the commands that update a checkout),
+ * including SSH-key materialisation and HTTPS credential-helper injection.
  *
  * Extracted from RunnerController so the ~100-LOC credential-handling
  * logic lives in one focused unit rather than bloating the CLI command.
@@ -36,8 +36,11 @@ final class GitEnvBuilder
      * @param string|null $sshKeyFile Filled in with the temp path when an SSH key was materialised.
      * @return array<string, string>
      */
-    public function build(string $scmUrl, #[\SensitiveParameter] ?array $scmCredential, ?string &$sshKeyFile): array
-    {
+    public function build(
+        #[\SensitiveParameter] string $scmUrl,
+        #[\SensitiveParameter] ?array $scmCredential,
+        ?string &$sshKeyFile
+    ): array {
         $env = $this->baseEnv();
 
         if ($scmCredential === null || $scmUrl === '') {
@@ -78,13 +81,13 @@ final class GitEnvBuilder
     /**
      * SSH URL detection (scp-style `git@host:path` or `ssh://`).
      */
-    public function isSshUrl(string $url): bool
+    public function isSshUrl(#[\SensitiveParameter] string $url): bool
     {
         return str_starts_with($url, 'ssh://')
             || (str_contains($url, '@') && str_contains($url, ':') && !str_starts_with($url, 'http'));
     }
 
-    public function isHttpsUrl(string $url): bool
+    public function isHttpsUrl(#[\SensitiveParameter] string $url): bool
     {
         return str_starts_with($url, 'https://') || str_starts_with($url, 'http://');
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers\api\v1;
 
+use app\components\SurveySecrets;
 use app\controllers\api\v1\WebhooksController;
 use app\models\ApiToken;
 use app\models\User;
@@ -18,6 +19,9 @@ use app\tests\integration\controllers\WebControllerTestCase;
  */
 class WebhooksControllerTest extends WebControllerTestCase
 {
+    /** A test value, not a secret. */
+    private const SECRET = 'w5c-webhook-signing-8840';
+
     private WebhooksController $ctrl;
 
     protected function setUp(): void
@@ -149,6 +153,72 @@ class WebhooksControllerTest extends WebControllerTestCase
         $this->assertSame('updated-webhook', $wh['name']);
         $this->assertSame('https://example.com/updated', $wh['url']);
         $this->assertFalse($wh['enabled']);
+    }
+
+    // -- has_secret -----------------------------------------------------------
+
+    /**
+     * API parity with the webhook pages, which say whether a webhook signs
+     * its deliveries: the list and the detail answer has_secret, never the
+     * secret. A secret that WebhookService does not sign with ('', "0")
+     * counts as none, as on the pages.
+     */
+    public function testTheListAndTheDetailSayWhetherAWebhookSignsAndNeverAnswerTheSecret(): void
+    {
+        $admin = $this->authenticateWithAdmin();
+        $signed = $this->createWebhook((int)$admin->id, secret: self::SECRET);
+        $unsigned = $this->createWebhook((int)$admin->id);
+        $empty = $this->createWebhook((int)$admin->id, secret: '');
+        $zero = $this->createWebhook((int)$admin->id, secret: '0');
+
+        $list = $this->ctrl->actionIndex();
+        $detail = $this->callSuccess($this->ctrl->actionView((int)$signed->id));
+
+        $this->assertStringNotContainsString(self::SECRET, (string)json_encode([$list, $detail]));
+        $this->assertIsArray($detail);
+        $this->assertArrayNotHasKey('secret', $detail);
+        $this->assertTrue($detail['has_secret']);
+        $listed = [];
+        $data = $list['data'] ?? null;
+        $this->assertIsArray($data);
+        foreach ($data as $item) {
+            $this->assertIsArray($item);
+            $this->assertArrayNotHasKey('secret', $item);
+            $listed[$item['id']] = $item['has_secret'];
+        }
+        $this->assertSame(true, $listed[(int)$signed->id] ?? null);
+        $this->assertSame(false, $listed[(int)$unsigned->id] ?? null);
+        $this->assertSame(false, $listed[(int)$empty->id] ?? null);
+        $this->assertSame(false, $listed[(int)$zero->id] ?? null);
+        $unsignedDetail = $this->callSuccess($this->ctrl->actionView((int)$unsigned->id));
+        $this->assertIsArray($unsignedDetail);
+        $this->assertFalse($unsignedDetail['has_secret']);
+    }
+
+    /**
+     * Create and update answer has_secret for the stored secret: one set,
+     * one kept with $encrypted$, one removed with null.
+     */
+    public function testCreateAndUpdateAnswerWhetherTheStoredWebhookSigns(): void
+    {
+        $this->authenticateWithAdmin();
+        $this->setBody(['name' => 'signed-webhook', 'url' => 'https://example.com/signed', 'events' => 'job.success', 'secret' => self::SECRET]);
+        $created = $this->callSuccess($this->ctrl->actionCreate());
+        $this->assertIsArray($created);
+        $this->assertTrue($created['has_secret']);
+        $this->assertArrayNotHasKey('secret', $created);
+        $id = (int)$created['id'];
+
+        $this->setBody(['name' => 'still-signed', 'secret' => SurveySecrets::PLACEHOLDER]);
+        $kept = $this->callSuccess($this->ctrl->actionUpdate($id));
+        $this->assertIsArray($kept);
+        $this->assertTrue($kept['has_secret']);
+
+        $this->setBody(['name' => 'unsigned-now', 'secret' => null]);
+        $removed = $this->callSuccess($this->ctrl->actionUpdate($id));
+        $this->assertIsArray($removed);
+        $this->assertFalse($removed['has_secret']);
+        $this->assertStringNotContainsString(self::SECRET, (string)json_encode([$created, $kept, $removed]));
     }
 
     // -- Delete ---------------------------------------------------------------

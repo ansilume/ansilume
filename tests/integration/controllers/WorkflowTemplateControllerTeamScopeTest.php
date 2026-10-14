@@ -219,7 +219,7 @@ class WorkflowTemplateControllerTeamScopeTest extends WebControllerTestCase
      */
     private function targetLinks(string $html, WorkflowStep $step): array
     {
-        $found = preg_match('#<tr data-step-id="' . $step->id . '">(.*?)</tr>#s', $html, $row);
+        $found = preg_match('#<tr\b[^>]*\bdata-step-id="' . $step->id . '"[^>]*>(.*?)</tr>#s', $html, $row);
         $this->assertSame(1, $found, "row of step #{$step->id}");
         preg_match_all('#href="(/(?:job-template|approval-rule)/view\?id=\d+)"#', $row[1], $links);
 

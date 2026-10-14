@@ -19,6 +19,9 @@ use yii\console\Controller;
  */
 final class RunnerProjectSync
 {
+    /** Written to the runner's output once the git commands of a sync succeeded; sprintf(): the seconds they took. */
+    public const SYNC_COMPLETED = 'Git sync completed in %ss';
+
     public function __construct(
         private readonly Controller $controller,
         private readonly GitEnvBuilder $gitEnv = new GitEnvBuilder(),
@@ -45,10 +48,6 @@ final class RunnerProjectSync
         }
 
         $isClone = !is_dir($projectPath . '/.git');
-        $cmd = $isClone
-            ? ['git', 'clone', '--depth', '1', '--branch', $scmBranch, $scmUrl, $projectPath]
-            : ['git', '-C', $projectPath, 'pull', '--ff-only', 'origin', $scmBranch];
-
         $action = $isClone ? 'Cloning' : 'Pulling';
         $redactedUrl = GitSyncDiagnostics::redactUrl($scmUrl);
         $this->controller->stdout("{$action} project: {$redactedUrl} (branch: {$scmBranch}) → {$projectPath}\n");
@@ -57,7 +56,9 @@ final class RunnerProjectSync
         $scmCredential = is_array($payload['scm_credential'] ?? null) ? $payload['scm_credential'] : null;
         $sshKeyFile = null;
         try {
-            $error = $this->runGitCommand($cmd, $projectPath, $isClone, $scmUrl, $scmCredential, $sshKeyFile);
+            $env = $this->buildGitEnv($scmUrl, $scmCredential, $sshKeyFile);
+            $commands = $this->gitCommands($isClone, $scmUrl, $scmBranch, $projectPath);
+            $error = $this->runGitCommands($commands, $env, $projectPath, $isClone);
         } finally {
             if ($sshKeyFile !== null && is_file($sshKeyFile)) {
                 FileHelper::safeUnlink($sshKeyFile);
@@ -67,22 +68,78 @@ final class RunnerProjectSync
     }
 
     /**
-     * Run a git command with safe environment and return null on success
-     * or an error message string on failure.
+     * The git commands that bring the checkout at $projectPath to the head
+     * of $scmBranch at $scmUrl, the project's current repository URL: a
+     * clone; or, for an existing checkout, origin set to $scmUrl, a fetch
+     * and a fast-forward.
      *
-     * @param array<int, string> $cmd
-     * @param array{credential_type: string, username: string|null, env_var_name?: string|null, secrets: array<string, string>}|null $scmCredential
-     * @param string|null $sshKeyFile Set to the temp path when an SSH key was written (caller unlinks).
+     * A checkout keeps the URL it was cloned with as its origin, credentials
+     * included, in its .git/config. Origin is set first, so that the fetch
+     * uses a changed URL (a rotated token, a moved repository) and the
+     * credentials of the old URL leave the checkout. "--" ends git's
+     * options, so that neither the URL nor the branch is read as one; git
+     * pull would hand the branch on to its fetch without it, so the runner
+     * fetches and merges itself.
+     *
+     * @return list<list<string>>
+     */
+    private function gitCommands(
+        bool $isClone,
+        #[\SensitiveParameter] string $scmUrl,
+        string $scmBranch,
+        string $projectPath
+    ): array {
+        if ($isClone) {
+            return [['git', 'clone', '--depth', '1', '--branch', $scmBranch, '--', $scmUrl, $projectPath]];
+        }
+
+        return [
+            ['git', '-C', $projectPath, 'remote', 'set-url', '--', 'origin', $scmUrl],
+            ['git', '-C', $projectPath, 'fetch', '--', 'origin', $scmBranch],
+            ['git', '-C', $projectPath, 'merge', '--ff-only', 'FETCH_HEAD'],
+        ];
+    }
+
+    /**
+     * Run $commands in turn with $env and stop at the first that fails:
+     * null when all of them succeeded, else the error message of the one
+     * that failed.
+     *
+     * @param list<list<string>> $commands The commands, the repository URL with its credentials included.
+     * @param array<string, string> $env
+     */
+    private function runGitCommands(
+        #[\SensitiveParameter] array $commands,
+        #[\SensitiveParameter] array $env,
+        string $projectPath,
+        bool $isClone
+    ): ?string {
+        $startTime = microtime(true);
+        foreach ($commands as $cmd) {
+            $error = $this->runGitCommand($cmd, $env, $projectPath, $isClone);
+            if ($error !== null) {
+                return $error;
+            }
+        }
+
+        $elapsed = round(microtime(true) - $startTime, 2);
+        $this->controller->stdout(sprintf(self::SYNC_COMPLETED, $elapsed) . "\n");
+        return null;
+    }
+
+    /**
+     * Run a git command with the environment of buildGitEnv() and return
+     * null on success or an error message string on failure.
+     *
+     * @param array<int, string> $cmd The command, the repository URL with its credentials included.
+     * @param array<string, string> $env
      */
     private function runGitCommand(
-        array $cmd,
+        #[\SensitiveParameter] array $cmd,
+        #[\SensitiveParameter] array $env,
         string $projectPath,
-        bool $isClone,
-        string $scmUrl = '',
-        #[\SensitiveParameter] ?array $scmCredential = null,
-        ?string &$sshKeyFile = null,
+        bool $isClone
     ): ?string {
-        $env = $this->buildGitEnv($scmUrl, $scmCredential, $sshKeyFile);
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 
         $startTime = microtime(true);
@@ -93,8 +150,10 @@ final class RunnerProjectSync
         }
 
         fclose($pipes[0]);
-        $stdout = (string)stream_get_contents($pipes[1]);
-        $stderr = (string)stream_get_contents($pipes[2]);
+        // Git's messages can name the URL: with a raw "@" in its password,
+        // the rest of the password as the user (GitSyncDiagnostics::redactUrl).
+        $stdout = GitSyncDiagnostics::redactUrl((string)stream_get_contents($pipes[1]));
+        $stderr = GitSyncDiagnostics::redactUrl((string)stream_get_contents($pipes[2]));
         fclose($pipes[1]);
         fclose($pipes[2]);
         $exitCode = proc_close($proc);
@@ -114,7 +173,6 @@ final class RunnerProjectSync
             );
         }
 
-        $this->controller->stdout("Git sync completed in {$elapsed}s\n");
         return null;
     }
 
@@ -140,7 +198,7 @@ final class RunnerProjectSync
      * @return array<string, string>
      */
     private function buildGitEnv(
-        string $scmUrl,
+        #[\SensitiveParameter] string $scmUrl,
         #[\SensitiveParameter] ?array $scmCredential,
         ?string &$sshKeyFile
     ): array {
@@ -149,12 +207,13 @@ final class RunnerProjectSync
 
     /**
      * Format a git command for logging, redacting any credentials that
-     * may be embedded in URL arguments.
+     * may be embedded in URL arguments (as ProjectService logs its git
+     * commands).
      *
      * @param array<int, string> $cmd
      */
-    private function redactGitCmd(array $cmd): string
+    private function redactGitCmd(#[\SensitiveParameter] array $cmd): string
     {
-        return implode(' ', array_map(fn (string $arg): string => GitSyncDiagnostics::redactUrl($arg), $cmd));
+        return GitSyncDiagnostics::redactUrl(implode(' ', $cmd));
     }
 }

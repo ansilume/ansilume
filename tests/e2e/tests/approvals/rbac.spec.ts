@@ -4,6 +4,7 @@ import { forgePost, indexRows, rowsWhere } from '../../lib/scoping';
 import {
   GATED_TEMPLATE,
   LAUNCHER_REFUSED,
+  REQUEST_RULE_COLUMN,
   cancelJob,
   decisionForms,
   decisionRows,
@@ -21,8 +22,7 @@ import {
  * The rule lists the viewer as approver, but the viewer role lacks approval.decide.
  */
 async function openBetaRequest(page: Page): Promise<string> {
-  // Columns of the index: #, Job, Rule, Status, ...
-  const rows = rowsWhere(await indexRows(page, '/approval/index'), 2, 'e2e-beta-approval-rule');
+  const rows = rowsWhere(await indexRows(page, '/approval/index'), REQUEST_RULE_COLUMN, 'e2e-beta-approval-rule');
   expect(rows, 'the viewer sees the request of their team\'s workflow').toHaveLength(1);
   await page.goto(`/approval/view?id=${rows[0].id}`);
   await expect(page.locator('#page-content table').first()).toContainText('Pending');

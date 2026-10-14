@@ -509,6 +509,33 @@ vars. Password answers are handled like credentials:
   the repository of its project, can make the answers of its jobs and
   schedules reach a playbook of their choosing, as with credentials.
 
+## Secrets in inventories and extra vars
+
+The content of a static inventory and the extra vars of job templates,
+jobs and schedules are stored as entered, without encryption, and shown to
+everyone who may see them: the content on the page of the inventory, a job
+template's Default Extra Vars on its page, a job's extra vars on its page,
+in its stored command and in `GET /api/v1/jobs`, and a schedule's extra
+vars on its page and in `GET /api/v1/schedules`. By default viewers see
+inventories, job templates and jobs, and operators schedules; with teams,
+the members of the teams that have their project do. A password, token or
+key written there is readable by all of them, and only the answers of
+password survey fields show as `$encrypted$`. Keep secrets in:
+
+- a credential, which no page and no API answer shows: a token credential
+  reaches the playbook as an environment variable (see
+  [Token credentials and custom env var names](#token-credentials-and-custom-env-var-names));
+- a vault-encrypted value, which the job template's vault password opens on
+  the runner (see [Vault files in your repository](#vault-files-in-your-repository));
+- a password survey field, whose answers show as `$encrypted$` (see
+  [Password survey answers](#password-survey-answers)).
+
+The same holds for the credentials of a repository URL
+(`https://user:token@host/...`): give the project an SCM credential
+instead, which no page, log or checkout shows (see
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Security: repository URLs in syncs and logs**).
+
 ## RBAC
 
 | Permission | Who has it by default |

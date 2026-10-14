@@ -8,6 +8,7 @@ use app\models\NotificationTemplate;
 use app\services\notification\WebhookChannel;
 use PHPUnit\Framework\TestCase;
 use yii\db\BaseActiveRecord;
+use yii\log\Logger;
 
 class WebhookChannelTest extends TestCase
 {
@@ -166,6 +167,45 @@ class WebhookChannelTest extends TestCase
         } finally {
             $server->stop();
         }
+    }
+
+    /**
+     * regression: a delivery the webhook took was logged at info with the
+     * webhook's URL ("WebhookChannel: sent to <url> — 204"), which the queue
+     * worker's log target writes. The URL is a channel secret and often
+     * carries a token. The log names the template and the HTTP code only, as
+     * SlackChannel and TeamsChannel do.
+     */
+    public function testRegressionTheLogNamedTheWebhookUrl(): void
+    {
+        $server = new HttpLoopbackServer();
+        $baseUrl = $server->start(204, '');
+        $url = $baseUrl . '/hooks/w5c-webhook-token-7713?key=w5c-webhook-key-7714';
+        $logger = new Logger();
+        $logger->flushInterval = PHP_INT_MAX;
+        $previous = \Yii::getLogger();
+        \Yii::setLogger($logger);
+        try {
+            $nt = $this->makeTemplate((string)json_encode(['url' => $url, 'headers' => ['Authorization' => 'Bearer w5c-header-7715']]));
+            (new WebhookChannel())->send($nt, 'Hello', 'World', []);
+        } finally {
+            \Yii::setLogger($previous);
+            $server->stop();
+        }
+
+        $logged = array_values(array_filter(
+            $logger->messages,
+            static fn (array $message): bool => $message[2] === WebhookChannel::class
+        ));
+        $text = (string)json_encode($logged);
+        $this->assertStringNotContainsString('w5c-webhook-token-7713', $text);
+        $this->assertStringNotContainsString('w5c-webhook-key-7714', $text);
+        $this->assertStringNotContainsString('w5c-header-7715', $text);
+        $this->assertStringNotContainsString('127.0.0.1', $text);
+        $this->assertSame([[Logger::LEVEL_INFO, sprintf(WebhookChannel::SENT, 1, 204)]], array_map(
+            static fn (array $message): array => [$message[1], $message[0]],
+            $logged
+        ));
     }
 
     public function testPostRaisesOnNon2xxResponse(): void

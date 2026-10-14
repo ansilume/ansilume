@@ -82,20 +82,23 @@ class RoleControllerActionTest extends WebControllerTestCase
 
     public function testCreateRendersFormOnGet(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsSuperadmin();
 
         $ctrl = $this->makeController();
         $result = $ctrl->actionCreate();
 
         $this->assertSame('rendered:create', $result);
         $this->assertArrayHasKey('form', $ctrl->capturedParams);
+        $this->assertNotContains(false, $ctrl->capturedParams['grantable'], 'a superadmin may grant every permission');
+        $this->assertSame(
+            \app\helpers\PermissionCatalog::allPermissionNames(),
+            array_keys($ctrl->capturedParams['grantable'])
+        );
     }
 
     public function testCreatePersistsAndRedirects(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsSuperadmin();
 
         $name = 'custom-' . substr(md5(uniqid('', true)), 0, 8);
         $this->setPost([
@@ -141,8 +144,7 @@ class RoleControllerActionTest extends WebControllerTestCase
 
     public function testUpdateRendersFormOnGet(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsSuperadmin();
         $name = $this->createCustomRole(['project.view']);
 
         $ctrl = $this->makeController();
@@ -152,12 +154,12 @@ class RoleControllerActionTest extends WebControllerTestCase
         $this->assertSame($name, $ctrl->capturedParams['form']->name);
         $this->assertSame(['project.view'], $ctrl->capturedParams['form']->permissions);
         $this->assertSame($name, $ctrl->capturedParams['role']['name']);
+        $this->assertNotContains(false, $ctrl->capturedParams['grantable'], 'a superadmin may grant every permission');
     }
 
     public function testUpdatePersistsChanges(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsSuperadmin();
         $name = $this->createCustomRole(['project.view']);
 
         $this->setPost([
@@ -197,8 +199,7 @@ class RoleControllerActionTest extends WebControllerTestCase
 
     public function testDeleteRemovesCustomRole(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsSuperadmin();
         $name = $this->createCustomRole(['project.view']);
 
         $ctrl = $this->makeController();
@@ -219,8 +220,7 @@ class RoleControllerActionTest extends WebControllerTestCase
      */
     public function testDeleteRefusesSystemRole(): void
     {
-        $user = $this->createUser();
-        $this->loginAs($user);
+        $user = $this->loginAsSuperadmin();
 
         $ctrl = $this->makeController();
         $result = $ctrl->actionDelete('viewer');
@@ -244,6 +244,21 @@ class RoleControllerActionTest extends WebControllerTestCase
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * Signs in a superadmin, who may change every role and grant every
+     * permission (RoleChangePolicy); who else may is
+     * RoleControllerChangeRuleTest's.
+     */
+    private function loginAsSuperadmin(): \app\models\User
+    {
+        $user = $this->createUser('role-ctrl-superadmin');
+        $user->is_superadmin = true;
+        $user->save(false);
+        $this->loginAs($user);
+
+        return $user;
+    }
 
     /**
      * Create a custom role directly via the auth manager so each test has a

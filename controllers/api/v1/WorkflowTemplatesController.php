@@ -5,13 +5,17 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\components\ErrorText;
+use app\components\WorkflowStepSerializer;
 use app\components\WorkflowStepsInput;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\models\WorkflowJob;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\runstate\Viewer;
+use app\services\runstate\WorkflowRunStates;
 use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
 use app\services\WorkflowExecutionService;
@@ -29,14 +33,23 @@ use yii\web\NotFoundHttpException;
  * steps. Seeing one needs view access to every job step's project; updating,
  * deleting and launching it need operator access to every one.
  *
+ * A workflow's detail (view, create, update) names its start step
+ * (start_step_id) and the steps a run passes when every step succeeds
+ * (success_path), and lists its steps by position, each with where its
+ * branches lead (WorkflowStepSerializer).
+ *
  * Steps (create and update): a "steps" list replaces all steps; null or no
- * "steps" keeps them. Every step needs a name (max 128) and a step_type of
- * job (default), approval or pause; a job step needs job_template_id, an
- * approval step approval_rule_id of an existing approval rule
- * (WorkflowStepsInput). extra_vars_template, JSON text or a JSON object, must
- * be JSON that can be stored: a number too large for JSON answers 422 in
- * either form. The answers, in this order (update: 403 "Forbidden." first,
- * without access to the workflow):
+ * "steps" keeps them. The new steps get new IDs and no branches: the list
+ * does not read on_success_step_id, on_failure_step_id or on_always_step_id,
+ * and the branches of the replaced steps go with them. To change one step
+ * and keep its ID and every branch, use the per-step endpoints
+ * (WorkflowStepsController). Every step needs a name (max 128) and a
+ * step_type of job (default), approval or pause; a job step needs
+ * job_template_id, an approval step approval_rule_id of an existing approval
+ * rule (WorkflowStepsInput). extra_vars_template, JSON text or a JSON
+ * object, must be JSON that can be stored: a number too large for JSON
+ * answers 422 in either form. The answers, in this order (update: 403
+ * "Forbidden." first, without access to the workflow):
  * - 422 for a template that is not valid, such as an empty name;
  * - 422 for steps that cannot be read;
  * - 403 when the caller may not change these steps: gated steps (approval
@@ -48,10 +61,17 @@ use yii\web\NotFoundHttpException;
  * - 422 for unknown approval rules; then 422 for job templates that do not
  *   exist or that the caller cannot see, 403 for visible ones the caller may
  *   not operate, both naming them in error.job_template_ids;
- * - (update) 404 when the workflow was deleted meanwhile, then 409 while a
- *   run of the workflow is active, naming the runs in error.workflow_job_ids
+ * - (update) 404 when the workflow was deleted meanwhile, 403 "Forbidden."
+ *   when the caller may no longer operate every job step's project, then
+ *   403 when the lock re-check of gated steps refuses, then 409 while a run
+ *   of the workflow is active, naming the runs in error.workflow_job_ids
  *   (WorkflowStepChangeGuard), checked with the workflow's row locked, as a
  *   launch locks it;
+ * - 403 (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED) when a
+ *   job template of the new steps got an approval rule meanwhile: the rule
+ *   of gated steps is checked again for the new steps in the write's
+ *   transaction, with the workflow's row locked on update, as the per-step
+ *   endpoints check it (WorkflowStepWriteService);
  * - 422 for a template or step that cannot be saved.
  * Nothing is written unless the template and every step are valid; then the
  * template and its steps are written in one transaction. Runs keep the
@@ -60,7 +80,12 @@ use yii\web\NotFoundHttpException;
  * Delete cancels the workflow's active runs (WorkflowTemplateDeletionService)
  * and answers how many it canceled and how many it could not (canceled_runs,
  * failed_runs). Launch takes optional extra_vars, which every job
- * step of the run receives; the engine refuses unusable ones with 422.
+ * step of the run receives; the engine refuses unusable ones with 422. It
+ * answers the new run (workflow_job_id), what the run waits for at its start
+ * step (waiting_for: approval, resume or runner; null when it does not wait)
+ * and the approval request of that step (approval_request_id: an approval
+ * step's or a gated job step's; null without one, or when the caller may
+ * not see it).
  */
 class WorkflowTemplatesController extends BaseApiController
 {
@@ -229,7 +254,24 @@ class WorkflowTemplatesController extends BaseApiController
             return $this->error($e->getMessage(), 422);
         }
 
-        return $this->success(['workflow_job_id' => $wfJob->id], 201);
+        return $this->success(['workflow_job_id' => $wfJob->id] + $this->waitOf($wfJob), 201);
+    }
+
+    /**
+     * What the new run $run waits for at its start step (Display::WAITING_FOR_*,
+     * null when it does not wait), and the approval request of that step: an
+     * approval step's, or a gated job step's; null without one, or when the
+     * caller may not see it (WorkflowRunStates::forRuns()).
+     *
+     * @return array{waiting_for: string|null, approval_request_id: int|null}
+     */
+    private function waitOf(WorkflowJob $run): array
+    {
+        /** @var WorkflowRunStates $states */
+        $states = \Yii::$app->get('workflowRunStates');
+        $state = $states->forRuns([$run], Viewer::current())[(int)$run->id];
+
+        return ['waiting_for' => $state->waitingFor, 'approval_request_id' => $state->current?->approval?->requestId];
     }
 
     /**
@@ -281,17 +323,15 @@ class WorkflowTemplatesController extends BaseApiController
     /**
      * 403 when the caller may not change the steps to these: approval steps
      * and gated job steps are for admins. Checked here before the
-     * references; the workflow's own steps are checked again while it is
-     * locked (WorkflowStepChangeGuard).
+     * references, and again while the workflow is locked: its own steps by
+     * WorkflowStepChangeGuard, the new ones by saveAll().
      *
      * @param list<WorkflowStep> $steps
      * @return array{error: array<string, mixed>}|null
      */
     private function stepsPolicyError(WorkflowTemplate $model, array $steps): ?array
     {
-        /** @var ApprovalRuleAssignmentPolicy $policy */
-        $policy = \Yii::$app->get('approvalRuleAssignmentPolicy');
-        $refusal = $policy->stepsAddRefusal((int)$this->currentUserId(), $model, $steps);
+        $refusal = $this->policy()->stepsAddRefusal((int)$this->currentUserId(), $model, $steps);
 
         return $refusal === null ? null : $this->error($refusal, 403);
     }
@@ -336,12 +376,16 @@ class WorkflowTemplatesController extends BaseApiController
 
     /**
      * Save the template and, when given, replace its steps, all or nothing.
-     * Steps are replaced through WorkflowStepChangeGuard: with the workflow
-     * locked, 403 for a caller who may not change them, 409 while a run is
-     * active, and 404 when the workflow was deleted meanwhile. Whether a new
-     * job step is gated was asked before (stepsPolicyError()): a rule that a
-     * job template gets in between is one it got right after, and locks the
-     * workflow from then on. Returns the error response, or null.
+     * Steps are replaced through WorkflowStepChangeGuard, in one transaction
+     * with the workflow locked (on update; a new template has no row to
+     * lock): 404 when the workflow was deleted meanwhile, 403 for a caller
+     * who may not change them, and 409 while a run is active. Then, in that
+     * transaction, saveAll() asks again whether the caller may add the new
+     * steps (asked before by stepsPolicyError()): a job template that got an
+     * approval rule in between makes its job step a gated job step, which
+     * answers 403 (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED)
+     * and writes nothing, as on the per-step endpoints. Returns the error
+     * response, or null.
      *
      * @param list<WorkflowStep>|null $steps null keeps the current steps
      * @return array{error: array<string, mixed>}|null
@@ -371,14 +415,16 @@ class WorkflowTemplatesController extends BaseApiController
     }
 
     /**
-     * Save the template, then replace its steps. A refusal (422) rolls back
+     * Once the caller may still add the steps (assertMayAddSteps()), save
+     * the template, then replace its steps. A refusal (403, 422) rolls back
      * the guard's transaction.
      *
      * @param list<WorkflowStep> $steps
-     * @throws WorkflowStepChangeRefusedException when the template or a step cannot be saved
+     * @throws WorkflowStepChangeRefusedException when the caller may no longer add the steps (403), or the template or a step cannot be saved (422)
      */
     private function saveAll(WorkflowTemplate $model, array $steps): void
     {
+        $this->assertMayAddSteps($model, $steps);
         if (!$model->save()) {
             throw new WorkflowStepChangeRefusedException(
                 WorkflowStepsInput::firstError($model),
@@ -394,6 +440,30 @@ class WorkflowTemplatesController extends BaseApiController
                     WorkflowStepChangeRefusedException::INVALID
                 );
             }
+        }
+    }
+
+    /**
+     * 403 when the caller may not add $steps to $model, asked again in the
+     * guard's transaction (with the workflow's row locked on update) by the
+     * rule stepsPolicyError() asked before it: rule 12,
+     * ApprovalRuleAssignmentPolicy::stepsAddRefusal(). A job template that an
+     * admin gave an approval rule since then makes its job step a gated job
+     * step, which is for admins (GATED_JOB_STEP_ADD_REFUSED). The per-step
+     * endpoints check the same under the lock (WorkflowStepWriteService).
+     *
+     * Regression: the rule was checked only before the lock, so a job
+     * template that got an approval rule in between was given to a new job
+     * step of the steps list all the same.
+     *
+     * @param list<WorkflowStep> $steps
+     * @throws WorkflowStepChangeRefusedException (403)
+     */
+    private function assertMayAddSteps(WorkflowTemplate $model, array $steps): void
+    {
+        $refusal = $this->policy()->stepsAddRefusal((int)$this->currentUserId(), $model, $steps);
+        if ($refusal !== null) {
+            throw new WorkflowStepChangeRefusedException($refusal, WorkflowStepChangeRefusedException::FORBIDDEN);
         }
     }
 
@@ -495,28 +565,20 @@ class WorkflowTemplatesController extends BaseApiController
     }
 
     /**
-     * A step returns only the target of its type: job_template_id for a job
-     * step, approval_rule_id for an approval step. A job template that an
-     * older version saved on another step type does not restrict who sees the
-     * workflow, so it is never shown.
+     * The workflow with its start step, its success path and its steps by
+     * position, as WorkflowStepSerializer writes them: each step returns
+     * only the target of its type, and where its branches lead.
      *
      * @return array<string, mixed>
      */
     private function serializeDetailed(WorkflowTemplate $m): array
     {
+        $steps = WorkflowStepSerializer::forTemplate($m);
         $data = $this->serialize($m, $this->mayChange($m));
-        $data['steps'] = array_map(fn (WorkflowStep $s) => [
-            'id' => $s->id,
-            'name' => $s->name,
-            'step_order' => $s->step_order,
-            'step_type' => $s->step_type,
-            'job_template_id' => $s->step_type === WorkflowStep::TYPE_JOB ? $s->job_template_id : null,
-            'approval_rule_id' => $s->step_type === WorkflowStep::TYPE_APPROVAL ? $s->approval_rule_id : null,
-            'on_success_step_id' => $s->on_success_step_id,
-            'on_failure_step_id' => $s->on_failure_step_id,
-            'on_always_step_id' => $s->on_always_step_id,
-            'extra_vars_template' => $s->getParsedExtraVarsTemplate(),
-        ], $m->steps);
+        $data['start_step_id'] = $steps->startStepId();
+        $data['success_path'] = $steps->successPath();
+        $data['steps'] = $steps->steps();
+
         return $data;
     }
 
@@ -535,6 +597,13 @@ class WorkflowTemplatesController extends BaseApiController
         /** @var WorkflowAccessChecker $checker */
         $checker = \Yii::$app->get('workflowAccessChecker');
         return $checker;
+    }
+
+    private function policy(): ApprovalRuleAssignmentPolicy
+    {
+        /** @var ApprovalRuleAssignmentPolicy $policy */
+        $policy = \Yii::$app->get('approvalRuleAssignmentPolicy');
+        return $policy;
     }
 
     /**

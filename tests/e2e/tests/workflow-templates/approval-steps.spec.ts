@@ -1,13 +1,12 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, Locator, Page } from '@playwright/test';
 import { expectFlash, submitForm } from '../../lib/helpers';
 import { forgePost, idWhere, indexRows } from '../../lib/scoping';
 import { openWorkflowTemplate } from '../../lib/triggers';
 import {
   APPROVAL_STEPS_JOB,
   APPROVAL_STEPS_WORKFLOW,
+  GATED_BADGE,
   GATED_JOB_AFTER,
-  GATED_JOB_FAILURE_ROUTE,
-  GATED_JOB_FAILURE_TITLE,
   GATED_JOB_STEP,
   GATED_JOB_TEMPLATE,
   GATED_JOB_WORKFLOW,
@@ -15,13 +14,32 @@ import {
   GATE_CONTINUE_JOB,
   GATE_CONTINUE_WORKFLOW,
   GATE_RULE,
-  ROUTE_END_FAILED,
-  ROUTE_NEXT_STEP,
+  NEXT_TITLE,
+  PART_SEPARATOR,
+  PAUSE_FAILURE_TITLE,
+  POSITION_SELECT,
+  REFUSED_APPROVAL_TITLE,
+  ROUTE_AFTER_REFUSED_APPROVAL,
+  ROUTE_ALSO_AFTER_FAILED_JOB,
+  ROUTE_END_FAILS,
+  ROUTE_END_SUCCEEDS,
+  ROUTE_UNUSED,
   STEPS_BUILD,
   STEPS_LOCKED_NOTICE,
   STEPS_WORKFLOW,
+  STEP_NOT_ADDED,
   addStepFormErrors,
+  gatedTitle,
+  nowEnds,
+  removeTemplateStep,
+  routeCell,
+  routeNext,
+  stepAdded,
+  stepLabel,
+  stepRemoved,
+  templateStepId,
   templateStepRow,
+  typeBadge,
 } from '../../lib/workflows';
 
 /**
@@ -31,6 +49,9 @@ import {
  * (commands/E2eWorkflowGateSeeder.php): e2e-approval-steps-workflow, never
  * launched, with the one job step e2e-approval-steps-job; and
  * e2e-gate-continue-workflow, whose approval step has no On Failure branch.
+ *
+ * Other specs leave runs waiting at these workflows' steps, and the Type
+ * cell also counts them: only the type badge is asserted.
  */
 const ADDED = 'e2e-added-approval';
 const ADDED_GATED_JOB = 'e2e-added-gated-job';
@@ -40,11 +61,9 @@ async function gateRuleId(page: Page): Promise<string> {
   return idWhere(await indexRows(page, '/approval-rule/index'), 0, GATE_RULE);
 }
 
-/** The ID of the step named `name` of the open workflow template page. */
-async function stepId(page: Page, name: string): Promise<string> {
-  const id = (await templateStepRow(page, name).getAttribute('data-step-id')) ?? '';
-  expect(id, `the ID of step ${name}`).toMatch(/^\d+$/);
-  return id;
+/** The hover texts of the parts of a route cell. */
+async function partTitles(row: Locator, route: 'success' | 'failure' | 'always'): Promise<(string | null)[]> {
+  return routeCell(row, route).locator(':scope > span').evaluateAll((spans) => spans.map((span) => span.getAttribute('title')));
 }
 
 test.describe('Approval steps (admin)', () => {
@@ -54,16 +73,17 @@ test.describe('Approval steps (admin)', () => {
   test('the routes of an approval step without On Failure branch say that a rejection ends the run', async ({ page }) => {
     await openWorkflowTemplate(page, GATE_CONTINUE_WORKFLOW);
     const approve = templateStepRow(page, GATE_CONTINUE_APPROVE);
-    await expect(approve.locator('td').nth(2)).toHaveText('Approval');
+    await expect(typeBadge(approve)).toHaveText('Approval');
     await expect(approve.locator('td').nth(3)).toHaveText(GATE_RULE);
-    await expect(approve.locator('td[data-route="success"]')).toHaveText(ROUTE_NEXT_STEP);
-    await expect(approve.locator('td[data-route="failure"]')).toHaveText(ROUTE_END_FAILED);
-    await expect(approve.locator('td[data-route="always"]')).toHaveText('—');
-    // A job step's empty On Failure still goes on with the next step.
+    await expect(routeCell(approve, 'success')).toHaveText(routeNext(2, GATE_CONTINUE_JOB));
+    await expect(routeCell(approve, 'failure')).toHaveText(ROUTE_END_FAILS);
+    await expect(routeCell(approve, 'always')).toHaveText(ROUTE_UNUSED);
+    // The job step is the last: its empty branches end the run with its outcome.
     const job = templateStepRow(page, GATE_CONTINUE_JOB);
-    await expect(job.locator('td').nth(2)).toHaveText('Job');
-    await expect(job.locator('td[data-route="failure"]')).toHaveText(ROUTE_NEXT_STEP);
-    await expect(job.locator('td[data-route="always"]')).toHaveText('—');
+    await expect(typeBadge(job)).toHaveText('Job');
+    await expect(routeCell(job, 'success')).toHaveText(ROUTE_END_SUCCEEDS);
+    await expect(routeCell(job, 'failure')).toHaveText(ROUTE_END_FAILS);
+    await expect(routeCell(job, 'always')).toHaveText(ROUTE_UNUSED);
   });
 
   // A job step whose job template has an approval rule fails closed too:
@@ -74,18 +94,22 @@ test.describe('Approval steps (admin)', () => {
   test('the empty On Failure of a job step whose job template needs approval says when the run ends as failed', async ({ page }) => {
     await openWorkflowTemplate(page, GATED_JOB_WORKFLOW);
     const gated = templateStepRow(page, GATED_JOB_STEP);
-    await expect(gated.locator('td').nth(2)).toHaveText('Job');
+    await expect(typeBadge(gated)).toHaveText('Job');
+    await expect(gated.locator('[data-gated-badge]')).toHaveText(GATED_BADGE);
+    await expect(gated.locator('[data-gated-badge]')).toHaveAttribute('title', gatedTitle(GATE_RULE));
     await expect(gated.locator('td').nth(3)).toHaveText(GATED_JOB_TEMPLATE);
-    await expect(gated.locator('td[data-route="success"]')).toHaveText(ROUTE_NEXT_STEP);
-    const failure = gated.locator('td[data-route="failure"]');
+    await expect(routeCell(gated, 'success')).toHaveText(routeNext(2, GATED_JOB_AFTER));
     // Both cases: a job that ran and failed, and an approval that was refused.
-    await expect(failure).toHaveText(GATED_JOB_FAILURE_ROUTE);
-    await expect(failure.locator('span')).toHaveAttribute('title', GATED_JOB_FAILURE_TITLE);
-    await expect(gated.locator('td[data-route="always"]')).toHaveText('—');
-    // The pause step after it is no gate.
+    await expect(routeCell(gated, 'failure')).toHaveText(
+      `${routeNext(2, GATED_JOB_AFTER)}${ROUTE_ALSO_AFTER_FAILED_JOB}${PART_SEPARATOR}${ROUTE_END_FAILS}${ROUTE_AFTER_REFUSED_APPROVAL}`,
+    );
+    expect(await partTitles(gated, 'failure')).toEqual([NEXT_TITLE, REFUSED_APPROVAL_TITLE]);
+    await expect(routeCell(gated, 'always')).toHaveText(ROUTE_UNUSED);
+    // The pause step after it is no gate, and never fails.
     const pause = templateStepRow(page, GATED_JOB_AFTER);
-    await expect(pause.locator('td').nth(2)).toHaveText('Pause');
-    await expect(pause.locator('td[data-route="failure"]')).toHaveText(ROUTE_NEXT_STEP);
+    await expect(typeBadge(pause)).toHaveText('Pause');
+    await expect(routeCell(pause, 'failure')).toHaveText(ROUTE_UNUSED);
+    expect(await partTitles(pause, 'failure')).toEqual([PAUSE_FAILURE_TITLE]);
   });
 
   test('admin adds an approval step and removes it again', async ({ page }) => {
@@ -94,38 +118,37 @@ test.describe('Approval steps (admin)', () => {
     await expect(steps).toHaveCount(1);
 
     await page.locator('#workflowstep-name').fill(ADDED);
-    await page.locator('#workflowstep-step_order').fill('20');
+    await expect(page.locator(POSITION_SELECT)).toHaveValue('end');
     // An Always branch chosen while the step was a job step is not posted
     // once it is an approval step: the server would refuse the step. The
     // hidden job template select must not keep the form from being sent
     // either (add-step-form.spec.ts).
     await page.locator('#ws-step-type').selectOption('job');
-    await page.locator('#workflowstep-on_always_step_id').selectOption({ label: `#10 ${APPROVAL_STEPS_JOB}` });
+    await page.locator('#workflowstep-on_always_step_id').selectOption({ label: stepLabel(1, APPROVAL_STEPS_JOB) });
     await page.locator('#ws-step-type').selectOption('approval');
     await page.locator('#workflowstep-approval_rule_id').selectOption({ label: GATE_RULE });
     await submitForm(page, 'Add Step');
     // The form was sent: no field, hidden or not, refused it.
     expect(await addStepFormErrors(page)).toEqual([]);
 
-    await expectFlash(page, 'success', `Step "${ADDED}" added.`);
+    await expectFlash(page, 'success', `${stepAdded(ADDED, 2, 2, APPROVAL_STEPS_JOB)} "${APPROVAL_STEPS_JOB}" now continues with `
+      + `"${ADDED}", also after a failure (was the end of the run).`);
     await expect(steps).toHaveCount(2);
     const added = templateStepRow(page, ADDED);
-    await expect(added.locator('td').nth(0)).toHaveText('20');
-    await expect(added.locator('td').nth(2)).toHaveText('Approval');
+    await expect(added.locator('[data-position]')).toHaveText('2');
+    await expect(typeBadge(added)).toHaveText('Approval');
     await expect(added.locator('td').nth(3)).toHaveText(GATE_RULE);
-    await expect(added.locator('td[data-route="success"]')).toHaveText(ROUTE_NEXT_STEP);
+    await expect(routeCell(added, 'success')).toHaveText(ROUTE_END_SUCCEEDS);
     // Without an On Failure branch, a rejection ends the run as failed.
-    await expect(added.locator('td[data-route="failure"]')).toHaveText(ROUTE_END_FAILED);
-    await expect(added.locator('td[data-route="always"]')).toHaveText('—');
+    await expect(routeCell(added, 'failure')).toHaveText(ROUTE_END_FAILS);
+    await expect(routeCell(added, 'always')).toHaveText(ROUTE_UNUSED);
     // An admin may still change the steps of a workflow with an approval step.
     await expect(page.locator(STEPS_LOCKED_NOTICE)).toHaveCount(0);
     await expect(page.locator('#add-step-form')).toBeVisible();
 
-    page.once('dialog', (dialog) => dialog.accept());
-    await added.locator('form[action*="/workflow-template/remove-step"] button').click();
-    await expectFlash(page, 'success', 'Step removed.');
+    await removeTemplateStep(page, ADDED);
+    await expectFlash(page, 'success', `${stepRemoved(ADDED, 2, 2)} ${nowEnds(APPROVAL_STEPS_JOB, ADDED)}`);
     await expect(steps).toHaveCount(1);
-    await expect(templateStepRow(page, ADDED)).toHaveCount(0);
     await expect(templateStepRow(page, APPROVAL_STEPS_JOB)).toHaveCount(1);
   });
 
@@ -137,40 +160,42 @@ test.describe('Approval steps (admin)', () => {
     await expect(steps).toHaveCount(1);
 
     await page.locator('#workflowstep-name').fill(ADDED_GATED_JOB);
-    await page.locator('#workflowstep-step_order').fill('20');
+    await expect(page.locator(POSITION_SELECT)).toHaveValue('end');
     await page.locator('#ws-step-type').selectOption('job');
     await page.locator('#workflowstep-job_template_id').selectOption({ label: GATED_JOB_TEMPLATE });
     await submitForm(page, 'Add Step');
     // The form was sent: no field, hidden or not, refused it.
     expect(await addStepFormErrors(page)).toEqual([]);
 
-    await expectFlash(page, 'success', `Step "${ADDED_GATED_JOB}" added.`);
+    await expectFlash(page, 'success', stepAdded(ADDED_GATED_JOB, 2, 2, APPROVAL_STEPS_JOB));
     await expect(steps).toHaveCount(2);
     const added = templateStepRow(page, ADDED_GATED_JOB);
-    await expect(added.locator('td').nth(0)).toHaveText('20');
-    await expect(added.locator('td').nth(2)).toHaveText('Job');
+    await expect(added.locator('[data-position]')).toHaveText('2');
+    await expect(typeBadge(added)).toHaveText('Job');
+    await expect(added.locator('[data-gated-badge]')).toHaveText(GATED_BADGE);
     await expect(added.locator('td').nth(3)).toHaveText(GATED_JOB_TEMPLATE);
-    await expect(added.locator('td[data-route="success"]')).toHaveText(ROUTE_NEXT_STEP);
-    await expect(added.locator('td[data-route="failure"]')).toHaveText(GATED_JOB_FAILURE_ROUTE);
-    await expect(added.locator('td[data-route="always"]')).toHaveText('—');
+    await expect(routeCell(added, 'success')).toHaveText(ROUTE_END_SUCCEEDS);
+    // The form's default ends the workflow when the step fails; a refused
+    // approval ends it as failed too: one part.
+    await expect(routeCell(added, 'failure')).toHaveText(ROUTE_END_FAILS);
+    await expect(routeCell(added, 'always')).toHaveText(ROUTE_UNUSED);
     // An admin may still change the steps of a workflow with a gated job step.
     await expect(page.locator(STEPS_LOCKED_NOTICE)).toHaveCount(0);
     await expect(page.locator('#add-step-form')).toBeVisible();
 
-    page.once('dialog', (dialog) => dialog.accept());
-    await added.locator('form[action*="/workflow-template/remove-step"] button').click();
-    await expectFlash(page, 'success', 'Step removed.');
+    await removeTemplateStep(page, ADDED_GATED_JOB);
     await expect(steps).toHaveCount(1);
-    await expect(templateStepRow(page, ADDED_GATED_JOB)).toHaveCount(0);
     await expect(templateStepRow(page, APPROVAL_STEPS_JOB)).toHaveCount(1);
   });
 
+  // The forged posts send a step_order, which the form never reads: only the
+  // refusals count.
   test('an approval step without a rule or with an Always branch, and a branch out of the workflow, are refused', async ({ page }) => {
     const ruleId = await gateRuleId(page);
     await openWorkflowTemplate(page, STEPS_WORKFLOW);
-    const foreignStepId = await stepId(page, STEPS_BUILD);
+    const foreignStepId = await templateStepId(page, STEPS_BUILD);
     const id = await openWorkflowTemplate(page, APPROVAL_STEPS_WORKFLOW);
-    const jobStepId = await stepId(page, APPROVAL_STEPS_JOB);
+    const jobStepId = await templateStepId(page, APPROVAL_STEPS_JOB);
     const approvalStep = (fields: Record<string, string>) => ({
       'WorkflowStep[name]': ADDED,
       'WorkflowStep[step_type]': 'approval',
@@ -181,18 +206,18 @@ test.describe('Approval steps (admin)', () => {
       [
         // A branch leads to the end or to a step of the same workflow.
         { 'WorkflowStep[name]': ADDED, 'WorkflowStep[step_type]': 'pause', 'WorkflowStep[step_order]': '20', 'WorkflowStep[on_success_step_id]': foreignStepId },
-        'Step not added: The selected step is not part of this workflow.',
+        'The selected step is not part of this workflow.',
       ],
-      [approvalStep({}), 'Step not added: An approval step needs an approval rule.'],
-      [approvalStep({ 'WorkflowStep[approval_rule_id]': '999999999' }), 'Step not added: The selected approval rule does not exist.'],
+      [approvalStep({}), 'An approval step needs an approval rule.'],
+      [approvalStep({ 'WorkflowStep[approval_rule_id]': '999999999' }), 'The selected approval rule does not exist.'],
       [
         approvalStep({ 'WorkflowStep[approval_rule_id]': ruleId, 'WorkflowStep[on_always_step_id]': jobStepId }),
-        'Step not added: An approval step cannot have an Always branch: a rejection would continue past it.',
+        'An approval step cannot have an Always branch: a rejection would continue past it.',
       ],
       [
         // END is an Always branch too.
         approvalStep({ 'WorkflowStep[approval_rule_id]': ruleId, 'WorkflowStep[on_always_step_id]': '0' }),
-        'Step not added: An approval step cannot have an Always branch: a rejection would continue past it.',
+        'An approval step cannot have an Always branch: a rejection would continue past it.',
       ],
     ];
 
@@ -200,7 +225,8 @@ test.describe('Approval steps (admin)', () => {
       // Real form posts with a valid CSRF token: only the server checks may refuse them.
       await page.goto('/workflow-template/index');
       await forgePost(page, `/workflow-template/add-step?id=${id}`, fields, /\/workflow-template\/view/);
-      await expectFlash(page, 'danger', refusal);
+      await expect(page).toHaveURL(/#add-step$/);
+      await expectFlash(page, 'danger', `${STEP_NOT_ADDED}${refusal}`);
       await expect(page.locator('#workflow-steps-table tbody tr')).toHaveCount(1);
       await expect(templateStepRow(page, ADDED)).toHaveCount(0);
     }

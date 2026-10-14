@@ -38,8 +38,10 @@ info:
     caller who is not an admin, everything that belongs to a team-assigned
     project is limited to that project's teams: viewer access to read,
     operator access to change, launch, resume and cancel. Projects without a
-    team stay open to everyone with the permission. Admins, superadmins and
-    installations without team-assigned projects are not restricted.
+    team stay open to everyone with the permission, so removing a project
+    from its last team, or deleting that team, opens it. Admins,
+    superadmins and installations without team-assigned projects are not
+    restricted; only admins and superadmins manage teams (`/api/v1/teams`).
 
     - Lists leave out what the caller may not see, and `meta.total` counts
       only the visible rows.
@@ -98,15 +100,16 @@ info:
     use conventional HTTP status codes (401, 403, 404, 409, 422). Some errors
     add fields next to `message`, such as `error.job_template_ids`,
     `error.used_by`, `error.status` (the state that refused the request, for
-    example of an approval request) or `error.workflow_job_ids`. Others come
-    from the framework instead, with the shape
+    example of an approval request), `error.workflow_job_ids` or
+    `error.step_ids`. Others come from the framework instead, with the shape
     `{ "name": "Not Found", "message": "...", "code": 0, "status": 404 }`:
     `400` for a request body that is not valid JSON, `401` for a missing or
     invalid token, `404` for an unknown resource `{id}` in the path (a
     role's `{name}`), and `500` for an unexpected error. An unknown nested
-    ID in the path (`artifact_id`, `userId`, `projectId`) answers `404` in
-    the usual shape. The trigger endpoints, outside `/api/v1/`, answer
-    `403`, `422` and `500` as `{ "error": "<message>" }`, for example
+    ID in the path (`artifact_id`, `userId`, `projectId`, a workflow step's
+    `stepId`) answers `404` in the usual shape. The trigger endpoints,
+    outside `/api/v1/`, answer `403`, `422` and `500` as
+    `{ "error": "<message>" }`, for example
     `{ "error": "Launch refused." }`. Their `400` (no token), `404` (unknown
     or revoked token, and every other path under `/trigger/`) and `405`
     (another method than POST, also on `/trigger/{token}`) are the web UI's
@@ -154,7 +157,8 @@ tags:
       removing it, adding an approval step to a workflow, and changing the
       steps of a workflow that has one need `approval-rule.update` as well,
       and so do adding a job step whose job template has a rule (a gated
-      job step) and changing the steps of a workflow that has one. Changing
+      job step) and changing the steps of a workflow that has one. Giving a
+      job step such a job template needs it too. Changing
       what a job template with a rule runs, any field but its name and
       description, needs `approval-rule.update` too (403 otherwise). A
       custom role can be given these permissions.
@@ -206,11 +210,28 @@ tags:
       projects of its job steps. Seeing it needs view access to the project
       of every job step; changing, deleting and launching it need operator
       access to every one.
+
+      Steps run in the run order: by `step_order`, an internal sort key, then
+      by ID. A step's `position` is its 1-based place in that order, and runs
+      start with the step at position 1. An empty branch goes on with the
+      step at the next position, so moving a step changes where empty
+      branches lead; the `routes` of a step say where each of its branches
+      leads now. The step endpoints (`/api/v1/workflow-templates/{id}/steps`)
+      add, change, move and remove one step: a step keeps its ID, and the
+      branches that lead to it stay. A `steps` list on `POST` or `PUT
+      /api/v1/workflow-templates` replaces every step instead: the steps get
+      new IDs and no branches.
   - name: Workflow Jobs
     description: |
       Runs of workflow templates. They follow their workflow template, also
       after it was deleted. A run's job steps run as the user who launched
       the run; each is checked when it starts.
+
+      A run that waits is stored as `running`, and so is the step it waits
+      at; `waiting_for` says what it waits for: `approval` (an approval
+      request, at an approval step or a gated job step), `resume` (a pause
+      step, until someone resumes the run) or `runner` (the step's job is
+      queued and waits for a runner). The stored statuses keep their values.
   - name: Analytics
     description: |
       Reports over jobs, workflows, approval requests and runners. They count
@@ -297,7 +318,7 @@ paths:
       responses:
         '201': { $ref: '#/components/responses/ProjectResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/ProjectRejected' }
   /api/v1/projects/{id}:
     parameters:
       - $ref: '#/components/parameters/IdPath'
@@ -324,7 +345,7 @@ paths:
         '200': { $ref: '#/components/responses/ProjectResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/ProjectRejected' }
     delete:
       tags: [Projects]
       summary: Delete a project
@@ -967,6 +988,11 @@ paths:
         step follows its workflow (view access to the project of every job
         step), and a job whose template was purged is visible only to
         unrestricted callers.
+
+        `approval_request_id`, `workflow_job_id` and `workflow_job_step_id`
+        link the job to its approval request and to the workflow run and step
+        execution it was created for (see `JobDetail`), as far as the caller
+        may see them.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/JobDetailResponse' }
@@ -1221,6 +1247,8 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ScheduleInput' }
             example:
+              name: Nightly deploy
+              job_template_id: 1
               cron_expression: "30 2 * * *"
               extra_vars: '{"app_env": "production", "db_password": "$encrypted$"}'
       responses:
@@ -1481,7 +1509,10 @@ paths:
     delete:
       tags: [Teams]
       summary: Delete a team
-      description: Requires `admin` role. Also removes all member and project associations.
+      description: |
+        Requires `admin` role. Also removes all member and project
+        associations. A project that no team has any more is open: every
+        signed-in user reaches it, as far as their permissions allow.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -1551,7 +1582,9 @@ paths:
     delete:
       tags: [Teams]
       summary: Unassign a project from a team
-      description: Requires `admin` role.
+      description: |
+        Requires `admin` role. A project that no team has any more is open:
+        every signed-in user reaches it, as far as their permissions allow.
       parameters:
         - $ref: '#/components/parameters/IdPath'
         - in: path
@@ -1578,7 +1611,22 @@ paths:
     post:
       tags: [Users]
       summary: Create a user
-      description: Requires `user.create`. Password is required and must be at least 5 characters.
+      description: |
+        Requires `user.create`. Password is required and must be at least 5
+        characters. A `role` needs every permission the role grants, through
+        its child roles too, unless the caller is a superadmin;
+        `is_superadmin: true` needs a superadmin. Either refusal answers 403
+        and creates nothing. The `admin` role, which gives every
+        team-restricted project on top of its permissions, and a role that
+        contains it are given only by a superadmin or a caller who holds the
+        `admin` role: a caller who holds every permission of it through
+        another role gets 403 `You cannot assign the role "admin": it is or
+        contains the admin role, which only superadmins and admins may
+        assign.` The answers come in this order: 403
+        `Forbidden.` without `user.create`; 422 for an unknown
+        `auth_source` or `role`; 403 for a role the caller may not assign;
+        403 for `is_superadmin: true` from a caller who is no superadmin;
+        422 for a password or another field that is not valid.
       requestBody:
         required: true
         content:
@@ -1591,8 +1639,21 @@ paths:
               role: operator
       responses:
         '201': { $ref: '#/components/responses/UserResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/UserGrantForbidden' }
+        '422':
+          description: |
+            Invalid input, such as a missing password, or a `role` that is not
+            the name of one of the instance's roles, compared exactly; that
+            answer names the roles. Nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                role:
+                  summary: role names no role of the instance
+                  value:
+                    error:
+                      message: 'role must be one of: admin, operator, viewer.'
   /api/v1/users/{id}:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
     get:
@@ -1609,10 +1670,59 @@ paths:
       tags: [Users]
       summary: Update a user
       description: |
-        Requires `user.update`. Password is optional on update — if provided
-        it must be at least 5 characters. Taking the superadmin flag from the
-        only superadmin (`is_superadmin: false`) answers 422
-        `Cannot demote the only superadmin.` and changes nothing.
+        Requires `user.update`. A caller who is no superadmin changes only a
+        user who is no superadmin and all of whose assigned roles they may
+        assign, that is, whose roles grant no permission the caller does not
+        hold; a user without an assigned role may be changed by everyone with
+        `user.update`. Anyone else gets 403 `You cannot change or delete this
+        user: they are a superadmin, or a role assigned to them grants
+        permissions you do not hold.` and nothing is written. A caller who
+        holds every permission those roles grant, but neither is a superadmin
+        nor holds the `admin` role, gets 403 `You cannot change or delete this
+        user: a role assigned to them is or contains the admin role, which
+        only a superadmin or an admin may assign.` in its place for a user who
+        is no superadmin and holds the `admin` role or a role that contains
+        it, whatever the user's teams; nothing is written. A caller who
+        neither is a superadmin nor holds the `admin` role changes a user
+        only when, for every team-restricted project the user's teams give
+        the user, the caller's own teams give the caller that project with at
+        least the same role (operator over viewer; the highest role of their
+        teams counts); anyone else gets 403 `You cannot change or delete this
+        user: their teams give them more access to a project than you have.`
+        where the roles allow the change, and nothing is written.
+
+        Password is optional on update — if provided it must be at least 5
+        characters. The only active superadmin changes their own account,
+        but taking their superadmin flag (`is_superadmin: false`) answers
+        422 `Cannot demote the only active superadmin.`, and deactivating
+        them (a `status` other than 10) answers 422 `Cannot deactivate the
+        only active superadmin.`; both change nothing. An inactive
+        superadmin does not count as another superadmin, and may be demoted
+        or deactivated. A change of `status` clears `ldap_sync_disabled`, so
+        an LDAP account deactivated this way stays inactive whatever the
+        directory says.
+
+        A `role` the user already has, one of the roles assigned to them,
+        keeps every role assigned to the user, so a `role` read with `GET`
+        and sent back keeps them all; another role replaces them all and
+        needs every permission it grants, unless the caller is a
+        superadmin. The `admin` role, which gives every team-restricted
+        project on top of its permissions, and a role that contains it are
+        given only by a superadmin or a caller who holds the `admin` role: a
+        caller who holds every permission of it through another role gets
+        403 `You cannot assign the role "admin": it is or contains the admin
+        role, which only superadmins and admins may assign.` Only a
+        superadmin changes `is_superadmin`: a value that would set or clear
+        the flag answers 403 for anyone else, and the current value is
+        accepted. A refusal answers 403 and changes nothing. The answers come
+        in this order: 403 `Forbidden.` without `user.update`; 404 for an
+        unknown user; 403 for a user the caller may not change, for their
+        roles or their teams; 422 for a change of `auth_source` or an unknown
+        `role`; 403 for a role the caller may not assign; 403 for a change of
+        `is_superadmin` from a caller who is no superadmin; 422 `Cannot
+        demote the only active superadmin.` or `Cannot deactivate the only
+        active superadmin.`; 422 for a password or another field that is not
+        valid.
       requestBody:
         required: true
         content:
@@ -1620,21 +1730,60 @@ paths:
             schema: { $ref: '#/components/schemas/UserInput' }
       responses:
         '200': { $ref: '#/components/responses/UserResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/UserUpdateForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422':
+          description: |
+            Invalid input, such as a password that is too short, taking the
+            superadmin flag from the only active superadmin or deactivating
+            them, or a `role` that is not the name of one of the instance's
+            roles, compared exactly; that answer names the roles. Nothing was
+            written: neither the user nor their roles changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                role:
+                  summary: role names no role of the instance
+                  value:
+                    error:
+                      message: 'role must be one of: admin, operator, viewer.'
+                deactivate:
+                  summary: status 0 for the only active superadmin
+                  value:
+                    error:
+                      message: 'Cannot deactivate the only active superadmin.'
     delete:
       tags: [Users]
       summary: Delete a user
       description: |
-        Requires `user.delete`. Cannot delete your own account or the last
-        superadmin (422). A user whom other records still refer to cannot be
+        Requires `user.delete`. A caller who is no superadmin deletes only a
+        user who is no superadmin and all of whose assigned roles they may
+        assign, and, unless the caller holds the `admin` role, whose teams
+        give them no project beyond what the caller's teams give the caller,
+        with at least the same role; anyone else gets 403 `You cannot change
+        or delete this user: they are a superadmin, or a role assigned to them
+        grants permissions you do not hold.`, 403 `You cannot change or delete
+        this user: a role assigned to them is or contains the admin role,
+        which only a superadmin or an admin may assign.` (a user who is no
+        superadmin, with the `admin` role or a role that contains it, from a
+        caller who holds every permission of the user's roles but not the
+        `admin` role, whatever the teams) or 403 `You cannot change or delete
+        this user: their teams give them more access to a project than you
+        have.` and nothing is deleted. Cannot delete your own
+        account or the only active superadmin (422); an inactive superadmin
+        may be deleted. A user whom other records still refer to cannot be
         deleted either (409): jobs they launched, rows they created (projects,
         templates, schedules and so on) or a trigger token they generated.
-        Disable such a user instead (`PUT` with `status: 0`).
+        Disable such a user instead (`PUT` with `status: 0`). The answers come
+        in this order: 403 `Forbidden.` without `user.delete`; 404 for an
+        unknown user; 403 for a user the caller may not change, for their
+        roles or their teams; 422 `Cannot delete your own account.`; 422
+        `Cannot delete the only active superadmin.`; 409 for a user other
+        records still refer to.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/UserDeleteForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
           description: |
@@ -1672,6 +1821,10 @@ paths:
         authenticate (bind as user); otherwise it performs a search-only
         lookup. Useful for verifying the search filter, group mapping,
         and the resulting Ansilume role assignment for a candidate user.
+        Without a `password`, a lookup that fails, whether the service bind,
+        the user search or the group search, answers `found: false` with
+        that failure as `error`; `User not found in directory.` means that
+        the directory has no such user.
 
         Audited via `ldap.test.performed`. The submitted password is **never**
         logged, persisted, or returned.
@@ -1841,6 +1994,12 @@ paths:
     post:
       tags: [Notification Templates]
       summary: Create a notification template
+      description: |
+        Requires `notification-template.create`. The answer shows every
+        channel secret of `config` as `$encrypted$`, as every answer does
+        (see `config` of `NotificationTemplate`); `$encrypted$` at the place
+        of a channel secret in the body answers 422, as nothing is stored
+        yet.
       requestBody:
         required: true
         content:
@@ -1848,7 +2007,7 @@ paths:
             schema: { $ref: '#/components/schemas/NotificationTemplateInput' }
       responses:
         '201': { $ref: '#/components/responses/NotificationTemplateResponse' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/NotificationTemplateRejected' }
         '403': { $ref: '#/components/responses/Forbidden' }
   /api/v1/notification-templates/{id}:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
@@ -1862,15 +2021,26 @@ paths:
     put:
       tags: [Notification Templates]
       summary: Update a notification template
+      description: |
+        Requires `notification-template.update`. Fields left out keep their
+        value. `$encrypted$` at the place of a channel secret in `config`
+        keeps the stored secret, so a template read with `GET` and sent
+        back unchanged keeps every secret (see `config` of
+        `NotificationTemplateInput`); a new value replaces the stored one.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/NotificationTemplateInput' }
+            example:
+              name: ops-telegram
+              channel: telegram
+              events: job.failed,workflow.failed
+              config: { bot_token: '$encrypted$', chat_id: '-1001234567890' }
       responses:
         '200': { $ref: '#/components/responses/NotificationTemplateResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/NotificationTemplateRejected' }
         '403': { $ref: '#/components/responses/Forbidden' }
     delete:
       tags: [Notification Templates]
@@ -2048,20 +2218,39 @@ paths:
       description: |
         Requires `approval.view`. Lists approval requests of every status
         (pending, approved, rejected, timed out, canceled), newest first, 25
-        per page. Only the requests the caller may see: those of jobs whose
-        project the caller may view and those of workflow approval steps
-        whose workflow the caller may view.
-      parameters: [{ $ref: '#/components/parameters/Page' }]
+        per page; with `status`, only the requests of that status. Only the
+        requests the caller may see: those of jobs whose project the caller
+        may view and those of workflow approval steps whose workflow the
+        caller may view. The request of a workflow step names its run, step
+        and workflow only to a caller who may view that workflow (see
+        `workflow_job_id` of `ApprovalRequest`). Each request lists its
+        votes in `decisions`, read for the whole page at once.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/ApprovalStatusFilter'
       responses:
         '200':
           description: Paginated list
           content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalRequestList' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422':
+          description: |
+            `status` is not a status of approval requests; nothing was
+            listed. An empty `status` lists every request.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  message: 'status must be one of: pending, approved, rejected, timed_out, canceled.'
   /api/v1/approvals/{id}:
     get:
       tags: [Approvals]
       summary: Get an approval request
-      description: Requires `approval.view` and view access to the request (403 otherwise), as for the list.
+      description: |
+        Requires `approval.view` and view access to the request (403
+        otherwise), as for the list. The request lists its votes in
+        `decisions`.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/ApprovalRequestResponse' }
@@ -2085,9 +2274,12 @@ paths:
           the job still waits but its workflow run has ended, which
           cancels the job too, and likewise when its workflow step no
           longer runs or its job template was deleted;
-        - the caller launched the job (for a workflow approval step:
-          started the run): 403 `You launched this job; another approver
-          must decide.`, also for admins and superadmins;
+        - the caller launched the job: 403 `You launched this job; another
+          approver must decide.`; for the job of a workflow step, the
+          placeholder job of an approval step or the job of a gated job
+          step, whose run the caller started: 403 `You launched this
+          workflow run; another approver must decide.`; also for admins and
+          superadmins;
         - the caller is not an eligible approver (see Approvals): 403
           `You are not eligible to decide on this request.`;
         - the caller has voted on this request already: 422
@@ -2131,7 +2323,8 @@ paths:
         step whose job waited for the approval, then fails, and its run
         follows the step's On Failure branch or ends as failed (see
         `on_failure_step_id` of `WorkflowStep`). The comment is stored with
-        the vote and shown with the decisions.
+        the vote and shown with the decisions, also in `decisions` of the
+        request.
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       requestBody:
         required: false
@@ -2189,20 +2382,29 @@ paths:
         well, otherwise the call answers 403 `Only admins may add a job step
         whose job template has an approval rule: that needs
         approval-rule.update.` A job template the caller cannot see counts
-        as none for this check and answers 422 as not found. The answers come
-        in this order: 422 for a template that is not valid, such as one
-        without a name (`Name cannot be blank.`); 422 for steps that cannot
-        be read; 403 for approval steps and gated job steps; 422 for unknown
-        approval rules; 422 or 403 for job templates; 422 for a template or
-        step that cannot be saved.
+        as none for this check and answers 422 as not found. Whether a job
+        step's job template is gated is checked again in the transaction
+        that writes the steps: an approval rule assigned to it meanwhile
+        answers the same 403 `Only admins may add a job step whose job
+        template has an approval rule: that needs approval-rule.update.`,
+        and nothing is written. The answers come in this order: 422 for a
+        template that is not valid, such as one without a name (`Name
+        cannot be blank.`); 422 for steps that cannot be read; 403 for
+        approval steps and gated job steps; 422 for unknown approval rules;
+        422 or 403 for job templates; 403 for a job template that got an
+        approval rule meanwhile; 422 for a template or step that cannot be
+        saved.
 
-        Branches (`on_success_step_id`, `on_failure_step_id`,
-        `on_always_step_id`) cannot be set through the API. Steps written
-        here have none: a step that succeeds or fails continues with the
-        next step in order. An approval step that is rejected, times out or
-        is canceled, and a job step whose job is rejected or canceled while
-        it waits for approval, end the run as failed instead (see
-        `on_failure_step_id` of `WorkflowStep`). Set branches in the web UI.
+        The `steps` list sets no branches (`on_success_step_id`,
+        `on_failure_step_id`, `on_always_step_id`): steps written here have
+        none, so a step that succeeds or fails continues with the next step
+        in the list. An approval step that is rejected, times out or is
+        canceled, and a job step whose job is rejected or canceled while it
+        waits for approval, end the run as failed instead (see
+        `on_failure_step_id` of `WorkflowStep`). Set branches with the step
+        endpoints, which add, change, move and remove one step:
+        `POST /api/v1/workflow-templates/{id}/steps` and
+        `PUT /api/v1/workflow-templates/{id}/steps/{stepId}`.
       requestBody:
         required: true
         content:
@@ -2227,9 +2429,11 @@ paths:
         '403':
           description: |
             Missing `workflow-template.create`, approval steps or gated job
-            steps without `approval-rule.update`, or a job step uses a job
-            template the caller can see but may not operate (named in
-            `error.job_template_ids`). Nothing was written.
+            steps without `approval-rule.update` (also a job template of
+            the new steps that got an approval rule while they were
+            written), or a job step uses a job template the caller can see
+            but may not operate (named in `error.job_template_ids`). Nothing
+            was written.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/JobTemplateRefError' }
@@ -2263,7 +2467,10 @@ paths:
       summary: Get a workflow template
       description: |
         Requires `workflow-template.view` and view access to the project of
-        every job step (403 otherwise). Includes the steps.
+        every job step (403 otherwise). Includes the steps in run order, by
+        `position`, each with where its branches lead (`routes`), and the
+        workflow's start step (`start_step_id`) and success path
+        (`success_path`).
       responses:
         '200': { $ref: '#/components/responses/WorkflowTemplateResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2275,10 +2482,15 @@ paths:
         Requires `workflow-template.update` and operator access to the project
         of every current job step (403 `Forbidden.` otherwise). Omitted
         fields keep their value. Without `steps`, or with `steps: null`, the
-        steps stay as they are; a `steps` list replaces all of them, branches
-        included, and `[]` removes them all. New steps are checked as on
-        create (422 or 403 with `error.job_template_ids`). A rejected update
-        changes nothing, neither the template nor its steps.
+        steps stay as they are. A `steps` list replaces all of them: every
+        step is deleted with its branches, and the listed steps are written
+        as new steps, with new IDs and without branches, so the branches
+        that led to the old steps are gone too; `[]` removes them all. To
+        change one step and keep its ID and the branches that lead to it,
+        use `PUT /api/v1/workflow-templates/{id}/steps/{stepId}`. New steps
+        are checked as on create (422 or 403 with `error.job_template_ids`).
+        A rejected update changes nothing, neither the template nor its
+        steps.
 
         Approval steps and gated job steps (job steps whose job template has
         an approval rule) are for admins (`approval-rule.update`). Without
@@ -2294,10 +2506,14 @@ paths:
         rule: only admins may change its steps (approval-rule.update).`, also
         when it holds the same steps. Whether a job step is gated is read
         from its job template at each call, so a job template that gets an
-        approval rule locks the workflows that use it from then on. A job
-        template the caller cannot see counts as none for this check. Without
-        `steps`, or with `steps: null`, the name and description change as
-        before.
+        approval rule locks the workflows that use it from then on. The new
+        steps are checked again while the workflow is locked: an approval
+        rule assigned meanwhile to the job template of a new job step
+        answers the same 403 `Only admins may add a job step whose job
+        template has an approval rule: that needs approval-rule.update.`,
+        and nothing is written. A job template the caller cannot see counts
+        as none for this check. Without `steps`, or with `steps: null`, the
+        name and description change as before.
 
         The steps cannot change while a run of the workflow is active
         (`running`): such an update answers 409 and names the runs in
@@ -2308,8 +2524,10 @@ paths:
         that is not valid, such as an empty name (`Name cannot be blank.`);
         422 for steps that cannot be read; 403 for approval steps and gated
         job steps; 422 for unknown approval rules; 422 or 403 for job
-        templates; 404 for a workflow deleted meanwhile; 409 for an active
-        run; 422 for a template or step that cannot be saved.
+        templates; 404 for a workflow deleted meanwhile; 403 `Forbidden.`
+        for operator access lost meanwhile; 403 for steps locked meanwhile;
+        409 for an active run; 403 for a job template that got an approval
+        rule meanwhile; 422 for a template or step that cannot be saved.
 
         Runs keep the history of replaced steps: their executions keep the
         name and type the step had when it ran (`step_name`, `step_type`),
@@ -2326,9 +2544,10 @@ paths:
           description: |
             Missing `workflow-template.update`, no operator access to the
             project of every current job step, approval steps or gated job
-            steps without `approval-rule.update`, or a new step uses a job
-            template the caller can see but may not operate (named in
-            `error.job_template_ids`). Nothing was written.
+            steps without `approval-rule.update` (also a job template of the
+            new steps that got an approval rule while they were written), or
+            a new step uses a job template the caller can see but may not
+            operate (named in `error.job_template_ids`). Nothing was written.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/JobTemplateRefError' }
@@ -2387,6 +2606,618 @@ paths:
         '200': { $ref: '#/components/responses/WorkflowTemplateDeletedResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
+  /api/v1/workflow-templates/{id}/steps:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    post:
+      tags: [Workflow Templates]
+      summary: Add a step to a workflow template
+      description: |
+        Requires `workflow-template.update` and operator access to the
+        project of every job step of the workflow (403 `Forbidden.`
+        otherwise). Adds one step (see `WorkflowStepCreateInput`); every
+        other step keeps its ID and its branches. The step goes to the end
+        of the run order unless `position` or `after_step_id` names another
+        place. Its branches can lead to any step of the workflow, an earlier
+        one too (a loop, see `WorkflowStep`). An empty branch of another
+        step goes on with the step at the next position, so a step placed
+        right after it changes where that branch leads: `change.message`
+        says so.
+
+        Approval steps and gated job steps (job steps whose job template has
+        an approval rule) are for admins (`approval-rule.update`). Without
+        that permission, adding an approval step answers 403 `Only admins
+        may add approval steps: that needs approval-rule.update.`, adding a
+        gated job step 403 `Only admins may add a job step whose job
+        template has an approval rule: that needs approval-rule.update.`,
+        and adding any step to a workflow that has an approval step 403
+        `This workflow has an approval step: only admins may change its
+        steps (approval-rule.update).`, or to one that has a gated job step
+        403 `This workflow has a job step whose job template has an approval
+        rule: only admins may change its steps (approval-rule.update).`
+        Whether a job step's job template is gated is checked again while
+        the workflow is locked: an approval rule assigned to it meanwhile
+        answers the same 403 `Only admins may add a job step whose job
+        template has an approval rule: that needs approval-rule.update.`,
+        and nothing is written. The job template of a job step must be one
+        the caller may operate: one
+        that does not exist, is deleted or belongs to a project the caller
+        cannot see answers 422 `The selected job template does not exist.`,
+        a visible one the caller may not operate 403 `You may not use this
+        job template in a workflow: that needs operator access to its
+        project.`; both name it in `error.job_template_ids`. The steps cannot
+        change while a run of the workflow is active (409, the runs in
+        `error.workflow_job_ids`). A refused change writes nothing.
+
+        The answer holds the step as it is now (`data`, with its `position`
+        and `routes`) and what the change did (`change`): where the step
+        landed, how the empty branches of other steps now lead, and
+        warnings when runs now start with another step, reach a job step
+        without passing the approval step they passed before, or when an
+        approval step is not on the success path (see `warnings` of
+        `WorkflowStepChange`). Audited as `workflow-template.step.added`
+        with source `api`.
+
+        The answers come in this order: 401 without a valid token; 403
+        `Forbidden.` without `workflow-template.update`; 404 for an unknown
+        workflow; 403 `Forbidden.` without operator access to the workflow;
+        422 for a body that cannot be read; 403 for an approval step, a
+        gated job step or a workflow that has one; 422 or 403 for the job
+        template; 422 for a step that is not valid; 404 for a workflow
+        deleted meanwhile; 403 `Forbidden.` for operator access lost
+        meanwhile; 403 for steps locked meanwhile; 409 for an active run;
+        403 for a job template that got an approval rule meanwhile; 422 for
+        a step that cannot be saved or a place it cannot take.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkflowStepCreateInput' }
+            examples:
+              jobStep:
+                summary: A job step right after the approval step 42 that ends the run when its job fails
+                value:
+                  name: Deploy
+                  step_type: job
+                  job_template_id: 15
+                  on_failure_step_id: 0
+                  after_step_id: 42
+              approvalStep:
+                summary: An approval step at the start (admins only)
+                value:
+                  name: Release approval
+                  step_type: approval
+                  approval_rule_id: 3
+                  position: start
+              pauseStep:
+                summary: A pause step at position 2 whose Resume continues with step 43
+                value:
+                  name: Wait for the change window
+                  step_type: pause
+                  on_success_step_id: 43
+                  position: 2
+              mapping:
+                summary: A job step at the end that takes a variable from the output of the step before it
+                value:
+                  name: Smoke test
+                  job_template_id: 16
+                  extra_vars_template: { app_version: build_version }
+      responses:
+        '201': { $ref: '#/components/responses/WorkflowStepWritten' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: |
+            Missing `workflow-template.update` or operator access to the
+            workflow (`Forbidden.`); an approval step, a gated job step or a
+            workflow that has one, without `approval-rule.update`; or a job
+            template the caller can see but may not operate (named in
+            `error.job_template_ids`). Nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                forbidden:
+                  summary: Missing workflow-template.update or operator access to the workflow
+                  value:
+                    error:
+                      message: Forbidden.
+                approvalStep:
+                  summary: The step is an approval step
+                  value:
+                    error:
+                      message: 'Only admins may add approval steps: that needs approval-rule.update.'
+                gatedJobStep:
+                  summary: The step is a job step whose job template has an approval rule
+                  value:
+                    error:
+                      message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                approvalWorkflow:
+                  summary: The workflow has an approval step
+                  value:
+                    error:
+                      message: 'This workflow has an approval step: only admins may change its steps (approval-rule.update).'
+                gatedJobWorkflow:
+                  summary: The workflow has a job step whose job template has an approval rule
+                  value:
+                    error:
+                      message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+                jobTemplate:
+                  summary: A job template the caller may see but not operate
+                  value:
+                    error:
+                      message: 'You may not use this job template in a workflow: that needs operator access to its project.'
+                      job_template_ids: [15]
+        '404': { $ref: '#/components/responses/WorkflowForStepNotFound' }
+        '409': { $ref: '#/components/responses/WorkflowStepsLocked' }
+        '422':
+          description: |
+            The body cannot be read (see `WorkflowStepCreateInput`), the job
+            template does not exist for the caller (named in
+            `error.job_template_ids`), the step is not valid, or it cannot
+            take the place the body names. The first refusal answers, and
+            nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                bothGiven:
+                  summary: position and after_step_id together
+                  value:
+                    error:
+                      message: 'Send either position or after_step_id, not both.'
+                position:
+                  summary: A position that is no whole number from 1
+                  value:
+                    error:
+                      message: 'position must be "start", "end" or a whole number from 1.'
+                afterStepId:
+                  summary: An after_step_id that is no whole number from 1
+                  value:
+                    error:
+                      message: 'after_step_id must be the ID of a step of this workflow.'
+                branch:
+                  summary: A branch that is neither null, 0 nor a step ID, such as "" or true
+                  value:
+                    error:
+                      message: 'on_failure_step_id must be null, 0 (end the workflow) or the ID of a step of this workflow.'
+                pauseBranches:
+                  summary: A pause step with an On Failure or Always branch
+                  value:
+                    error:
+                      message: 'A pause step only has on_success_step_id: Resume continues there. Send on_failure_step_id and on_always_step_id as null.'
+                numberTooLarge:
+                  summary: A variable mapping with a number too large for JSON
+                  value:
+                    error:
+                      message: 'The extra vars cannot be stored: they contain a number too large for JSON.'
+                mappingShape:
+                  summary: A variable mapping that is not an object of extra var names to output variable names, such as ["build_version"]
+                  value:
+                    error:
+                      message: 'extra_vars_template must be null or a JSON object that maps extra var names to the names of output variables, such as {"app_version": "build_version"}.'
+                name:
+                  summary: No name
+                  value:
+                    error:
+                      message: 'Name cannot be blank.'
+                stepType:
+                  summary: A type other than job, approval and pause
+                  value:
+                    error:
+                      message: 'Step Type is invalid.'
+                stepTypeBlank:
+                  summary: A step_type that is null or empty
+                  value:
+                    error:
+                      message: 'Step Type cannot be blank.'
+                jobTemplateRequired:
+                  summary: A job step without a job template
+                  value:
+                    error:
+                      message: 'A job step needs a job template.'
+                jobTemplateNotFound:
+                  summary: A job template that does not exist for the caller
+                  value:
+                    error:
+                      message: 'The selected job template does not exist.'
+                      job_template_ids: [12]
+                approvalRuleRequired:
+                  summary: An approval step without an approval rule
+                  value:
+                    error:
+                      message: 'An approval step needs an approval rule.'
+                approvalRuleNotFound:
+                  summary: An approval rule that does not exist
+                  value:
+                    error:
+                      message: 'The selected approval rule does not exist.'
+                approvalAlways:
+                  summary: An approval step with an Always branch
+                  value:
+                    error:
+                      message: 'An approval step cannot have an Always branch: a rejection would continue past it.'
+                branchOutside:
+                  summary: A branch to a step that is not part of this workflow
+                  value:
+                    error:
+                      message: 'The selected step is not part of this workflow.'
+                afterStepMissing:
+                  summary: after_step_id names a step that is not, or no longer, part of this workflow
+                  value:
+                    error:
+                      message: 'The step to place it after (step ID 12) is not part of this workflow. Load the workflow again and choose another position.'
+                positionOutOfRange:
+                  summary: A position after the end of a workflow with 3 steps, where the new step can take 1 to 4
+                  value:
+                    error:
+                      message: 'position must be "start", "end" or a number from 1 to 4.'
+  /api/v1/workflow-templates/{id}/steps/{stepId}:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/StepIdPath'
+    put:
+      tags: [Workflow Templates]
+      summary: Change a step of a workflow template
+      description: |
+        Requires `workflow-template.update` and operator access to the
+        project of every job step of the workflow (403 `Forbidden.`
+        otherwise). Changes the step in place: it keeps its ID, so the
+        branches that lead to it and the history of its runs stay. Only the
+        fields the body sends change (see `WorkflowStepUpdateInput`); null
+        clears a branch, which then goes on with the next step in the run
+        order, or the variable mapping. With `position` or `after_step_id`
+        the step moves too. The type of a step cannot change: a body with
+        another `step_type` answers 422 `A step's type cannot change: add a
+        new step and remove this one.`
+
+        The steps of a workflow that has an approval step or a gated job
+        step are for admins (`approval-rule.update`): without it, an update
+        answers 403 `This workflow has an approval step: only admins may
+        change its steps (approval-rule.update).` or `This workflow has a
+        job step whose job template has an approval rule: only admins may
+        change its steps (approval-rule.update).` So is giving a job step a
+        job template with an approval rule: 403 `Only admins may add a job
+        step whose job template has an approval rule: that needs
+        approval-rule.update.` This is checked again while the workflow is
+        locked: an approval rule assigned to that job template meanwhile
+        answers the same 403, and nothing is written. A new job template is
+        checked as on add (422
+        or 403, with `error.job_template_ids`). An approval step that an
+        older version saved with an Always branch answers 422 `An approval
+        step cannot have an Always branch: a rejection would continue past
+        it.` until the body sends `on_always_step_id: null`. The steps
+        cannot change while a run of the workflow is active (409). A refused
+        change writes nothing.
+
+        An update that changes nothing answers 200 with `change.message`
+        `Step "Deploy" is unchanged.`, writes nothing and is not audited.
+        The variable mapping is compared by its JSON value, so a step sent
+        back as `GET` answers it (`extra_vars_template: []` for none, or the
+        stored mapping without its spaces) is unchanged.
+        Any other is audited as `workflow-template.step.updated` with source
+        `api` and the changed fields, each with its old and new value (the
+        variable mapping only as changed, without its values).
+
+        The answers come in this order: 401 without a valid token; 403
+        `Forbidden.` without `workflow-template.update`; 404 for an unknown
+        workflow; 403 `Forbidden.` without operator access to the workflow;
+        404 for a step the workflow does not have; 422 for a body that
+        cannot be read or another step type; 403 for a workflow whose steps
+        are for admins, or a gated job template; 422 or 403 for a new job
+        template; 422 for a step that is not valid; 404 for a workflow
+        deleted meanwhile; 403 `Forbidden.` for operator access lost
+        meanwhile; 403 for steps locked meanwhile; 409 for an active run;
+        404 for a step removed meanwhile; 403 for a job template the update
+        gives a job step that got an approval rule meanwhile; 422 for a step
+        that cannot be saved or a place it cannot take.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkflowStepUpdateInput' }
+            examples:
+              renameAndBranch:
+                summary: A new name, and a failed job goes back to step 41
+                value:
+                  name: Deploy web
+                  on_failure_step_id: 41
+              branchAndPlace:
+                summary: Empty the On Success branch and move the step to position 2
+                value:
+                  on_success_step_id: null
+                  position: 2
+              legacyAlways:
+                summary: Remove the Always branch an older version saved on an approval step
+                value:
+                  on_always_step_id: null
+      responses:
+        '200': { $ref: '#/components/responses/WorkflowStepWritten' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: |
+            Missing `workflow-template.update` or operator access to the
+            workflow (`Forbidden.`); a workflow that has an approval step or
+            a gated job step, or a gated job template, without
+            `approval-rule.update`; or a new job template the caller can see
+            but may not operate (named in `error.job_template_ids`). Nothing
+            was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                forbidden:
+                  summary: Missing workflow-template.update or operator access to the workflow
+                  value:
+                    error:
+                      message: Forbidden.
+                approvalWorkflow:
+                  summary: The workflow has an approval step
+                  value:
+                    error:
+                      message: 'This workflow has an approval step: only admins may change its steps (approval-rule.update).'
+                gatedJobWorkflow:
+                  summary: The workflow has a job step whose job template has an approval rule
+                  value:
+                    error:
+                      message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+                gatedJobStep:
+                  summary: The new job template has an approval rule
+                  value:
+                    error:
+                      message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                jobTemplate:
+                  summary: A new job template the caller may see but not operate
+                  value:
+                    error:
+                      message: 'You may not use this job template in a workflow: that needs operator access to its project.'
+                      job_template_ids: [15]
+        '404': { $ref: '#/components/responses/WorkflowStepNotFound' }
+        '409': { $ref: '#/components/responses/WorkflowStepsLocked' }
+        '422':
+          description: |
+            The body cannot be read (see `WorkflowStepUpdateInput`), it names
+            another step type, the new job template does not exist for the
+            caller (named in `error.job_template_ids`), the step is not
+            valid, or it cannot take the place the body names. The first
+            refusal answers, and nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                typeLocked:
+                  summary: Another step type
+                  value:
+                    error:
+                      message: "A step's type cannot change: add a new step and remove this one."
+                bothGiven:
+                  summary: position and after_step_id together
+                  value:
+                    error:
+                      message: 'Send either position or after_step_id, not both.'
+                position:
+                  summary: A position that is no whole number from 1
+                  value:
+                    error:
+                      message: 'position must be "start", "end" or a whole number from 1.'
+                afterStepId:
+                  summary: An after_step_id that is no whole number from 1
+                  value:
+                    error:
+                      message: 'after_step_id must be the ID of a step of this workflow.'
+                branch:
+                  summary: A branch that is neither null, 0 nor a step ID, such as "" or true
+                  value:
+                    error:
+                      message: 'on_success_step_id must be null, 0 (end the workflow) or the ID of a step of this workflow.'
+                pauseBranches:
+                  summary: An On Failure or Always branch for a pause step
+                  value:
+                    error:
+                      message: 'A pause step only has on_success_step_id: Resume continues there. Send on_failure_step_id and on_always_step_id as null.'
+                numberTooLarge:
+                  summary: A variable mapping with a number too large for JSON
+                  value:
+                    error:
+                      message: 'The extra vars cannot be stored: they contain a number too large for JSON.'
+                mappingShape:
+                  summary: A new variable mapping that is not an object of extra var names to output variable names
+                  value:
+                    error:
+                      message: 'extra_vars_template must be null or a JSON object that maps extra var names to the names of output variables, such as {"app_version": "build_version"}.'
+                name:
+                  summary: An empty name
+                  value:
+                    error:
+                      message: 'Name cannot be blank.'
+                jobTemplateRequired:
+                  summary: A job step without a job template, such as after job_template_id null
+                  value:
+                    error:
+                      message: 'A job step needs a job template.'
+                jobTemplateNotFound:
+                  summary: A new job template that does not exist for the caller
+                  value:
+                    error:
+                      message: 'The selected job template does not exist.'
+                      job_template_ids: [12]
+                approvalRuleNotFound:
+                  summary: An approval rule that does not exist
+                  value:
+                    error:
+                      message: 'The selected approval rule does not exist.'
+                approvalAlways:
+                  summary: An approval step that keeps an Always branch an older version saved
+                  value:
+                    error:
+                      message: 'An approval step cannot have an Always branch: a rejection would continue past it.'
+                branchOutside:
+                  summary: A branch to a step that is not part of this workflow
+                  value:
+                    error:
+                      message: 'The selected step is not part of this workflow.'
+                afterStepMissing:
+                  summary: after_step_id names a step that is not, or no longer, part of this workflow
+                  value:
+                    error:
+                      message: 'The step to place it after (step ID 12) is not part of this workflow. Load the workflow again and choose another position.'
+                afterItself:
+                  summary: after_step_id names the step itself
+                  value:
+                    error:
+                      message: 'A step cannot be placed after itself.'
+                positionOutOfRange:
+                  summary: A position after the end of a workflow with 3 steps
+                  value:
+                    error:
+                      message: 'position must be "start", "end" or a number from 1 to 3.'
+    delete:
+      tags: [Workflow Templates]
+      summary: Remove a step from a workflow template
+      description: |
+        Requires `workflow-template.update` and operator access to the
+        project of every job step of the workflow (403 `Forbidden.`
+        otherwise). Removes the step; every other step keeps its ID and its
+        branches, and their empty branches now go on with the step that
+        follows them. A step that branches of other steps lead to is not
+        removed: 409 `Step "Deploy" was not removed: other steps route to it
+        (step 1 "Build", step 4 "Verify"). Edit those steps to lead
+        elsewhere first, then remove it.`, with those steps by position in
+        the message and by ID in `error.step_ids`; change their branches
+        first (`PUT /api/v1/workflow-templates/{id}/steps/{stepId}`). A
+        branch of the step to itself does not keep it. The steps of a
+        workflow that has an approval step or a gated job step are for
+        admins (403, as for an update), and the steps cannot change while a
+        run of the workflow is active (409). Runs keep the history of the
+        removed step: its executions keep the name and type it had when it
+        ran (`step_name`, `step_type`), and their `workflow_step_id` becomes
+        null. The answer names the removed step (`data`) and what the
+        removal did (`change`), with warnings when runs now start with
+        another step, reach a job step without passing the approval step
+        they passed before, or when an approval step is no longer on the
+        success path (see `warnings` of `WorkflowStepChange`).
+        Audited as `workflow-template.step.removed` with source `api`.
+
+        The answers come in this order: 401 without a valid token; 403
+        `Forbidden.` without `workflow-template.update`; 404 for an unknown
+        workflow; 403 `Forbidden.` without operator access to the workflow;
+        404 for a step the workflow does not have; 404 for a workflow deleted
+        meanwhile; 403 `Forbidden.` for operator access lost meanwhile; 403
+        for a workflow whose steps are for admins; 409 for an active run;
+        404 for a step removed meanwhile; 409 for a step that other steps
+        route to.
+      responses:
+        '200': { $ref: '#/components/responses/WorkflowStepDeletedResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/WorkflowStepsForbidden' }
+        '404': { $ref: '#/components/responses/WorkflowStepNotFound' }
+        '409': { $ref: '#/components/responses/WorkflowStepRemoveConflict' }
+  /api/v1/workflow-templates/{id}/steps/{stepId}/move:
+    parameters:
+      - $ref: '#/components/parameters/IdPath'
+      - $ref: '#/components/parameters/StepIdPath'
+    post:
+      tags: [Workflow Templates]
+      summary: Move a step of a workflow template
+      description: |
+        Requires `workflow-template.update` and operator access to the
+        project of every job step of the workflow (403 `Forbidden.`
+        otherwise). Moves the step to another place in the run order, any
+        distance in one call (see `WorkflowStepMoveInput`): to the start, to
+        the end, right after another step, to a position, or one place up
+        or down. The step keeps its ID and its branches. A move changes
+        where empty branches lead, which step runs first and whose output
+        the variable mapping of the step after it reads: `change` says what
+        changed, and warns when runs now start with another step, reach a
+        job step without passing the approval step they passed before, or
+        when an approval step is not on the success path (see `warnings` of
+        `WorkflowStepChange`). The steps of a
+        workflow that has an approval step or a gated job step are for
+        admins (403, as for an update), and the steps cannot change while a
+        run of the workflow is active (409).
+
+        A move to where the step stands, also up from the start or down
+        from the end, answers 200 with `change.message` `Step "Deploy" stays
+        at position 3.`, writes nothing and is not audited. Any other move is
+        audited as `workflow-template.step.moved` with source `api`.
+
+        The answers come in this order: 401 without a valid token; 403
+        `Forbidden.` without `workflow-template.update`; 404 for an unknown
+        workflow; 403 `Forbidden.` without operator access to the workflow;
+        404 for a step the workflow does not have; 422 for a body that
+        cannot be read; 404 for a workflow deleted meanwhile; 403
+        `Forbidden.` for operator access lost meanwhile; 403 for a workflow
+        whose steps are for admins; 409 for an active run; 404 for a step
+        removed meanwhile; 422 for a place the step cannot take.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WorkflowStepMoveInput' }
+            examples:
+              afterStep:
+                summary: Right after step 41
+                value:
+                  after_step_id: 41
+              start:
+                summary: To the start, so that runs start with it
+                value:
+                  position: start
+              position:
+                summary: To position 2
+                value:
+                  position: 2
+              up:
+                summary: One place up
+                value:
+                  direction: up
+      responses:
+        '200': { $ref: '#/components/responses/WorkflowStepWritten' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/WorkflowStepsForbidden' }
+        '404': { $ref: '#/components/responses/WorkflowStepNotFound' }
+        '409': { $ref: '#/components/responses/WorkflowStepsLocked' }
+        '422':
+          description: |
+            The body cannot be read (see `WorkflowStepMoveInput`), or the
+            step cannot take the place it names. Nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                moveNeedsOne:
+                  summary: None, or more than one, of position, after_step_id and direction
+                  value:
+                    error:
+                      message: 'Send exactly one of position, after_step_id and direction.'
+                position:
+                  summary: A position that is no whole number from 1
+                  value:
+                    error:
+                      message: 'position must be "start", "end" or a whole number from 1.'
+                afterStepId:
+                  summary: An after_step_id that is no whole number from 1
+                  value:
+                    error:
+                      message: 'after_step_id must be the ID of a step of this workflow.'
+                direction:
+                  summary: A direction other than up and down
+                  value:
+                    error:
+                      message: 'direction must be "up" or "down".'
+                afterStepMissing:
+                  summary: after_step_id names a step that is not, or no longer, part of this workflow
+                  value:
+                    error:
+                      message: 'The step to place it after (step ID 12) is not part of this workflow. Load the workflow again and choose another position.'
+                afterItself:
+                  summary: after_step_id names the step itself
+                  value:
+                    error:
+                      message: 'A step cannot be placed after itself.'
+                positionOutOfRange:
+                  summary: A position after the end of a workflow with 3 steps
+                  value:
+                    error:
+                      message: 'position must be "start", "end" or a number from 1 to 3.'
   /api/v1/workflow-templates/{id}/launch:
     post:
       tags: [Workflow Templates]
@@ -2400,7 +3231,11 @@ paths:
         not launch this workflow.` without them. The run belongs to the
         caller: each job step runs as the caller and is checked again when it
         starts. A step the caller may no longer launch then fails without a
-        job (see `steps[].error` of the run) and the workflow fails.
+        job (see `steps[].error` of the run) and the workflow fails. The
+        answer says what the run waits for right after the launch
+        (`waiting_for`), and names the approval request of a first step that
+        waits for an approval (`approval_request_id`); the caller, who
+        launched the run, never decides on it.
 
         The optional `extra_vars` are the run's launch extra vars. They are
         stored on the run (`extra_vars` of `GET /api/v1/workflow-jobs/{id}`,
@@ -2505,13 +3340,45 @@ paths:
         Requires `workflow.view`. Lists only the runs of workflow templates the
         caller may see (view access to the project of every job step),
         deleted templates included. Newest first, 25 per page, without the
-        steps.
-      parameters: [{ $ref: '#/components/parameters/Page' }]
+        steps; each run says what it waits for (`waiting_for`) and the step
+        it is at (`current_step`).
+
+        The filters combine: `waiting_for` keeps the running runs that wait
+        for that at their current step, `workflow_template_id` the runs of
+        one workflow template, and `status` the runs with that stored
+        status. A missing or empty filter does not filter. Any other value
+        that a filter does not take answers 422, and nothing is listed.
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/WaitingForFilter'
+        - $ref: '#/components/parameters/WorkflowTemplateIdFilter'
+        - $ref: '#/components/parameters/WorkflowJobStatusFilter'
       responses:
         '200':
           description: Paginated list
           content: { application/json: { schema: { $ref: '#/components/schemas/WorkflowJobList' } } }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '422':
+          description: A filter has a value it does not take; nothing was listed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                waitingFor:
+                  summary: waiting_for is not approval, resume or runner
+                  value:
+                    error:
+                      message: 'waiting_for must be one of: approval, resume, runner.'
+                workflowTemplateId:
+                  summary: workflow_template_id is no whole number from 1
+                  value:
+                    error:
+                      message: 'workflow_template_id must be a positive integer.'
+                status:
+                  summary: status is not a status of runs
+                  value:
+                    error:
+                      message: 'status must be one of: running, succeeded, failed, canceled.'
   /api/v1/workflow-jobs/{id}:
     get:
       tags: [Workflow Jobs]
@@ -2525,6 +3392,14 @@ paths:
         had when it ran, also after the step was removed from the workflow
         or replaced; its `workflow_step_id` is null then. `extra_vars` are
         the run's launch extra vars, password answers as `$encrypted$`.
+
+        Each execution says what it waits for (`waiting_for`), the status of
+        its job (`job_status`), and the approval request it waits or waited
+        for (`approval`), when the caller may see that request. For the
+        pending request of the step the run is at, `approval` also counts
+        the approvers who may decide (`eligible_count`), those of them who
+        have not voted (`open_count`), and says whether it can still be
+        approved (`can_still_be_approved`).
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200': { $ref: '#/components/responses/WorkflowJobDetailResponse' }
@@ -2563,8 +3438,34 @@ paths:
             `error.job_template_ids`, when present, names the job templates
             the caller may not operate; it is never present for a caller who
             may not see the workflow.
-          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
-        '422': { $ref: '#/components/responses/ValidationError' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                forbidden:
+                  summary: Missing workflow.cancel or operator access to the workflow
+                  value:
+                    error:
+                      message: Forbidden.
+                visible:
+                  summary: Access lost meanwhile, to a caller who may see the workflow
+                  value:
+                    error:
+                      message: 'You may not operate job template(s) #15 of this workflow.'
+                      job_template_ids: [15]
+                hidden:
+                  summary: Access lost meanwhile, to a caller who may not see the workflow
+                  value:
+                    error:
+                      message: You may not operate this workflow.
+        '422':
+          description: The run has already finished, also when it finished while it was being canceled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  message: Workflow is already finished.
   /api/v1/workflow-jobs/{id}/resume:
     post:
       tags: [Workflow Jobs]
@@ -2585,7 +3486,22 @@ paths:
         '200': { $ref: '#/components/responses/WorkflowJobResponse' }
         '500': { $ref: '#/components/responses/WorkflowRunOperationFailed' }
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422':
+          description: The run has already finished, or it waits at no pause step.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                finished:
+                  summary: The run has finished
+                  value:
+                    error:
+                      message: Workflow is already finished.
+                notPaused:
+                  summary: The run waits at no pause step
+                  value:
+                    error:
+                      message: No paused step to resume.
         '403':
           description: |
             Missing `workflow.launch` or operator access to the project of
@@ -2593,7 +3509,26 @@ paths:
             `error.job_template_ids`, when present, names the job templates
             the caller may not operate; it is never present for a caller who
             may not see the workflow.
-          content: { application/json: { schema: { $ref: '#/components/schemas/JobTemplateRefError' } } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobTemplateRefError' }
+              examples:
+                forbidden:
+                  summary: Missing workflow.launch or operator access to the workflow
+                  value:
+                    error:
+                      message: Forbidden.
+                visible:
+                  summary: Access lost meanwhile, to a caller who may see the workflow
+                  value:
+                    error:
+                      message: 'You may not operate job template(s) #15 of this workflow.'
+                      job_template_ids: [15]
+                hidden:
+                  summary: Access lost meanwhile, to a caller who may not see the workflow
+                  value:
+                    error:
+                      message: You may not operate this workflow.
 
   # ─────────────────────────── Analytics ─────────────────────────
   /api/v1/analytics/summary:
@@ -2911,6 +3846,16 @@ paths:
     post:
       tags: [Roles]
       summary: Create a custom role
+      description: |
+        Requires `role.create`. A caller who is no superadmin may list only
+        permissions they hold, through their roles or the default role
+        viewer; a permission they do not hold answers 403 `You cannot grant
+        the permission "user.update": you do not hold it.`, naming the first
+        such permission of the request, and nothing is written. A permission
+        listed twice is granted once. The answers come in this order: 403
+        `Forbidden.` without `role.create`; 422 for a body that does not
+        validate (the name, an unknown permission); 403 for a permission the
+        caller does not hold.
       requestBody:
         required: true
         content:
@@ -2929,7 +3874,7 @@ paths:
                 type: object
                 properties:
                   data: { $ref: '#/components/schemas/Role' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RoleCreateForbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/roles/{name}:
     parameters:
@@ -2957,6 +3902,19 @@ paths:
       description: |
         System roles (viewer/operator/admin) can have their permissions edited
         but not their name. The name field in the body is ignored for them.
+
+        Requires `role.update`. A caller who is no superadmin changes only a
+        role they may assign (they hold every permission it grants, and for
+        the admin role, or a role that contains it, they hold the admin
+        role), and adds to it only permissions they hold; removing
+        permissions needs no more. A role they may not change answers 403
+        `You cannot change or delete this role: you may not assign it, as it
+        grants more than you hold.`; an added permission they do not hold
+        answers 403 `You cannot grant the permission "user.update": you do
+        not hold it.`. Nothing is written. The answers come in this order:
+        403 `Forbidden.` without `role.update`; 404 for an unknown role; 403
+        for a role the caller may not change; 422 for a body that does not
+        validate; 403 for an added permission the caller does not hold.
       requestBody:
         required: true
         content:
@@ -2971,7 +3929,7 @@ paths:
                 type: object
                 properties:
                   data: { $ref: '#/components/schemas/Role' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RoleUpdateForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
     delete:
@@ -2980,9 +3938,17 @@ paths:
       description: |
         System roles cannot be deleted — returns 422. Users holding the role
         are left with no role and must be reassigned manually.
+
+        Requires `role.delete`. A caller who is no superadmin deletes only a
+        role they may assign; anyone else gets 403 `You cannot change or
+        delete this role: you may not assign it, as it grants more than you
+        hold.` and nothing is deleted. The answers come in this order: 403
+        `Forbidden.` without `role.delete`; 404 for an unknown role; 403 for
+        a role the caller may not change; 422 `Cannot delete system role.`;
+        422 `Role could not be deleted.`.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RoleDeleteForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/permissions:
@@ -3081,6 +4047,54 @@ components:
       in: query
       required: false
       schema: { type: integer, minimum: 1, default: 1 }
+    StepIdPath:
+      name: stepId
+      in: path
+      required: true
+      description: |
+        The ID of a step of the workflow template `{id}` (`id` of
+        `WorkflowStep`), not its position. A step of another workflow
+        template answers 404 as an unknown one.
+      schema: { type: integer, minimum: 1 }
+    WaitingForFilter:
+      name: waiting_for
+      in: query
+      required: false
+      description: |
+        Only the running runs that wait for this at their current step:
+        `approval` (an approval request), `resume` (a paused run) or
+        `runner` (a job that waits for a runner). Empty: no filter. Any
+        other value answers 422 `waiting_for must be one of: approval,
+        resume, runner.`
+      schema: { type: string, enum: [approval, resume, runner] }
+    WorkflowTemplateIdFilter:
+      name: workflow_template_id
+      in: query
+      required: false
+      description: |
+        Only the runs of this workflow template, also a deleted one: a whole
+        number from 1, in digits. Empty: no filter. Any other value answers
+        422 `workflow_template_id must be a positive integer.`
+      schema: { type: integer, minimum: 1 }
+    WorkflowJobStatusFilter:
+      name: status
+      in: query
+      required: false
+      description: |
+        Only the runs with this stored status; a run that waits is
+        `running` (see `waiting_for`). Empty: no filter. Any other value
+        answers 422 `status must be one of: running, succeeded, failed,
+        canceled.`
+      schema: { type: string, enum: [running, succeeded, failed, canceled] }
+    ApprovalStatusFilter:
+      name: status
+      in: query
+      required: false
+      description: |
+        Only the approval requests with this status. Empty: no filter. Any
+        other value answers 422 `status must be one of: pending, approved,
+        rejected, timed_out, canceled.`
+      schema: { type: string, enum: [pending, approved, rejected, timed_out, canceled] }
 
   responses:
     NotFound:
@@ -3097,7 +4111,16 @@ components:
               - $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
       description: Authentication required (missing or invalid token)
-      content: { application/json: { schema: { $ref: '#/components/schemas/FrameworkError' } } }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/FrameworkError' }
+          examples:
+            missing:
+              summary: No Bearer token
+              value: { name: Unauthorized, message: 'Bearer token required.', code: 0, status: 401 }
+            invalid:
+              summary: An unknown or expired token, or the token of a disabled user
+              value: { name: Unauthorized, message: 'Invalid or expired token.', code: 0, status: 401 }
     Forbidden:
       description: |
         The caller lacks the required permission, or access to the resource:
@@ -3233,6 +4256,23 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/Project' }
+    ProjectRejected:
+      description: |
+        Invalid input, such as a missing name, an unknown `scm_type`, or, for
+        git projects, a `scm_branch` that starts with `-` or contains
+        whitespace, also the branch a project was saved with before 2.11.0
+        when a `PUT` sends no other one, and that of a manual project that a
+        `PUT` makes a git project. The answer names the first error. Nothing
+        was saved and no sync was queued.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            branch:
+              summary: A branch that starts with "-" or contains whitespace
+              value:
+                error:
+                  message: 'The branch cannot start with "-" or contain whitespace.'
     JobTemplateResponse:
       description: Job template
       content:
@@ -3289,6 +4329,180 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/User' }
+    UserGrantForbidden:
+      description: |
+        The caller lacks `user.create`, may not assign the `role` (one that
+        grants permissions the caller does not hold, or the `admin` role or a
+        role that contains it, from a caller who does not hold the `admin`
+        role), or is no superadmin and would set `is_superadmin`. Nothing was
+        written.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            permission:
+              summary: Missing user.create
+              value:
+                error:
+                  message: Forbidden.
+            role:
+              summary: A role that grants permissions the caller does not hold
+              value:
+                error:
+                  message: 'You cannot assign the role "admin": it grants permissions you do not hold.'
+            adminRole:
+              summary: The admin role, from a caller who holds its permissions but not the role
+              value:
+                error:
+                  message: 'You cannot assign the role "admin": it is or contains the admin role, which only superadmins and admins may assign.'
+            superadmin:
+              summary: is_superadmin set or cleared by a caller who is no superadmin
+              value:
+                error:
+                  message: 'Only a superadmin can set or clear is_superadmin.'
+    UserUpdateForbidden:
+      description: |
+        The caller lacks `user.update`, may not change the user (a
+        superadmin, a user with a role that grants permissions the caller
+        does not hold, a user with the `admin` role or a role that contains
+        it, from a caller who does not hold the `admin` role, or a user whose
+        teams give them more access to a project than the caller's teams give
+        the caller), may not assign the `role` (one that grants permissions
+        the caller does not hold, or the `admin` role or a role that contains
+        it, from a caller who does not hold the `admin` role), or is no
+        superadmin and would set or clear `is_superadmin`. Nothing was
+        written.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            permission:
+              summary: Missing user.update
+              value:
+                error:
+                  message: Forbidden.
+            change:
+              summary: A superadmin, or a user whose roles grant permissions the caller does not hold
+              value:
+                error:
+                  message: 'You cannot change or delete this user: they are a superadmin, or a role assigned to them grants permissions you do not hold.'
+            adminUser:
+              summary: A user with the admin role, from a caller who holds every permission of their roles but not the admin role
+              value:
+                error:
+                  message: 'You cannot change or delete this user: a role assigned to them is or contains the admin role, which only a superadmin or an admin may assign.'
+            team:
+              summary: A user whose teams give them more access to a project than the caller has
+              value:
+                error:
+                  message: 'You cannot change or delete this user: their teams give them more access to a project than you have.'
+            role:
+              summary: A role that grants permissions the caller does not hold
+              value:
+                error:
+                  message: 'You cannot assign the role "admin": it grants permissions you do not hold.'
+            adminRole:
+              summary: The admin role, from a caller who holds its permissions but not the role
+              value:
+                error:
+                  message: 'You cannot assign the role "admin": it is or contains the admin role, which only superadmins and admins may assign.'
+            superadmin:
+              summary: is_superadmin set or cleared by a caller who is no superadmin
+              value:
+                error:
+                  message: 'Only a superadmin can set or clear is_superadmin.'
+    UserDeleteForbidden:
+      description: |
+        The caller lacks `user.delete`, or may not change the user: a
+        superadmin, a user with a role that grants permissions the caller
+        does not hold, a user with the `admin` role or a role that contains
+        it, from a caller who does not hold the `admin` role, or a user whose
+        teams give them more access to a project than the caller's teams give
+        the caller. Nothing was deleted.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            permission:
+              summary: Missing user.delete
+              value:
+                error:
+                  message: Forbidden.
+            change:
+              summary: A superadmin, or a user whose roles grant permissions the caller does not hold
+              value:
+                error:
+                  message: 'You cannot change or delete this user: they are a superadmin, or a role assigned to them grants permissions you do not hold.'
+            adminUser:
+              summary: A user with the admin role, from a caller who holds every permission of their roles but not the admin role
+              value:
+                error:
+                  message: 'You cannot change or delete this user: a role assigned to them is or contains the admin role, which only a superadmin or an admin may assign.'
+            team:
+              summary: A user whose teams give them more access to a project than the caller has
+              value:
+                error:
+                  message: 'You cannot change or delete this user: their teams give them more access to a project than you have.'
+    RoleCreateForbidden:
+      description: |
+        The caller lacks `role.create`, or lists a permission they do not
+        hold. Nothing was written.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            permission:
+              summary: Missing role.create
+              value:
+                error:
+                  message: Forbidden.
+            grant:
+              summary: A permission the caller does not hold
+              value:
+                error:
+                  message: 'You cannot grant the permission "user.update": you do not hold it.'
+    RoleUpdateForbidden:
+      description: |
+        The caller lacks `role.update`, may not change the role (it grants
+        more than they hold), or adds a permission they do not hold. Nothing
+        was written.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            permission:
+              summary: Missing role.update
+              value:
+                error:
+                  message: Forbidden.
+            change:
+              summary: A role the caller may not assign
+              value:
+                error:
+                  message: 'You cannot change or delete this role: you may not assign it, as it grants more than you hold.'
+            grant:
+              summary: An added permission the caller does not hold
+              value:
+                error:
+                  message: 'You cannot grant the permission "user.update": you do not hold it.'
+    RoleDeleteForbidden:
+      description: |
+        The caller lacks `role.delete`, or may not change the role. Nothing
+        was deleted.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            permission:
+              summary: Missing role.delete
+              value:
+                error:
+                  message: Forbidden.
+            change:
+              summary: A role the caller may not assign
+              value:
+                error:
+                  message: 'You cannot change or delete this role: you may not assign it, as it grants more than you hold.'
     WebhookResponse:
       description: Webhook
       content:
@@ -3313,6 +4527,37 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/NotificationTemplate' }
+    NotificationTemplateRejected:
+      description: |
+        Invalid input, such as a missing name or an unknown channel, or
+        `$encrypted$` at the place of a channel secret that cannot keep a
+        stored value: nothing is stored there (always on create), the
+        channel changed, or, for a header of a webhook channel, its `url`
+        changed. Nothing was written.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            notStored:
+              summary: $encrypted$ where no value is stored
+              value:
+                error:
+                  message: 'bot_token has no stored value; enter the real value.'
+            channelChanged:
+              summary: $encrypted$ after a change of the channel
+              value:
+                error:
+                  message: 'webhook_url: the channel changed; enter the real value.'
+            urlChanged:
+              summary: A header kept as $encrypted$ while the webhook url changes
+              value:
+                error:
+                  message: 'headers.Authorization: url changed; enter the real value.'
+            notEncodable:
+              summary: A config with a number too large for JSON
+              value:
+                error:
+                  message: 'The config cannot be stored: it contains a number too large for JSON.'
     ApprovalRequestResponse:
       description: Approval request
       content:
@@ -3325,7 +4570,11 @@ components:
       description: |
         The vote was refused, and nothing was recorded: the caller may not
         see the request, launched its job, or is not an eligible approver
-        (see Approvals).
+        (see Approvals). The launcher of a job reads `You launched this job;
+        another approver must decide.`; for the job of a workflow step, the
+        placeholder job of an approval step or the job of a gated job step,
+        the user who started the run reads `You launched this workflow run;
+        another approver must decide.`
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -3340,6 +4589,11 @@ components:
               value:
                 error:
                   message: You launched this job; another approver must decide.
+            launcherRun:
+              summary: The caller started the workflow run whose step waits for the request
+              value:
+                error:
+                  message: You launched this workflow run; another approver must decide.
             notEligible:
               summary: The caller is no eligible approver
               value:
@@ -3456,18 +4710,22 @@ components:
             properties:
               data: { $ref: '#/components/schemas/WorkflowTemplateDetail' }
     WorkflowLaunchResponse:
-      description: The launched run
+      description: The launched run, and what it waits for right after the launch
       content:
         application/json:
           schema:
             type: object
             properties:
-              data:
-                type: object
-                properties:
-                  workflow_job_id: { type: integer }
-          example:
-            data: { workflow_job_id: 17 }
+              data: { $ref: '#/components/schemas/WorkflowLaunchResult' }
+          examples:
+            approval:
+              summary: The first step waits for an approval
+              value:
+                data: { workflow_job_id: 17, waiting_for: approval, approval_request_id: 12 }
+            running:
+              summary: The first step runs, or the run has already ended
+              value:
+                data: { workflow_job_id: 17, waiting_for: null, approval_request_id: null }
     WorkflowLaunchRejected:
       description: |
         The launch was refused for a reason the caller or an admin can fix,
@@ -3543,6 +4801,182 @@ components:
             error:
               message: 'Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.'
               workflow_job_ids: [12]
+    WorkflowStepWritten:
+      description: |
+        The step as it is now, and what the change did. A change that
+        writes nothing says so in `change.message`, and has no warnings.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkflowStepWriteResponse' }
+          examples:
+            added:
+              summary: A job step added after the approval step, which was the last step
+              value:
+                data:
+                  id: 43
+                  name: Deploy
+                  step_order: 30
+                  step_type: job
+                  job_template_id: 15
+                  approval_rule_id: null
+                  on_success_step_id: null
+                  on_failure_step_id: 0
+                  on_always_step_id: null
+                  extra_vars_template: []
+                  position: 3
+                  is_start: false
+                  reachable: true
+                  cannot_run: null
+                  routes:
+                    success: { kind: end, via: next, step_id: null, position: null, run_outcome: succeeds, loop: false }
+                    failure: { kind: end, via: on_failure, step_id: null, position: null, run_outcome: fails, loop: false }
+                    closed_gate: null
+                change:
+                  message: 'Step "Deploy" added at position 3 of 3, after "Release approval". "Release approval" now continues with "Deploy" (was the end of the run).'
+                  warnings: []
+            movedToStart:
+              summary: That step moved to the start, before the approval step
+              value:
+                data:
+                  id: 43
+                  name: Deploy
+                  step_order: 10
+                  step_type: job
+                  job_template_id: 15
+                  approval_rule_id: null
+                  on_success_step_id: null
+                  on_failure_step_id: 0
+                  on_always_step_id: null
+                  extra_vars_template: []
+                  position: 1
+                  is_start: true
+                  reachable: true
+                  cannot_run: null
+                  routes:
+                    success: { kind: step, via: next, step_id: 41, position: 2, run_outcome: null, loop: false }
+                    failure: { kind: end, via: on_failure, step_id: null, position: null, run_outcome: fails, loop: false }
+                    closed_gate: null
+                change:
+                  message: 'Step "Deploy" moved to position 1 of 3, at the start. "Deploy" now continues with "Build" (was the end of the run). "Release approval" now ends the run (was "Deploy").'
+                  warnings:
+                    - 'Runs now start with "Deploy" (was "Build").'
+                    - 'Job step "Deploy" now runs before the approval step "Release approval": runs start it without waiting for that approval.'
+    WorkflowStepDeletedResponse:
+      description: |
+        The step was removed, and what that did: where it was, how the empty
+        branches of other steps now lead, and warnings when runs now start
+        with another step, reach a job step without passing the approval
+        step they passed before, or when an approval step is no longer on
+        the success path.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/WorkflowStepRemoveResponse' }
+          example:
+            data: { deleted: true, id: 43 }
+            change:
+              message: 'Step "Deploy" removed; it was at position 3 of 3. "Release approval" now ends the run (was "Deploy").'
+              warnings: []
+    WorkflowForStepNotFound:
+      description: |
+        The workflow template does not exist, in the framework's shape
+        (`FrameworkError`), or another request deleted it meanwhile, as
+        `ErrorResponse`.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/FrameworkError'
+              - $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            workflow:
+              summary: An unknown or deleted workflow template
+              value: { name: Not Found, message: 'Workflow template #5 not found.', code: 0, status: 404 }
+            deletedMeanwhile:
+              summary: The workflow template was deleted while the change was checked
+              value:
+                error:
+                  message: 'Workflow template #5 not found.'
+    WorkflowStepNotFound:
+      description: |
+        The workflow template does not exist, in the framework's shape
+        (`FrameworkError`); or, as `ErrorResponse`, it has no step `{stepId}`
+        (a step of another workflow template included), another request
+        deleted it meanwhile, or removed the step meanwhile.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/FrameworkError'
+              - $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            workflow:
+              summary: An unknown or deleted workflow template
+              value: { name: Not Found, message: 'Workflow template #5 not found.', code: 0, status: 404 }
+            step:
+              summary: The workflow template has no such step
+              value:
+                error:
+                  message: 'Workflow template #5 has no step with ID 43.'
+            deletedMeanwhile:
+              summary: The workflow template was deleted while the change was checked
+              value:
+                error:
+                  message: 'Workflow template #5 not found.'
+            removedMeanwhile:
+              summary: Another request removed the step while the change was checked
+              value:
+                error:
+                  message: 'Workflow template #5 has no step with ID 43.'
+    WorkflowStepsForbidden:
+      description: |
+        Missing `workflow-template.update` or operator access to the project
+        of every job step of the workflow (`Forbidden.`), or the steps of a
+        workflow that has an approval step or a gated job step, without
+        `approval-rule.update`. Nothing was written.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            forbidden:
+              summary: Missing workflow-template.update or operator access to the workflow
+              value:
+                error:
+                  message: Forbidden.
+            approvalWorkflow:
+              summary: The workflow has an approval step
+              value:
+                error:
+                  message: 'This workflow has an approval step: only admins may change its steps (approval-rule.update).'
+            gatedJobWorkflow:
+              summary: The workflow has a job step whose job template has an approval rule
+              value:
+                error:
+                  message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+    WorkflowStepRemoveConflict:
+      description: |
+        The step was not removed: runs of the workflow are active
+        (`error.workflow_job_ids`, see `WorkflowStepsLocked`), or branches of
+        other steps lead to it (`error.step_ids`): change those branches
+        first.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/WorkflowStepsLockedError'
+              - $ref: '#/components/schemas/WorkflowStepRoutedToError'
+          examples:
+            runsActive:
+              summary: A run of the workflow is active
+              value:
+                error:
+                  message: 'Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.'
+                  workflow_job_ids: [12]
+            routedTo:
+              summary: Other steps route to the step
+              value:
+                error:
+                  message: 'Step "Deploy" was not removed: other steps route to it (step 1 "Build", step 4 "Verify"). Edit those steps to lead elsewhere first, then remove it.'
+                  step_ids: [41, 44]
     WorkflowRunOperationFailed:
       description: |
         A database error stopped the cancel or the resume of the run. The
@@ -3903,7 +5337,17 @@ components:
         name:        { type: string }
         description: { type: string, nullable: true }
         scm_type:    { type: string, enum: [manual, git] }
-        scm_url:     { type: string, nullable: true }
+        scm_url:
+          type: string
+          nullable: true
+          description: |
+            The git repository URL. A caller who may update the project
+            (`project.update` and operator access to it) gets it in full, so
+            a `GET` and `PUT` round trip keeps it. Every other caller gets it
+            with its userinfo (`user:password@`, or a token before `@`)
+            replaced by `***@`, such as
+            `https://***@git.example.com/org/repo.git`.
+          example: https://git.example.com/org/repo.git
         scm_branch:  { type: string, nullable: true }
         status:      { type: string, enum: [new, syncing, synced, error] }
         last_synced_at: { type: integer, nullable: true, description: Unix timestamp }
@@ -4466,6 +5910,31 @@ components:
               type: array
               description: The job's credentials as launched, primary first. Never includes secrets.
               items: { $ref: '#/components/schemas/JobCredential' }
+            approval_request_id:
+              type: integer
+              nullable: true
+              description: |
+                The approval request the job waits or waited for (see
+                `GET /api/v1/approvals/{id}`); null when it has none, or the
+                caller may not see it.
+              example: 12
+            workflow_job_id:
+              type: integer
+              nullable: true
+              description: |
+                The workflow run the job was created for: the job of a job
+                step, or the placeholder job of an approval step, which holds
+                the step's approval request and never runs. null when the job
+                belongs to no workflow step, or the caller may not view that
+                workflow.
+              example: 17
+            workflow_job_step_id:
+              type: integer
+              nullable: true
+              description: |
+                The step execution of that run the job was created for (`id`
+                of `WorkflowJobStep`); null as `workflow_job_id`.
+              example: 31
     JobCredential:
       type: object
       properties:
@@ -4613,10 +6082,19 @@ components:
           description: Event names this template subscribes to.
         config:
           type: object
-          description: >
-            Channel-specific config. email → {emails:[]}, slack/teams → {webhook_url},
-            webhook → {url, headers?}, telegram → {bot_token, chat_id},
-            pagerduty → {routing_key}.
+          description: |
+            Channel-specific config. email → {emails:[]}, slack/teams →
+            {webhook_url}, webhook → {url, headers?}, telegram → {bot_token,
+            chat_id}, pagerduty → {routing_key}. Every channel secret is
+            answered as `$encrypted$`, to every caller: the `bot_token` of
+            telegram; the `webhook_url` of slack and teams; the `url` of
+            webhook and the value of every one of its `headers` (the header
+            names are shown); the `routing_key` of pagerduty. A key that is a
+            secret of one channel is answered as `$encrypted$` in every
+            config; an empty value (null or '') is answered as it is. The
+            secrets are stored as entered: `$encrypted$` only stands in for
+            them.
+          example: { bot_token: '$encrypted$', chat_id: '-1001234567890' }
         subject_template: { type: string, nullable: true }
         body_template:    { type: string, nullable: true }
         created_by:  { type: integer }
@@ -4630,7 +6108,25 @@ components:
         description:      { type: string, nullable: true }
         channel:          { type: string, enum: [email, slack, teams, webhook, telegram, pagerduty] }
         events:           { type: string, description: 'Comma-separated event names' }
-        config:           { type: string, description: 'JSON string with channel-specific settings' }
+        config:
+          description: |
+            Channel-specific settings (see `config` of `NotificationTemplate`),
+            as an object or as JSON text. `$encrypted$` at a secret's place
+            keeps the stored value, so a `GET` and `PUT` round trip changes
+            no secret. That holds only while the template keeps its channel,
+            and for a header of a webhook channel only while `url` keeps its
+            stored value. Otherwise, and on create, the answer is 422 and
+            nothing is written; the message starts with the place of the
+            secret: `bot_token has no stored value; enter the real value.`
+            where nothing is stored, `webhook_url: the channel changed; enter
+            the real value.` after a change of the channel, and
+            `headers.Authorization: url changed; enter the real value.` for
+            a header once `url` changed. A config that holds a number too
+            large for JSON answers 422 `The config cannot be stored: it
+            contains a number too large for JSON.`
+          oneOf:
+            - { type: object }
+            - { type: string }
         subject_template: { type: string, nullable: true, maxLength: 512 }
         body_template:    { type: string, nullable: true }
     NotificationTemplateList:
@@ -4646,9 +6142,46 @@ components:
         name: { type: string, maxLength: 128 }
         description: { type: string, nullable: true }
         scm_type: { type: string, enum: [manual, git] }
-        scm_url: { type: string, nullable: true }
-        scm_branch: { type: string, nullable: true }
-        scm_credential_id: { type: integer, nullable: true }
+        scm_url:
+          type: string
+          nullable: true
+          description: |
+            The git repository URL. Credentials in its userinfo are stored as
+            sent, and shown only to callers who may update the project;
+            prefer an SCM credential (`scm_credential_id`). Each sync points
+            the project's checkout at the URL as it is then, on the server
+            and on runners, so a changed URL counts from the next sync; a
+            runner older than 2.11.0 keeps the URL its checkout was cloned
+            with until the checkout is removed.
+        scm_branch:
+          type: string
+          nullable: true
+          description: |
+            The branch that syncs of a git project check out; git takes it for
+            a branch name, never for one of its options. For git projects
+            (`scm_type` `git` once the request is applied), a branch that
+            starts with `-` or contains whitespace is refused: `POST` and
+            `PUT` answer 422 `The branch cannot start with "-" or contain
+            whitespace.` and save nothing. A git project saved with such a
+            branch before 2.11.0 keeps it until it is changed; until then
+            every `PUT` that sends no other branch and leaves it a git project
+            answers that 422. The branch of a manual project is not checked,
+            as no sync reads it; a `PUT` that makes a manual project with
+            such a branch a git project answers that 422. An empty branch is
+            not checked.
+        scm_credential_id:
+          type: integer
+          nullable: true
+          description: |
+            The credential that syncs of a git project sign in with. For a git
+            project (`scm_type` `git` once the request is applied), an SSH URL
+            needs an SSH Key credential and an HTTPS URL a Token or
+            Username/Password credential; another type answers 422 `SSH URLs
+            require an SSH Key credential.` or `HTTPS URLs require a Token or
+            Username/Password credential.` and saves nothing. The credential
+            of a manual project is not checked against its URL, as no sync
+            reads them. A credential that does not exist is refused with 422
+            for every project.
         vault_password_source:
           type: string
           enum: [ansilume, repository]
@@ -5023,7 +6556,15 @@ components:
         status: { type: integer, description: "10 = active, 0 = inactive" }
         is_superadmin: { type: boolean }
         totp_enabled: { type: boolean }
-        role: { type: string, nullable: true }
+        role:
+          type: string
+          nullable: true
+          description: |
+            The role assigned to the user, the first by name when several are;
+            null when none is. A default role, such as viewer, which every
+            signed-in user holds, is answered only when it is also assigned to
+            the user. Sent back with `PUT`, it keeps every role assigned to
+            the user.
         auth_source:
           type: string
           enum: [local, ldap]
@@ -5034,6 +6575,16 @@ components:
         ldap_dn: { type: string, nullable: true, description: Distinguished name set after the first directory bind (LDAP users only). }
         ldap_uid: { type: string, nullable: true, description: Stable directory identifier (objectGUID/entryUUID). LDAP users only. }
         last_synced_at: { type: integer, nullable: true, description: Unix timestamp of the most recent LDAP attribute sync. }
+        ldap_sync_disabled:
+          type: boolean
+          readOnly: true
+          description: |
+            True when `ldap/sync` deactivated the account because the
+            directory no longer had the user: the user's next LDAP sign-in, or
+            an `ldap/sync` that finds them, activates it again. False for every
+            other account; one deactivated in Ansilume stays inactive whatever
+            the directory says. Read-only: POST and PUT ignore it, and a PUT
+            that changes `status` clears it.
         created_at: { type: integer }
         updated_at: { type: integer }
     UserInput:
@@ -5046,9 +6597,29 @@ components:
           type: string
           minLength: 5
           description: Required on create for local users; rejected for LDAP users. Optional on update.
-        status: { type: integer }
-        is_superadmin: { type: boolean }
-        role: { type: string, description: RBAC role name to assign }
+        status: { type: integer, description: "10 = active, 0 = inactive" }
+        is_superadmin:
+          type: boolean
+          description: |
+            Only a superadmin may change it: a value that would set or clear
+            the flag answers 403 `Only a superadmin can set or clear
+            is_superadmin.` for anyone else; the current value is accepted.
+        role:
+          type: string
+          nullable: true
+          description: |
+            The role to assign: one of the roles the instance has. A role the
+            user already has, one of the roles assigned to them, keeps every
+            role assigned to the user; another role replaces them all; leave
+            it out, or send null or an empty string, to keep them. Another
+            value answers 422. Assigning a role needs every permission it
+            grants, through its child roles too, unless the caller is a
+            superadmin; else 403 `You cannot assign the role "admin": it
+            grants permissions you do not hold.` The `admin` role, and a role
+            that contains it, also needs a caller who holds the `admin` role,
+            unless the caller is a superadmin; else 403 `You cannot assign the
+            role "admin": it is or contains the admin role, which only
+            superadmins and admins may assign.`
         auth_source:
           type: string
           enum: [local, ldap]
@@ -5093,7 +6664,21 @@ components:
           nullable: true
           description: Present only when the request supplies a username.
           properties:
-            found: { type: boolean }
+            found:
+              type: boolean
+              description: |
+                True when the directory has the user and, with a `password`,
+                the password is right. False otherwise, with `error` saying
+                why, such as the error of a failed service bind. Without a
+                `password`, `User not found in directory.` means that the
+                user search ran and found no entry; a user search or a group
+                search that fails answers that failure instead, such as
+                `User search failed: No such object` or `Group search
+                failed: Operations error`. With a `password`, a wrong one
+                answers `User bind failed (invalid credentials).`, a user
+                search that finds no entry or fails answers `User not found
+                in directory.`, and a failed group search answers the user as
+                found, without groups.
             dn: { type: string, nullable: true }
             uid: { type: string, nullable: true }
             username: { type: string, nullable: true }
@@ -5101,7 +6686,7 @@ components:
             display_name: { type: string, nullable: true }
             groups: { type: array, items: { type: string } }
             mapped_roles: { type: array, items: { type: string } }
-            error: { type: string, nullable: true, description: Set when found=false. }
+            error: { type: string, nullable: true, description: 'Set when found=false: why the user was not found, or why the lookup failed.' }
 
     Webhook:
       type: object
@@ -5111,6 +6696,14 @@ components:
         url: { type: string }
         events: { type: string, description: Comma-separated event names }
         enabled: { type: boolean }
+        has_secret:
+          type: boolean
+          description: |
+            Whether the webhook has a signing secret, so that its deliveries
+            carry `X-Ansilume-Signature`. The secret itself is never
+            answered. A secret of '' or '0' counts as none, as on the webhook
+            pages.
+          example: true
         created_at: { type: integer }
         updated_at: { type: integer }
     WebhookInput:
@@ -5119,7 +6712,16 @@ components:
       properties:
         name: { type: string, maxLength: 128 }
         url: { type: string, format: uri }
-        secret: { type: string, nullable: true }
+        secret:
+          type: string
+          nullable: true
+          description: |
+            HMAC-SHA256 signing secret, never answered (`Webhook` has no
+            `secret`; `has_secret` says whether one is stored). On update,
+            `$encrypted$` keeps the stored secret, and null or '' removes it,
+            so deliveries are unsigned. `$encrypted$` where no secret is
+            stored, as on create, answers 422 `The secret has no stored
+            value; enter the real value.`
         events:
           description: Event names as array or comma-separated string
           oneOf:
@@ -5157,7 +6759,7 @@ components:
 
     ApprovalRequest:
       type: object
-      required: [id, job_id, launched_by, approval_rule_id, status, requested_at, resolved_at, expires_at, approval_count, rejection_count]
+      required: [id, job_id, launched_by, approval_rule_id, status, requested_at, resolved_at, expires_at, approval_count, rejection_count, decisions, workflow_job_id, workflow_job_step_id, workflow_template_id, workflow_step_name]
       properties:
         id: { type: integer }
         job_id: { type: integer, description: "The job waiting for the decision; for a workflow approval step, its placeholder job without a job template." }
@@ -5204,11 +6806,74 @@ components:
         rejection_count:
           type: integer
           description: The rejections that count; the launcher's votes are left out.
+        decisions:
+          type: array
+          nullable: true
+          description: |
+            Every vote on the request, in the order cast: the votes the
+            request page lists. A vote whose `user_id` is `launched_by` was
+            cast by the launcher before self-approval was refused; it counts
+            neither as an approval nor as a rejection (`approval_count` and
+            `rejection_count` leave it out). null for a caller without
+            `approval.view`, which only the answers of approve and reject
+            reach.
+          items: { $ref: '#/components/schemas/ApprovalDecision' }
+        workflow_job_id:
+          type: integer
+          nullable: true
+          description: |
+            The workflow run whose step created the request's job: the
+            placeholder job of an approval step, or the job of a gated job
+            step. null when the job belongs to no workflow step, or the
+            caller may not view that workflow: a team member can see the
+            request of a gated job step through its job template's project
+            while the workflow is hidden, and then learns nothing about the
+            workflow, the run or the step.
+          example: 17
+        workflow_job_step_id:
+          type: integer
+          nullable: true
+          description: The step execution of that run (`id` of `WorkflowJobStep`); null as `workflow_job_id`.
+          example: 31
+        workflow_template_id:
+          type: integer
+          nullable: true
+          description: The workflow template of that run, also a deleted one; null as `workflow_job_id`.
+          example: 5
+        workflow_step_name:
+          type: string
+          nullable: true
+          description: The step's name when it ran; null as `workflow_job_id`.
+          example: Release approval
     ApprovalRequestList:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/ApprovalRequest' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+    ApprovalDecision:
+      type: object
+      description: One vote on an approval request.
+      required: [user_id, username, decision, comment, created_at]
+      properties:
+        user_id:
+          type: integer
+          description: The user who voted.
+          example: 12
+        username:
+          type: string
+          example: alice
+        decision:
+          type: string
+          enum: [approved, rejected]
+        comment:
+          type: string
+          nullable: true
+          description: The comment given with the vote, as given; null without one.
+          example: Change window confirmed
+        created_at:
+          type: integer
+          description: When the vote was cast (Unix time).
+          example: 1760000000
     ApprovalDecisionInput:
       type: object
       properties:
@@ -5216,7 +6881,11 @@ components:
           type: string
           nullable: true
           maxLength: 1000
-          description: Optional comment stored with the vote and shown with the decisions. Longer text, or a value that is not a string, answers 422.
+          description: |
+            Optional comment stored with the vote and shown with the
+            decisions, on the page of the request and in `decisions` of the
+            request. Longer text, or a value that is not a string, answers
+            422.
     ApprovalDecisionConflictError:
       type: object
       properties:
@@ -5445,16 +7114,65 @@ components:
         - $ref: '#/components/schemas/WorkflowTemplate'
         - type: object
           properties:
+            start_step_id:
+              type: integer
+              nullable: true
+              description: The step runs start with, at position 1; null for a workflow without steps.
+              example: 41
+            success_path: { $ref: '#/components/schemas/WorkflowSuccessPath' }
             steps:
               type: array
-              description: The steps in run order.
+              description: The steps in run order, by `position`.
               items: { $ref: '#/components/schemas/WorkflowStep' }
     WorkflowStep:
       type: object
       properties:
-        id: { type: integer }
+        id:
+          type: integer
+          description: The step's ID. It stays when the step is changed or moved, so branches and runs keep pointing to the step.
         name: { type: string }
-        step_order: { type: integer, description: "Steps run in ascending order unless a branch says otherwise." }
+        step_order:
+          type: integer
+          description: |
+            An internal sort key: steps run by `step_order`, then by ID. The
+            step endpoints number the steps 10, 20, 30, … in run order after
+            every add, move and remove of a step; an update that does not
+            move the step, and a move to where the step stands, leave the
+            numbers as they are. A `steps` list numbers them 0, 1, 2, …;
+            steps that an older version gave the same value run by ID. Use
+            `position`.
+        position:
+          type: integer
+          minimum: 1
+          description: |
+            The step's 1-based place in the run order, which runs start at
+            1. Adding, moving and removing steps changes it: address a step
+            by its `id`.
+          example: 2
+        is_start:
+          type: boolean
+          description: Whether runs start with this step, the one at position 1.
+        reachable:
+          type: boolean
+          description: |
+            Whether a run can reach the step: it is the start step, or a
+            branch that some outcome of a step a run can reach takes leads
+            to it. A step that is not reachable never runs. A step that
+            cannot run (`cannot_run`) leads nowhere, as a run fails there: a
+            step that only it leads to is not reachable.
+        cannot_run:
+          type: string
+          nullable: true
+          enum: [job_template_missing, approval_rule_missing, unknown_type, null]
+          description: |
+            Why a run that reaches the step fails there; null when it can
+            run. `job_template_missing`: a job step without a job template,
+            or whose job template was deleted; `approval_rule_missing`: an
+            approval step without its approval rule, or a job step whose job
+            template has an approval rule that no longer exists;
+            `unknown_type`: a type an older version stored (see
+            `step_type`), whose `routes` are all null.
+        routes: { $ref: '#/components/schemas/WorkflowStepRoutes' }
         step_type:
           type: string
           description: |
@@ -5467,22 +7185,28 @@ components:
           type: integer
           nullable: true
           description: |
-            Step after success. null: the next step in order (after the last
-            step, the run ends as succeeded); 0: end the workflow. A branch
-            to a step that no longer exists fails the run
-            (`The next step #7 of this workflow no longer exists.`).
+            Step after success, by ID. null: the next step in the run order
+            (after the last step, the run ends as succeeded); 0: end the
+            workflow; the ID of a step of this workflow, the step itself or
+            an earlier one too (a loop: the run repeats steps until a branch
+            leads elsewhere). A branch to a step that no longer exists fails
+            the run (`The step this branch leads to no longer exists (step ID
+            7).`). `routes.success` says where a success leads now.
         on_failure_step_id:
           type: integer
           nullable: true
           description: |
-            Step after failure. null: the next step in order; 0: end the
-            workflow. After a closed approval gate, null ends the run as
+            Step after failure. null: the next step in the run order; 0: end
+            the workflow. After a closed approval gate, null ends the run as
             failed instead of going on with the next step: an approval step
             that was rejected, timed out (rejecting) or canceled, and a job
             step whose job was rejected or canceled while it waited for
             approval. Only an explicit step here continues the run then. A
             run that ends after a failed step ends as failed; a branch to a
-            step that no longer exists fails the run.
+            step that no longer exists fails the run. A job step that leads
+            to itself here retries until its job succeeds or the run is
+            canceled. `routes.failure` and `routes.closed_gate` say where a
+            failure and a closed gate lead now.
         on_always_step_id:
           type: integer
           nullable: true
@@ -5500,6 +7224,11 @@ components:
           description: |
             Extra vars this step takes from the output of the previous step:
             extra var name to output variable name. `[]` when there are none.
+            A mapping of another shape that a version before 2.11.0 stored is
+            answered as it is decoded when it is a JSON list or object (such
+            as `["build_version"]`), and as `[]` when it is a number, text,
+            true or false. Runs ignore every entry that does not map an extra
+            var name to the name of an output variable.
           oneOf:
             - { type: object, additionalProperties: { type: string } }
             - { type: array, maxItems: 0 }
@@ -5521,16 +7250,22 @@ components:
           type: array
           nullable: true
           description: |
-            All steps in run order; replaces the current ones, branches
-            included. Omit it or send null to keep the current steps on
-            update; `[]` removes them all. Not while a run of the workflow is
-            active (409), and only for admins when an approval step or a
-            gated job step (a job step whose job template has an approval
-            rule) is in the list or in the workflow (403). Runs keep the
-            history of replaced steps.
+            All steps in run order; replaces the current ones: they are
+            deleted with their branches, and the listed steps are written as
+            new steps, with new IDs and without branches. Omit it or send
+            null to keep the current steps on update; `[]` removes them all.
+            Not while a run of the workflow is active (409), and only for
+            admins when an approval step or a gated job step (a job step
+            whose job template has an approval rule) is in the list or in the
+            workflow (403). Runs keep the history of replaced steps. To change
+            one step, use the step endpoints (`/api/v1/workflow-templates/{id}/steps`).
           items: { $ref: '#/components/schemas/WorkflowStepInput' }
     WorkflowStepInput:
       type: object
+      description: |
+        One step of a `steps` list. The list's order is the run order, and
+        branches, `position` and `after_step_id` are not read here: the
+        steps get none. The step endpoints set them.
       required: [name]
       properties:
         name: { type: string, minLength: 1, maxLength: 128, description: "Required; a missing or empty name answers 422." }
@@ -5554,27 +7289,478 @@ components:
         extra_vars_template:
           description: |
             Extra vars this step takes from the output of the previous step:
-            a JSON object mapping an extra var name to the name of an output
-            variable, or the same object as JSON text. A mapped value wins
-            over the run's launch extra vars, which win over the job
-            template's extra vars. The start step has no previous step, so
-            its mapping gives nothing. Either form with a number too
-            large for JSON, such as `1e999`, is rejected with 422
+            a JSON object that maps an extra var name (text that is not
+            empty) to the name of an output variable (text), or the same
+            object as JSON text; null, `{}` and `[]`, or the same as JSON
+            text, store no mapping. A mapped value wins over the run's launch
+            extra vars, which win over the job template's extra vars. The
+            start step has no previous step, so its mapping gives nothing.
+            Any other JSON is rejected with 422 `steps[<n>]:
+            extra_vars_template must be null or a JSON object that maps extra
+            var names to the names of output variables, such as
+            {"app_version": "build_version"}.`, among the steps that cannot
+            be read, before the 403 for gated steps. Either form with a
+            number too large for JSON, such as `1e999`, is rejected with 422
             `steps[<n>]: The extra vars cannot be stored: they contain a
             number too large for JSON.` An object with text that is not
             valid UTF-8, which only a form-encoded body can carry, is
             rejected with 422 `steps[<n>]: The extra vars cannot be stored:
             they contain characters that are not valid UTF-8.`
           oneOf:
-            - { type: object, additionalProperties: { type: string } }
+            - { type: object, nullable: true, additionalProperties: { type: string } }
+            - { type: array, maxItems: 0 }
             - { type: string }
+    WorkflowStepCreateInput:
+      type: object
+      required: [name]
+      description: |
+        The step to add. A key the body leaves out takes its default:
+        `step_type` job, no branches, no variable mapping, and the end of
+        the run order. Send `position` or `after_step_id`, not both (422
+        `Send either position or after_step_id, not both.`); null counts as
+        not sent. `id`, `step_order` and keys not listed here are ignored.
+        A value that cannot be read answers 422 before anything else of the
+        step is checked.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Required; a missing or empty name answers 422 `Name cannot be blank.`
+        step_type:
+          type: string
+          enum: [job, approval, pause]
+          default: job
+          description: |
+            `job` runs a job template, `approval` waits for the approvers of
+            an approval rule, `pause` waits until someone resumes the run.
+            Not sent: `job`. null or an empty value answers 422 `Step Type
+            cannot be blank.`; any other value 422 `Step Type is invalid.`
+            Approval steps are for admins (`approval-rule.update`; 403
+            otherwise).
+        job_template_id:
+          type: integer
+          minimum: 1
+          description: |
+            Required for a job step: a job template the caller may operate
+            (see the endpoint). An integer, or text with a whole number such
+            as `"15"` (a sign or spaces around it are read away); text with a
+            leading zero, `true` and `1.0` count as none, which answers 422
+            `A job step needs a job template.`
+            Ignored for other step types. A job template with an approval
+            rule makes the step a gated job step, which is for admins as an
+            approval step is (`approval-rule.update`; 403 otherwise).
+        approval_rule_id:
+          type: integer
+          minimum: 1
+          description: |
+            Required for an approval step: an existing approval rule (422
+            `An approval step needs an approval rule.` without one, `The
+            selected approval rule does not exist.` for an unknown one), read
+            as `job_template_id` is. Ignored for other step types.
+        on_success_step_id:
+          description: |
+            Where a run goes after the step succeeds: its job succeeded, it
+            was approved, or the run was resumed. Not sent: null, the next
+            step in the run order. See `WorkflowStepBranchInput`.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepBranchInput' }]
+        on_failure_step_id:
+          description: |
+            Where a run goes after the job of a job step failed, and after a
+            closed approval gate: an approval rejected, timed out or
+            canceled, of an approval step or of a gated job step. Not sent:
+            null, the next step in the run order, except after a closed
+            gate, where null ends the run as failed. A pause step takes only
+            null. See `WorkflowStepBranchInput`.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepBranchInput' }]
+        on_always_step_id:
+          description: |
+            Job steps only: where a run goes after the job, whether it
+            succeeded or failed, instead of On Success and On Failure; not
+            after a closed approval gate. Not sent: null, none. An approval
+            step with one answers 422 `An approval step cannot have an
+            Always branch: a rejection would continue past it.`, a pause step
+            422 as for `on_failure_step_id`. See `WorkflowStepBranchInput`.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepBranchInput' }]
+        extra_vars_template:
+          description: |
+            Extra vars this step takes from the output of the previous step:
+            a JSON object that maps an extra var name (text that is not
+            empty) to the name of an output variable (text), such as
+            `{"app_version": "build_version"}`, or the same object as JSON
+            text. null, `{}` and `[]`, or the same as JSON text, store no
+            mapping. A mapped value wins over the run's launch extra vars,
+            which win over the job template's extra vars. Any other JSON (a
+            list, a number, text, true or false, a value that is not text,
+            an empty key or a key that is a whole number such as `"0"`)
+            answers 422 `extra_vars_template must be null or a JSON object
+            that maps extra var names to the names of output variables, such
+            as {"app_version": "build_version"}.` Either form with a number
+            too large for JSON, such as `1e999`, answers 422 `The extra vars
+            cannot be stored: they contain a number too large for JSON.`;
+            text that is not valid JSON answers 422 `Extra_vars_template must
+            be valid JSON.`
+          oneOf:
+            - { type: object, nullable: true, additionalProperties: { type: string } }
+            - { type: array, maxItems: 0 }
+            - { type: string }
+        position:
+          description: Where the step goes; neither this nor `after_step_id`, the end.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepPositionInput' }]
+        after_step_id:
+          description: Place the step right after this step of the workflow.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepAfterInput' }]
+    WorkflowStepUpdateInput:
+      type: object
+      description: |
+        The fields of the step to change. A key the body leaves out keeps
+        its value; null clears a branch, which then goes on with the next
+        step in the run order, or the variable mapping. Without `position`
+        and `after_step_id`, or with both null, the step keeps its place;
+        with one of them it moves there (not both: 422 `Send either position
+        or after_step_id, not both.`). `id`, `step_order` and keys not
+        listed here are ignored. A value that cannot be read answers 422
+        before anything else of the step is checked.
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: An empty name answers 422 `Name cannot be blank.`
+        step_type:
+          type: string
+          enum: [job, approval, pause]
+          description: |
+            The type cannot change: the step's own type is accepted, another
+            answers 422 `A step's type cannot change: add a new step and
+            remove this one.`
+        job_template_id:
+          type: integer
+          minimum: 1
+          description: |
+            A job step's job template, read as on add. A new one is checked
+            as on add: it must exist for the caller (422) and be one the
+            caller may operate (403), and one with an approval rule needs
+            `approval-rule.update` (403). null, or a value that is no ID,
+            answers 422 `A job step needs a job template.` Ignored for other
+            step types.
+        approval_rule_id:
+          type: integer
+          minimum: 1
+          description: An approval step's approval rule, read as on add. Ignored for other step types.
+        on_success_step_id:
+          description: Where a run goes after the step succeeds, as on add. Not sent, unchanged.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepBranchInput' }]
+        on_failure_step_id:
+          description: |
+            Where a run goes after a failed job or a closed approval gate,
+            as on add. Not sent, unchanged. A pause step takes only null.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepBranchInput' }]
+        on_always_step_id:
+          description: |
+            Job steps only, as on add. Not sent, unchanged. An approval step
+            that an older version saved with an Always branch answers 422
+            `An approval step cannot have an Always branch: a rejection would
+            continue past it.` to every update until one sends null here,
+            which removes it.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepBranchInput' }]
+        extra_vars_template:
+          description: |
+            The variable mapping, as on add. Not sent, unchanged; null, `{}`
+            or `[]` removes it. It is compared by its JSON value: the same
+            mapping with other spaces or another order of keys, and `[]` or
+            `{}` where there is none, is no change, so a step sent back as
+            `GET` answers it is unchanged. A mapping of another shape that a
+            version before 2.11.0 stored stays while an update leaves it out
+            or sends it back unchanged; another mapping of that shape answers
+            the 422 of add.
+          oneOf:
+            - { type: object, nullable: true, additionalProperties: { type: string } }
+            - { type: array, maxItems: 0 }
+            - { type: string }
+        position:
+          description: Where the step moves; not sent, it keeps its place.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepPositionInput' }]
+        after_step_id:
+          description: Move the step right after this step of the workflow.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepAfterInput' }]
+    WorkflowStepMoveInput:
+      type: object
+      description: |
+        Where the step moves: exactly one of `position`, `after_step_id` and
+        `direction`; a key sent as null counts as not sent. None, or more
+        than one, answers 422 `Send exactly one of position, after_step_id
+        and direction.`
+      properties:
+        position:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepPositionInput' }]
+        after_step_id:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/WorkflowStepAfterInput' }]
+        direction:
+          type: string
+          nullable: true
+          enum: [up, down, null]
+          description: |
+            One place earlier (`up`) or later (`down`), as ▲ and ▼ on the
+            workflow's page do; at the start or the end the step stays.
+            Anything else answers 422 `direction must be "up" or "down".`
+    WorkflowStepPositionInput:
+      description: |
+        A place in the run order: `start` (runs start with the step), `end`,
+        or a 1-based position, as an integer or a string of digits. A
+        position counts the step itself: an add takes 1 to the number of
+        steps plus one, an update or a move 1 to the number of steps;
+        another one answers 422 `position must be "start", "end" or a number
+        from 1 to 4.`, naming the highest it can take. Anything else, such
+        as 0, `1.5`, `true` or `"START"`, answers 422 `position must be
+        "start", "end" or a whole number from 1.` A position is resolved
+        when the change is applied, so another change at the same time can
+        shift it; `after_step_id` names a step instead. null counts as not
+        sent.
+      oneOf:
+        - { type: string, enum: [start, end] }
+        - { type: integer, minimum: 1, nullable: true }
+        - { type: string, pattern: '^0*[1-9][0-9]*$' }
+    WorkflowStepAfterInput:
+      description: |
+        The ID of a step of this workflow, as an integer or a string of
+        digits. A step that is not, or no longer, part of the workflow
+        answers 422 `The step to place it after (step ID 12) is not part of
+        this workflow. Load the workflow again and choose another
+        position.`; the step itself, on an update or a move, 422 `A step
+        cannot be placed after itself.` Anything that is no whole number
+        from 1 answers 422 `after_step_id must be the ID of a step of this
+        workflow.` null counts as not sent.
+      oneOf:
+        - { type: integer, minimum: 1, nullable: true }
+        - { type: string, pattern: '^0*[1-9][0-9]*$' }
+    WorkflowStepBranchInput:
+      description: |
+        A branch: null for the next step in the run order, 0 to end the
+        run, or the ID of a step of this workflow, an earlier one too, and
+        on an update the step itself (a loop: the run repeats steps until a
+        branch leads elsewhere); as an integer or a string of digits. A step
+        that is not part of this workflow answers 422 `The selected step is
+        not part of this workflow.` Anything else, such as `""`, `true`,
+        `1.5` or `-1`, answers 422 with the branch's name, such as
+        `on_failure_step_id must be null, 0 (end the workflow) or the ID of
+        a step of this workflow.` A pause step takes only On Success: one
+        sent with an `on_failure_step_id` or `on_always_step_id` that is not
+        null answers 422 `A pause step only has on_success_step_id: Resume
+        continues there. Send on_failure_step_id and on_always_step_id as
+        null.`
+      oneOf:
+        - { type: integer, minimum: 0, nullable: true }
+        - { type: string, pattern: '^[0-9]+$' }
+    WorkflowStepWriteResponse:
+      type: object
+      required: [data, change]
+      description: The answer of an add, update or move of one step.
+      properties:
+        data: { $ref: '#/components/schemas/WorkflowStep' }
+        change: { $ref: '#/components/schemas/WorkflowStepChange' }
+    WorkflowStepChange:
+      type: object
+      required: [message, warnings]
+      description: What a change of one step did, in the words of the success message on the workflow's page.
+      properties:
+        message:
+          type: string
+          description: |
+            Where the step landed, or which fields changed; then, one
+            sentence each, how the empty branches of other steps now lead
+            elsewhere (explicit branches never move). For example:
+            - `Step "Deploy" added at position 3 of 3, after "Release
+              approval". "Release approval" now continues with "Deploy" (was
+              the end of the run).`
+            - `Step "Smoke test" added at position 2 of 3, after "Build".
+              "Build" now continues with "Smoke test", also after a failure
+              (was "Deploy").`
+            - `Step "Deploy" moved to position 1 of 3, at the start.`
+            - `Step "Deploy web" saved: name, On Failure changed.`
+            - `Step "Deploy" saved: On Success changed; it is now at
+              position 2 of 3, after "Build".`
+            - `Step "Deploy" removed; it was at position 3 of 3. "Release
+              approval" now ends the run (was "Deploy").`
+            A change that writes nothing says so, and is not audited: `Step
+            "Deploy" is unchanged.` for an update, `Step "Deploy" stays at
+            position 3.` for a move to where the step stands.
+          example: 'Step "Deploy" added at position 3 of 3, after "Release approval". "Release approval" now continues with "Deploy" (was the end of the run).'
+        warnings:
+          type: array
+          items: { type: string }
+          description: |
+            What runs now do differently, one entry each; empty when nothing
+            changed for them. The branches decide, not the positions alone:
+            - `Runs now start with "Deploy" (was "Build").`
+            - `Job step "Deploy" now runs before the approval step "Release
+              approval": runs start it without waiting for that approval.`,
+              for each job step that runs reached only through an approval
+              step, or that the change added, and that runs now reach without
+              passing one, naming the first approval step;
+            - `Job step "Deploy" no longer comes after an approval step: runs
+              start it without waiting for an approval.`, for each such job
+              step once no approval step is left;
+            - `The approval step "Release approval" is not on the success
+              path: runs whose steps all succeed do not wait for it.`, for an
+              approval step that the change added, moved or edited, or that
+              was on the success path before, when it is not on the success
+              path after the change.
+          example: ['Runs now start with "Deploy" (was "Build").']
+    WorkflowStepRemoveResponse:
+      type: object
+      required: [data, change]
+      description: The answer of the removal of one step.
+      properties:
+        data: { $ref: '#/components/schemas/WorkflowStepDeletion' }
+        change: { $ref: '#/components/schemas/WorkflowStepChange' }
+    WorkflowStepDeletion:
+      type: object
+      required: [deleted, id]
+      properties:
+        deleted:
+          type: boolean
+          enum: [true]
+        id:
+          type: integer
+          description: The ID of the removed step.
+          example: 43
+    WorkflowStepRoutes:
+      type: object
+      required: [success, failure, closed_gate]
+      description: |
+        Where a run goes after each outcome of the step, as the engine
+        routes it: after a success the Always branch, else On Success; after
+        a failed job the Always branch, else On Failure; after a closed
+        approval gate On Failure only. null for an outcome the step cannot
+        have.
+      properties:
+        success:
+          nullable: true
+          description: After the step succeeds; null only for a step of an unknown type.
+          allOf: [{ $ref: '#/components/schemas/WorkflowRouteTarget' }]
+        failure:
+          nullable: true
+          description: After the step's job failed; null for approval, pause and unknown steps.
+          allOf: [{ $ref: '#/components/schemas/WorkflowRouteTarget' }]
+        closed_gate:
+          nullable: true
+          description: |
+            After its approval was rejected, timed out or canceled: for
+            approval steps and gated job steps (job steps whose job template
+            has an approval rule) only, null for every other step. An empty
+            On Failure branch ends the run as failed here.
+          allOf: [{ $ref: '#/components/schemas/WorkflowRouteTarget' }]
+    WorkflowRouteTarget:
+      type: object
+      required: [kind, via, step_id, position, run_outcome, loop]
+      description: Where one branch of a step leads.
+      properties:
+        kind:
+          type: string
+          enum: [step, end, missing]
+          description: |
+            `step`: the run goes on with the step `step_id`; `end`: the run
+            ends; `missing`: the branch leads to a step that no longer exists
+            (`step_id`), and the run fails there (`The step this branch leads
+            to no longer exists (step ID 7).`).
+        via:
+          type: string
+          enum: [on_success, on_failure, on_always, next]
+          description: |
+            The branch that decides it. `next`: the branch is empty, and the
+            run goes on with the step at the next position; after the last
+            step it ends, as succeeded after a success and as failed after a
+            failure. Moving steps changes where such a branch leads.
+        step_id:
+          type: integer
+          nullable: true
+          description: The step it leads to (`step`), or the ID that no longer exists (`missing`); null for `end`.
+        position:
+          type: integer
+          nullable: true
+          description: The position of the step it leads to; null unless `kind` is `step`.
+        run_outcome:
+          type: string
+          nullable: true
+          enum: [succeeds, fails, null]
+          description: |
+            How the run ends here: for `end`, `succeeds` after a success and
+            `fails` otherwise; `fails` for `missing`; null for `step`.
+        loop:
+          type: boolean
+          description: Whether it leads back to the step itself or an earlier one, so the run repeats steps.
+      example: { kind: step, via: next, step_id: 43, position: 3, run_outcome: null, loop: false }
+    WorkflowSuccessPath:
+      type: object
+      required: [step_ids, end, loop_to_step_id, missing_step_id]
+      description: The steps a run passes when every step succeeds, from the start step, and how that path ends.
+      properties:
+        step_ids:
+          type: array
+          items: { type: integer }
+          description: The steps in the order a run passes them, the start step first; empty without steps.
+          example: [41, 42, 43]
+        end:
+          type: string
+          nullable: true
+          enum: [succeeds, loop, missing, cannot_run, null]
+          description: |
+            `succeeds`: the path ends the run, which succeeds; `loop`: it
+            leads back to a step it passed (`loop_to_step_id`), so a run
+            repeats steps until one fails or the run is canceled; `missing`:
+            it leads to a step that no longer exists (`missing_step_id`),
+            and the run fails there; `cannot_run`: it reaches a step that
+            cannot run, the last of `step_ids` (see `cannot_run` of
+            `WorkflowStep`), and the run fails there; null for a workflow
+            without steps.
+        loop_to_step_id:
+          type: integer
+          nullable: true
+          description: The step the path leads back to (`loop`); null otherwise.
+        missing_step_id:
+          type: integer
+          nullable: true
+          description: The step ID the path leads to that no longer exists (`missing`); null otherwise.
+    WorkflowStepRoutedToError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [message, step_ids]
+          properties:
+            message:
+              type: string
+              example: 'Step "Deploy" was not removed: other steps route to it (step 1 "Build", step 4 "Verify"). Edit those steps to lead elsewhere first, then remove it.'
+            step_ids:
+              type: array
+              items: { type: integer }
+              description: The steps whose branches lead to the step, in run order.
+              example: [41, 44]
 
     WorkflowJob:
       type: object
       properties:
         id: { type: integer }
         workflow_template_id: { type: integer }
-        status: { type: string, enum: [running, succeeded, failed, canceled] }
+        status:
+          type: string
+          enum: [running, succeeded, failed, canceled]
+          description: |
+            The stored status. A run that waits for an approval, a resume or
+            a runner is `running`; `waiting_for` says what it waits for.
         launched_by:
           type: integer
           description: |
@@ -5583,6 +7769,41 @@ components:
         started_at: { type: integer, nullable: true }
         finished_at: { type: integer, nullable: true }
         created_at: { type: integer }
+        waiting_for:
+          type: string
+          nullable: true
+          enum: [approval, resume, runner, null]
+          description: |
+            What the run waits for at its current step (`current_step`):
+            `approval`, an approval request of an approval step or of a gated
+            job step (`steps[].approval` of the run); `resume`, a pause step
+            waits until someone resumes the run; `runner`, the step's job is
+            queued and waits for a runner. null when the run does not wait:
+            its step runs, it is between two steps, or it has finished.
+        current_step:
+          nullable: true
+          description: The step the run is at; null once the run has finished, and between two steps.
+          allOf: [{ $ref: '#/components/schemas/WorkflowJobCurrentStep' }]
+    WorkflowJobCurrentStep:
+      type: object
+      required: [id, workflow_step_id, step_name, step_type]
+      description: The step execution a running run is at, its newest that still runs.
+      properties:
+        id:
+          type: integer
+          description: The step execution (`id` of `WorkflowJobStep`).
+        workflow_step_id:
+          type: integer
+          nullable: true
+          description: The step of the workflow; null once the step was removed from the workflow.
+        step_name:
+          type: string
+          description: The step's name when it started; `—` when unknown.
+        step_type:
+          type: string
+          nullable: true
+          description: The step's type when it started, as stored.
+      example: { id: 31, workflow_step_id: 42, step_name: Release approval, step_type: approval }
     WorkflowJobDetail:
       allOf:
         - $ref: '#/components/schemas/WorkflowJob'
@@ -5621,9 +7842,47 @@ components:
           nullable: true
           description: The step's type when it ran (`job`, `approval` or `pause`, or a type an older version stored), as stored.
         job_id: { type: integer, nullable: true, description: "The job of a job step, or the placeholder job of an approval step." }
-        status: { type: string, enum: [pending, running, succeeded, failed, skipped] }
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, skipped]
+          description: |
+            The stored status. A step that waits for an approval, a resume or
+            a runner is `running` (see `waiting_for`). A step that a cancel of
+            its run ended is `failed`, with `error` `Not finished: the run was
+            canceled.` or `Not finished: the run was canceled because its
+            workflow template was deleted.`
         started_at: { type: integer, nullable: true }
         finished_at: { type: integer, nullable: true }
+        waiting_for:
+          type: string
+          nullable: true
+          enum: [approval, resume, runner, null]
+          description: |
+            What the step waits for while it runs: `approval` (its job waits
+            for the approval request in `approval`), `resume` (a pause step)
+            or `runner` (its job is queued). null when it does not wait, and
+            once it has finished.
+        job_status:
+          type: string
+          nullable: true
+          enum: [pending, queued, running, succeeded, failed, canceled, timed_out, pending_approval, rejected, null]
+          description: |
+            The status of the step's job (`job_id`): for an approval step, of
+            the placeholder job that holds its approval request. null when
+            the step has no job, or its job no longer exists.
+        approval_request_id:
+          type: integer
+          nullable: true
+          description: |
+            The approval request the step's job waits or waited for: of an
+            approval step, or of a job step whose job template has an
+            approval rule. null without one, or when the caller may not see
+            it (`approval.view` and view access to the request).
+          example: 12
+        approval:
+          nullable: true
+          description: That approval request; null as `approval_request_id`.
+          allOf: [{ $ref: '#/components/schemas/WorkflowJobStepApproval' }]
         error:
           type: string
           nullable: true
@@ -5660,9 +7919,11 @@ components:
               approval without an approval request (2.9.0 and older deleted
               the requests of a deleted rule), and the maintenance run
               canceled it; the gate did not open;
-            - `The next step #7 of this workflow no longer exists.`: a branch
-              to a removed step, which fails the run; added to the step's own
-              message, also on a step that succeeded;
+            - `The step this branch leads to no longer exists (step ID 7).`:
+              a branch to a removed step, which fails the run; added to the
+              step's own message, also on a step that succeeded. Steps that
+              ran before 2.11.0 keep the text they stored then: `The next step
+              #7 of this workflow no longer exists.`;
             - `This step was removed from the workflow while it ran, so the
               run cannot go on.`;
             - `Not finished: the run was canceled.` and `Not finished: the run
@@ -5670,11 +7931,114 @@ components:
             - `Not finished: the run had ended.`: the step still ran in a run
               that had ended otherwise, and the maintenance run ended it.
           example: 'Not launched: user #7, whom this workflow runs as, may not launch job template "Deploy web" (#15).'
+    WorkflowJobStepApproval:
+      type: object
+      required: [id, status, approval_rule_id, approval_rule_name, approval_count, rejection_count, required_approvals, requested_at, expires_at, resolved_at, timeout_action, eligible_count, open_count, can_still_be_approved]
+      description: |
+        The approval request a step's job waits or waited for. The counts
+        leave out the votes of the user who launched the run, who never
+        decides. The approvers are counted, never named.
+      properties:
+        id:
+          type: integer
+          description: The approval request (see `GET /api/v1/approvals/{id}`).
+        status:
+          type: string
+          enum: [pending, approved, rejected, timed_out, canceled]
+        approval_rule_id:
+          type: integer
+          nullable: true
+          description: The rule the request waits for; null once that rule was deleted.
+        approval_rule_name:
+          type: string
+          nullable: true
+          description: The rule's name; null once the rule was deleted.
+        approval_count:
+          type: integer
+          description: The approvals that count.
+        rejection_count:
+          type: integer
+          description: The rejections that count.
+        required_approvals:
+          type: integer
+          nullable: true
+          description: The approvals the rule requires; null once the rule was deleted.
+        requested_at: { type: integer }
+        expires_at:
+          type: integer
+          nullable: true
+          description: When the rule's timeout runs out; null without a timeout (see `expires_at` of `ApprovalRequest`).
+        resolved_at: { type: integer, nullable: true }
+        timeout_action:
+          type: string
+          nullable: true
+          enum: [approve, reject, null]
+          description: |
+            What the timeout does when it runs out: `approve` or `reject`
+            (see `expires_at` of `ApprovalRequest`); null without a timeout,
+            or once the rule was deleted.
+        eligible_count:
+          type: integer
+          nullable: true
+          description: |
+            How many approvers may decide on the request (see Approvals).
+            Only for the pending request of the step the run is at, in
+            `GET /api/v1/workflow-jobs/{id}`; null otherwise.
+        open_count:
+          type: integer
+          nullable: true
+          description: How many of them have not voted yet; null as `eligible_count`.
+        can_still_be_approved:
+          type: boolean
+          nullable: true
+          description: |
+            Whether the approvals that count and the votes still open can
+            reach `required_approvals`. false: too few approvers can still
+            decide, so the request can no longer be approved; an admin can
+            add approvers to the rule, or cancel the run. null as
+            `eligible_count`.
+      example:
+        id: 12
+        status: pending
+        approval_rule_id: 3
+        approval_rule_name: deploy-prod
+        approval_count: 0
+        rejection_count: 0
+        required_approvals: 1
+        requested_at: 1792396800
+        expires_at: 1792400400
+        resolved_at: null
+        timeout_action: reject
+        eligible_count: 2
+        open_count: 2
+        can_still_be_approved: true
     WorkflowJobList:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/WorkflowJob' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+    WorkflowLaunchResult:
+      type: object
+      required: [workflow_job_id, waiting_for, approval_request_id]
+      properties:
+        workflow_job_id:
+          type: integer
+          description: The new run (see `GET /api/v1/workflow-jobs/{id}`).
+        waiting_for:
+          type: string
+          nullable: true
+          enum: [approval, resume, runner, null]
+          description: |
+            What the run waits for right after the launch, as `waiting_for`
+            of `WorkflowJob`; null when its first step runs, or the run has
+            already ended.
+        approval_request_id:
+          type: integer
+          nullable: true
+          description: |
+            The approval request the run's first step waits for; null when
+            it waits for none, or the caller may not see it. The caller
+            launched the run, so another approver decides.
     WorkflowLaunchInput:
       type: object
       description: Optional launch options of a workflow run.

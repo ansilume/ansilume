@@ -19,6 +19,13 @@ class RoleForm extends Model
 {
     public const RESERVED_NAMES = ['superadmin'];
 
+    /**
+     * The hint over the Permissions of the role form when the signed-in user
+     * may not grant some of them, which the form disables
+     * (app\services\RoleChangePolicy).
+     */
+    public const NOT_HELD_HINT = 'Permissions you do not hold are disabled: you can grant only what you hold.';
+
     public string $name = '';
     public string $description = '';
     /** @var string[] */

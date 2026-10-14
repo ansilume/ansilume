@@ -130,6 +130,1389 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.10.1 or older: workflow steps and waiting runs
+
+Workflow steps are placed by position instead of a Step Order, can be
+edited where they are, and every branch on a workflow's page names where it
+leads; the API adds, edits, moves and removes single steps as well. A run
+that waits says what it waits for: an approval, a resume or a runner, and
+approval requests name the workflow run they belong to. Visitors who are
+not signed in no longer see what a viewer sees (see **Security: signed-out
+visitors**), pages and the API no longer show the secrets of notification
+channels and the credentials of repository URLs (see **Security: secrets
+on pages and in the API**), nor do syncs write those credentials into
+their output, errors and logs, and a sync uses the project's current
+repository URL (see **Security: repository URLs in syncs and logs**). Git
+no longer reads a project's branch as one of its options, and for git
+projects the project form and the API refuse a branch that starts with `-`
+or contains whitespace (see **Security: a project's branch read as an
+option of git**). Only a superadmin gives the superadmin flag, and only
+superadmins and admins give the admin role (see **Security: who may give
+roles and the superadmin flag**). A user who is no superadmin no longer
+changes the account of a superadmin, nor that of a user whose roles or
+teams give that user more than they have themselves (see **Security: who
+may change other users' accounts**), nor gives a role a permission they do
+not hold, nor changes or deletes a role that grants more than they hold
+(see **Security: who may change roles**). `php yii setup/admin` creates a
+superadmin whenever no active superadmin exists, so that one can sign in
+again (see **Security: who may change other users' accounts**). Saving a
+user's account no longer makes an operator or an admin a viewer, nor drops
+the other roles of a user who has several (see **Roles of edited users**).
+`php yii ldap/sync` no longer deactivates an LDAP account whose lookup
+fails, only one that the directory no longer has, and ends with a non-zero
+exit code when a lookup fails (see **ldap/sync and a directory that cannot
+be read**). An LDAP account deactivated in Ansilume stays inactive: the
+user's LDAP sign-in and `php yii ldap/sync` activate again only an account
+that `ldap/sync` deactivated because the directory no longer had the user
+(see **Security: LDAP accounts deactivated in Ansilume**). LDAP works with
+the prebuilt images for the first time: their app image has PHP's `ldap`
+extension now (see **Fixes that change behaviour**). The update has one
+migration, which adds `user.ldap_sync_disabled` and fills it from the
+audit log (see **Security: LDAP accounts deactivated in Ansilume**); runs
+of workflows whose steps share a step order now take those steps in the
+order of their IDs, and runners need the update too (see **Database and
+deployment**). What to do:
+
+1. Run the read-only query under **Steps that share a step order**, before
+   or after the update, and check the order of the workflows it lists.
+2. Tell the users who build workflows that steps have positions and can be
+   edited, and that a job step added on a workflow's page now ends the run
+   when it fails unless they choose otherwise (see **Steps have
+   positions**, **Steps can be edited** and **New job steps end the run
+   when they fail**).
+3. Give `workflow-template.update` to the custom roles that should still add
+   or remove workflow steps (see **Changing steps needs
+   workflow-template.update**).
+4. Tell the systems that use the API about the step endpoints and the new
+   fields, that `?status=` now filters runs and approval requests, that the
+   `role` of a user names the role assigned to them, where a role the
+   instance does not have answers `422`, that every user carries
+   `ldap_sync_disabled`, and that the users and roles endpoints answer
+   `403` for a change the caller may not make (see **API contract
+   change**).
+5. Tell approvers about the banner of a waiting run and its **Review &
+   decide** button (see **Runs say what they wait for**).
+6. Check the Role column of the Users page after the update, and assign the
+   right role again to everyone who became a viewer because their account
+   was saved with 2.10.1 or older (see **Roles of edited users**). Saves
+   made with 2.10.1 or older are recorded as `user.updated` without the
+   role, so the log cannot tell which of them changed one; from 2.11.0 on,
+   `user.created` and `user.updated` record `roles` and `is_superadmin` as
+   `{from, to}` when they change.
+7. Rotate the secrets of your notification channels, and the credentials in
+   repository URLs, if the instance was reachable from untrusted networks
+   before the update, or if users who should not hold these secrets had
+   accounts on it: a new bot token, new incoming-webhook URLs, a new routing
+   key, new tokens in webhook headers and new repository credentials, then
+   enter them in the notification templates and projects (see **Security:
+   signed-out visitors** and **Security: secrets on pages and in the
+   API**). The credentials in repository URLs also reached the log of the
+   queue-worker, and could reach the error of a failed sync and its
+   `project.sync_failed` notifications: rotate them where these should not
+   hold them, and keep the new ones in an SCM credential of the project;
+   saving the project syncs it, and each checkout takes the new URL at its
+   next sync, except on runners older than 2.11.0 (see **Security:
+   repository URLs in syncs and logs**).
+8. Check who is a superadmin or an admin with the read-only query under
+   **Security: who may give roles and the superadmin flag**, and take the
+   flag or the role from whoever should not hold it. If no superadmin it
+   lists is active (`status` 10), create one with `php yii setup/admin`
+   (see **Security: who may change other users' accounts**): from 2.11.0
+   on, only superadmins change superadmins, so an admin can no longer
+   activate one.
+9. Check the changes that users who are no superadmin made to the accounts
+   of superadmins and admins, and those that users who are neither a
+   superadmin nor an admin made to the accounts of team members with more
+   access to a project than they had (the `user.updated` and
+   `user.status_changed` entries of the audit log), with the two read-only
+   queries under **Security: who may change other users' accounts**. For
+   each change you did not expect, set a new password for that account,
+   check its API tokens and its TOTP, and check in the audit log what the
+   account did after the change.
+10. Check the roles that users who are no superadmin created, changed or
+    deleted (the `role.created`, `role.updated` and `role.deleted` entries
+    of the audit log) with the read-only query under **Security: who may
+    change roles**, and on the Roles page the permissions of your custom
+    roles and of viewer, which every signed-in user holds. Take from a role
+    what its holders should not hold, and `role.create`, `role.update` and
+    `role.delete` from whoever should not change roles.
+11. Run the read-only query under **Security: a project's branch read as an
+    option of git**, and give each project it lists the branch it should
+    check out: from 2.11.0 on, every save of such a project as a git
+    project that keeps that branch is refused, and every sync of one whose
+    branch starts with `-` fails.
+12. Update every runner, also those that run apart from the server (see
+    **Database and deployment**): a runner older than 2.11.0 still fetches
+    from the URL its checkout was cloned with, and still hands a project's
+    branch to git where git reads it as an option.
+13. If LDAP is enabled, check which accounts `ldap/sync` deactivated with
+    the read-only query under **ldap/sync and a directory that cannot be
+    read**, and make a non-zero exit of `ldap/sync` alert someone. An entry
+    whose `reason` is not `User not found in directory.` was written while
+    the lookup failed; up to 2.10.1 a failed user search recorded that
+    reason too, so check with `php yii ldap/test-user <username>` whether
+    the directory still has such a user. The next `ldap/sync` that can read
+    the directory activates again every account that `ldap/sync`
+    deactivated and that it finds there (`ldap.user.reenabled`), and so
+    does each such user's next sign-in for their own account, with exactly
+    the roles their groups map to (`LDAP_ROLE_MAPPING`, else
+    `LDAP_DEFAULT_ROLE`, else no assigned role: every signed-in user still
+    holds viewer); an account that was changed in Ansilume after `ldap/sync`
+    had deactivated it stays inactive until an admin activates it (see
+    **Security: LDAP accounts deactivated in Ansilume**). Their sessions
+    ended, and the API tokens deleted then are gone: create new ones and
+    hand them to the systems that used them.
+14. If LDAP is enabled, run the read-only query under **Security: LDAP
+    accounts deactivated in Ansilume**, and deactivate again every account
+    it lists that should stay inactive. Then open the page of each inactive
+    LDAP account from the Users page: an account whose page says
+    `Deactivated in Ansilume: the directory does not activate the account again, neither an LDAP sign-in nor ldap/sync.`
+    stays inactive whatever the directory says, so activate it where the
+    user should sign in again.
+
+**Steps that share a step order.** Runs take a workflow's steps by their
+step order, and steps that share one by their IDs, which is how the
+workflow's page lists them. Before the update, an empty branch skipped a
+step that shared its step order with the step it left, and which of such
+steps a run started with was up to the database. Steps share a step order
+when an older version or a database edit stored them so: every step added,
+moved or removed on a workflow's page, or through the step endpoints of the
+API, renumbers its steps. This read-only query lists them, with the steps of
+each group in the order runs now take them. The update changes no steps, so
+it lists the same before and after it:
+
+```sql
+-- Steps that share a step order, in the order runs now take them
+SELECT w.id AS workflow_id, w.name AS workflow, s.step_order, COUNT(*) AS steps,
+  GROUP_CONCAT(CONCAT('ID ', s.id, ' ', s.name) ORDER BY s.id SEPARATOR ', ') AS steps_in_run_order
+FROM workflow_step s JOIN workflow_template w ON w.id = s.workflow_template_id
+WHERE w.deleted_at IS NULL GROUP BY w.id, w.name, s.step_order HAVING COUNT(*) > 1 ORDER BY w.id, s.step_order;
+```
+
+Open each listed workflow and read its steps table: the list is the run
+order now, and the success path above it shows the steps a run passes when
+every step succeeds. Where that is not the order the steps should run in,
+move them (see **Steps have positions**). A step added, moved or removed
+renumbers the workflow's steps 10, 20, 30… in their run order, and the
+query no longer lists the workflow.
+
+**Steps have positions.** The Step Order field of the Add Step form, and its
+hint, are gone. The `#` column of the steps table shows each step's
+position, 1 to the number of steps, in the order runs take them, and
+`Start` marks step 1. The Add Step form has a **Position** field:
+`At the end (after 3. Deploy)`, the default, `At the start (runs will start with this step)`
+or `After 2. Test`. A line below it says where the step will run, and it
+follows the branches: where a success of the step above leads elsewhere,
+it says so, such as
+`Listed after "Build", but a successful "Build" goes on with "Deploy", skipping this step.`
+A warning shows when the choice changes the start step, when runs would
+reach a job step, the new one included, without passing the approval step,
+or, for an approval step, when no success would lead to the place:
+`This approval step will not be on the success path: runs whose steps all succeed will not wait for it.`
+**+ Insert below** in a row adds a step right after that row. ▲ / ▼ move a
+step one place, and **Move to…** to the start, the end or after another
+step in one click, each choice with the same warnings first, and with
+`The approval step "Release approval" will not be on the success path: runs whose steps all succeed will not wait for it.`
+for a move that takes an approval step off the success path. On a workflow
+of more than 20 steps, **Move to…** opens the page of the step at its
+Position field instead. After a change the page shows the step's row,
+highlighted, and the flash says where the step went and how the empty
+branches of the other steps now lead, for example
+`Step "Deploy" moved to position 1 of 3, at the start. "Deploy" now continues with "Build" (was the end of the run). "Release approval" now ends the run (was "Deploy").`,
+followed by one warning flash per effect, such as
+`Runs now start with "Deploy" (was "Build").` and
+`Job step "Deploy" now runs before the approval step "Release approval": runs start it without waiting for that approval.`
+An approval step that is off the success path after a change that added,
+moved or edited it, or that a change takes off the success path, adds
+`The approval step "Release approval" is not on the success path: runs whose steps all succeed do not wait for it.`
+Labels, flashes and refusals name steps by position, `3. Deploy` or
+`step 3 "Deploy"`, and a step's ID as `step ID 43`. See
+[workflows.md](workflows.md#positions-and-the-run-order).
+
+**Steps can be edited.** **Edit** in a step's row opens its own page, titled
+like `Edit step 2 "Test"`, where the step's name, its job template or
+approval rule, its branches and its position change; **Save Step** saves
+them. Branches can lead to any step, also one added later. The step keeps
+its ID, so the branches that lead to it and the history of its runs stay.
+Its type cannot change:
+`A step's type cannot change: add a new step and remove this one.`
+The page lists, under `Steps that route here`, exactly the steps whose
+branches keep it from being removed, with a note under one whose branch no
+run takes, such as `Not used: its Always branch is taken instead.`, and
+shows its variable mapping, if it has one, read-only (a mapping that an
+earlier version stored as `[]` or `{}` is none). A refused save keeps what
+was typed and says why, after `Step not saved: `;
+a save that changes nothing reads `Step "Test" is unchanged.` Each edit is
+audited as `workflow-template.step.updated`, with the fields that changed;
+a variable mapping is recorded as changed, never with its values. Where the
+notes of earlier releases advise removing a step and adding it again to
+change its target or its branches, edit it instead. See
+[workflows.md](workflows.md#editing-a-step).
+
+**Every branch names where it leads.** The steps table names the step each
+branch leads to, by position, also where the branch is empty:
+
+| Before 2.11.0 | Now |
+|---|---|
+| `#` showed the step order: 10, 20, 30… | `#` shows the position: 1, 2, 3…; `Start` marks step 1 |
+| `#20 Test` in the branch lists of the form | `2. Test` |
+| `→ next step` | `→ 3. Deploy (next)`; after the last step `end · run succeeds` or `end · run fails` |
+| `→ next step` as a job step's On Failure | `→ 3. Deploy (next), also after a failure` |
+| `end workflow` | `end · run succeeds` after a success, `end · run fails` after a failure, `end · run succeeds or fails with this step` as Always |
+| `end workflow (failed)` | `end · run fails` |
+| `→ next step; end workflow (failed) after a refused approval` | `→ 3. Deploy (next), also after a failed job; end · run fails after a refused approval` |
+| `#7`, a branch to a removed step | `missing step (ID 7) · run fails` |
+| a branch to the step itself or an earlier one | `↺ 1. Build` |
+| On Success and On Failure of a step with an Always branch | `—` |
+| On Failure of a pause step | `—` |
+
+New are the badges `needs approval` on a gated job step and `unreachable`
+on a step that no branch a run takes leads to
+(`No branch that a run takes leads to this step, so runs never start it.`),
+also one that only a step that cannot run leads to, as a run fails at
+that step; the success path above the table, such as
+`Success path: 1. Build → 2. Release approval (approval step) → 3. Deploy → end · run succeeds`,
+and the legend below it:
+`A run starts with step 1. An empty branch goes on with the next step in the list, marked (next), and changes when steps move. ↺ marks a branch back to the same or an earlier step.`
+The choices of the form changed alike: `— next step (default) —` reads
+`Next in the list: "Deploy"` (`Next in the list: none, the run succeeds`
+after the last step), `— end workflow —` reads
+`End the workflow: the run succeeds` or `End the workflow: the run fails`,
+`— end workflow as failed (default) —` reads
+`End the workflow: the run fails`, `— use success/failure above —` reads
+`Not set: On Success or On Failure decides`, and a pause step's
+`Next step →` reads `After Resume → go to`. See
+[workflows.md](workflows.md#branches-where-a-run-goes-next).
+
+**New job steps end the run when they fail.** For a job step, the Add Step
+form preselects `End the workflow: the run fails` under On Failure and says
+`A new job step ends the workflow when it fails. Choose "Next in the list" to go on instead.`
+Before, a job step added with the form's defaults went on with the next
+step after a failure. Steps that exist keep their branches, and a step
+added through the API keeps an empty On Failure unless one is sent; the
+table now labels such a branch `→ 3. Deploy (next), also after a failure`.
+
+**Changing steps needs workflow-template.update.** Adding and removing a
+step on a workflow's page was allowed with `workflow-template.create`
+alone. Now every change of the steps, adding, editing, moving and removing
+one, needs `workflow-template.update`, in the web UI and in the API, and
+operator access to the project of every job step as before. The built-in
+operator and admin roles hold both permissions, so only custom roles that
+have `workflow-template.create` without `workflow-template.update` lose
+adding and removing steps. Rule 12 counts editing as a change of the
+steps: only admins (`approval-rule.update`) edit a step of a workflow with
+an approval step or a gated job step, and only they give a job step a job
+template with an approval rule, whether they add the step or edit it.
+
+**What the step forms no longer read.** These web changes show no message.
+A Step Order sent with the Add Step form is ignored: the step goes where
+its Position puts it. A variable mapping (`extra_vars_template`) sent with
+the form is ignored too, where 2.10.1 stored it; it changes only through the
+API now. A step type sent as JSON `true` answers
+`Step not added: Step Type is invalid.`, which read
+`Step not added: Step Type must be a string.` before.
+
+**Runs say what they wait for.** A run that waits, and its step, are stored
+as `running` as before; the pages show what it waits for instead:
+`Awaiting Approval`, `Paused` or `Queued` (see
+[workflows.md](workflows.md#what-a-run-waits-for)). The run's page has a
+banner with the approval request, its rule, the approvals so far, how many
+approvers can still decide, since when the run waits and when the request
+expires, never with the approvers' names; one line for the reader, such as
+`You launched this run, so another approver must decide.`; and the button
+`Review & decide` for those who may decide. When too few approvers can still
+decide, it warns
+`Too few of the rule's approvers can still decide, so this request can no longer be approved. An admin can add approvers to the rule, or cancel the run.`
+The page follows the run without a reload: **Resume** appears when the run
+pauses, and **Cancel** and **Resume** go away when it ends. A step that a
+cancel of its run, or the deletion of its workflow template, ended reads
+`Canceled` instead of `Failed`. Waiting runs show on the list of workflow
+jobs, with a Current Step column and the filter All, Awaiting Approval,
+Paused and Queued; on the workflow's page under `Active runs`, for everyone
+who may see runs; and on the dashboard, with **Review** for a run that
+waits for an approval. The launch flash names a start step that waits, such
+as
+`Workflow "Hotfix" launched. Step "Release approval" waits for approval (Approval Request #18).`
+The run page's status poll (`/workflow-job/status`) keeps `status`,
+`status_label` and `status_css` as stored, and adds `state`, `state_label`,
+`state_css`, `waiting_for`, `banner` and `actions`.
+
+**Approval requests name their workflow run.** The list of approval
+requests, a request's page and the dashboard's Pending Approvals have a For
+column, such as `Release web › Release approval (Workflow Job #12)`; a
+request outside a workflow, or of a workflow the reader may not view, names
+its job template, such as `Deploy web (job template)`. The list has an
+Expires column and a filter by status, and the dashboard's button
+`All pending` opens it filtered. The launcher of a workflow run reads
+`You launched this workflow run; another approver must decide.` on the
+request's page, and the API refuses their vote with it (`403`); both said
+`You launched this job; another approver must decide.` before. A job that
+waits for approval says `This job waits for Approval Request #18.` on its
+page, and the job of an approval step, which only holds its request, says
+so instead of showing an empty log.
+
+**Renamed labels.** The sidebar's **Executions** is **Workflow Jobs**, the
+list of approvals is titled `Approval Requests`, the run page's **Child
+Job** column is `Job / Request`, and the dashboard's **All Executions** and
+**All Approvals** buttons read `All Workflow Jobs` and `All pending`. An
+empty list of runs reads `No workflow jobs yet.` instead of
+`No workflow executions yet.` The step flashes say more than before:
+`Step "Deploy" added.` reads like
+`Step "Deploy" added at position 3 of 3, after "Release approval". "Release approval" now continues with "Deploy" (was the end of the run).`,
+`Step "Deploy" moved up.` like
+`Step "Deploy" moved to position 2 of 3, after "Build".` with the branches
+that now lead elsewhere, and `Step removed.` like
+`Step "Deploy" removed; it was at position 3 of 3. "Release approval" now ends the run (was "Deploy").`
+`Invalid move direction.` reads
+`Step not moved: direction must be "up" or "down".`, and the confirmation
+`Remove this step?` names the step: `Remove step 3 "Deploy"?`
+
+**Two messages read differently.** A branch to a removed step adds
+`The step this branch leads to no longer exists (step ID 7).` to the error
+of its step; steps that ran before 2.11.0 keep
+`The next step #7 of this workflow no longer exists.` A step that other
+steps route to is not removed:
+`Step "Build" was not removed: other steps route to it (step 3 "Retry"). Edit those steps to lead elsewhere first, then remove it.`
+Up to 2.10.1 it named the steps by their step order and advised to remove
+them: `Step "Build" was not removed: other steps route to it (#10 "Retry"). Remove those steps first, and add them again with other routes if you still need them.`
+
+**Security: signed-out visitors.** Up to 2.10.1, a visitor who was not
+signed in counted as holding the role `viewer`, the default role of every
+signed-in user, and could open the pages of that role that team scoping
+does not filter: the lists and the single pages of credentials, runner
+groups, approval rules and notification templates, and the analytics.
+They showed:
+
+- notification templates: the name, channel and events of each, and on a
+  template's page its channel configuration as stored, with its secrets:
+  the bot token of a Telegram channel, the incoming-webhook URL of a Slack
+  or Teams channel, the URL and the header values of a webhook channel and
+  the routing key of a PagerDuty channel, and the recipients of an email
+  channel;
+- credentials: the name, type, user name and creator of each, and on a
+  credential's page the SSH public key with its algorithm and size, the
+  environment variable of a token and whether a secret is stored, never
+  the secret itself;
+- runner groups: their names, and on a group's page its runners with their
+  status, version, transport, last contact and address;
+- approval rules: their names and settings, and on a rule's page its
+  approvers by role, team or user names, and who created it;
+- the analytics: the names of all users and runners, without counts.
+
+Lists that team scoping filters, such as those of projects, jobs and
+approval requests, stayed empty for such a visitor. The API was not
+affected: it answers `401` without a valid token. From 2.11.0 on, the
+default role applies to signed-in users only. Signed-out visitors reach
+only the login page with its two-factor step, the password-reset and error
+pages, the trigger endpoint, and the health and metrics endpoints for
+monitoring; every other page sends them to the login page. An instance that
+was reachable from untrusted networks rotates the secrets of its
+notification channels (step 7 above), as anyone could read them there, and
+should assume that the other names and settings were readable too.
+
+**Security: secrets on pages and in the API.** Up to 2.10.1, every
+signed-in user, a viewer of any team too, read the channel secrets of every
+notification template on its page and through
+`GET /api/v1/notification-templates` and
+`GET /api/v1/notification-templates/{id}`: the bot token of a Telegram
+channel, the incoming-webhook URL of a Slack or Teams channel, the URL and
+the header values of a webhook channel, and the routing key of a PagerDuty
+channel. Everyone who could see a project read the credentials in its
+repository URL (`https://user:token@host/...`) on its page, in its sync
+output and through the API, and the edit form of an outbound webhook
+carried its signing secret in the page source. From 2.11.0 on, the page of
+a notification template, its edit form and the API show every channel
+secret as `$encrypted$`, to admins too; the page of a template with a
+secret says `Channel secrets show as $encrypted$.`, and the edit form
+`Secrets show as $encrypted$: leave it to keep the stored value, or replace it to change it.`
+Saving the form, or a `PUT`, with `$encrypted$` keeps the stored value,
+except where nothing is stored, after a change of the channel, and for a
+header once the URL changed (see
+[troubleshooting.md](troubleshooting.md#saving-a-notification-template-or-a-webhook-a-secret-has-no-stored-value)).
+The page of a project shows its repository URL, and the sync output and
+error the page loads with, with `***@` in place of the credentials, such as
+`https://***@git.example.com/org/repo.git`, to everyone; the API does so for
+callers who may not update the project. So do the sync output that the page
+receives while a sync runs, the errors of a sync and the logs (see
+**Security: repository URLs in syncs and logs**). The
+edit form of an outbound webhook shows `$encrypted$` for a stored signing
+secret and says
+`A secret is stored: leave the field as it is to keep it, clear it to send deliveries unsigned, or enter a new one.`
+Where users who should not hold these secrets had accounts, rotate them
+(step 7 above). The channel secrets and the webhook signing secret are
+still stored as entered, without encryption: `$encrypted$` only stands in
+for them on the pages and in the API.
+
+**Security: repository URLs in syncs and logs.** A repository URL can carry
+credentials, as in `https://user:token@host/...`. Up to 2.10.1 they
+reached:
+
+- the sync output of the project, which everyone who could see the project
+  read on its page while a sync ran: the command that clones the
+  repository, with its URL;
+- the log of the queue-worker, which writes the level info: the same
+  command, as `ProjectService: git clone … https://user:token@host/…`;
+- the error of a clone that ran too long, which named that command: the
+  project's last sync error, which its page shows and `project.sync_failed`
+  sends, and which the queue-worker logs;
+- for a password with a raw `@`, the part after it: git's own messages name
+  it as the user, also in the job log of a runner's sync.
+
+From 2.11.0 on, all of these show the URL as
+`https://***@git.example.com/org/repo.git`, also the rows and errors stored
+before the update when the page shows them, and a password with a raw `@`
+is hidden whole. A clone that runs too long fails with, for example,
+`git command timed out after 300 seconds: git clone --progress --branch main --depth 1 -- https://***@git.example.com/org/repo.git /var/www/runtime/projects/5`.
+A webhook notification that its endpoint took was logged with the URL of
+the webhook, which can carry a token, as
+`WebhookChannel: sent to <url> — 204`; it is logged as
+`WebhookChannel: sent the notification of template #12 to its webhook — 204`
+now. The application log of the queue-worker and the schedule-runner
+(`runtime/logs/app.log`) keeps the lines it wrote before the update: a git
+checkout keeps the file in its install directory, so truncate it as
+**Purge old logs** in
+[the notes of 2.8.1](#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets)
+describes, and purge its copies in log shippers and backups; the prebuilt
+images start the new containers with new log files. Rotate the
+credentials in repository URLs where the readers of these pages, logs and
+notifications should not hold them (step 7 above), and keep the new ones
+in an SCM credential of the project rather than in its URL: git gets them
+at each sync, and no page, log or checkout holds them.
+A checkout keeps the URL it was cloned with, credentials included, in its
+`.git/config`. Up to 2.10.1 later syncs and jobs fetched from that URL even
+after the project's URL changed, so a rotated token or a moved repository
+was used only once the checkout was removed, and the old credentials
+stayed on the disk. From 2.11.0 on, the sync of an existing checkout first
+points its origin at the project's current URL: on the server at every
+sync (saving a git project queues one), shown in the sync output as
+`$ git -C /var/www/runtime/projects/5 remote set-url -- origin https://***@git.example.com/org/repo.git`,
+and on a runner before every job of the project. The old credentials leave
+a checkout at its next sync. Runners older than 2.11.0 keep fetching from
+the URL their checkout was cloned with until they are updated (see
+**Database and deployment**); until then, remove the project's checkout on
+such a runner (`/var/www/runtime/projects/<project ID>`, in its container
+if it runs in one) after a change of the URL or of the credentials in it.
+
+A runner only fast-forwards its checkout, so a URL that names a repository
+with another history fails the job, with git's
+`fatal: refusing to merge unrelated histories` or
+`fatal: Not possible to fast-forward, aborting.`, as a force push of the
+branch did before: remove the project's checkout on that runner, and its
+next job clones the repository again. Up to 2.10.1 such a runner kept
+running the repository its checkout was cloned from. The server resets its
+checkout to what it fetched and needs nothing.
+
+**Security: a project's branch read as an option of git.** Up to 2.10.1 the
+branch of a project went to git after `origin`, in
+`git fetch … origin <branch>` on the server and
+`git pull --ff-only origin <branch>` on runners, where git read a branch
+that starts with `-` as one of its options. Whoever could change a project,
+as operators can by default, could so make git run a command of their
+choice when it fetched: over ssh on the git server, as the account the sync
+signs in with, where that account may run commands; over https git does
+not run it. From 2.11.0 on,
+git gets the branch after `--`, which ends its options, and takes it for a
+branch name: a sync with a branch that starts with `-` fails, as git finds
+no such branch or refuses it, such as
+`git command failed (exit 128): fatal: couldn't find remote ref -x` on the
+server, and a runner fails the job with `Git sync failed (exit 128, …)` and
+the same message of git. Runners update a checkout with `git fetch` and
+`git merge --ff-only FETCH_HEAD`, because `git pull` hands the branch on to
+its fetch without `--`. Runners older than 2.11.0 still hand the branch to
+`git pull`: update them (see **Database and deployment**). From 2.11.0 on,
+for git projects, the project form and the API refuse such a branch, and
+any branch with whitespace: the form shows
+`The branch cannot start with "-" or contain whitespace.` under the Branch
+field, and `POST /api/v1/projects` and `PUT /api/v1/projects/{id}` answer
+`422` with it; nothing is saved and no sync is queued. The branch of a
+manual project is not checked: no sync reads it, and the form hides the
+Branch field while Manual (no SCM) is chosen; saving the project as a git
+project checks it. A git project saved with such a branch before keeps it
+until it is changed: saving it as a git project, in its Edit form or with
+a `PUT` that sends no other branch, is refused with the same text. This
+read-only query lists the git projects whose branch starts with `-` or
+contains whitespace:
+
+```sql
+-- Git projects whose branch starts with "-" (which git read as one of its options) or contains whitespace
+SELECT p.id, p.name, p.scm_branch, FROM_UNIXTIME(p.updated_at) AS updated_at
+FROM project p
+WHERE p.scm_type = 'git' AND (p.scm_branch LIKE '-%' OR p.scm_branch REGEXP '[[:space:]]')
+ORDER BY p.id;
+```
+
+Give each project it lists the branch it should check out. The
+`project.created` and `project.updated` entries of the audit log name who
+saved a project, not its branch.
+
+**Security: who may give roles and the superadmin flag.** Up to 2.10.1,
+whoever held `user.update` or `user.create` could make any user, themselves
+included, an admin or a superadmin. Of the built-in roles only admin holds
+these permissions, but a custom role, such as one for a help desk, could
+hold them too. The Edit User form hid the Superadmin field from users who
+are no superadmin but took it when it was sent, and `POST` and
+`PUT /api/v1/users` set both. The audit entries `user.created` and
+`user.updated` recorded neither. From 2.11.0 on, only a superadmin sets or
+clears the superadmin flag: the form ignores the field for anyone else, and
+the API answers `403`
+`Only a superadmin can set or clear is_superadmin.`; a body that repeats
+the current value is accepted. A role is assigned only by a superadmin, or
+by a user who holds every permission the role grants, through its child
+roles and the default role too. The `admin` role gives every
+team-restricted project on top of its permissions, so it, and a role that
+contains it, is assigned only by a superadmin or by a user who holds the
+`admin` role; a user who holds every permission of it through another role
+gets
+`You cannot assign the role "admin": it is or contains the admin role, which only superadmins and admins may assign.`,
+as an error of the field and as a `403` of the API, and nothing is written.
+The Role field offers only those roles and the user's current role;
+another role is refused with
+`You cannot assign the role "admin": it grants permissions you do not hold.`,
+as an error of the field and as a `403` of the API, and nothing is written.
+Admins hold every permission, so for them only the superadmin flag
+changes here, besides that they no longer change the accounts of
+superadmins (see **Security: who may change other users' accounts**).
+`user.created` and `user.updated` record `roles` and
+`is_superadmin` as `{from, to}` when they change. This read-only query lists
+the users who hold the superadmin flag or the role admin assigned to them;
+a custom role can grant the same permissions, so check the roles on the
+Roles page as well:
+
+```sql
+-- Superadmins and admins, to check after the update
+SELECT u.id, u.username, u.is_superadmin, u.status
+FROM user u
+WHERE u.is_superadmin = 1
+   OR EXISTS (SELECT 1 FROM auth_assignment a WHERE a.user_id = u.id AND a.item_name = 'admin')
+ORDER BY u.id;
+```
+
+**Security: who may change other users' accounts.** Up to 2.10.1, whoever
+held `user.update` could set the password and the email of any user, a
+superadmin included, through the Edit User form and
+`PUT /api/v1/users/{id}`, and so sign in as them; whoever held
+`user.delete` could deactivate or delete any user. Of the built-in roles
+only admin holds these permissions, so this concerned custom roles, such as
+one for a help desk, and admins who are no superadmins, who could take over
+the account of a superadmin. From 2.11.0 on, a user who is no superadmin
+changes or deletes another user only when that user is no superadmin and
+every role assigned to them is one the first may assign, that is, one that
+grants no permission they do not hold, and, for the `admin` role or a role
+that contains it, only when they hold the `admin` role (see **Security: who
+may give roles and the superadmin flag**). A user without an assigned role
+who is no superadmin may be changed by everyone who holds `user.update`.
+Superadmins change everyone, and admins who are no superadmins everyone
+but superadmins. Anyone else gets `403`
+`You cannot change or delete this user: they are a superadmin, or a role assigned to them grants permissions you do not hold.`
+for the Edit User form, opened or saved, for **Deactivate**, **Activate**
+and **Delete**, and for `PUT` and `DELETE /api/v1/users/{id}`; nothing is
+written, and the users list and the user page no longer offer **Edit**,
+**Deactivate**, **Activate** and **Delete** for such a user. A user who
+holds every permission that the user's roles grant, but is neither a
+superadmin nor holds the `admin` role, gets `403`
+`You cannot change or delete this user: a role assigned to them is or contains the admin role, which only a superadmin or an admin may assign.`
+instead, in the same places, for a user who is no superadmin and holds the
+`admin` role or a role that contains it, whatever the user's teams, as the
+`admin` role also gives every team-restricted project.
+
+Teams give access to team-restricted projects beyond any role, so a user
+who is neither a superadmin nor holds the `admin` role changes a user only
+when, for every project the user's teams give the user, their own teams
+give them that project with at least the same role (operator over viewer;
+the highest role of their teams counts): otherwise a help desk in no team
+could set the password of a team member and sign in as them to read the
+team's projects. Such a change, where the roles allow it, answers `403`
+`You cannot change or delete this user: their teams give them more access to a project than you have.`
+in the same places, and the pages offer no **Edit**, **Deactivate**,
+**Activate** or **Delete** for that user.
+
+The only active superadmin now opens and saves their own Edit User form;
+up to 2.10.1 opening it answered `403`
+`Cannot remove or demote the only superadmin account.` A save that would
+clear their superadmin flag or deactivate them answers `403`
+`Cannot remove, demote or deactivate the only active superadmin account.`,
+and `PUT /api/v1/users/{id}` answers `422`
+`Cannot demote the only active superadmin.` or, new,
+`Cannot deactivate the only active superadmin.`: up to 2.10.1 the API let
+anyone who held `user.update` deactivate the only superadmin, that
+superadmin included. Only active superadmins count: up to 2.10.1 an
+inactive superadmin counted as another superadmin, so the last active
+superadmin could deactivate or demote themselves while the only other
+superadmin was inactive, and then nobody could sign in as a superadmin.
+**Delete** of the only active superadmin answers the same `403`, and
+`DELETE /api/v1/users/{id}` answers `422`
+`Cannot delete the only active superadmin.`; an inactive superadmin may be
+demoted, deactivated or deleted. `php yii setup/admin` creates a
+superadmin whenever no active superadmin exists, the way back in when no
+superadmin can sign in (see
+[troubleshooting.md](troubleshooting.md#no-superadmin-can-sign-in-any-more));
+while one exists it answers `An active superadmin already exists. Aborting.`
+(up to 2.10.1: `A superadmin already exists. Aborting.`, for an inactive
+superadmin too).
+
+This read-only query lists the changes that users who are no superadmin
+made to the accounts of superadmins, and those that users who are neither a
+superadmin nor assigned the role admin made to the accounts of admins, as
+the roles and flags stand now. A deleted account is not listed: check the
+`user.deleted` entries of the audit log as well.
+
+```sql
+-- Changes to the accounts of superadmins and admins by users who may no longer make them
+SELECT l.id, FROM_UNIXTIME(l.created_at) AS changed_at, l.action,
+       l.user_id AS changed_by, l.object_id AS changed_user
+FROM audit_log l
+JOIN user t ON t.id = l.object_id
+WHERE l.object_type = 'user'
+  AND l.action IN ('user.updated', 'user.status_changed')
+  AND l.user_id <> l.object_id
+  AND NOT EXISTS (SELECT 1 FROM user c WHERE c.id = l.user_id AND c.is_superadmin = 1)
+  AND (t.is_superadmin = 1
+       OR (EXISTS (SELECT 1 FROM auth_assignment a WHERE a.user_id = t.id AND a.item_name = 'admin')
+           AND NOT EXISTS (SELECT 1 FROM auth_assignment b WHERE b.user_id = l.user_id AND b.item_name = 'admin')))
+ORDER BY l.id;
+```
+
+This read-only query lists the changes that users who are neither a
+superadmin nor assigned the role admin made to the accounts of team members
+whose teams give them a project that the changer's teams do not give them,
+or only with a lower role, as teams and roles stand now:
+
+```sql
+-- Changes to the accounts of team members by users without the same access to the team's projects
+SELECT l.id, FROM_UNIXTIME(l.created_at) AS changed_at, l.action,
+       l.user_id AS changed_by, l.object_id AS changed_user
+FROM audit_log l
+WHERE l.object_type = 'user'
+  AND l.action IN ('user.updated', 'user.status_changed')
+  AND l.user_id <> l.object_id
+  AND NOT EXISTS (SELECT 1 FROM user c WHERE c.id = l.user_id AND c.is_superadmin = 1)
+  AND NOT EXISTS (SELECT 1 FROM auth_assignment b WHERE b.user_id = l.user_id AND b.item_name = 'admin')
+  AND EXISTS (
+      SELECT 1 FROM team_member tm JOIN team_project tp ON tp.team_id = tm.team_id
+      WHERE tm.user_id = l.object_id
+        AND NOT EXISTS (
+            SELECT 1 FROM team_member cm JOIN team_project cp ON cp.team_id = cm.team_id
+            WHERE cm.user_id = l.user_id AND cp.project_id = tp.project_id
+              AND (cp.role = 'operator' OR tp.role <> 'operator')))
+ORDER BY l.id;
+```
+
+**Security: who may change roles.** Up to 2.10.1, whoever held
+`role.update` could give any role, their own and the default role viewer
+included, any permission, and so take `user.update` or
+`approval-rule.update`; whoever held `role.create` could create a role with
+any permission, and whoever held `role.delete` could delete any custom
+role. Of the built-in roles only admin holds these permissions, so this
+concerned custom roles. From 2.11.0 on, a user who is no superadmin creates
+a role only with permissions they hold, through their roles or the default
+role, and changes or deletes a role only when they may assign it (see
+**Security: who may give roles and the superadmin flag**), adding to it
+only permissions they hold; removing permissions needs no more. The New
+Role and Edit Role forms disable the permissions they do not hold and say
+`Permissions you do not hold are disabled: you can grant only what you hold.`;
+one sent anyway is refused with
+`You cannot grant the permission "user.update": you do not hold it.`, as
+an error of the Permissions field and as a `403` of `POST /api/v1/roles`
+and `PUT /api/v1/roles/{name}`. The Edit Role form of a role they may not
+assign, opened or saved, **Delete**, and `PUT` and
+`DELETE /api/v1/roles/{name}` answer `403`
+`You cannot change or delete this role: you may not assign it, as it grants more than you hold.`,
+after the `404` of a role that does not exist; the role page no longer
+offers **Edit** and **Delete** for such a role. Nothing is written.
+Superadmins change every role, and so do admins, who hold every permission
+and the admin role. This read-only query lists the roles that users who are
+no superadmin created, changed or deleted:
+
+```sql
+-- Roles created, changed or deleted by users who are no superadmin
+SELECT l.id, FROM_UNIXTIME(l.created_at) AS changed_at, l.action,
+       l.user_id AS changed_by, JSON_UNQUOTE(JSON_EXTRACT(l.metadata, '$.name')) AS role_name,
+       l.metadata
+FROM audit_log l
+WHERE l.action IN ('role.created', 'role.updated', 'role.deleted')
+  AND NOT EXISTS (SELECT 1 FROM user c WHERE c.id = l.user_id AND c.is_superadmin = 1)
+ORDER BY l.id;
+```
+
+The `metadata` of `role.created` lists the permissions of the role, and
+that of `role.updated` the permissions it `added` and `removed`. Check each
+change you did not expect, and on the Roles page the permissions of your
+custom roles and of viewer, which every signed-in user holds; take from
+them what their holders should not hold (step 10 above).
+
+**Roles of edited users.** Every signed-in user holds the role `viewer` by
+default, and up to 2.10.1 the user pages and the API took that default role
+for the user's role. The Edit User form preselected Viewer for every user,
+so saving the account of an operator or an admin, even unchanged, for
+example to change their email, made them a viewer. The users list and the
+user page showed `viewer` beside every user's role, and the `role` the API
+answers for a user said `viewer` for every user, so a client that sent it
+back with `PUT /api/v1/users/{id}` made the user a viewer too. From 2.11.0
+on, the form, the users list, the user page and the API read the roles
+assigned to the user: the form preselects the assigned role, the pages show
+only the assigned roles, and the API answers the assigned role, the first
+by name when a user has several, and `null` when none is assigned. A user
+without an assigned role holds `viewer` as before, and the pages show no
+role for them. The update changes no role: whoever became a viewer that way
+stays one until an admin assigns their role again. A user with several
+assigned roles, as an LDAP group mapping gives them, keeps all of them when
+the Edit User form is saved with the role it shows, the first by name, and
+the Role field says so, such as
+`Assigned roles: approvers, operator. Saving with the role shown keeps all of them; another role replaces them all.`
+Through the API, a `role` the user already has keeps every role assigned to
+them, so a `role` read with `GET` and sent back keeps them all. Another role
+replaces them all, in the form and in the API. A user without an assigned
+role is shown Viewer, and saving that choice assigns viewer.
+
+**ldap/sync and a directory that cannot be read.** Up to 2.10.1,
+`php yii ldap/sync` deactivated every LDAP account whose lookup failed, as
+if the directory no longer had it: every one while the service bind failed
+or LDAP was enabled without a host or base DN, and each one whose user
+search failed, was answered with a referral or a size limit, or matched
+more than one entry. It signed them out, revoked their roles, deleted their
+API tokens, kept their superadmin flag, recorded `ldap.user.disabled` with
+a reason and counted no error, so a directory outage during a scheduled run
+deactivated every LDAP account, superadmins included. From 2.11.0 on, only
+a user search that runs and finds no entry deactivates an account (see
+**Fixes that change behaviour**). This read-only query lists the accounts
+that `ldap/sync` deactivated, with the reason it recorded:
+
+```sql
+-- Accounts that ldap/sync disabled, with the reason it recorded
+SELECT l.id, FROM_UNIXTIME(l.created_at) AS disabled_at, l.object_id AS user_id,
+       JSON_UNQUOTE(JSON_EXTRACT(l.metadata, '$.username')) AS username,
+       JSON_UNQUOTE(JSON_EXTRACT(l.metadata, '$.reason')) AS reason,
+       u.status, u.is_superadmin
+FROM audit_log l
+LEFT JOIN user u ON u.id = l.object_id
+WHERE l.action = 'ldap.user.disabled'
+ORDER BY l.id;
+```
+
+Up to 2.10.1 the reason was
+`LDAP is not enabled or not fully configured.` while LDAP was enabled
+without a host or base DN, the error of the service bind while that bind
+failed, such as
+`Service account bind failed: Can't contact LDAP server` or
+`Service account bind failed: Invalid credentials`, and
+`User not found in directory.` both for a user search that found no entry
+and for one that failed, was answered with a referral or matched more than
+one entry. From 2.11.0 on it is always `User not found in directory.` A
+`status` of 0 means that the account is still inactive, and a deleted
+account has no `status` (step 13 above).
+
+**Security: LDAP accounts deactivated in Ansilume.** Up to 2.10.1,
+`php yii ldap/sync` activated again every inactive LDAP account that it
+found in the directory (`ldap.user.reenabled`), and so did each user's
+LDAP sign-in for their own account, also an account that an admin had
+deactivated with **Deactivate**, the Edit User form or
+`PUT /api/v1/users/{id}`: an admin could not lock out an LDAP user who was
+still in the directory. From 2.11.0 on, a sign-in or `ldap/sync` activates
+again only an account that `ldap/sync` deactivated because the directory
+no longer had the user. The new column `user.ldap_sync_disabled` marks
+such an account, and every other change of an account's status clears the
+mark. The sign-in of an account deactivated in Ansilume is refused with
+`Incorrect username or password.`, as every refused sign-in is; once the
+directory accepts the password, it is recorded as `ldap.login.failed` with
+the reason `Account deactivated in Ansilume.`, and nothing of the account
+changes. `ldap/sync` takes the account's DN, email and roles from the
+directory, as for every user it finds, but leaves it inactive, prints
+`- <username>: deactivated in Ansilume, not by ldap/sync → left inactive`
+(also with `--dry-run`) and counts it under `updated`, not `re-enabled`.
+The page of an inactive LDAP account says under its status which of the
+two it is,
+`Deactivated by ldap/sync because the directory no longer had this user: an LDAP sign-in, or an ldap/sync that finds them in the directory, activates the account again.`
+or
+`Deactivated in Ansilume: the directory does not activate the account again, neither an LDAP sign-in nor ldap/sync.`,
+and the users API answers the mark as `ldap_sync_disabled` (see **API
+contract change**).
+
+The migration decides the mark of every account from the audit log, and
+leaves it unset wherever the log does not show that `ldap/sync`
+deactivated the account: it marks an inactive LDAP account whose latest
+entry, by ID, among `ldap.user.disabled`, `ldap.user.reenabled`,
+`ldap.user.provisioned`, `user.created`, `user.updated` and
+`user.status_changed` is `ldap.user.disabled`, and no other account. An
+inactive LDAP account that was changed in Ansilume after `ldap/sync`
+deactivated it, even without a change of its status, or that has none of
+these entries, stays inactive until an admin activates it. The migration
+prints what it decided to the output of the app container
+(`docker compose logs app`), for example:
+
+```
+    > Marked 2 inactive LDAP account(s) that ldap/sync deactivated: an LDAP sign-in or ldap/sync that finds the user activates them again.
+    > Left 1 other inactive LDAP account(s) unmarked: they stay inactive until an admin activates them.
+```
+
+This read-only query lists every time a sign-in or `ldap/sync` activated
+an account again whose status entry before was not `ldap/sync`
+deactivating it, such as an account that an admin had deactivated, with
+that entry (`NULL` when there is none) and the account as it is now; a
+deleted account has no `status`. Deactivate again each account it lists
+that should stay inactive (step 14 above):
+
+```sql
+-- LDAP accounts that a sign-in or ldap/sync activated again after something other than ldap/sync deactivated them
+SELECT r.id, FROM_UNIXTIME(r.created_at) AS reenabled_at, r.object_id AS user_id,
+       JSON_UNQUOTE(JSON_EXTRACT(r.metadata, '$.username')) AS username,
+       p.action AS status_entry_before, FROM_UNIXTIME(p.created_at) AS entry_at,
+       u.status, u.ldap_sync_disabled
+FROM audit_log r
+LEFT JOIN audit_log p ON p.id = (
+    SELECT MAX(x.id) FROM audit_log x
+    WHERE x.object_type = 'user' AND x.object_id = r.object_id AND x.id < r.id
+      AND x.action IN ('ldap.user.disabled', 'ldap.user.reenabled', 'ldap.user.provisioned',
+                       'user.created', 'user.updated', 'user.status_changed'))
+LEFT JOIN user u ON u.id = r.object_id
+WHERE r.action = 'ldap.user.reenabled' AND r.object_type = 'user'
+  AND (p.action IS NULL OR p.action <> 'ldap.user.disabled')
+ORDER BY r.id;
+```
+
+**Known limits.** These stay as they are in this release:
+
+- Loops are allowed and not capped: a branch back to the same or an earlier
+  step repeats steps until a branch leads elsewhere or the run is canceled.
+- Steps move with ▲ / ▼ and **Move to…**; there is no drag and drop.
+- The web forms change neither a step's type nor its variable mapping: add
+  a new step for another type, and change the mapping through the API.
+- `PUT /api/v1/workflow-templates/{id}` with a `steps` list still replaces
+  every step: the steps get new IDs and no branches. Use the step
+  endpoints to change single steps.
+- There is no `GET` of a single step: `GET /api/v1/workflow-templates/{id}`
+  lists the steps.
+- A request that too few approvers can still approve is flagged on the run
+  page, not ended: an admin adds approvers to the rule, or someone cancels
+  the run.
+- A run's page asks for every step the run executed at each poll. A loop
+  that runs thousands of times, such as a job step that retries itself
+  while its hosts are down, makes each poll send megabytes (about 1 MB for
+  2,000 executed steps), every 3 seconds while the run goes on, to each
+  open page of the run. Close such a page, or cancel the run.
+- The credentials of a repository URL are hidden up to the last `@` before
+  the URL's path or the next space. A password with a raw `/` or a space is
+  not recognised, so such a URL shows in full wherever the URL is shown; it
+  does not work either. Percent-encode such characters (`%2F`, `%20`, and
+  `%40` for `@`), or give the project an SCM credential. Sync output that
+  2.10.1 or older stored with a URL split across two of its rows shows as
+  stored until the next sync of the project replaces it.
+- Who may approve follows the users' roles, their team memberships and the
+  projects of their teams, which an approval rule does not lock: whoever
+  may assign roles, change what a role grants, or manage teams, their
+  members and their projects, by default only admins, changes who may
+  approve a request without `approval-rule.update`. With LDAP, the
+  directory groups of a user give their roles.
+- Whoever may change a role changes what every user who holds it may do.
+  Every signed-in user holds viewer, the default role, so whoever holds
+  `role.update` may change viewer and give every user the permissions they
+  hold themselves. Grant `role.update` only to users who may give their own
+  permissions to everyone.
+- Team management is administrative: whoever may change a team's members
+  or its projects, which takes the admin role or the superadmin flag,
+  decides who reaches which team-restricted project, and reaches every
+  project themselves. The rule of **Security: who may change other users'
+  accounts** takes team memberships as they stand. A project that no team
+  has is open: every signed-in user reaches it, as far as their roles
+  allow, so removing a project from its last team, or deleting that team,
+  opens the project to everyone.
+- With `YII_ENV=dev`, as `.env.example` sets it for a git checkout, the
+  debug toolbar and gii answer everyone who reaches the stack, signed in or
+  not; the rule for signed-out visitors above does not cover them. The
+  request panel of the debug module no longer keeps the passwords,
+  secrets, cookies and bodies of the requests it records, nor the values
+  of `.env`, but the module still shows every URL requested, with the
+  token of a trigger URL or a password-reset link in it, and its other
+  panels the configuration with every value of `.env`, the stored record
+  of the signed-in user, the mails sent and every SQL statement with its
+  values. A dev stack must never be reachable by others; production runs
+  with `YII_ENV=prod`.
+- An inactive LDAP account that `ldap/sync` deactivated keeps its mark when
+  it is saved without a change of its status (the Edit User form,
+  `PUT /api/v1/users/{id}`), so the directory still activates it again. To
+  keep such an account inactive whatever the directory says, **Activate**
+  it and **Deactivate** it again; it is active in between.
+- Only changes of an account's status made through Ansilume clear the
+  mark: a status changed directly in the database keeps it.
+
+**Fixes that change behaviour:**
+
+- An empty branch went past a step that shared its step order with the step
+  it left; it leads to that step now (see **Steps that share a step order**).
+- ▲ and ▼ on a step that shared its step order with its neighbour wrote the
+  same order back and flashed `Step "Deploy" moved up.` without moving the
+  step; they move it now. Every ▲ and ▼ was named `Move step up` or
+  `Move step down` for screen readers; each names its step now, such as
+  `Move step 3 "Deploy" up`.
+- The status in the details of a job's page follows the job: it kept
+  `Awaiting Approval` after an approval until the page was loaded again.
+- Durations read in their two largest units, `45s`, `1m 15s`, `2h 13m` or
+  `3d 4h`, on the run's page and the dashboard (Running for, Duration and
+  the Time Until of upcoming schedules); a step's duration was given in
+  minutes only, and the dashboard's Running for started over after 24
+  hours. Started on the dashboard and the times on the run's page add the
+  date for another day.
+- A superadmin without a role sees **Resume** and **Cancel** on a run's
+  page; both worked for them already.
+- The steps table, the lists of workflow jobs and approval requests and
+  the steps of a run's page no longer overflow the page at phone width:
+  each scrolls in its own box.
+- What the dark theme hid is readable: the badges of a canceled approval
+  request, of an unreachable task on a job's page, of unreachable hosts in
+  the job list and the `No` badge of the webhook list, and the bars of
+  unreachable hosts on the dashboard, used colours that the dark theme
+  draws like its background.
+- A deleted workflow is named `Release web (deleted)`, without a link,
+  where runs, approval requests and jobs name it; the link led to a page
+  that answers `404`.
+- The team scope of a workflow's job steps is checked again while its steps
+  are locked for a change, so a change no longer goes through when someone
+  else adds a step of a project the user may not operate at the same
+  moment. The API answers `403` `Forbidden.`, the template page
+  `You do not have permission to modify this resource.`, the answers of
+  their own checks before the change.
+- `GET /api/v1/jobs` counts the artifacts of its jobs without a query per
+  job, and `GET /api/v1/approvals` counts the votes with one query per
+  page.
+- The example of `PUT /api/v1/schedules/{id}` in the OpenAPI spec names the
+  required `name` and `job_template_id`.
+- The line below the Position field, its warnings, the warnings of
+  **Move to…** and the warning flashes of a change looked at the positions
+  only. They follow the branches now: a place after a step whose success
+  leads elsewhere reads, for example,
+  `Listed after "Build", but a successful "Build" goes on with "Deploy", skipping this step.`
+  instead of `Runs after "Build", before "Deploy".`; a job step that a
+  branch past the approval step lets runs reach without it is warned
+  about; and an approval step that is not on the success path is flagged,
+  on Add Step before the add too (see **Steps have positions**).
+- `Steps that route here` on the page of a step left out the steps whose
+  branch to it no run takes, such as an On Success that an Always branch
+  overrides, and said `No other step routes here.` while the removal of the
+  step was refused because of them. It lists exactly the steps that keep
+  the step from being removed now, with a note under such a branch.
+- A step that only a step that cannot run leads to, such as the step after
+  a job step whose job template was deleted, was not marked `unreachable`,
+  and the API answered `reachable: true` for it, though runs fail at the
+  step that cannot run and never get there. Both say so now.
+- The page of a workflow grew with the square of its steps, as each row
+  carried a **Move to…** menu with every place: 50 steps made a page of
+  1.25 MB, and 450 exhausted the memory of the request. Above 20 steps,
+  **Move to…** opens the page of the step, whose Position field offers
+  every place; 50 steps make a page of about 260 KB.
+- A step sent back to `PUT /api/v1/workflow-templates/{id}/steps/{stepId}`
+  as `GET` answers it, with `extra_vars_template: []` for no mapping or the
+  stored mapping without its spaces, answered
+  `Step "Build" saved: variable mapping changed.`, rewrote the mapping and
+  added a `workflow-template.step.updated` entry. The mapping is compared
+  by its JSON value now: spaces and the order of keys do not count, and
+  `null`, `{}` and `[]` all mean none, which is stored as no mapping. Such a
+  request answers `Step "Build" is unchanged.` and writes nothing.
+- A job step whose variable mapping was a list, such as
+  `["build_version"]`, gave its jobs the extra vars `["1.2.3"]`, a JSON list
+  instead of an object of variables. Runs ignore every entry of a mapping
+  that does not map an extra var name to the name of an output variable
+  now.
+- Giving a job step a job template with an approval rule, by Add Step, Edit
+  Step, the step endpoints or a `steps` list of `POST` and
+  `PUT /api/v1/workflow-templates`, is checked again in the transaction
+  that writes the change, with the steps of an existing workflow locked: an
+  approval rule that an admin assigns to that job template at the same
+  moment refuses the change (`403`
+  `Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.`,
+  the same text on the template page), and nothing is written.
+- On the Add Step form, an On Failure chosen while the type was Approval is
+  kept when the type goes back to Job, also through Pause; it became
+  `End the workflow: the run fails` again. The end chosen for an approval
+  step stays the end for a job step; it became the step chosen before.
+- A run's page asks for news 3 seconds after something changed, and up to
+  30 seconds apart while nothing does; it does not ask while its tab is
+  hidden, and asks at once when the tab is shown again. It asked every 3
+  seconds for as long as the run waited, also in hidden tabs.
+- A job's page asks for news 2.5 seconds after each answer while the job
+  runs, so its output keeps up. While the job waits for an approval, to be
+  queued or for a runner, it asks up to 30 seconds apart while nothing
+  changes (after 2.5, 5, 10 and 20 seconds, then every 30), and 2.5
+  seconds after something changed. It does not ask while its tab is
+  hidden, and asks at once when the tab is shown again. After a poll that
+  failed it asks twice as late each time, at most 30 seconds apart. It
+  asked every 2.5 seconds for as long as the job waited, also in hidden
+  tabs, and every 5 seconds while its polls failed.
+- A run's or a job's page whose poll is refused, because the user signed
+  out or lost access, or the run or job was deleted, stops asking: the Live
+  badge gives way to
+  `Live updates stopped. Reload the page to keep following the run.`
+  (`Live updates stopped. Reload the page to keep following the job.` on
+  the page of a job). They asked again every 3 or 5 seconds for as long as
+  the page stayed open, and each refused poll of a run's page wrote an
+  error with its stack trace to the application log. The sync output of a
+  project's page stops the same way and says below the output
+  `Live updates stopped. Reload the page to keep following the sync.`; it
+  asked again every 2 seconds for as long as the page stayed open.
+- Signed in again after a sign-out, a user whose job page had stayed open
+  landed on the job's poll (`/job/log-poll`, JSON) instead of the
+  dashboard, and so did a user whose project page asked for its sync output
+  (`/project/sync-status`), whose dashboard asked for its charts
+  (`/site/chart-data`), or who opened the preview of a text artifact on a
+  job's page (`/job/<id>/artifact/<artifact_id>/content`), while they were
+  signed out. These requests ask for JSON now, and are answered `403`
+  instead of being sent to the login page. So do the requests of two
+  buttons, which were answered with a redirect to the login page while
+  the user was signed out: **Generate Ed25519 Key Pair** on the credential
+  form said `Request failed: SyntaxError: …`, and **Parse Inventory** (or
+  **Refresh**) on an inventory's page said `Server response was not JSON`
+  with `HTTP 302`. Both now say
+  `The server refused the request (HTTP 403): your session may have ended, or you are not allowed to do this; reload the page and sign in.`
+  (`HTTP 401` for a `401`), and keep their messages for other failures.
+- A dashboard whose request for its charts is refused or fails keeps its
+  charts as they are; it read every answer as JSON, which ended in an
+  error that the page did not catch.
+- The preview of a text artifact on a job's page says
+  `Failed to load preview.` when the server refuses it (signed out, or no
+  access any more) or cannot find the artifact or its file; it showed an
+  empty preview for such an answer. Opened again, the preview is fetched
+  again.
+- The page of an approval request lists its votes in the order they were
+  cast, as `decisions` in the API does; it listed them in the order the
+  database returned them, which can be by user ID.
+- `POST /api/v1/roles`, and a New Role form sent by hand, with a permission
+  listed twice answered `500` and left the role half created, without an
+  audit entry; the permission is granted once now.
+- `php yii setup/admin` ran the seed migrations of the Selftest and Demo
+  content (m000020, m000035, m000036) again on every run that created a
+  superadmin; only the first setup, run while no user exists, runs them
+  now. A later run no longer recreates a removed Selftest template or Demo
+  project, queues no clone of the demo repository, and gives no seeded
+  template without a runner group the `default` group.
+- A runner updates an existing checkout with `git remote set-url`,
+  `git fetch` and `git merge --ff-only FETCH_HEAD` instead of
+  `git pull --ff-only`, and a failed sync names the command that failed in
+  the job log, such as
+  `command: git -C /var/www/runtime/projects/5 merge --ff-only FETCH_HEAD`.
+  Its clone passes the URL after `--`
+  (`git clone --depth 1 --branch main -- https://***@git.example.com/org/repo.git /var/www/runtime/projects/5`).
+  The server's sync output gains the row of `git remote set-url` and shows
+  the fetch as
+  `$ git -C /var/www/runtime/projects/5 fetch --progress --depth 1 -- origin main`.
+- `php yii ldap/sync` deactivated every LDAP account whose lookup failed,
+  not only those the directory no longer has (see **ldap/sync and a
+  directory that cannot be read**), and took a failed group search for no
+  group, so it took the roles a user's groups map to and left them only
+  `LDAP_DEFAULT_ROLE`, if one is set. Only a user search that runs and
+  finds no entry deactivates an account now. A lookup that fails leaves the
+  account, its roles and its API tokens as they are and counts as an error
+  (`- jdoe: lookup failed → left unchanged (User search failed: No such object)`),
+  a failed service bind stops the run
+  (`[ldap] Service bind failed (Service account bind failed: Can't contact LDAP server): sync stopped, 12 user(s) left unchanged.`),
+  and LDAP enabled without a host or base DN stops it before the first user
+  (`[ldap] LDAP is enabled but not fully configured (host or base DN missing): sync stopped, no user changed.`,
+  exit code 78). The command exits with 1 whenever it counted an error; it
+  exited with 0 and counted no error for all of these.
+  `php yii ldap/test-user` names the failure, such as
+  `[ldap] Lookup failed: User search failed: No such object`, instead of
+  `[ldap] Lookup failed: User not found in directory.`, and exits with 1
+  for a failed group search, where it showed the user without groups and
+  exited with 0.
+- An LDAP account deactivated in Ansilume was activated again by the
+  user's next LDAP sign-in or by the next `ldap/sync` that found them; only
+  an account that `ldap/sync` deactivated is activated again now (see
+  **Security: LDAP accounts deactivated in Ansilume**).
+- While LDAP was enabled, the sign-in form took the right password of an
+  inactive local user, though the session ended with the next request; it
+  answers `Incorrect username or password.` now, as without LDAP.
+- The prebuilt app image `ghcr.io/ansilume/ansilume` had no PHP `ldap`
+  extension in any release since LDAP came in 2.1.11. With
+  `LDAP_ENABLED=true` and a host and base DN set, the sign-in of an LDAP
+  user, or of a username that is no local account, showed the error page
+  (`500`), `php yii ldap/test-connection`, `ldap/test-user` and
+  `ldap/sync` stopped with `Error: PHP ldap extension is not loaded.`, and
+  `/api/v1/admin/ldap/test` answered `500`; local accounts signed in as
+  before. The image has the extension now
+  (`docker compose exec app php -m | grep -x ldap` prints `ldap`), so LDAP
+  works for the first time with `docker-compose.prebuilt.yml`, the
+  quickstart and the deploy role's prebuilt mode. A git checkout and the
+  deploy role's default build mode had it already (see
+  [ldap.md](ldap.md#container-images)).
+- `GET /health` counts under `checks.users.superadmins` only the
+  superadmins who can sign in, those with an active account; it counted
+  inactive superadmins too, so it could show superadmins while none could
+  sign in. `ok` and `total` are unchanged.
+- On the approval rule form, the count of a role rule's approvers, which
+  the warning `Warning: Required approvals (3) exceeds eligible approvers (2).`
+  and the note
+  `The user who launches a job never approves it: a launch is refused unless enough other approvers may decide.`
+  compare with the required approvals, takes only the active users assigned
+  the role directly; it took inactive users too, so a rule that needed more
+  approvals than the role has active users could get no warning.
+- A manual project is saved with the URL, branch and credential it was
+  given under Git: the type of its credential is checked against its URL
+  for git projects only, as its branch is. A New Project with an SSH URL
+  and a Token credential chosen under Git, then switched to Manual (no
+  SCM), was refused with `SSH URLs require an SSH Key credential.` under
+  the hidden Credential field (Scm Credential Id): the form showed no error
+  and saved nothing, and so did the Edit form of such a project
+  (`HTTPS URLs require a Token or Username/Password credential.` for an
+  HTTPS URL with an SSH Key credential). A git project is checked as
+  before, also when a save makes a manual project a git project. The
+  browser checks the URL, Branch and Credential fields only while Git is
+  chosen. An error that the server still finds in them while the form
+  hides them, such as a credential deleted while the form was open, is
+  shown above the form:
+  `Not saved: the hidden Git fields have errors. Choose Git under Scm Type to see and correct them, then switch back and save.`,
+  followed by the errors. The browser counts an emoji, and every other
+  character outside the Basic Multilingual Plane, as two against the
+  length of a field, so the Edit form of a manual project whose stored URL
+  or branch was within its length for the server but over it for the
+  browser was not sent, and showed no error.
+
+**API contract change:**
+
+- New: `POST /api/v1/workflow-templates/{id}/steps` (`201`),
+  `PUT /api/v1/workflow-templates/{id}/steps/{stepId}`,
+  `POST /api/v1/workflow-templates/{id}/steps/{stepId}/move` and
+  `DELETE /api/v1/workflow-templates/{id}/steps/{stepId}` (`200`) add,
+  edit, move and remove one step; each answers the step and the change
+  (`change.message`, `change.warnings`). See
+  [workflows.md](workflows.md#steps).
+- Every step in the answers of `/api/v1/workflow-templates` gains
+  `position`, `is_start`, `reachable`, `cannot_run` and `routes`; a
+  workflow's detail gains `start_step_id` and `success_path`, and lists the
+  steps by position. `step_order` is an internal sort key, which every add,
+  move and remove of a step renumbers. `reachable` is `false` for a step
+  that only a step that cannot run (`cannot_run`) leads to.
+- The `change.warnings` of the step endpoints follow the branches, as the
+  warning flashes do: a job step is named when runs now reach it without
+  passing the approval step they passed before, and so is an added job step
+  that runs reach without passing one; an approval step that is not on the
+  success path adds
+  `The approval step "Release approval" is not on the success path: runs whose steps all succeed do not wait for it.`
+- A step's `extra_vars_template` must be none (`null`, `{}` or `[]`, or the
+  same as JSON text) or a JSON object that maps extra var names (text that
+  is not empty) to the names of output variables (text). Any other JSON
+  answers `422`
+  `extra_vars_template must be null or a JSON object that maps extra var names to the names of output variables, such as {"app_version": "build_version"}.`
+  on `POST` and `PUT` of the step endpoints, and `steps[<n>]: ` with the
+  same text for the `steps` list of `POST` and `PUT /api/v1/workflow-templates`.
+  It was stored, and answered in a shape the schema does not have, such as
+  `[1,2]` or `{"a": 1}`, or as `[]` for `5`. None is stored as no mapping;
+  it was stored as the text `[]`. A mapping of another shape that an
+  earlier version stored stays until it is changed, and runs ignore its
+  entries that do not map a name to a name.
+- The launch of a workflow answers `workflow_job_id`, `waiting_for` and
+  `approval_request_id`.
+- Every run gains `waiting_for` and `current_step`, and every step of a
+  run's detail `waiting_for`, `job_status`, `approval_request_id` and
+  `approval`. `GET /api/v1/workflow-jobs` takes `?waiting_for=`,
+  `?workflow_template_id=` and `?status=`.
+- Every approval request gains `workflow_job_id`, `workflow_job_step_id`,
+  `workflow_template_id` and `workflow_step_name`, and a job's detail
+  `approval_request_id`, `workflow_job_id` and `workflow_job_step_id`.
+- Every approval request gains `decisions`: every vote on it, in the order
+  cast, with `user_id`, `username`, `decision`, `comment` (`null` without
+  one) and `created_at`, the launcher's earlier vote too, which counts for
+  nothing; `null` for a caller without `approval.view`, whom only the
+  answers of approve and reject reach. The votes were shown only on the
+  page of the request and, as a step's decision note, on the run's page.
+- `?status=` on `GET /api/v1/approvals` and `GET /api/v1/workflow-jobs` was
+  ignored and filters now. A value the list does not know, such as
+  `?status=PENDING` (the values are compared exactly, in lower case),
+  answers `422`, such as
+  `status must be one of: pending, approved, rejected, timed_out, canceled.`,
+  instead of listing everything.
+- `POST /api/v1/approvals/{id}/approve` and `/reject` answer `403`
+  `You launched this workflow run; another approver must decide.` for the
+  launcher of a workflow run.
+- The `role` of a user in the answers of `/api/v1/users` is the role
+  assigned to the user, the first by name when several are, and `null` when
+  none is; it was `viewer` for every user (see **Roles of edited users**).
+- Every user that `GET /api/v1/users`, `GET /api/v1/users/{id}`,
+  `POST /api/v1/users` and `PUT /api/v1/users/{id}` return has
+  `ldap_sync_disabled` (boolean, read-only): `true` for an inactive LDAP
+  account that `ldap/sync` deactivated because the directory no longer had
+  the user, which the user's LDAP sign-in or an `ldap/sync` that finds them
+  activates again; `false` for every other account. `POST` and `PUT` ignore
+  it in the body; a `PUT` that changes `status` clears it (see **Security:
+  LDAP accounts deactivated in Ansilume**).
+- `POST /api/v1/users` and `PUT /api/v1/users/{id}` answer `422` for a
+  `role` the instance does not have, with the roles it has, such as
+  `role must be one of: admin, operator, viewer.`, and write nothing. They
+  saved the user without any role: an update removed every role the user
+  had. A `role` that is not a string, such as `5` or `true`, answers the
+  same `422`; it was ignored. Role names are compared exactly, so `Admin`
+  answers `422` too, where it assigned `admin`. Without a `role`, or with
+  `null` or an empty one, the roles stay as they are.
+- `POST /api/v1/users` and `PUT /api/v1/users/{id}` answer `403`
+  `Only a superadmin can set or clear is_superadmin.` when the body would
+  change `is_superadmin` and the caller is no superadmin, and `403`
+  `You cannot assign the role "admin": it grants permissions you do not hold.`
+  for a role the caller may not assign; nothing is written. Both were taken
+  from anyone with `user.create` or `user.update` (see **Security: who may
+  give roles and the superadmin flag**).
+- `PUT` and `DELETE /api/v1/users/{id}` answer `403`
+  `You cannot change or delete this user: they are a superadmin, or a role assigned to them grants permissions you do not hold.`
+  when the caller is no superadmin and the user is a superadmin or holds a
+  role the caller may not assign. The answer comes after the `403` of a
+  missing permission and the `404` of an unknown user, and before every
+  other answer, and nothing is written. Up to 2.10.1, both changed any user
+  for anyone with `user.update` or `user.delete` (see **Security: who may
+  change other users' accounts**).
+- `PUT` and `DELETE /api/v1/users/{id}` answer `403`
+  `You cannot change or delete this user: a role assigned to them is or contains the admin role, which only a superadmin or an admin may assign.`
+  in place of that answer when the caller holds every permission of the
+  user's roles but neither is a superadmin nor holds the `admin` role, and
+  the user is no superadmin and holds the `admin` role or a role that
+  contains it, whatever the user's teams; nothing is written.
+- `PUT` and `DELETE /api/v1/users/{id}` answer `403`
+  `You cannot change or delete this user: their teams give them more access to a project than you have.`
+  where neither of those answers comes, when the caller is neither a
+  superadmin nor holds the `admin` role and the user's teams give the user
+  a project that the caller's teams do not give the caller, or only with a
+  lower role. The answer comes where the other refusal of a user comes,
+  after the `404` and before every other answer, and nothing is written.
+- `POST /api/v1/users` and `PUT /api/v1/users/{id}` answer `403`
+  `You cannot assign the role "admin": it is or contains the admin role, which only superadmins and admins may assign.`
+  for the `admin` role, or a role that contains it, from a caller who holds
+  every permission it grants but not the `admin` role; nothing is written.
+- `PUT /api/v1/users/{id}` answers `422`
+  `Cannot deactivate the only active superadmin.` when the only active
+  superadmin sends a `status` other than 10 for their own account, and
+  nothing is written; anyone else gets the `403` of a user they may not
+  change. Up to 2.10.1 anyone who held `user.update` could deactivate the
+  only superadmin.
+- The other two answers about the only superadmin name the only active
+  superadmin: `PUT /api/v1/users/{id}` with `is_superadmin: false` answers
+  `422` `Cannot demote the only active superadmin.` (was
+  `Cannot demote the only superadmin.`), and `DELETE /api/v1/users/{id}`
+  answers `422` `Cannot delete the only active superadmin.` (was
+  `Cannot delete the only superadmin.`). An inactive superadmin no longer
+  counts as another superadmin for these three answers, and may be
+  demoted, deactivated or deleted.
+- For git projects, `POST /api/v1/projects` and `PUT /api/v1/projects/{id}`
+  answer `422` `The branch cannot start with "-" or contain whitespace.`
+  for a `scm_branch` that starts with `-` or contains whitespace, also for a
+  `PUT` of a project whose stored branch is such a branch and that sends no
+  other branch, and for a `PUT` that makes a manual project with such a
+  branch a git project; nothing is written. They saved such a branch
+  before. The branch of a manual project is not checked.
+- `POST /api/v1/projects` and `PUT /api/v1/projects/{id}` check the type
+  of `scm_credential_id` against `scm_url` for git projects only
+  (`scm_type` `git` once the request is applied). A manual project with an
+  SSH URL and a credential that is no SSH Key credential, or with an HTTPS
+  URL and one that is neither a Token nor a Username/Password credential,
+  is saved (`201`, `200`) and queues no sync; it was refused with `422`
+  `SSH URLs require an SSH Key credential.` or
+  `HTTPS URLs require a Token or Username/Password credential.` A git
+  project, and a `PUT` that makes such a manual project a git project,
+  still get that `422`, and nothing is saved. A credential that does not
+  exist is refused for every project, as before.
+- `POST /api/v1/roles` and `PUT /api/v1/roles/{name}` answer `403`
+  `You cannot grant the permission "user.update": you do not hold it.` for
+  a permission the caller does not hold, which `PUT` checks for the
+  permissions it adds, after the `422` of a body that does not validate;
+  `PUT` and `DELETE /api/v1/roles/{name}` answer `403`
+  `You cannot change or delete this role: you may not assign it, as it grants more than you hold.`
+  for a role the caller may not assign, after the `404` of an unknown role
+  and before every other answer. Nothing is written. Both apply to callers
+  who are no superadmin; up to 2.10.1 the three accepted any permission and
+  any role from anyone with `role.create`, `role.update` or `role.delete`
+  (see **Security: who may change roles**).
+- A `role` the user already has keeps every role assigned to them; it
+  replaced them all, so a `PUT` with the `role` read from `GET` dropped
+  every role but the first by name.
+- The audit entries `user.created` and `user.updated` add `roles` and
+  `is_superadmin` as `{from, to}`: on create both, from `null`; on update
+  each when it changed.
+- `GET /api/v1/notification-templates` and
+  `GET /api/v1/notification-templates/{id}` answer every channel secret of
+  `config` as `$encrypted$`, to every caller: the `bot_token` of a Telegram
+  channel, the `webhook_url` of a Slack or Teams channel, the `url` and the
+  value of every header of a webhook channel, and the `routing_key` of a
+  PagerDuty channel. A `PUT` that sends `$encrypted$` back keeps the stored
+  value, so a `GET` and `PUT` round trip changes no secret; where nothing is
+  stored, after a change of the channel, and for a header once the `url`
+  changed, it answers `422`, such as
+  `bot_token has no stored value; enter the real value.`, and writes
+  nothing.
+- `GET /api/v1/projects` and `GET /api/v1/projects/{id}` answer the
+  `scm_url` of a project with `***@` in place of the credentials of the URL,
+  such as `https://***@git.example.com/org/repo.git`, to callers who may not
+  update the project (`project.update` and operator access to it).
+- `PUT /api/v1/webhooks/{id}` with `secret` `$encrypted$` keeps the stored
+  signing secret; `POST /api/v1/webhooks` with it answers `422`
+  `The secret has no stored value; enter the real value.`
+- `GET /api/v1/webhooks` and `GET /api/v1/webhooks/{id}`, and the answers of
+  `POST` and `PUT`, gain `has_secret`: whether the webhook has a signing
+  secret, so that its deliveries are signed, as the webhook pages say. The
+  secret itself is never answered.
+- `POST /api/v1/admin/ldap/test` with a `username` and no `password`
+  answers a failed group search as
+  `user: {found: false, error: "Group search failed: …"}`, where it
+  answered the user as found, with `groups: []` and, as `mapped_roles`,
+  only `LDAP_DEFAULT_ROLE`, if one is set, and its `ldap.test.performed`
+  entry records `user_found: false`. For a user search that failed, was
+  answered with a referral or a size limit, or matched more than one entry,
+  `user.error` names that failure, such as
+  `User search failed: No such object`, instead of
+  `User not found in directory.` A user the directory does not have still
+  answers `found: false` with `User not found in directory.`; the shape is
+  unchanged.
+- The statuses and their enums are unchanged: a waiting run is `running`.
+  Three things differ from the web UI on purpose. A step that a cancel of
+  its run, or the deletion of its workflow template, ended keeps the status
+  `failed`, with the `error`
+  `Not finished: the run was canceled.` or
+  `Not finished: the run was canceled because its workflow template was deleted.`
+  A run's detail says nothing about the caller's own relation to a
+  request, nor whether they may resume or cancel; the
+  `approval_request_id` and `approval` of a step are `null` where the
+  caller may not see the request. The items of `GET /api/v1/jobs` carry no
+  link fields: read them from `GET /api/v1/jobs/{id}`.
+
+**Database and deployment.** One migration runs,
+`m000086_000000_add_user_ldap_sync_disabled`: it adds
+`user.ldap_sync_disabled` (boolean, default 0) and fills it from the audit
+log (see **Security: LDAP accounts deactivated in Ansilume**); no setting
+is new. Both update paths recreate every container, so every process runs
+the new code, the bundled runners included: `docker compose pull && docker
+compose up -d`, or quickstart `--update`, for the prebuilt images, and
+`docker compose up -d --build --force-recreate` right after `git pull` for
+a git checkout. The pages load their new scripts and style sheet under
+URLs that change with their content, so no browser keeps an old copy.
+Runners older than 2.11.0 keep running jobs, but only runners of 2.11.0
+point a checkout at the project's current repository URL before they
+fetch, and give git the project's branch after `--` (see **Security:
+repository URLs in syncs and logs** and **Security: a project's branch
+read as an option of git**). Update the other runners too:
+
+- Ansible deploy role: running the role for the new version updates its
+  runners.
+- External runners: deploy the new `ghcr.io/ansilume/ansilume-runner`
+  image.
+- Runners installed without Docker: `git pull && composer install --no-dev
+  --optimize-autoloader`, then restart the process
+  (`sudo systemctl restart ansilume-runner`).
+
+To roll back to 2.10.1, first drop the new column with
+`docker compose exec app php yii migrate/down 1 --interactive=0`, which
+reverts `m000086_000000_add_user_ldap_sync_disabled`, so that the next
+update fills it from the audit log again (2.10.1 ignores the column but
+does not keep its mark up to date), then deploy 2.10.1:
+
+- Prebuilt images: set the images in `docker-compose.yml` to
+  `ghcr.io/ansilume/ansilume:2.10.1`, `ghcr.io/ansilume/ansilume-nginx:2.10.1`
+  and `ghcr.io/ansilume/ansilume-runner:2.10.1` (the image tags have no
+  leading `v`), then run `docker compose pull && docker compose up -d`.
+  This takes the `ldap` extension away again: the sign-in of LDAP users
+  shows the error page, and `php yii ldap/*` stops with
+  `Error: PHP ldap extension is not loaded.`
+- Git checkout: `git checkout v2.10.1 && docker compose up -d --build --force-recreate`.
+
+2.10.1 can neither edit branches nor remove steps whose branches lead to
+each other, such as a Deploy whose On Failure leads to Rollback and a
+Rollback whose On Success leads back to Deploy, which **Edit** can build in
+2.11.0: it refuses to remove a step that a branch of another step leads
+to. Clear such branches with **Edit** before rolling back, or replace the
+steps with `PUT /api/v1/workflow-templates/{id}` afterwards, which drops
+every branch.
+
 ## After updating from 2.10.0 or older: new workflow steps go to the end
 
 A step added on a workflow's page without a Step Order now goes to the end
@@ -419,7 +1802,8 @@ ORDER BY w.id, s.step_order, s.id;
 
 The sixth lists the branches to steps that no longer exist, which used to
 end a run as succeeded and fail it now (see **Branches to removed steps
-fail the run**). Remove such a step and add it again with its routes:
+fail the run**). Remove such a step and add it again with its routes, or,
+from 2.11.0 on, edit the step and choose another target for the branch:
 
 ```sql
 -- Branches to steps that no longer exist
@@ -3281,7 +4665,7 @@ redacts secrets before printing.
 If an update causes problems:
 
 1. **Restore your `.env` backup** if it was modified.
-2. **Pin a specific version** by editing the image tags in `docker-compose.yml` (e.g., change `:latest` to `:v2.1.0`).
+2. **Pin a specific version** by editing the image tags in `docker-compose.yml` (e.g., change `:latest` to `:2.10.1`; the image tags have no leading `v`, unlike the git tags such as `v2.10.1`). A git checkout runs `git checkout v2.10.1` instead.
 3. **Restart** with `docker compose up -d`.
 4. **Restore your database** if a migration caused issues:
 
@@ -3299,6 +4683,10 @@ To roll back from the update to approvals and workflows (migrations
 `m000082` to `m000085`), restore the backup taken before it, see
 **Database and deployment** under
 [After updating from 2.9.0 or older](#after-updating-from-290-or-older-approvals-and-workflows).
+
+To roll back from 2.11.0 (migration `m000086`), revert its migration
+before you deploy the older version, see **Database and deployment** under
+[After updating from 2.10.1 or older](#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs).
 
 ---
 

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\integration\models;
 
 use app\components\SurveySecrets;
+use app\components\WorkflowStepMapping;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\models\WorkflowStep;
@@ -104,6 +105,10 @@ class ExtraVarsTooLargeForJsonTest extends DbTestCase
     }
 
     /**
+     * The JSON rule of every model takes them. A step's variable mapping
+     * maps names to names, so its shape rule refuses a number there
+     * (WorkflowStepMapping::INVALID, not the message of a number too large).
+     *
      * @dataProvider storableProvider
      */
     public function testEveryModelStoresNumbersJsonCanHold(string $json): void
@@ -113,10 +118,16 @@ class ExtraVarsTooLargeForJsonTest extends DbTestCase
         $schedule = $this->schedule($json);
         $step = new WorkflowStep();
         $step->extra_vars_template = $json;
+        $step->validateJson('extra_vars_template');
 
         $this->assertTrue($template->validate(['extra_vars']), (string)json_encode($template->getErrors()));
         $this->assertTrue($schedule->validate(['extra_vars']), (string)json_encode($schedule->getErrors()));
-        $this->assertTrue($step->validate(['extra_vars_template']), (string)json_encode($step->getErrors()));
+        $this->assertSame([], $step->getErrors(), 'the JSON rule of a step takes them');
+        $this->assertSame(
+            WorkflowStepMapping::isValid($json) ? [] : [WorkflowStepMapping::INVALID],
+            $step->validate(['extra_vars_template']) ? [] : $step->getErrors('extra_vars_template'),
+            'the mapping\'s shape decides'
+        );
     }
 
     /**

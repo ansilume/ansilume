@@ -249,13 +249,18 @@ class HealthController extends Controller
     }
 
     /**
+     * 'total': every user. 'superadmins': the superadmins who can sign in,
+     * users with the superadmin flag and the status User::STATUS_ACTIVE, the
+     * condition of User::activeSuperadminExists(); an inactive superadmin is
+     * not counted. 'ok' is false only when no user exists.
+     *
      * @return array<string, mixed>
      */
     protected function checkUsers(): array
     {
         try {
             $total = (int)User::find()->count();
-            $admins = (int)User::find()->where(['is_superadmin' => true])->count();
+            $admins = (int)User::find()->where(['is_superadmin' => true, 'status' => User::STATUS_ACTIVE])->count();
             if ($total === 0) {
                 return ['ok' => false, 'error' => 'No users exist', 'total' => 0, 'superadmins' => 0];
             }

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { userId } from '../../lib/helpers';
 import { forgePost } from '../../lib/scoping';
 import { E2E_APPROVAL_LAUNCHER, asUser } from '../../lib/session';
 import {
@@ -77,6 +78,17 @@ test.describe('Approval Requests That Need Two Approvals', () => {
     await expect(flash(page, 'success')).toHaveText('Rejection recorded.');
     await expect(requestStatus(page)).toHaveText('Rejected');
     await expect(decisionRows(page)).toHaveCount(2);
+    // regression: the request page listed the votes by user ID, not in the
+    // order cast, as the API does (ApprovalRequest::getDecisions() had no
+    // order, and MariaDB read the votes through the unique index
+    // (approval_request_id, user_id)). e2e-operator voted first and has the
+    // higher user ID, so a page that lists the votes by user ID shows
+    // e2e-admin first.
+    await expect(decisionRows(page).locator('td:first-child'), 'the votes in the order cast').toHaveText(['e2e-operator', 'e2e-admin']);
+    // That tells the two orders apart only while the first voter has the
+    // higher user ID (commands/E2eController.php seeds e2e-admin first).
+    expect(Number(await userId(page, 'e2e-operator')), 'e2e-operator, who voted first, has the higher user ID')
+      .toBeGreaterThan(Number(await userId(page, 'e2e-admin')));
     await page.goto(`/job/view?id=${jobId}`);
     await expect(page.locator('#status-badge')).toHaveText('Rejected');
   });

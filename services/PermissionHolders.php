@@ -22,6 +22,10 @@ use yii\rbac\ManagerInterface;
  * DbManager, are left to checkAccess() user by user, so the answer never
  * differs from it.
  *
+ * A user ID below 1 names no user and holds nothing, default roles or not:
+ * app\components\AuthManager::checkAccess() answers false for it, so it is
+ * dropped before anything is read.
+ *
  * One instance reads the item hierarchy once: create one per decision, not
  * one per process, or role changes would go unnoticed.
  */
@@ -36,10 +40,11 @@ final class PermissionHolders
 
     /**
      * @param list<int> $userIds
-     * @return list<int> the users of $userIds who hold $itemName, in the order given
+     * @return list<int> the users of $userIds who hold $itemName, in the order given; never an ID below 1
      */
     public function among(string $itemName, array $userIds): array
     {
+        $userIds = array_values(array_filter($userIds, static fn (int $userId): bool => $userId >= 1));
         if ($userIds === []) {
             return [];
         }

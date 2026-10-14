@@ -6,21 +6,61 @@ namespace app\tests\integration\services;
 
 use app\models\AuditLog;
 use app\models\RoleForm;
+use app\services\RoleChangePolicy;
+use app\services\RoleChangeRefusedException;
 use app\services\RoleService;
 use app\tests\integration\DbTestCase;
 
 /**
  * Integration tests for RoleService, exercised against the real DbManager.
  * System-role protection, CRUD, cascade delete, and audit emission are all
- * verified end-to-end.
+ * verified end-to-end, as a superadmin unless a test says otherwise. Who
+ * else may change which role is RoleEditingRuleTest's.
  */
 class RoleServiceTest extends DbTestCase
 {
+    private ?RoleChangePolicy $superadminPolicy = null;
+
     private function service(): RoleService
     {
         /** @var RoleService $s */
         $s = \Yii::$app->get('roleService');
         return $s;
+    }
+
+    /**
+     * The policy of a superadmin, who may change every role and grant every
+     * permission; one per test.
+     */
+    private function superadmin(): RoleChangePolicy
+    {
+        if ($this->superadminPolicy === null) {
+            $user = $this->createUser('role-svc-superadmin');
+            $user->is_superadmin = true;
+            $user->save(false);
+            $this->superadminPolicy = RoleChangePolicy::forUser($user);
+        }
+
+        return $this->superadminPolicy;
+    }
+
+    private function auditCount(string $action): int
+    {
+        return (int)AuditLog::find()->where(['action' => $action])->count();
+    }
+
+    /**
+     * @param callable(): mixed $call
+     */
+    private function assertRefused(string $message, callable $call): void
+    {
+        try {
+            $call();
+        } catch (RoleChangeRefusedException $e) {
+            $this->assertSame($message, $e->getMessage());
+            return;
+        }
+        $this->fail('Expected a RoleChangeRefusedException: ' . $message);
     }
 
     private function uniqueName(string $prefix = 'custom'): string
@@ -55,7 +95,7 @@ class RoleServiceTest extends DbTestCase
         $name = $this->uniqueName();
         $form = $this->makeForm($name, ['project.view', 'job.view']);
 
-        $this->assertTrue($this->service()->createRole($form, 1));
+        $this->assertTrue($this->service()->createRole($form, $this->superadmin()));
 
         $direct = $this->service()->directPermissions($name);
         $this->assertSame(['job.view', 'project.view'], $direct);
@@ -64,14 +104,14 @@ class RoleServiceTest extends DbTestCase
     public function testCreateRoleRejectsSystemName(): void
     {
         $form = $this->makeForm('viewer', ['project.view']);
-        $this->assertFalse($this->service()->createRole($form, 1));
+        $this->assertFalse($this->service()->createRole($form, $this->superadmin()));
         $this->assertArrayHasKey('name', $form->errors);
     }
 
     public function testCreateRoleRejectsReservedName(): void
     {
         $form = $this->makeForm('superadmin', ['project.view']);
-        $this->assertFalse($this->service()->createRole($form, 1));
+        $this->assertFalse($this->service()->createRole($form, $this->superadmin()));
         $this->assertArrayHasKey('name', $form->errors);
     }
 
@@ -79,7 +119,7 @@ class RoleServiceTest extends DbTestCase
     {
         $name = $this->uniqueName();
         $form = $this->makeForm($name, ['project.view', 'nonexistent.permission']);
-        $this->assertFalse($this->service()->createRole($form, 1));
+        $this->assertFalse($this->service()->createRole($form, $this->superadmin()));
         $this->assertArrayHasKey('permissions', $form->errors);
     }
 
@@ -88,7 +128,7 @@ class RoleServiceTest extends DbTestCase
         $name = $this->uniqueName();
         $before = AuditLog::find()->where(['action' => AuditLog::ACTION_ROLE_CREATED])->count();
 
-        $this->service()->createRole($this->makeForm($name), 1);
+        $this->service()->createRole($this->makeForm($name), $this->superadmin());
 
         $after = AuditLog::find()->where(['action' => AuditLog::ACTION_ROLE_CREATED])->count();
         $this->assertSame((int)$before + 1, (int)$after);
@@ -108,10 +148,10 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleDiffsPermissions(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), $this->superadmin());
 
         $update = $this->makeForm($name, ['project.view', 'inventory.view']);
-        $this->assertTrue($this->service()->updateRole($name, $update, 1));
+        $this->assertTrue($this->service()->updateRole($name, $update, $this->superadmin()));
 
         $direct = $this->service()->directPermissions($name);
         $this->assertSame(['inventory.view', 'project.view'], $direct);
@@ -120,10 +160,10 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleUpdatesDescription(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view'], 'old desc'), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view'], 'old desc'), $this->superadmin());
 
         $update = $this->makeForm($name, ['project.view'], 'new desc');
-        $this->service()->updateRole($name, $update, 1);
+        $this->service()->updateRole($name, $update, $this->superadmin());
 
         $role = $this->service()->getRole($name);
         $this->assertNotNull($role);
@@ -141,22 +181,22 @@ class RoleServiceTest extends DbTestCase
         $update->permissions = array_merge($originalDirect, ['analytics.view']);
         $update->isSystemRole = true;
 
-        $this->assertTrue($svc->updateRole('viewer', $update, 1));
+        $this->assertTrue($svc->updateRole('viewer', $update, $this->superadmin()));
         $this->assertContains('analytics.view', $svc->directPermissions('viewer'));
     }
 
     public function testUpdateRoleReturnsFalseForUnknownRole(): void
     {
         $update = $this->makeForm('ghost-role', ['project.view']);
-        $this->assertFalse($this->service()->updateRole('ghost-role', $update, 1));
+        $this->assertFalse($this->service()->updateRole('ghost-role', $update, $this->superadmin()));
     }
 
     public function testUpdateRoleWritesAuditLog(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
-        $this->service()->updateRole($name, $this->makeForm($name, ['project.view', 'job.view']), 1);
+        $this->service()->updateRole($name, $this->makeForm($name, ['project.view', 'job.view']), $this->superadmin());
 
         $log = AuditLog::find()
             ->where(['action' => AuditLog::ACTION_ROLE_UPDATED])
@@ -172,9 +212,9 @@ class RoleServiceTest extends DbTestCase
     public function testDeleteCustomRoleRemovesIt(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name), 1);
+        $this->service()->createRole($this->makeForm($name), $this->superadmin());
 
-        $this->assertTrue($this->service()->deleteRole($name, 1));
+        $this->assertTrue($this->service()->deleteRole($name, $this->superadmin()));
         $this->assertNull($this->service()->getRole($name));
     }
 
@@ -182,7 +222,7 @@ class RoleServiceTest extends DbTestCase
     {
         $auth = \Yii::$app->authManager;
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $user1 = $this->createUser('role-del-1');
         $user2 = $this->createUser('role-del-2');
@@ -190,7 +230,7 @@ class RoleServiceTest extends DbTestCase
         $auth->assign($auth->getRole($name), $user2->id);
 
         $this->assertCount(2, $this->service()->usersWithRole($name));
-        $this->assertTrue($this->service()->deleteRole($name, 1));
+        $this->assertTrue($this->service()->deleteRole($name, $this->superadmin()));
 
         $log = AuditLog::find()
             ->where(['action' => AuditLog::ACTION_ROLE_DELETED])
@@ -203,13 +243,13 @@ class RoleServiceTest extends DbTestCase
 
     public function testDeleteSystemRoleIsRefused(): void
     {
-        $this->assertFalse($this->service()->deleteRole('viewer', 1));
+        $this->assertFalse($this->service()->deleteRole('viewer', $this->superadmin()));
         $this->assertNotNull($this->service()->getRole('viewer'));
     }
 
     public function testDeleteUnknownRoleReturnsFalse(): void
     {
-        $this->assertFalse($this->service()->deleteRole('ghost-' . uniqid(), 1));
+        $this->assertFalse($this->service()->deleteRole('ghost-' . uniqid(), $this->superadmin()));
     }
 
     // -- listRoles / getRole --------------------------------------------------
@@ -217,7 +257,7 @@ class RoleServiceTest extends DbTestCase
     public function testListRolesIncludesSystemAndCustom(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), $this->superadmin());
 
         $list = $this->service()->listRoles();
         $names = array_column($list, 'name');
@@ -245,7 +285,7 @@ class RoleServiceTest extends DbTestCase
     public function testGetRoleReturnsFullShape(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $data = $this->service()->getRole($name);
         $this->assertNotNull($data);
@@ -270,21 +310,21 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleValidationFailureReturnsFalse(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         // Pass unknown permission to trigger validation failure
         $update = $this->makeForm($name, ['nonexistent.permission']);
-        $this->assertFalse($this->service()->updateRole($name, $update, 1));
+        $this->assertFalse($this->service()->updateRole($name, $update, $this->superadmin()));
         $this->assertArrayHasKey('permissions', $update->errors);
     }
 
     public function testUpdateRoleRemovesAllPermissions(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), $this->superadmin());
 
         $update = $this->makeForm($name, []);
-        $this->assertTrue($this->service()->updateRole($name, $update, 1));
+        $this->assertTrue($this->service()->updateRole($name, $update, $this->superadmin()));
 
         $direct = $this->service()->directPermissions($name);
         $this->assertSame([], $direct);
@@ -293,10 +333,10 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleAddsPermissionsWithoutRemovingExisting(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $update = $this->makeForm($name, ['project.view', 'job.view', 'inventory.view']);
-        $this->assertTrue($this->service()->updateRole($name, $update, 1));
+        $this->assertTrue($this->service()->updateRole($name, $update, $this->superadmin()));
 
         $direct = $this->service()->directPermissions($name);
         $this->assertSame(['inventory.view', 'job.view', 'project.view'], $direct);
@@ -305,9 +345,9 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleAuditLogRecordsDescriptionChanged(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view'], 'original'), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view'], 'original'), $this->superadmin());
 
-        $this->service()->updateRole($name, $this->makeForm($name, ['project.view'], 'changed'), 1);
+        $this->service()->updateRole($name, $this->makeForm($name, ['project.view'], 'changed'), $this->superadmin());
 
         $log = \app\models\AuditLog::find()
             ->where(['action' => \app\models\AuditLog::ACTION_ROLE_UPDATED])
@@ -321,9 +361,9 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleAuditLogRecordsDescriptionUnchanged(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view'], 'same'), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view'], 'same'), $this->superadmin());
 
-        $this->service()->updateRole($name, $this->makeForm($name, ['project.view', 'job.view'], 'same'), 1);
+        $this->service()->updateRole($name, $this->makeForm($name, ['project.view', 'job.view'], 'same'), $this->superadmin());
 
         $log = \app\models\AuditLog::find()
             ->where(['action' => \app\models\AuditLog::ACTION_ROLE_UPDATED])
@@ -337,9 +377,9 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleAuditLogRecordsRemovedPermissions(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), $this->superadmin());
 
-        $this->service()->updateRole($name, $this->makeForm($name, ['project.view']), 1);
+        $this->service()->updateRole($name, $this->makeForm($name, ['project.view']), $this->superadmin());
 
         $log = \app\models\AuditLog::find()
             ->where(['action' => \app\models\AuditLog::ACTION_ROLE_UPDATED])
@@ -354,10 +394,10 @@ class RoleServiceTest extends DbTestCase
     public function testUpdateRoleDeduplicatesPermissions(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $update = $this->makeForm($name, ['project.view', 'job.view', 'job.view']);
-        $this->assertTrue($this->service()->updateRole($name, $update, 1));
+        $this->assertTrue($this->service()->updateRole($name, $update, $this->superadmin()));
 
         $direct = $this->service()->directPermissions($name);
         $this->assertSame(['job.view', 'project.view'], $direct);
@@ -373,41 +413,64 @@ class RoleServiceTest extends DbTestCase
         $name = $this->uniqueName();
         $form = $this->makeForm($name, ['project.view']);
 
-        $this->assertTrue($this->service()->createRole($form, 1));
+        $this->assertTrue($this->service()->createRole($form, $this->superadmin()));
         $this->assertSame(['project.view'], $this->service()->directPermissions($name));
+    }
+
+    /**
+     * regression: a permission listed twice was added twice; the second
+     * insert hit the primary key of auth_item_child after the role was
+     * added, so the role stayed half created, without an audit entry.
+     */
+    public function testRegressionCreateRoleDeduplicatesPermissions(): void
+    {
+        $name = $this->uniqueName();
+        $form = $this->makeForm($name, ['job.view', 'project.view', 'job.view']);
+
+        $this->assertTrue($this->service()->createRole($form, $this->superadmin()));
+
+        $this->assertSame(['job.view', 'project.view'], $this->service()->directPermissions($name));
+        $log = AuditLog::find()->where(['action' => AuditLog::ACTION_ROLE_CREATED])->orderBy(['id' => SORT_DESC])->one();
+        $this->assertNotNull($log);
+        $this->assertSame(['job.view', 'project.view'], json_decode((string)$log->metadata, true)['permissions']);
     }
 
     public function testCreateRoleWithEmptyPermissions(): void
     {
         $name = $this->uniqueName();
         $form = $this->makeForm($name, []);
-        $this->assertTrue($this->service()->createRole($form, 1));
+        $this->assertTrue($this->service()->createRole($form, $this->superadmin()));
 
         $this->assertSame([], $this->service()->directPermissions($name));
     }
 
-    public function testCreateRoleWithNullActorId(): void
+    /**
+     * Without a signed-in user nobody grants a permission: up to 2.10.1 a
+     * role was created with whatever it listed, the audit entry naming
+     * nobody.
+     */
+    public function testCreateRoleWithoutASignedInUserIsRefused(): void
     {
         $name = $this->uniqueName();
-        $form = $this->makeForm($name, ['project.view']);
-        $this->assertTrue($this->service()->createRole($form, null));
+        $before = $this->auditCount(AuditLog::ACTION_ROLE_CREATED);
 
-        $log = \app\models\AuditLog::find()
-            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_CREATED])
-            ->orderBy(['id' => SORT_DESC])
-            ->one();
-        $this->assertNotNull($log);
-        $this->assertNull($log->user_id);
+        $this->assertRefused(
+            sprintf(RoleChangePolicy::PERMISSION_REFUSED, 'project.view'),
+            fn () => $this->service()->createRole($this->makeForm($name, ['project.view']), RoleChangePolicy::forUser(null))
+        );
+
+        $this->assertNull($this->service()->getRole($name));
+        $this->assertSame($before, $this->auditCount(AuditLog::ACTION_ROLE_CREATED));
     }
 
     public function testCreateRoleDuplicateNameFails(): void
     {
         $name = $this->uniqueName();
         $form1 = $this->makeForm($name, ['project.view']);
-        $this->assertTrue($this->service()->createRole($form1, 1));
+        $this->assertTrue($this->service()->createRole($form1, $this->superadmin()));
 
         $form2 = $this->makeForm($name, ['job.view']);
-        $this->assertFalse($this->service()->createRole($form2, 1));
+        $this->assertFalse($this->service()->createRole($form2, $this->superadmin()));
         $this->assertArrayHasKey('name', $form2->errors);
     }
 
@@ -416,9 +479,9 @@ class RoleServiceTest extends DbTestCase
     public function testDeleteRoleWritesAuditLogWithEmptyAffectedUsers(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
-        $this->assertTrue($this->service()->deleteRole($name, 1));
+        $this->assertTrue($this->service()->deleteRole($name, $this->superadmin()));
 
         $log = \app\models\AuditLog::find()
             ->where(['action' => \app\models\AuditLog::ACTION_ROLE_DELETED])
@@ -429,25 +492,40 @@ class RoleServiceTest extends DbTestCase
         $this->assertSame([], $metadata['affected_users']);
     }
 
-    public function testDeleteRoleWithNullActorId(): void
+    public function testDeleteRoleWithoutASignedInUserIsRefused(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
+        $before = $this->auditCount(AuditLog::ACTION_ROLE_DELETED);
 
-        $this->assertTrue($this->service()->deleteRole($name, null));
+        $this->assertRefused(
+            RoleChangePolicy::CHANGE_REFUSED,
+            fn () => $this->service()->deleteRole($name, RoleChangePolicy::forUser(null))
+        );
 
-        $log = \app\models\AuditLog::find()
-            ->where(['action' => \app\models\AuditLog::ACTION_ROLE_DELETED])
-            ->orderBy(['id' => SORT_DESC])
-            ->one();
-        $this->assertNotNull($log);
-        $this->assertNull($log->user_id);
+        $this->assertNotNull($this->service()->getRole($name));
+        $this->assertSame($before, $this->auditCount(AuditLog::ACTION_ROLE_DELETED));
+    }
+
+    public function testTheAuditEntryNamesTheUserOfThePolicy(): void
+    {
+        $policy = $this->superadmin();
+        $name = $this->uniqueName();
+        $this->service()->createRole($this->makeForm($name), $policy);
+        $this->service()->updateRole($name, $this->makeForm($name, ['job.view']), $policy);
+        $this->service()->deleteRole($name, $policy);
+
+        foreach ([AuditLog::ACTION_ROLE_CREATED, AuditLog::ACTION_ROLE_UPDATED, AuditLog::ACTION_ROLE_DELETED] as $action) {
+            $log = AuditLog::find()->where(['action' => $action])->orderBy(['id' => SORT_DESC])->one();
+            $this->assertNotNull($log, $action);
+            $this->assertSame($policy->actorId(), (int)$log->user_id, $action);
+        }
     }
 
     public function testDeleteAllSystemRolesRefused(): void
     {
-        $this->assertFalse($this->service()->deleteRole('operator', 1));
-        $this->assertFalse($this->service()->deleteRole('admin', 1));
+        $this->assertFalse($this->service()->deleteRole('operator', $this->superadmin()));
+        $this->assertFalse($this->service()->deleteRole('admin', $this->superadmin()));
     }
 
     // -- listRoles: additional coverage ------------------------------------
@@ -464,7 +542,7 @@ class RoleServiceTest extends DbTestCase
     public function testListRolesUserCountReflectsAssignments(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $user = $this->createUser('list-count');
         $auth = \Yii::$app->authManager;
@@ -483,7 +561,7 @@ class RoleServiceTest extends DbTestCase
     public function testGetRoleReturnsUserIdsWhenAssigned(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $user = $this->createUser('getRole-assigned');
         $auth = \Yii::$app->authManager;
@@ -507,7 +585,7 @@ class RoleServiceTest extends DbTestCase
     public function testEffectivePermissionsForCustomRole(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view', 'job.view']), $this->superadmin());
 
         $effective = $this->service()->effectivePermissions($name);
         $this->assertSame(['job.view', 'project.view'], $effective);
@@ -516,7 +594,7 @@ class RoleServiceTest extends DbTestCase
     public function testDirectPermissionsReturnsEmptyForRoleWithoutPermissions(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, []), 1);
+        $this->service()->createRole($this->makeForm($name, []), $this->superadmin());
 
         $direct = $this->service()->directPermissions($name);
         $this->assertSame([], $direct);
@@ -527,7 +605,7 @@ class RoleServiceTest extends DbTestCase
     public function testUsersWithRoleReturnsEmptyForNoAssignments(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $users = $this->service()->usersWithRole($name);
         $this->assertSame([], $users);
@@ -536,7 +614,7 @@ class RoleServiceTest extends DbTestCase
     public function testUsersWithRoleReturnsIntegerIds(): void
     {
         $name = $this->uniqueName();
-        $this->service()->createRole($this->makeForm($name, ['project.view']), 1);
+        $this->service()->createRole($this->makeForm($name, ['project.view']), $this->superadmin());
 
         $user = $this->createUser('users-int');
         $auth = \Yii::$app->authManager;

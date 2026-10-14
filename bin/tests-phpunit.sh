@@ -112,7 +112,10 @@ fi
 # =============================================================================
 section "PHPUnit — unit tests"
 
-UNIT_OUT=$(dc php vendor/bin/phpunit --testsuite=Unit --colors=never 2>&1 || true)
+# Every PHPUnit run gets 1G instead of the container's CLI memory_limit
+# (256M): the coverage run below outgrew it with 2.11.0's tests. See
+# tests/unit/bin/PhpunitMemoryLimitTest.php.
+UNIT_OUT=$(dc php -d memory_limit=1G vendor/bin/phpunit --testsuite=Unit --colors=never 2>&1 || true)
 if echo "$UNIT_OUT" | grep -qP "^OK|Tests: .* Failures: 0"; then
     SUMMARY=$(echo "$UNIT_OUT" | grep -P "^OK|Tests:")
     ok "Unit tests passed ($SUMMARY)"
@@ -130,7 +133,10 @@ if [[ $FAST -eq 1 ]]; then
     skip "Integration tests (--fast mode)"
     skip "Code coverage (--fast mode)"
 else
-    COMBINED_OUT=$(dc php -d pcov.enabled=1 vendor/bin/phpunit \
+    # Coverage keeps, for every covered line, the tests that ran it, so the
+    # run's memory grows with the number of tests: 10444 tests peaked at
+    # 254.5 MB and crashed at the container's 256M (2026-10-13).
+    COMBINED_OUT=$(dc php -d pcov.enabled=1 -d memory_limit=1G vendor/bin/phpunit \
         --testsuite=Unit,Integration \
         --coverage-text \
         --colors=never \

@@ -9,8 +9,11 @@ declare(strict_types=1);
 /** @var array<int, string> $users     id => username */
 
 use app\models\ApprovalRule;
+use app\models\User;
+use yii\db\Query;
 use yii\helpers\Html;
 use yii\helpers\Json;
+use yii\rbac\DbManager;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->isNewRecord ? 'New Approval Rule' : 'Edit: ' . $model->name;
@@ -54,7 +57,8 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
             'class' => 'form-select',
             'prompt' => '— Select role —',
         ]) ?>
-        <div class="form-text">All users with this role can approve.</div>
+        <?php // A role rule counts the users assigned the role directly (ApprovalRule::resolveRoleIds()).?>
+        <div class="form-text" id="approver-role-hint"><?= Html::encode(ApprovalRule::ROLE_HINT) ?></div>
     </div>
 
     <div id="config-team" class="mb-3" style="display:none">
@@ -64,7 +68,8 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
             'class' => 'form-select',
             'prompt' => '— Select team —',
         ]) ?>
-        <div class="form-text">All members of this team can approve.</div>
+        <?php // A team rule counts every member of the team (ApprovalRule::resolveTeamIds()).?>
+        <div class="form-text" id="approver-team-hint"><?= Html::encode(ApprovalRule::TEAM_HINT) ?></div>
     </div>
 
     <div id="config-users" class="mb-3" style="display:none">
@@ -92,12 +97,22 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
 <?php ActiveForm::end(); ?>
 
 <?php
-// Pre-compute approver counts for JS warning
-$roleCounts = [];
+// Pre-compute approver counts for JS warning. A role rule's approvers are the
+// users assigned the role directly (ApprovalRule::resolveRoleIds()), of whom
+// only active accounts may decide (ApproverFilter): count the active ones,
+// every role in one query, 0 for a role without them.
+$roleCounts = array_fill_keys(array_map('strval', array_keys($roles)), 0);
 $auth = \Yii::$app->authManager;
-if ($auth !== null) {
-    foreach (array_keys($roles) as $rn) {
-        $roleCounts[$rn] = count($auth->getUserIdsByRole($rn));
+if ($auth instanceof DbManager && $roleCounts !== []) {
+    $holderRows = (new Query())
+        ->select(['role' => 'a.item_name', 'holders' => 'COUNT(DISTINCT [[u.id]])'])
+        ->from(['a' => $auth->assignmentTable])
+        ->innerJoin(['u' => User::tableName()], '[[u.id]] = [[a.user_id]]')
+        ->where(['a.item_name' => array_map('strval', array_keys($roleCounts)), 'u.status' => User::STATUS_ACTIVE])
+        ->groupBy('a.item_name')
+        ->all();
+    foreach ($holderRows as $holderRow) {
+        $roleCounts[(string)$holderRow['role']] = (int)$holderRow['holders'];
     }
 }
 $teamCounts = [];

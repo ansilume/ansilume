@@ -12,6 +12,8 @@ use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
 use app\services\ApprovalDecisionRefusedException;
+use app\services\runstate\ApprovalRequestContexts;
+use app\services\runstate\Viewer;
 use app\tests\integration\TeamScopeFixtures;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
@@ -534,7 +536,9 @@ class ApprovalControllerTeamScopeTest extends WebControllerTestCase
     }
 
     /**
-     * The request page as the view renders it, for $params on top of the model.
+     * The request page as the view renders it, for $params on top of the
+     * model and of what the controller passes for the signed-in user (what
+     * the request is for, and who looks at it).
      *
      * @param array<string, mixed> $params
      */
@@ -543,8 +547,12 @@ class ApprovalControllerTeamScopeTest extends WebControllerTestCase
         $previous = \Yii::$app->controller;
         // The view's form actions are routes relative to the active controller.
         \Yii::$app->controller = $this->makeController();
+        $viewer = Viewer::current();
+        /** @var ApprovalRequestContexts $contexts */
+        $contexts = \Yii::$app->get('approvalRequestContexts');
+        $defaults = ['context' => $contexts->forRequests([$request], $viewer)[(int)$request->id] ?? null, 'viewer' => $viewer];
         try {
-            return \Yii::$app->view->renderFile('@app/views/approval/view.php', ['model' => $request] + $params);
+            return \Yii::$app->view->renderFile('@app/views/approval/view.php', ['model' => $request] + $params + $defaults);
         } finally {
             \Yii::$app->controller = $previous;
         }

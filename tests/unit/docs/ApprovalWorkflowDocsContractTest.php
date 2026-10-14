@@ -36,9 +36,11 @@ use app\services\WorkflowExecutionService;
 use app\services\WorkflowRunVars;
 use app\services\WorkflowStepChangeGuard;
 use app\services\WorkflowStepDispatcher;
+use app\services\WorkflowRouteMap;
 use app\services\WorkflowStepRouter;
+use app\services\WorkflowStepsTable;
 use app\services\WorkflowTemplateDeletionService;
-use app\services\WorkflowTemplatePage;
+use app\tests\unit\services\WorkflowStepModels;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Yaml\Yaml;
 
@@ -62,10 +64,18 @@ use Symfony\Component\Yaml\Yaml;
  * and did not say where those lines are; and they named neither the time
  * budget of a maintenance run nor the cancel reasons and queries that came
  * with the sweep of jobs that ended workflow runs left waiting.
+ *
+ * Since 2.11.0 the section is history where 2.11.0 reworded what it quotes:
+ * the routed-to refusal, the error of a branch to a removed step and the
+ * route labels of the steps table read as up to 2.10.1, and these tests
+ * quote the same literals; troubleshooting.md quotes the new texts, and the
+ * old error beside its new one, as runs keep what they stored
+ * (WorkflowStepsUpdateDocsContractTest).
  */
 class ApprovalWorkflowDocsContractTest extends TestCase
 {
     use ReadsOperatorDocs;
+    use WorkflowStepModels;
 
     private const UPDATE_SECTION = '## After updating from 2.9.0 or older: approvals and workflows';
 
@@ -77,17 +87,31 @@ class ApprovalWorkflowDocsContractTest extends TestCase
     /** The approval step's sentence of security-2 (review of step 3). */
     private const STEP_GATES_ITS_RUNS = 'An approval step gates the runs of its workflow, not the job templates in it';
 
+    /** WorkflowStepChangeGuard::STEP_ROUTED_TO as 2.9.0 to 2.10.1 worded it, which the section quotes. */
+    private const ROUTED_TO_2101 = 'Step "Build" was not removed: other steps route to it (#10 "Retry"). Remove those steps '
+        . 'first, and add them again with other routes if you still need them.';
+
+    /** WorkflowStepRouter::ROUTE_TARGET_MISSING before 2.11.0; steps that ran then keep it. */
+    private const ROUTE_TARGET_MISSING_2101 = 'The next step #7 of this workflow no longer exists.';
+
+    /** The label of an approval step's empty On Failure branch up to 2.10.1. */
+    private const END_FAILED_2101 = 'end workflow (failed)';
+
+    /** The label of a gated job step's empty On Failure branch up to 2.10.1. */
+    private const GATED_JOB_FAILURE_2101 = '→ next step; end workflow (failed) after a refused approval';
+
     /**
-     * The section follows the one of the patch after it (2.10.1, the newest),
-     * and the one before it keeps its heading, which the contract tests of
-     * 2.9.0 read.
+     * The section follows those of the releases after it (2.11.0, the
+     * newest, and the patch 2.10.1), and the one before it keeps its
+     * heading, which the contract tests of 2.9.0 read.
      */
     public function testTheSectionFollowsThePatchAndTheOlderOnesStay(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][1] ?? null, 'This section comes next.');
-        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][2] ?? '');
+        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The patch 2.10.1 follows.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][2] ?? null, 'This section comes next.');
+        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][3] ?? '');
     }
 
     public function testTheChecklistStartsWithTheChecksBeforeTheUpdate(): void
@@ -147,7 +171,17 @@ class ApprovalWorkflowDocsContractTest extends TestCase
             'adding an approval step' => [ApprovalRuleAssignmentPolicy::APPROVAL_STEP_ADD_REFUSED, $both],
             'steps of an approval workflow' => [ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED, $both],
             'runs active' => [WorkflowStepChangeGuard::runsActiveMessage([12]), $both],
-            'routed to' => [sprintf(WorkflowStepChangeGuard::STEP_ROUTED_TO, SurveyDefinition::quote('Build'), '#10 ' . SurveyDefinition::quote('Retry')), $both],
+            // 2.11.0 names the steps by position and advises to edit them;
+            // the section quotes the refusal as it read up to 2.10.1.
+            'routed to, up to 2.10.1' => [self::ROUTED_TO_2101, $both],
+            'routed to' => [
+                sprintf(
+                    WorkflowStepChangeGuard::STEP_ROUTED_TO,
+                    SurveyDefinition::quote('Build'),
+                    sprintf(WorkflowStepChangeGuard::ROUTING_STEP_LABEL, 3, SurveyDefinition::quote('Retry'))
+                ),
+                ['troubleshooting'],
+            ],
             'step: no rule' => [WorkflowTemplateController::FLASH_STEP_NOT_ADDED . WorkflowStep::APPROVAL_RULE_REQUIRED, ['troubleshooting']],
             'step: unknown rule' => [WorkflowTemplateController::FLASH_STEP_NOT_ADDED . WorkflowStep::APPROVAL_RULE_NOT_FOUND, ['troubleshooting']],
             'step: always' => [WorkflowTemplateController::FLASH_STEP_NOT_ADDED . WorkflowStep::APPROVAL_ALWAYS_REFUSED, ['troubleshooting']],
@@ -157,7 +191,9 @@ class ApprovalWorkflowDocsContractTest extends TestCase
             'gate: timed out' => [sprintf(WorkflowStepRouter::APPROVAL_TIMED_OUT, 12), ['updating']],
             'gate: canceled' => [sprintf(WorkflowStepRouter::APPROVAL_CANCELED, 12), ['updating']],
             'gate of a job step' => [sprintf(WorkflowStepRouter::JOB_APPROVAL_REJECTED, 12), $both],
-            'route to a removed step' => [sprintf(WorkflowStepRouter::ROUTE_TARGET_MISSING, 7), $both],
+            // Steps that ran before 2.11.0 keep the error they stored.
+            'route to a removed step, before 2.11.0' => [self::ROUTE_TARGET_MISSING_2101, $both],
+            'route to a removed step' => [sprintf(WorkflowStepRouter::ROUTE_TARGET_MISSING, 7), ['troubleshooting']],
             'step removed while it ran' => [WorkflowExecutionService::STEP_REMOVED, ['troubleshooting']],
             'request not created' => [WorkflowStepDispatcher::REQUEST_FAILED, ['troubleshooting']],
             'rule of a step gone' => [WorkflowStepDispatcher::RULE_GONE, $both],
@@ -410,6 +446,10 @@ class ApprovalWorkflowDocsContractTest extends TestCase
      * step whose job template has an approval rule no longer takes its
      * Always branch either; the docs named only the approval step's. The
      * steps table labels such a step's empty On Failure branch as an end.
+     *
+     * The labels of the empty On Failure branches read as up to 2.10.1 (the
+     * section of 2.11.0 maps them to the labels of today); the notes of the
+     * Always column kept their wording, and the steps table shows them.
      */
     public function testTheClosedGateParagraphCoversTheAlwaysBranchOfGatedJobSteps(): void
     {
@@ -417,22 +457,25 @@ class ApprovalWorkflowDocsContractTest extends TestCase
         $this->assertMentions('the Always branch of an approval step, or of such a job step, was followed after a rejection, a timeout or a cancel', $gate, 'updating.md');
         $this->assertMentions('the Always branch is not taken (a job step still takes it after a job that ran)', $gate, 'updating.md');
         $admins = $this->paragraph('**Approval steps are for admins.**');
-        $this->assertMentions('`' . WorkflowTemplatePage::ROUTE_END_FAILED . '` for an approval step without an On Failure branch', $admins, 'updating.md');
+        $this->assertMentions('`' . self::END_FAILED_2101 . '` for an approval step without an On Failure branch', $admins, 'updating.md');
         // Last review round of step 3 (open need 1): a gated job step's empty
         // On Failure branch names both of its cases.
         $this->assertMentions(
-            '`' . WorkflowTemplatePage::GATED_JOB_FAILURE_ROUTE . '` for a job step whose job template has an approval rule and no On Failure branch',
+            '`' . self::GATED_JOB_FAILURE_2101 . '` for a job step whose job template has an approval rule and no On Failure branch',
             $admins,
             'updating.md'
         );
-        // The labels the workflow page shows, from their constants (wave 8 of
-        // step 3 moved them out of the view; the view is code: read from the
-        // repository).
-        $view = (string)file_get_contents(dirname(__DIR__, 3) . '/views/workflow-template/view.php');
-        $labels = ['ROUTE_END_FAILED', 'GATED_JOB_FAILURE_ROUTE', 'GATED_JOB_ALWAYS_NOTE', 'APPROVAL_ALWAYS_NOTE'];
-        foreach ($labels as $name) {
-            $label = (string)constant(WorkflowTemplatePage::class . '::' . $name);
-            $this->assertStringContainsString('WorkflowTemplatePage::' . $name, $view, "The workflow page shows {$label}");
+        // The notes as the steps table shows them (the presenter, not a view,
+        // has the labels since 2.11.0).
+        $approval = self::approval(1, 'Release approval', ['always' => 2]);
+        $gated = self::job(2, 'Deploy', ['always' => 0], 'deploy-prod');
+        $steps = [$approval, $gated];
+        $notes = array_map(
+            static fn (array $row): ?string => $row['routes']['always']['note'],
+            (new WorkflowStepsTable(WorkflowRouteMap::fromModels($steps), $steps, false, []))->rows()
+        );
+        $this->assertSame([WorkflowStepsTable::APPROVAL_ALWAYS_NOTE, WorkflowStepsTable::GATED_JOB_ALWAYS_NOTE], $notes);
+        foreach (array_merge([self::END_FAILED_2101, self::GATED_JOB_FAILURE_2101], $notes) as $label) {
             $this->assertMentions('`' . $label . '`', $admins . ' ' . $this->paragraph('**A closed approval gate ends the run as failed.**'), 'updating.md');
         }
         $this->assertMentions(

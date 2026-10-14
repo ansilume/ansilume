@@ -4,13 +4,15 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\SurveySecrets;
 use yii\db\ActiveRecord;
 
 /**
  * @property int         $id
  * @property string      $name
  * @property string      $url
- * @property string|null $secret    HMAC signing secret (stored in plain text — operator-managed)
+ * @property string|null $secret    HMAC signing secret (stored in plain text — operator-managed); the
+ *                                 edit form shows SurveySecrets::PLACEHOLDER for it, the API never answers it
  * @property string      $events    Comma-separated: job.success,job.failure,job.started
  * @property bool        $enabled
  * @property int         $created_by
@@ -24,6 +26,12 @@ class Webhook extends ActiveRecord
     public const EVENT_JOB_STARTED = 'job.started';
     public const EVENT_JOB_SUCCESS = 'job.success';
     public const EVENT_JOB_FAILURE = 'job.failure';
+
+    /** The placeholder submitted for a secret where none is stored (a new webhook, or one without a secret). */
+    public const SECRET_NOT_STORED = 'The secret has no stored value; enter the real value.';
+
+    /** The hint of the edit form's secret field when a secret is stored. */
+    public const SECRET_HINT = 'A secret is stored: leave the field as it is to keep it, clear it to send deliveries unsigned, or enter a new one.';
 
     public static function tableName(): string
     {
@@ -45,6 +53,8 @@ class Webhook extends ActiveRecord
             [['name'], 'string', 'max' => 128],
             [['url'], 'url', 'validSchemes' => ['http', 'https']],
             [['url'], 'string', 'max' => 512],
+            // Before the length rule, which checks the secret as stored.
+            [['secret'], 'restoreSecret'],
             [['secret'], 'string', 'max' => 128],
             [['events'], 'string', 'max' => 255],
             [['events'], 'validateEvents'],
@@ -65,6 +75,35 @@ class Webhook extends ActiveRecord
             $this->events = implode(',', array_filter((array)$this->eventsArray));
         }
         return parent::beforeValidate();
+    }
+
+    /**
+     * The stored secret in place of SurveySecrets::PLACEHOLDER, which the
+     * edit form shows for it, so a form or an API request that sends the
+     * placeholder back keeps it; an error where no secret is stored.
+     */
+    public function restoreSecret(string $attribute): void
+    {
+        if ($this->secret !== SurveySecrets::PLACEHOLDER) {
+            return;
+        }
+        $stored = $this->getOldAttribute('secret');
+        if (!is_string($stored) || $stored === '') {
+            $this->addError($attribute, self::SECRET_NOT_STORED);
+            return;
+        }
+        $this->secret = $stored;
+    }
+
+    /**
+     * What the edit form shows for the stored secret: SurveySecrets::PLACEHOLDER
+     * when one is stored, else ''.
+     */
+    public function getShownSecret(): string
+    {
+        $stored = $this->getOldAttribute('secret');
+
+        return is_string($stored) && $stored !== '' ? SurveySecrets::PLACEHOLDER : '';
     }
 
     public function validateEvents(string $attribute): void

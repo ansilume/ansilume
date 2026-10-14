@@ -13,6 +13,7 @@ use app\models\Project;
 use app\models\Schedule;
 use app\models\User;
 use app\models\WorkflowJob;
+use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\tests\integration\TeamScopeFixtures;
@@ -366,12 +367,23 @@ class SiteControllerTeamScopeTest extends WebControllerTestCase
         $project->save(false);
     }
 
+    /**
+     * A run paused at a pause step, as the engine leaves it: the step's
+     * execution runs until someone resumes the run.
+     */
     private function pausedRun(WorkflowTemplate $workflow, int $launchedBy): int
     {
         $pause = $this->createWorkflowStep((int)$workflow->id, 5, WorkflowStep::TYPE_PAUSE);
         $run = $this->createWorkflowJob((int)$workflow->id, $launchedBy);
         $run->current_step_id = $pause->id;
         $run->save(false);
+        $execution = new WorkflowJobStep();
+        $execution->workflow_job_id = (int)$run->id;
+        $execution->workflow_step_id = (int)$pause->id;
+        $execution->status = WorkflowJobStep::STATUS_RUNNING;
+        $execution->started_at = time();
+        $execution->snapshotStep($pause);
+        $execution->save(false);
         return (int)$run->id;
     }
 

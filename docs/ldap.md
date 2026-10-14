@@ -19,6 +19,32 @@ user record decides which path is consulted, and it is **immutable once set**.
 
 ---
 
+## Container images
+
+LDAP needs PHP's `ldap` extension in the container that signs users in and
+runs `php yii ldap/*`: the app container, whose image the queue-worker and
+the schedule-runner share.
+
+- The prebuilt app image `ghcr.io/ansilume/ansilume` has it from 2.11.0
+  on. Up to 2.10.1 it had none: with `LDAP_ENABLED=true` and a host and
+  base DN set, the sign-in of LDAP users showed the error page, and
+  `ldap/test-connection`, `ldap/test-user` and `ldap/sync` stopped with
+  `Error: PHP ldap extension is not loaded.` (see
+  [troubleshooting.md](troubleshooting.md#ldap-fails-php-ldap-extension-is-not-loaded)).
+  This concerns `docker-compose.prebuilt.yml`, both modes of the quickstart,
+  which both run `docker-compose.prebuilt.yml`, and the Ansible deploy role
+  with `ansilume_use_prebuilt_images: true`. Use 2.11.0 or later with LDAP.
+- A git checkout (`docker-compose.yml`, built from `docker/php/Dockerfile`)
+  and the deploy role's default build mode have had it since 2.1.11, the
+  release that brought LDAP.
+- The runner image `ghcr.io/ansilume/ansilume-runner` has no `ldap`
+  extension and needs none: runners never contact the directory.
+
+Check a running installation with
+`docker compose exec app php -m | grep -x ldap`, which prints `ldap`.
+
+---
+
 ## How it works
 
 ```
@@ -136,8 +162,10 @@ docker compose exec app php yii ldap/test-connection
 docker compose exec app php yii ldap/test-user jdoe
 
 # Reconcile every LDAP-backed user with the directory. Updates attributes
-# and roles, disables accounts the directory no longer recognises, and
-# re-enables ones it does.
+# and roles, disables accounts whose user search finds no entry, and
+# re-enables the ones it disabled once it finds them again; an account
+# deactivated in Ansilume stays inactive. A lookup that fails changes
+# nothing.
 docker compose exec app php yii ldap/sync
 
 # Same as above but reports without making changes.
@@ -146,6 +174,27 @@ docker compose exec app php yii ldap/sync --dry-run
 
 Run `ldap/sync` from cron (e.g. nightly) so accounts that have been removed
 or disabled in the directory lose their Ansilume access in a timely fashion.
+
+Only a user search that runs and finds no entry disables an account. A
+lookup that fails says nothing about the user, so `ldap/sync` leaves that
+account, its roles and its API tokens as they are, prints
+`- <username>: lookup failed → left unchanged (<reason>)` and counts it
+under `errors`: a user or group search that fails or does not run to the
+end (a referral to another server, a size limit), and a user search that
+matches more than one entry. A failed service bind stops the run, as every
+further lookup would fail too:
+`[ldap] Service bind failed (<reason>): sync stopped, <n> user(s) left unchanged.`
+LDAP that is enabled without a host or base DN stops it before the first
+user:
+`[ldap] LDAP is enabled but not fully configured (host or base DN missing): sync stopped, no user changed.`
+The command exits with `0` when it counted no error, with `1` when it
+counted one (a failed lookup or service bind, or an account it could not
+update), and with `78` when LDAP is enabled but not fully configured; with
+`LDAP_ENABLED=false` it prints `[ldap] LDAP is disabled — nothing to sync.`
+and exits with `0`. `--dry-run` takes the same paths and changes nothing.
+Make a non-zero exit alert someone: cron itself only mails what a job
+prints, and the entry below writes that to a log (see
+[troubleshooting.md](troubleshooting.md#ldapsync-fails-a-lookup-or-the-service-bind-failed)).
 
 Suggested crontab entry:
 
@@ -177,23 +226,24 @@ The submitted password is **never** logged, persisted, or returned.
 
 ## Lifecycle: enable, disable, re-enable
 
-| Directory event              | Ansilume reaction                                                       |
-|------------------------------|-------------------------------------------------------------------------|
-| First successful bind        | Creates local row (if `LDAP_AUTO_PROVISION=true`); maps roles; audited. |
-| Subsequent successful bind   | Updates DN/email/display name; reconciles roles; audited.               |
-| Group membership changes     | Roles diffed and added/removed at next login or `ldap/sync` run.        |
-| User removed from directory  | `ldap/sync` marks the account inactive, rotates `auth_key` (kills      |
-|                              | active sessions), deletes API tokens, revokes RBAC. Audited.           |
-| User restored in directory   | Next successful bind re-activates the account. Audited.                 |
+| Directory event | Ansilume reaction |
+|---|---|
+| First successful bind | Creates local row (if `LDAP_AUTO_PROVISION=true`); maps roles; audited. |
+| Subsequent successful bind | Updates DN/email/display name; reconciles roles; audited. |
+| Group membership changes | Roles diffed and added/removed at next login or `ldap/sync` run. |
+| User removed from directory | `ldap/sync` (its user search runs and finds no entry) marks the account inactive, rotates `auth_key` (kills active sessions), deletes API tokens, revokes RBAC. Audited. |
+| Directory cannot be read | `ldap/sync` changes nothing for a user whose lookup fails (service bind, user or group search) and counts an error; a failed service bind stops the run. Exit code `1`. |
+| User restored in directory | Next successful bind, or the next `ldap/sync` that finds the user, re-activates an account that `ldap/sync` deactivated (`user.ldap_sync_disabled`), with the roles their groups map to. Audited. |
+| Account deactivated in Ansilume (**Deactivate**, the Edit User form, `PUT /api/v1/users/{id}`) | Stays inactive whatever the directory says: a successful bind is refused with the generic error and audited as `ldap.login.failed` (`Account deactivated in Ansilume.`); `ldap/sync` updates its DN, email and roles and prints `- <username>: deactivated in Ansilume, not by ldap/sync → left inactive`. The user page says so under the status. |
 
 All lifecycle events emit dedicated audit log entries:
 
 - `ldap.user.provisioned` — new account created
 - `ldap.user.synced`      — attributes or role assignments changed
 - `ldap.user.disabled`    — disabled by `ldap/sync`
-- `ldap.user.reenabled`   — restored after re-appearing in the directory
+- `ldap.user.reenabled`   — an account `ldap/sync` disabled, activated again by a bind or `ldap/sync` once the directory has the user
 - `ldap.user.roles_changed` — RBAC diff applied
-- `ldap.login.failed`     — directory rejected the bind (separate from local failures)
+- `ldap.login.failed`     — directory rejected the bind, or the account was deactivated in Ansilume (separate from local failures)
 - `ldap.test.performed`   — `/admin/ldap/test` was invoked
 
 ---
@@ -214,15 +264,23 @@ All lifecycle events emit dedicated audit log entries:
   vice versa) via either the web UI or the API — the field is locked
   after creation. Letting it flip would either orphan the bcrypt hash
   or expose a directory-managed account to local password login.
+- An account an admin deactivates in Ansilume stays inactive whatever the
+  directory says: to lock out an LDAP user who is still in the directory,
+  deactivate the account in Ansilume. A sign-in or `ldap/sync` activates
+  again only an account that `ldap/sync` deactivated because the directory
+  no longer had the user. Up to 2.10.1 `ldap/sync` activated every inactive
+  LDAP account the directory had, and a sign-in the user's own.
 
 ---
 
 ## Operational checklist
 
+- [ ] `docker compose exec app php -m | grep -x ldap` prints `ldap` (prebuilt images: 2.11.0 or later).
 - [ ] `LDAP_ENABLED=true` and the rest of the block filled in.
-- [ ] `php yii ldap/test-connection` returns `service_bind: OK`.
+- [ ] `php yii ldap/test-connection` exits with `0`, and its `Service bind:` line reads `OK`.
 - [ ] `php yii ldap/test-user <known-user>` returns the expected groups + roles.
 - [ ] A test login through the web UI succeeds.
 - [ ] `ldap/sync --dry-run` reports the user list you expect.
-- [ ] `ldap/sync` is scheduled in cron for the lifecycle reconciliation.
+- [ ] `ldap/sync` is scheduled in cron for the lifecycle reconciliation, and a non-zero exit code alerts someone.
+- [ ] LDAP users who must not sign in, also while the directory still has them, are deactivated in Ansilume: the directory does not activate such an account again.
 - [ ] Local admin account is preserved as a break-glass — never delete it.

@@ -6,9 +6,12 @@ namespace app\controllers;
 
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
+use app\models\ApprovalRequestSearch;
 use app\models\User;
 use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalService;
+use app\services\runstate\ApprovalRequestContexts;
+use app\services\runstate\Viewer;
 use app\services\WorkflowAccessChecker;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
@@ -19,9 +22,51 @@ use yii\web\Response;
  * Approval requests. Team scoping applies: a request is visible to users who
  * may view the job's project (or, for a workflow approval step, the
  * workflow), and only visible requests can be decided on.
+ *
+ * The list and the request page say what each request is for
+ * (ApprovalRequestContexts, views/approval/_for.php): the workflow, step and
+ * run of its job, named only to a user who may view that workflow, else the
+ * job's template. The list filters by status (?status=, ApprovalRequestSearch),
+ * ignoring a status it does not know.
  */
 class ApprovalController extends BaseController
 {
+    /** The title of the list. */
+    public const LIST_TITLE = 'Approval Requests';
+
+    /** The header of the column, and of the request page's row, that says what a request is for. */
+    public const FOR_HEADER = 'For';
+
+    /** The columns of the list, in order. */
+    public const LIST_COLUMNS = ['#', 'Job', self::FOR_HEADER, 'Rule', 'Status', 'Requested', 'Expires', 'Resolved'];
+
+    /** The status filter's link to every request. */
+    public const FILTER_ALL = 'All';
+
+    /** The label of the status filter (aria-label). */
+    public const FILTER_LABEL = 'Filter approval requests by status';
+
+    /** The list without requests. */
+    public const NO_REQUESTS = 'No approval requests.';
+
+    /** The list filtered by a status without requests; sprintf(): the status label. */
+    public const NO_REQUESTS_WITH_STATUS = 'No approval requests with the status %s.';
+
+    /** Expires of a pending request without a timeout. */
+    public const EXPIRES_NEVER = 'Never';
+
+    /**
+     * How the For cell names the run, as Texts::FOR_WORKFLOW_STEP writes it,
+     * linked to the run for a user with workflow.view; sprintf(): the run ID.
+     */
+    public const RUN_LABEL = 'Workflow Job #%d';
+
+    /** The dashboard's link to the pending requests (/approval/index?status=pending). */
+    public const ALL_PENDING = 'All pending';
+
+    /** The dashboard's link to a request: a pending one, or the one a running workflow awaits. */
+    public const REVIEW = 'Review';
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -44,11 +89,15 @@ class ApprovalController extends BaseController
         ];
     }
 
+    /**
+     * The requests the user may see, newest first, optionally of one status;
+     * what each one is for is read for the whole page at once.
+     */
     public function actionIndex(): string
     {
-        $query = ApprovalRequest::find()
-            ->with(['job', 'approvalRule'])
-            ->orderBy(['id' => SORT_DESC]);
+        $search = new ApprovalRequestSearch();
+        $search->load((array)\Yii::$app->request->get(), '');
+        $query = $search->apply(ApprovalRequest::find()->with(['approvalRule'])->orderBy(['id' => SORT_DESC]));
         $filter = $this->access()->buildApprovalRequestFilter($this->currentUserId());
         if ($filter !== null) {
             $query->andWhere($filter);
@@ -58,13 +107,28 @@ class ApprovalController extends BaseController
             'query' => $query,
             'pagination' => ['pageSize' => 20],
         ]);
-        return $this->render('index', ['dataProvider' => $dataProvider]);
+        /** @var list<ApprovalRequest> $models */
+        $models = array_values($dataProvider->getModels());
+        $viewer = Viewer::current();
+
+        return $this->render('index', [
+            'dataProvider' => $dataProvider,
+            'contexts' => $this->contexts()->forRequests($models, $viewer),
+            'activeStatus' => $search->activeStatus(),
+            'viewer' => $viewer,
+        ]);
     }
 
     public function actionView(int $id): string
     {
         $model = $this->findVisibleModel($id);
-        return $this->render('view', ['model' => $model] + $this->decisionState($model));
+        $viewer = Viewer::current();
+
+        return $this->render('view', [
+            'model' => $model,
+            'context' => $this->contexts()->forRequests([$model], $viewer)[(int)$model->id] ?? null,
+            'viewer' => $viewer,
+        ] + $this->decisionState($model));
     }
 
     public function actionApprove(int $id): Response
@@ -187,5 +251,12 @@ class ApprovalController extends BaseController
         /** @var WorkflowAccessChecker $checker */
         $checker = \Yii::$app->get('workflowAccessChecker');
         return $checker;
+    }
+
+    private function contexts(): ApprovalRequestContexts
+    {
+        /** @var ApprovalRequestContexts $contexts */
+        $contexts = \Yii::$app->get('approvalRequestContexts');
+        return $contexts;
     }
 }

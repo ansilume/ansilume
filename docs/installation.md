@@ -58,7 +58,7 @@ docker compose exec app php yii setup/admin admin admin@example.com yourpassword
 
 Open **http://localhost:8080**.
 
-> Migrations run automatically on startup. The `setup/admin` command also seeds the demo project and selftest template.
+> Migrations run automatically on startup. The first `setup/admin`, run while no user exists, also seeds the demo project and selftest template. While no active superadmin exists, `setup/admin` creates a new superadmin, the way back in when no superadmin can sign in (see [troubleshooting.md](troubleshooting.md#no-superadmin-can-sign-in-any-more)); while one exists it answers `An active superadmin already exists. Aborting.` and changes nothing.
 
 ---
 
@@ -89,6 +89,19 @@ docker compose exec app php yii setup/admin admin admin@example.com yourpassword
 > `YII_ENV=dev` and `YII_DEBUG=1`, which turn on the debug toolbar and verbose
 > error pages. In production, use the prebuilt images or the
 > [Ansible deploy role](deployment.md).
+>
+> With `YII_ENV=dev` the debug and gii modules answer everyone who reaches
+> the stack, signed in or not, and the development compose file publishes
+> the web port on every interface of the host. The debug module's request
+> panel leaves out request bodies, passwords, credential secrets, survey
+> answers, channel secrets, cookies and the secrets of `.env`
+> (`config/debug.php`), but it still lists every URL requested, with the
+> token of a trigger URL or a password-reset link in it, and its other
+> panels show the configuration with every value of `.env`
+> (`APP_SECRET_KEY`, the database password, `COOKIE_VALIDATION_KEY`,
+> `RUNNER_BOOTSTRAP_SECRET`), the stored record of the signed-in user, the
+> mails sent, with their password-reset links, and every SQL statement
+> with its values. A dev stack must never be reachable by others.
 
 ---
 
@@ -180,7 +193,7 @@ All configuration is via `.env`. Variables with no default are required; everyth
 
 | Variable | Description |
 |---|---|
-| `LDAP_ENABLED` | `false` by default. Set to `true` to enable — see [ldap.md](ldap.md) for the full variable set. |
+| `LDAP_ENABLED` | `false` by default. Set to `true` to enable — see [ldap.md](ldap.md) for the full variable set. Prebuilt images: 2.11.0 or later (see [ldap.md](ldap.md#container-images)). |
 
 ### Audit
 

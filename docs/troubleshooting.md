@@ -86,6 +86,27 @@ script that the repository's `ansible.cfg` names. What you see instead:
 Jobs are not affected: the runner decrypts with the job template's vault
 credential.
 
+## Generate Ed25519 Key Pair or Parse Inventory: the server refused the request
+
+**Symptom:** **Generate Ed25519 Key Pair** on the credential form says
+`The server refused the request (HTTP 403): your session may have ended, or you are not allowed to do this; reload the page and sign in.`,
+or **Parse Inventory** (or **Refresh**) on an inventory's page shows it in
+the result card; a `401` reads `HTTP 401` instead.
+
+**Cause:** The session ended, for example after a sign-out in another tab,
+or the user may not do it: generating a key pair needs
+`credential.create`, also on the Edit form of a credential, which
+`credential.update` opens, and parsing an inventory needs
+`inventory.view` and access to the project of the inventory. Up to 2.10.1
+the buttons said `Request failed: SyntaxError: …` and
+`Server response was not JSON` for a session that had ended (see
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Fixes that change behaviour**).
+
+**Fix:** Load the page again and sign in. If the refusal stays, an admin
+gives the permission, or generate the key pair elsewhere and paste its
+private key into the form.
+
 ## Job aborted before execution: credentials could not be used
 
 **Symptom:** A job fails right after it was claimed, and its log starts with
@@ -305,11 +326,12 @@ order, whose approval could never be granted:
 
 **Cause:** Nobody approves their own launch, and only eligible approvers
 count: users on the rule's approver list (for a role rule, the users
-assigned that role directly) who have an active account, are superadmins or
-hold `approval.decide`, and may see the job template's project (for a
-workflow approval step, the workflow). Fewer of them than the rule's
-required approvals remain besides the user who launches, so the request
-could never be approved. That user is whoever launches in the web UI or the
+assigned that role directly; for a team rule, the members of the team) who
+have an active account, are superadmins or hold `approval.decide`, and may
+see the job template's project (for a workflow approval step, the
+workflow). Fewer of them than the rule's required approvals remain besides
+the user who launches, so the request could never be approved. That user
+is whoever launches in the web UI or the
 API, the user a schedule runs as (who last changed what or when it runs, or
 enabled it), the user a trigger runs as (who generated its token, or the
 template's creator for a token generated before Ansilume recorded that), or
@@ -374,15 +396,20 @@ warning, as an error page, or after `Your decision was not recorded: `;
 in brackets:
 
 - `You launched this job; another approver must decide.` (`403`): you
-  launched the job or started the workflow run; or the schedule that
-  launched it runs as you, because you were the last to change what or
-  when it runs, or to enable it; or the trigger that launched it runs as
-  you, because you generated its token, or because you created the
-  template and its token was generated before Ansilume recorded who
-  generated it (until the token is generated again). Nobody approves their
-  own launch, admins and superadmins included, and votes you cast before
-  the update count for nothing (the page marks them
+  launched the job; or the schedule that launched it runs as you, because
+  you were the last to change what or when it runs, or to enable it; or the
+  trigger that launched it runs as you, because you generated its token, or
+  because you created the template and its token was generated before
+  Ansilume recorded who generated it (until the token is generated again).
+  Nobody approves their own launch, admins and superadmins included, and
+  votes you cast before the update count for nothing (the page marks them
   `launcher, not counted`). Another approver must decide.
+- `You launched this workflow run; another approver must decide.` (`403`):
+  the request belongs to an approval step, or to a job step whose job
+  template has an approval rule, of a workflow run that you started, or
+  that the workflow's trigger started as you. The run's page says
+  `You launched this run, so another approver must decide.` Up to 2.10.1
+  the refusal read as for a job.
 - `You are not eligible to decide on this request.` (`403`): you are not on
   the rule's approver list, you lack `approval.decide`, or you may not see
   the job's project (the workflow, for a workflow approval step). An admin
@@ -462,9 +489,10 @@ workflows, or pending approval requests whose job still waits for approval
 refer to it. Before the update to approvals and workflows, deleting such a
 rule silently ungated its job templates and deleted its requests.
 
-**Fix:** Choose another rule, or none, on each job template; remove the
-workflow steps that use it (this needs `approval-rule.update`, and waits
-until the workflow's runs have finished); and let its pending requests be
+**Fix:** Choose another rule, or none, on each job template; edit the
+workflow steps that use it to choose another rule, or remove them (this
+needs `approval-rule.update`, and waits until the workflow's runs have
+finished); and let its pending requests be
 decided, or cancel their jobs. The card lists only what you may see and
 counts the rest: an admin who sees everything finds the others. Then delete
 the rule.
@@ -474,6 +502,58 @@ the application log mentions `Deadlock found when trying to get lock` or
 `Lock wait timeout exceeded`: another save assigned the rule at the same
 moment, twice in a row. Try again; once that save has committed, the delete
 is refused with the message above.
+
+## A workflow run seems stuck
+
+**Symptom:** A workflow run shows Awaiting Approval, Paused, Queued or
+Running for longer than expected, and the steps of its workflow cannot
+change:
+`Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.`
+
+**Cause and fix:** The run waits. The banner on the run's page says what
+for, and who can move it on:
+
+- `Waiting for approval at step "Release approval".` or
+  `Job #34 of step "Deploy" waits for approval.`: the approval request
+  below it, such as `Approval Request #18`, waits for its approvers.
+  `1 of 2 approval(s)` and `2 approver(s) can still decide` say how far it
+  got, and the line for you whether you may decide:
+  `You can decide on this request.`, with **Review & decide**, or
+  `You launched this run, so another approver must decide.` (see
+  [Approve or Reject is refused, or missing](#approve-or-reject-is-refused-or-missing)).
+- `Too few of the rule's approvers can still decide, so this request can no longer be approved. An admin can add approvers to the rule, or cancel the run.`:
+  nobody can approve the request any more, for example because approvers
+  were disabled or taken off the rule after the launch, or lost access to
+  the job. An admin adds approvers to the rule, or someone cancels the run.
+- `expired 2026-10-14 14:02:11; the next maintenance run applies its timeout (then rejected)`:
+  the rule's timeout has passed, and the next maintenance run, within a
+  minute, rejects or approves the request as the rule says. When the
+  banner keeps saying so, the maintenance run fails (see
+  [Approval timeouts or the deleted-template sweep keep failing](#approval-timeouts-or-the-deleted-template-sweep-keep-failing)).
+  A request that `never expires` waits until someone decides, or the run
+  is canceled.
+- `Its approval request no longer exists: the next maintenance run cancels the wait, and the step fails.`:
+  the job waits for approval without a request, which releases up to 2.9.0
+  could leave; the next maintenance run cancels the job, and the run goes
+  on as after a rejection (see
+  [A job was canceled without anyone canceling it](#a-job-was-canceled-without-anyone-canceling-it)).
+- `Paused at step "Wait" until someone resumes the run.`: **Resume** on the
+  run's page or the dashboard moves it on; it needs `workflow.launch` and
+  operator access to the project of every job step.
+- `Job #34 of step "Deploy" is queued: it waits for a runner.`: no runner
+  has claimed the job. Check that the job template's runner group has an
+  online runner (see [runners.md](runners.md)), and the job's page.
+- No banner, and the step reads Running: its job runs; its page shows the
+  log.
+
+**Cancel** on the run's page ends the run, whatever it waits for, with its
+job and approval request. The API says the same:
+`GET /api/v1/workflow-jobs/{id}` has `waiting_for` and `current_step`, and
+the current step's `approval` has `open_count` and
+`can_still_be_approved`; `GET /api/v1/workflow-jobs?waiting_for=approval`
+lists the runs that wait for an approval, and
+`GET /api/v1/approvals?status=pending` the requests (see
+[workflows.md](workflows.md#runs-and-approvals)).
 
 ## Workflow step failed without a job
 
@@ -557,10 +637,13 @@ cannot go on after it. Its error says why:
   while it had pending requests, and the maintenance run canceled its job
   (see [A job was canceled without anyone canceling it](#a-job-was-canceled-without-anyone-canceling-it)).
   The run goes on as after a rejection.
-- **"The next step #7 of this workflow no longer exists."**, added to the
-  step's own error, also on a step that succeeded: one of its branches leads
-  to a step that was removed, so the run fails instead of ending as if the
-  workflow were done.
+- **"The step this branch leads to no longer exists (step ID 7)."**, added
+  to the step's own error, also on a step that succeeded: one of its
+  branches leads to a step that was removed, so the run fails instead of
+  ending as if the workflow were done. Steps that ran before 2.11.0 show
+  **"The next step #7 of this workflow no longer exists."** The steps table
+  of the workflow's page labels such a branch
+  `missing step (ID 7) · run fails`.
 - **"This step was removed from the workflow while it ran, so the run
   cannot go on."**: the step's row was deleted while it ran, which Ansilume
   itself refuses while a run is active, for example in the database; the
@@ -571,6 +654,8 @@ cannot go on after it. Its error says why:
   started. Its job was canceled with its pending approval request; when
   that failed, the maintenance run cancels the job later (see
   [A job was canceled without anyone canceling it](#a-job-was-canceled-without-anyone-canceling-it)).
+  The run's page shows such a step as Canceled; the API keeps its status
+  `failed`.
 - **"Not finished: the run had ended."**: the step still showed as running
   in a run that had ended otherwise; the maintenance run ended it.
 
@@ -578,13 +663,15 @@ cannot go on after it. Its error says why:
 `workflow.launch`, or operator access to the step's project), or let a user
 who may operate every job step launch the workflow again. For a trigger,
 revoke its token and generate a new one as such a user. For a missing job
-template or approval rule, or a branch to a removed step, remove the step
-and add it again with its target and branches, after the workflow's runs
+template or approval rule, or a branch to a removed step, edit the step and
+choose another job template, rule or branch (see
+[Editing a step](workflows.md#editing-a-step)), after the workflow's runs
 finished or were canceled (see
 [Changing workflow steps is refused](#changing-workflow-steps-is-refused));
 only admins change the steps of a workflow with an approval step or a job
-step whose job template has an approval rule. For an
-unknown step type, remove the step and add it again with its type. For a
+step whose job template has an approval rule. A step's type cannot change:
+for an unknown step type, add a step of the right type, edit the steps that
+lead to the old one to lead to the new one, and remove the old one. For a
 closed gate, set the step's On Failure branch to the step that should follow
 a rejection, if the workflow should go on; for too few approvers, an admin
 adds approvers to the rule. Then launch the workflow again.
@@ -622,7 +709,7 @@ created.
 - `Step "Release approval": its approval rule no longer exists. An admin can choose another rule.`:
   the approval step has no rule (see
   [Workflow step failed without a job](#workflow-step-failed-without-a-job)).
-  An admin removes the step and adds it again with a rule.
+  An admin edits the step and chooses a rule.
 
 A refusal by team scoping answers `403` instead, as before.
 
@@ -643,24 +730,38 @@ see
 ## Workflow steps run in the wrong order
 
 **Symptom:** A workflow run starts with another step than intended, runs
-its steps in another order than they were added, or runs a job step before
-the approval step that should come first. Build, Test and Deploy, for
-example, run as Deploy, Test, Build.
+its steps in another order than the list on the workflow's page, or runs a
+job step before the approval step that should come first. Build, Test and
+Deploy, for example, run as Deploy, Test, Build.
 
-**Cause:** A run starts with the step at the top of the steps table on the
-workflow's page, the lowest `#`, and where a step's On Success branch is
-empty, it goes on with the next step down; a branch that names a step goes
-there. From 2.3.15 to 2.10.0, a step added with the Step Order that the Add
-Step form filled in went to the top, not to the end (see
+**Cause:** A run starts with step 1 of the steps table on the workflow's
+page, marked `Start`, and follows the branches of each step. A branch that
+names a step goes there; an empty branch goes on with the next step in the
+list, marked `(next)`, such as `→ 2. Test (next)`. So the order of the list
+decides where empty branches lead, and adding, moving or removing a step
+changes it. Read the branches of each step:
+
+- `→ 3. Deploy (next), also after a failure` on a job step's On Failure: the
+  run goes on with the next step also when the job failed, as job steps
+  added through the API, or before 2.11.0, do by default.
+- `↺ 1. Build`: the branch leads back to the same or an earlier step, and the
+  run repeats steps until a branch leads elsewhere.
+- `end · run succeeds` or `end · run fails`: the run ends there.
+
+Steps that share a step order run in the order of their IDs, as the list
+shows them; before 2.11.0, an empty branch skipped such a step. The query
+under **Steps that share a step order** in
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs)
+lists them. From 2.3.15 to 2.10.0, a step added with the Step Order that
+the Add Step form filled in went to the top, not to the end (see
 [updating.md](updating.md#after-updating-from-2100-or-older-new-workflow-steps-go-to-the-end)).
-A typed Step Order puts a step after the steps with the same number or a
-lower one.
 
-**Fix:** On the workflow's page, move the steps with ▲ / ▼ until the table
-lists them in the order they should run, and check the branches that name a
-step. To add a step at the end, leave Step Order empty (`At the end`); a
-step that is removed and added again, as several entries here advise, goes
-to the end too unless its Step Order is typed. When a move is refused, see
+**Fix:** On the workflow's page, check the success path above the steps
+table, then move the steps with ▲ / ▼ or **Move to…** until the table lists
+them in the order they should run, and edit the steps whose branches should
+lead elsewhere (see [workflows.md](workflows.md#moving-steps)). To end the
+run after a failed job, choose `End the workflow: the run fails` under On
+Failure. When a move or an edit is refused, see
 [Changing workflow steps is refused](#changing-workflow-steps-is-refused).
 The query under **Check your workflows** in
 [updating.md](updating.md#after-updating-from-2100-or-older-new-workflow-steps-go-to-the-end)
@@ -669,37 +770,52 @@ workflow.
 
 ## Changing workflow steps is refused
 
-**Symptom:** Adding, removing or moving a step on a workflow's page, or
-`POST` or `PUT /api/v1/workflow-templates` with `steps`, is refused. The
-page shows the message (after `Step not added: ` for a new step) or an
-error page (`403`); the API answers with the status in brackets:
+**Symptom:** Adding, editing, moving or removing a step on a workflow's
+page, a call of the step endpoints (`/api/v1/workflow-templates/{id}/steps`),
+or `POST` or `PUT /api/v1/workflow-templates` with `steps`, is refused. The
+page shows the message after `Step not added: `, `Step not saved: ` or
+`Step not moved: `, alone for a step that was not removed, or on an error
+page (`403`, `404`); the API answers with the status in brackets:
 
 - `Steps cannot change while run(s) #12 of this workflow are active: wait for them to finish or cancel them.`
   (`409`, with every such run in `error.workflow_job_ids`): a run reads the
   steps at every step it reaches, so the steps stay as they are while a run
   of the workflow is running. The workflow's page names the runs and hides
-  the step controls. Wait for them, or cancel them. A run that never
-  finishes, for example one whose step records an older release deleted,
-  blocks the steps until it is canceled; the eighth query under
+  the step controls, and the page of a step disables its form. Wait for
+  them, or cancel them; a run that waits for an approval, a resume or a
+  runner says so on its page (see
+  [A workflow run seems stuck](#a-workflow-run-seems-stuck)). A run that
+  never finishes, for example one whose step records an older release
+  deleted, blocks the steps until it is canceled; the eighth query under
   [updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows)
   lists such runs.
-- `Step "Build" was not removed: other steps route to it (#10 "Retry"). Remove those steps first, and add them again with other routes if you still need them.`:
-  a branch of another step leads to this one, and would fail the run.
-  Remove the steps it names first.
+- `Step "Build" was not removed: other steps route to it (step 3 "Retry"). Edit those steps to lead elsewhere first, then remove it.`
+  (`409`, with those steps in `error.step_ids`): a branch of another step
+  leads to this one, and would fail the run. Edit the steps it names to
+  lead to another step or to the end, then remove it; the page of the step
+  lists them under `Steps that route here`, with a `Not used: …` note under
+  a step whose branch here no run takes, which keeps the step all the same.
+  Up to 2.10.1 this read
+  `Step "Build" was not removed: other steps route to it (#10 "Retry"). Remove those steps first, and add them again with other routes if you still need them.`
 - `Only admins may add approval steps: that needs approval-rule.update.`
   (`403`): adding an approval step, or steps that include one, needs
   `approval-rule.update`.
 - `This workflow has an approval step: only admins may change its steps (approval-rule.update).`
   (`403`): every change of the steps of a workflow with an approval step
-  needs `approval-rule.update`, also a `steps` list with the same steps.
-  Users without it may still rename the workflow, launch it and manage its
-  trigger token.
+  needs `approval-rule.update`, editing a step included, also a `steps`
+  list with the same steps. Users without it may still rename the
+  workflow, launch it and manage its trigger token.
 - `Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.`
   (`403`): a gated job step, one whose job template has an approval rule, is
   for admins, as an approval step is: its job runs as the user who starts
   the workflow, who never approves it, so whoever chose the step could
-  approve it alone. The add-step form offers users without
-  `approval-rule.update` only job templates without an approval rule.
+  approve it alone. This holds for editing a job step to use such a job
+  template too. The step forms offer users without `approval-rule.update`
+  only job templates without an approval rule. It also comes when an admin
+  gives that job template an approval rule at the same moment: Add Step,
+  Edit Step, the step endpoints and a `steps` list of `POST` or
+  `PUT /api/v1/workflow-templates` check it again while they write the
+  change, and write nothing.
 - `This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).`
   (`403`): the workflow has a gated job step, so every change of its steps
   needs `approval-rule.update`, as for an approval step. This holds as well
@@ -710,16 +826,54 @@ error page (`403`); the API answers with the status in brackets:
   there (see
   [updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows),
   **Only admins change what a gated job template runs**).
+- `You may not use this job template in a workflow: that needs operator access to its project.`
+  (`403`, with the job template in `error.job_template_ids`): you may see
+  the job template, but not operate its project; choose one you may
+  operate. `Step not added: A job step needs a job template.` and
+  `Step not added: The selected job template does not exist.` (`422`) ask
+  for a job template you may use.
+- `A step's type cannot change: add a new step and remove this one.`
+  (`422`): add a step of the other type where this one stands, edit the
+  steps that lead to this one to lead to the new one, then remove it.
+- `Step not added: The step to place it after (step ID 43) is not part of this workflow. Load the workflow again and choose another position.`
+  (`422`): someone removed that step after the page was loaded. Load the
+  page again and choose another position. A position that does not fit
+  answers `A step cannot be placed after itself.` or, from the API,
+  `position must be "start", "end" or a number from 1 to 5.` (`422`); a
+  position the web form does not offer,
+  `Choose a position: at the start, at the end, or after a step of this workflow.`
+- The step endpoints refuse a body they cannot read (`422`):
+  `Send either position or after_step_id, not both.`,
+  `Send exactly one of position, after_step_id and direction.`,
+  `position must be "start", "end" or a whole number from 1.`,
+  `after_step_id must be the ID of a step of this workflow.`,
+  `direction must be "up" or "down".`,
+  `on_failure_step_id must be null, 0 (end the workflow) or the ID of a step of this workflow.`,
+  or, for a pause step,
+  `A pause step only has on_success_step_id: Resume continues there. Send on_failure_step_id and on_always_step_id as null.`
+- `Workflow template #7 has no step with ID 44.` (`404`): the step was
+  removed meanwhile, or belongs to another workflow.
 - `Step not added: An approval step needs an approval rule.`, or
   `Step not added: The selected approval rule does not exist.`: choose an
-  existing rule for the approval step. The API answers
+  existing rule for the approval step. A `steps` list answers
   `steps[1]: An approval step needs approval_rule_id, the ID of an approval rule.`
   or `Approval rule(s) not found: #9.` (`422`).
 - `Step not added: An approval step cannot have an Always branch: a rejection would continue past it.`:
-  approval steps have no Always branch; use On Success and On Failure.
+  approval steps have no Always branch; use On Success and On Failure. The
+  step endpoints answer it (`422`) for an approval step that keeps an
+  Always branch an older version saved, until the change sends
+  `on_always_step_id: null`; the page of the step shows such a branch
+  under On Success and saves it there.
 - `Step not added: The selected step is not part of this workflow.`: a
   branch names a step of another workflow, or one that was removed
   meanwhile; choose a step of this workflow.
+- `extra_vars_template must be null or a JSON object that maps extra var names to the names of output variables, such as {"app_version": "build_version"}.`
+  (`422`; `steps[<n>]: ` before it in a `steps` list): the variable mapping
+  of a step is a list, a number, text, `true` or `false`, holds a value that
+  is not text, or has an empty key or a key that is a whole number, such as
+  `"0"`. Send an object of extra var name to output variable name, or
+  `null` to remove the mapping. A mapping of another shape that an older
+  version stored stays while a change leaves it as it is.
 
 ## Deleting a workflow template: runs could not be canceled
 
@@ -813,6 +967,35 @@ database error, see
 [Approval timeouts or the deleted-template sweep keep failing](#approval-timeouts-or-the-deleted-template-sweep-keep-failing)
 for what the SQLSTATE and the driver's error code mean. A notification that
 failed is not sent again.
+
+## Saving a notification template or a webhook: a secret has no stored value
+
+**Symptom:** Saving a notification template, on its edit form or with
+`POST` or `PUT /api/v1/notification-templates`, is refused (`422` in the
+API) with one of these messages, where the first part names the place of
+the secret in the channel's config:
+
+- `bot_token has no stored value; enter the real value.`
+- `webhook_url: the channel changed; enter the real value.`
+- `headers.Authorization: url changed; enter the real value.`
+
+Or saving an outbound webhook, on its form or with `POST` or
+`PUT /api/v1/webhooks`, says
+`The secret has no stored value; enter the real value.`
+
+**Cause:** Pages and the API show every channel secret of a notification
+template as `$encrypted$`, and the edit form of an outbound webhook shows
+its signing secret so (the API never answers it). A save that sends
+`$encrypted$` back keeps the stored value. That works
+only where a value is stored: not for a new template or webhook, not after
+the template's channel changed, and not for a header of a webhook channel
+once its URL changed, so that a header is never sent to another address
+without being entered again.
+
+**Fix:** Enter the real value in place of `$encrypted$`: the bot token, the
+webhook URL, the routing key or the header's value; for an outbound
+webhook, the signing secret, or an empty field to send deliveries
+unsigned.
 
 ## Approval timeouts or the deleted-template sweep keep failing
 
@@ -1334,6 +1517,53 @@ and restart the process; dev checkout: `docker compose up -d
 migrations). Without `runner-group.view` the card shows only how many runners
 are affected.
 
+## A job fails at once: git cannot fast-forward the runner's checkout
+
+**Symptom:** A job fails before Ansible runs, and its log says
+`Git sync failed (exit 128, …)` with
+`command: git -C /var/www/runtime/projects/5 merge --ff-only FETCH_HEAD`
+and `fatal: refusing to merge unrelated histories` or
+`fatal: Not possible to fast-forward, aborting.`
+
+**Cause:** The runner's checkout of the project holds a history that the
+branch no longer has: the project's URL names another repository now, or
+the branch was force pushed. From 2.11.0 on, a runner points its checkout
+at the project's current URL before every job, fetches the branch and only
+fast-forwards; it never discards what the checkout holds. Up to 2.10.1 a
+runner whose project's URL had changed kept fetching from the URL its
+checkout was cloned with; a force push failed its fast-forward then too.
+
+**Fix:** Remove the project's checkout on that runner
+(`/var/www/runtime/projects/<project ID>`, in its container if it runs in
+one); its next job clones the repository again. The server resets its own
+checkout to what it fetched and needs nothing. See
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Security: repository URLs in syncs and logs**.
+
+## Project sync fails: the branch starts with "-"
+
+**Symptom:** The sync of a project fails with, for example,
+`git command failed (exit 128): fatal: couldn't find remote ref -x`, and
+its jobs fail with `Git sync failed (exit 128, …)` and the same message of
+git. Saving the project, in its Edit form or with
+`PUT /api/v1/projects/{id}`, is refused with
+`The branch cannot start with "-" or contain whitespace.`
+
+**Cause:** The project's branch starts with `-`. From 2.11.0 on, git gets
+the branch after `--` and takes it for a branch name, never for one of its
+options; up to 2.10.1 git read such a branch as an option (see
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Security: a project's branch read as an option of git**). From 2.11.0
+on, for git projects, the project form and the API refuse such a branch,
+and any branch with whitespace, with
+`The branch cannot start with "-" or contain whitespace.`; a git project
+saved with one before keeps it, and saving it as a git project is refused
+with the same text until its branch is changed. The branch of a manual
+project is not checked: no sync reads it.
+
+**Fix:** Give the project the branch it should check out and save it:
+saving a git project queues a sync.
+
 ## Deleting a project is refused
 
 **Symptom:** Deleting a project shows
@@ -1374,6 +1604,218 @@ another runner group for every job template that uses the group; then
 delete it. Changing the runner group of a job template with an approval
 rule is for admins (see
 [Saving a job template is refused: it has an approval rule](#saving-a-job-template-is-refused-it-has-an-approval-rule)).
+
+## Changing a user is refused
+
+**Symptom:** The Edit User form, opened or saved, **Deactivate**,
+**Activate**, **Delete**, or `PUT` or `DELETE /api/v1/users/{id}` answers
+`403` with
+`You cannot change or delete this user: they are a superadmin, or a role assigned to them grants permissions you do not hold.`,
+`You cannot change or delete this user: a role assigned to them is or contains the admin role, which only a superadmin or an admin may assign.`
+or
+`You cannot change or delete this user: their teams give them more access to a project than you have.`,
+and the users list and the user page offer no **Edit**, **Deactivate**,
+**Activate** or **Delete** for that user.
+
+**Cause:** Only superadmins change superadmins. A user who is no
+superadmin changes a user only when they may assign every role assigned to
+that user: a role that grants no permission they do not hold, and the
+`admin` role, or a role that contains it, only while they hold the `admin`
+role. Unless they hold the `admin` role, their own teams must also give
+them every team-restricted project that the user's teams give the user,
+with at least the same role (operator over viewer). A user who holds every
+permission of the user's roles, but neither is a superadmin nor holds the
+`admin` role, gets the second refusal for a user who is no superadmin and
+holds the `admin` role or a role that contains it, whatever the user's
+teams: the `admin` role also gives every team-restricted project.
+
+**Fix:** Let a superadmin or an admin make the change, or give the user who
+makes it what the refusal names: the permissions of the user's roles, or a
+team with the user's projects and roles. Roles and the superadmin flag are
+given by the same rule: the Role field, `POST /api/v1/users` and
+`PUT /api/v1/users/{id}` refuse
+`You cannot assign the role "admin": it grants permissions you do not hold.`
+and
+`You cannot assign the role "admin": it is or contains the admin role, which only superadmins and admins may assign.`,
+and the API `Only a superadmin can set or clear is_superadmin.` The only
+active superadmin edits their own account, but neither clears their
+superadmin flag nor deactivates their account, and is not deleted: the
+form and **Delete** answer `403`
+`Cannot remove, demote or deactivate the only active superadmin account.`,
+the API `422` `Cannot demote the only active superadmin.`,
+`Cannot deactivate the only active superadmin.` or
+`Cannot delete the only active superadmin.` An inactive superadmin does
+not count, as they cannot sign in, and may be demoted, deactivated or
+deleted. Make another user a superadmin, or reactivate one, first; when no
+superadmin can sign in at all, see
+[No superadmin can sign in any more](#no-superadmin-can-sign-in-any-more).
+See
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Security: who may change other users' accounts**.
+
+## No superadmin can sign in any more
+
+**Symptom:** Nobody can sign in as a superadmin: every account with the
+superadmin flag is inactive, or no account has the flag any more. The
+users list and the user page offer an admin who is no superadmin no
+**Edit** and no **Activate** for such a user, and
+`PUT /api/v1/users/{id}` answers them `403`
+`You cannot change or delete this user: they are a superadmin, or a role assigned to them grants permissions you do not hold.`
+
+**Cause:** From 2.11.0 on, only superadmins change superadmins, so once no
+superadmin can sign in, nothing in the web UI or the API makes one active
+again. That happens when:
+
+- `php yii ldap/sync` deactivates an LDAP account, a superadmin's too,
+  when the directory's user search runs and finds no entry for it, such as
+  one removed from the directory. It revokes the account's roles and
+  deletes its API tokens, keeps its superadmin flag, and records
+  `ldap.user.disabled` in the audit log. Up to 2.10.1 it did so for every
+  LDAP account whose lookup failed as well: all of them while the service
+  bind failed or LDAP was enabled without a host or base DN, and each one
+  whose user search failed; from 2.11.0 on, a lookup that fails changes
+  nothing.
+- Up to 2.10.1, **Deactivate** (with `user.delete`) deactivated any other
+  superadmin, and `PUT /api/v1/users/{id}` with `status` 0 (with
+  `user.update`) any superadmin, the last active one too. An inactive
+  superadmin counted as another superadmin, so the last active superadmin
+  could also take their own flag while the only other superadmin was
+  inactive.
+- Two superadmins deactivate, demote or delete each other at the same
+  moment: the checks take no lock.
+- The database was changed directly.
+
+**Fix:** An LDAP superadmin whom `ldap/sync` deactivated while the
+directory could not be read (up to 2.10.1) signs in again once it can be
+read: the sign-in, like the next `ldap/sync` that finds them, activates
+the account (`ldap.user.reenabled`), with the roles their groups map to.
+That holds while `user.ldap_sync_disabled` marks the account, as the
+migration of 2.11.0 does for an account whose latest status entry in the
+audit log is `ldap.user.disabled`; an account changed in Ansilume after
+that stays inactive whatever the directory says (see
+[An LDAP user cannot sign in: the account was deactivated in Ansilume](#an-ldap-user-cannot-sign-in-the-account-was-deactivated-in-ansilume)).
+Otherwise, while no active superadmin exists, run
+
+```bash
+docker compose exec app php yii setup/admin <username> <email> [password]
+```
+
+It creates an active superadmin with the `admin` role, and prints a
+generated password when none is given. Use a username and an email that no
+user has, not those of an old superadmin: a taken one fails with
+`Failed to create user: …` and creates nothing. The run is audited as
+`user.created` with the source `console:setup/admin`, and leaves the
+seeded Selftest and Demo content alone. Sign in as the new superadmin,
+then activate the old superadmins again (**Activate**) or remove them
+(clear their flag, or **Delete** those that nothing refers to). While an
+active superadmin exists, `setup/admin` answers
+`An active superadmin already exists. Aborting.` and changes nothing: sign
+in as that superadmin instead. See
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Security: who may change other users' accounts**.
+
+## An LDAP user cannot sign in: the account was deactivated in Ansilume
+
+**Symptom:** The sign-in of an LDAP user is refused with
+`Incorrect username or password.`, though the directory has the user and
+the password is right: `php yii ldap/test-user <username>` finds them. The
+audit log records `ldap.login.failed` with the reason
+`Account deactivated in Ansilume.`, `php yii ldap/sync` prints
+`- <username>: deactivated in Ansilume, not by ldap/sync → left inactive`,
+and the user page says
+`Deactivated in Ansilume: the directory does not activate the account again, neither an LDAP sign-in nor ldap/sync.`
+under the status.
+
+**Cause:** This is expected. The account was deactivated in Ansilume
+(**Deactivate**, the Edit User form or `PUT /api/v1/users/{id}`), or the
+update to 2.11.0 found no `ldap.user.disabled` as its latest status entry
+in the audit log. From 2.11.0 on, an LDAP sign-in or `ldap/sync` activates
+again only an account that `ldap/sync` deactivated because the directory
+no longer had the user (`user.ldap_sync_disabled`), so that an admin can
+lock out an LDAP user who is still in the directory. Up to 2.10.1 the
+user's next sign-in, or the next `ldap/sync`, activated the account again.
+
+**Fix:** If the user should sign in again, activate the account on their
+page (open it from the Users page, then **Activate**) or with
+`PUT /api/v1/users/{id}` and `status` 10. They then sign in with their
+directory password and get the roles their groups map to. See
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Security: LDAP accounts deactivated in Ansilume**.
+
+## LDAP fails: "PHP ldap extension is not loaded."
+
+**Symptom:** With `LDAP_ENABLED=true` and a host and base DN set,
+`php yii ldap/test-connection`, `php yii ldap/test-user <username>` and
+`php yii ldap/sync` (at its first LDAP account) stop with
+`Error: PHP ldap extension is not loaded.` and exit with `1`. The sign-in
+of an LDAP user, or of a username that is no local account, shows the
+error page (`500`), and `/api/v1/admin/ldap/test` answers `500`. Local
+accounts sign in as before. The application log has an
+`app\services\ldap\LdapException` with `PHP ldap extension is not loaded.`
+
+**Cause:** The PHP of the container has no `ldap` extension. The prebuilt
+app image `ghcr.io/ansilume/ansilume` had none up to 2.10.1, so LDAP never
+worked with `docker-compose.prebuilt.yml`, the quickstart or the deploy
+role's prebuilt mode.
+
+**Fix:** Update to 2.11.0 or later (`docker compose pull && docker compose
+up -d`, or quickstart `--update`). Then
+`docker compose exec app php -m | grep -x ldap` prints `ldap`, and
+`php yii ldap/test-connection` reaches the directory. An image of your own
+built on `ghcr.io/ansilume/ansilume` 2.10.1 or older needs `libldap2-dev`
+and `docker-php-ext-install ldap`, as `docker/php/Dockerfile.prod` has
+them from 2.11.0 on. See [ldap.md](ldap.md#container-images).
+
+## ldap/sync fails: a lookup or the service bind failed
+
+**Symptom:** `php yii ldap/sync` exits with `1` and prints, for a user,
+`- jdoe: lookup failed → left unchanged (User search failed: No such object)`,
+or stops with
+`[ldap] Service bind failed (Service account bind failed: Can't contact LDAP server): sync stopped, 12 user(s) left unchanged.`;
+or it exits with `78` and prints
+`[ldap] LDAP is enabled but not fully configured (host or base DN missing): sync stopped, no user changed.`
+
+**Cause:** The directory could not be read, or LDAP is enabled without a
+host or base DN, so `ldap/sync` left those accounts, their roles and their
+API tokens as they are: a lookup that fails says nothing about the user.
+A user or group search that fails or does not run to the end (a referral
+to another server, a size limit), and a user search that matches more than
+one entry, fail the lookup of that user; a failed service bind stops the
+run, as every further lookup would fail too. Up to 2.10.1 such a run
+deactivated the accounts (see
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**ldap/sync and a directory that cannot be read**).
+
+**Fix:** Run `php yii ldap/test-connection` and
+`php yii ldap/test-user <username>`, which name the failure. Check
+`LDAP_HOST`, the service account (`LDAP_BIND_DN`, `LDAP_BIND_PASSWORD`)
+and `LDAP_BASE_DN`: a referral means that another server holds the base
+DN. `LDAP_USER_FILTER` must match exactly one entry for each user, and
+`LDAP_GROUP_FILTER` must run without an error. Then run `ldap/sync` again.
+See [ldap.md](ldap.md#console-commands).
+
+## Changing a role is refused
+
+**Symptom:** The New Role or Edit Role form shows
+`You cannot grant the permission "user.update": you do not hold it.` under
+Permissions, or `POST /api/v1/roles` or `PUT /api/v1/roles/{name}` answers
+`403` with it; or the Edit Role form, opened or saved, **Delete**, or `PUT`
+or `DELETE /api/v1/roles/{name}` answers `403`
+`You cannot change or delete this role: you may not assign it, as it grants more than you hold.`,
+and the role page offers no **Edit** or **Delete**.
+
+**Cause:** A user who is no superadmin gives a role only permissions they
+hold, through their roles or the default role, and changes or deletes only
+a role they may assign: one that grants no permission they do not hold,
+and the `admin` role, or a role that contains it, only while they hold the
+`admin` role. The forms disable the permissions they do not hold and say
+`Permissions you do not hold are disabled: you can grant only what you hold.`
+Removing permissions from a role they may change is never refused.
+
+**Fix:** Let a superadmin or an admin make the change, or have them give the
+user who makes it the permission first. See
+[updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs),
+**Security: who may change roles**.
 
 ## Runner group page warns about plain HTTP
 

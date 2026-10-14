@@ -6,6 +6,8 @@ namespace app\controllers\api\v1;
 
 use app\helpers\PermissionCatalog;
 use app\models\RoleForm;
+use app\services\RoleChangePolicy;
+use app\services\RoleChangeRefusedException;
 use app\services\RoleService;
 use yii\web\NotFoundHttpException;
 
@@ -14,6 +16,14 @@ use yii\web\NotFoundHttpException;
  *
  * All endpoints require API token authentication via BaseApiController.
  * Role.* permissions are enforced per-action.
+ *
+ * What the caller may change (RoleChangePolicy), for a caller who is no
+ * superadmin: PUT and DELETE of a role they may not assign answer 403
+ * (RoleChangePolicy::CHANGE_REFUSED), after the 404 of a role that does not
+ * exist and before every other check; POST of a role, and PUT that adds to
+ * one, with a permission they do not hold answer 403
+ * (RoleChangePolicy::PERMISSION_REFUSED, naming the first such permission),
+ * after the 422 of a body that does not validate. Each writes nothing.
  */
 class RolesController extends BaseApiController
 {
@@ -60,6 +70,10 @@ class RolesController extends BaseApiController
     }
 
     /**
+     * Creates the role: 422 for a body that does not validate, then 403
+     * (RoleChangePolicy::PERMISSION_REFUSED) for a permission the caller may
+     * not grant.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionCreate(): array
@@ -72,8 +86,10 @@ class RolesController extends BaseApiController
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($form, $body);
 
-        if (!$this->service()->createRole($form, (int)\Yii::$app->user->id)) {
-            return $this->error($this->firstError($form), 422);
+        $policy = RoleChangePolicy::forCurrentUser();
+        $err = $this->refusedSave($form, fn (): bool => $this->service()->createRole($form, $policy));
+        if ($err !== null) {
+            return $err;
         }
 
         $role = $this->service()->getRole($form->name);
@@ -84,6 +100,11 @@ class RolesController extends BaseApiController
     }
 
     /**
+     * Updates the role: 404, then 403 (RoleChangePolicy::CHANGE_REFUSED) for
+     * a role the caller may not change, then 422 for a body that does not
+     * validate, then 403 (PERMISSION_REFUSED) for an added permission the
+     * caller may not grant.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionUpdate(string $name): array
@@ -93,16 +114,19 @@ class RolesController extends BaseApiController
         }
 
         $svc = $this->service();
-        if ($svc->getRole($name) === null) {
-            throw new NotFoundHttpException("Role \"{$name}\" not found.");
+        $policy = RoleChangePolicy::forCurrentUser();
+        $err = $this->refuseChange($policy, $name);
+        if ($err !== null) {
+            return $err;
         }
 
         $form = new RoleForm();
         $body = (array)\Yii::$app->request->bodyParams;
         $this->applyBody($form, $body);
 
-        if (!$svc->updateRole($name, $form, (int)\Yii::$app->user->id)) {
-            return $this->error($this->firstError($form), 422);
+        $err = $this->refusedSave($form, fn (): bool => $svc->updateRole($name, $form, $policy));
+        if ($err !== null) {
+            return $err;
         }
 
         /** @var array{name: string, description: string, isSystem: bool, directPermissions: string[], effectivePermissions: string[], userIds: int[]} $role */
@@ -111,6 +135,9 @@ class RolesController extends BaseApiController
     }
 
     /**
+     * Deletes the role: 404, then 403 (RoleChangePolicy::CHANGE_REFUSED) for
+     * a role the caller may not change, then 422 for a system role.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionDelete(string $name): array
@@ -120,13 +147,15 @@ class RolesController extends BaseApiController
         }
 
         $svc = $this->service();
+        $policy = RoleChangePolicy::forCurrentUser();
+        $err = $this->refuseChange($policy, $name);
+        if ($err !== null) {
+            return $err;
+        }
         if ($svc->isSystemRole($name)) {
             return $this->error('Cannot delete system role.', 422);
         }
-        if ($svc->getRole($name) === null) {
-            throw new NotFoundHttpException("Role \"{$name}\" not found.");
-        }
-        if (!$svc->deleteRole($name, (int)\Yii::$app->user->id)) {
+        if (!$svc->deleteRole($name, $policy)) {
             return $this->error('Role could not be deleted.', 422);
         }
 
@@ -160,6 +189,47 @@ class RolesController extends BaseApiController
     private function forbidden(): array
     {
         return $this->error('Forbidden.', 403);
+    }
+
+    /**
+     * 404 for a role that does not exist, then 403
+     * (RoleChangePolicy::CHANGE_REFUSED) when the caller may not change the
+     * role $name; null when they may.
+     *
+     * @return array{error: array{message: string}}|null
+     * @throws NotFoundHttpException
+     */
+    private function refuseChange(RoleChangePolicy $policy, string $name): ?array
+    {
+        if ($this->service()->getRole($name) === null) {
+            throw new NotFoundHttpException("Role \"{$name}\" not found.");
+        }
+        if ($policy->mayChange($name)) {
+            return null;
+        }
+
+        return $this->error(RoleChangePolicy::CHANGE_REFUSED, 403);
+    }
+
+    /**
+     * Saves the role with $save: null when saved, 422 with the form's first
+     * error when it did not validate, 403 with the refusal when the caller
+     * may not grant a permission (RoleChangeRefusedException).
+     *
+     * @param callable(): bool $save
+     * @return array{error: array{message: string}}|null
+     */
+    private function refusedSave(RoleForm $form, callable $save): ?array
+    {
+        try {
+            if ($save()) {
+                return null;
+            }
+        } catch (RoleChangeRefusedException $e) {
+            return $this->error($e->getMessage(), 403);
+        }
+
+        return $this->error($this->firstError($form), 422);
     }
 
     /**

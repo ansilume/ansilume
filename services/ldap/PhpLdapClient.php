@@ -18,6 +18,18 @@ namespace app\services\ldap;
  */
 class PhpLdapClient implements LdapClientInterface
 {
+    /** Why the client cannot be built: the PHP process has no ldap extension. */
+    public const EXTENSION_NOT_LOADED = 'PHP ldap extension is not loaded.';
+
+    /** Why a user search failed; the directory's error follows. */
+    public const USER_SEARCH_FAILED = 'User search failed';
+
+    /** A user search that names no single user: more than one entry matched, or the entry could not be read. */
+    public const USER_SEARCH_NOT_ONE = 'User search answered more than one entry, or an entry that could not be read.';
+
+    /** Why a group search failed; the directory's error follows. */
+    public const GROUP_SEARCH_FAILED = 'Group search failed';
+
     private LdapConfig $config;
 
     /** @var \LDAP\Connection|null Lazily opened connection handle. */
@@ -30,7 +42,7 @@ class PhpLdapClient implements LdapClientInterface
     public function __construct(LdapConfig $config)
     {
         if (!extension_loaded('ldap')) {
-            throw new LdapException('PHP ldap extension is not loaded.');
+            throw new LdapException(self::EXTENSION_NOT_LOADED);
         }
         $this->config = $config;
     }
@@ -72,6 +84,7 @@ class PhpLdapClient implements LdapClientInterface
 
     public function findUser(string $username): ?LdapEntry
     {
+        $this->lastError = null;
         if (!$this->serviceBound && !$this->bindServiceAccount()) {
             return null;
         }
@@ -87,17 +100,23 @@ class PhpLdapClient implements LdapClientInterface
 
         // sizelimit=2 — we want exactly one match; allow 2 so we can detect ambiguity.
         $result = $this->silently(static fn () => ldap_search($conn, $base, $filter, $attrs, 0, 2));
-        if (!($result instanceof \LDAP\Result)) {
-            $this->captureError('User search failed');
+        if (!($result instanceof \LDAP\Result) || $this->silently(static fn () => ldap_errno($conn)) !== 0) {
+            // The search failed, or did not run to the end here (a referral
+            // to another server, a size or administrative limit): it says
+            // nothing about the user.
+            $this->captureError(self::USER_SEARCH_FAILED);
             return null;
         }
-        $count = (int)$this->silently(static fn () => ldap_count_entries($conn, $result));
-        if ($count !== 1) {
-            // 0 = not found; >1 = ambiguous filter — refuse to guess.
+        $count = $this->silently(static fn () => ldap_count_entries($conn, $result));
+        if ($count === 0) {
+            // The search ran and found no entry: the directory has no such user.
             return null;
         }
-        $entry = $this->silently(static fn () => ldap_first_entry($conn, $result));
+        // More than one entry means an ambiguous filter — refuse to guess;
+        // a negative count means the answer could not be read.
+        $entry = $count === 1 ? $this->silently(static fn () => ldap_first_entry($conn, $result)) : false;
         if (!($entry instanceof \LDAP\ResultEntry)) {
+            $this->lastError = self::USER_SEARCH_NOT_ONE;
             return null;
         }
         return $this->buildEntry($conn, $entry);
@@ -129,6 +148,7 @@ class PhpLdapClient implements LdapClientInterface
 
     public function findUserGroups(string $userDn): array
     {
+        $this->lastError = null;
         if (!$this->serviceBound && !$this->bindServiceAccount()) {
             return [];
         }
@@ -138,12 +158,14 @@ class PhpLdapClient implements LdapClientInterface
         $attr = $this->config->groupNameAttr;
 
         $result = $this->silently(static fn () => ldap_search($conn, $base, $filter, [$attr]));
-        if (!($result instanceof \LDAP\Result)) {
-            $this->captureError('Group search failed');
-            return [];
-        }
-        $entries = $this->silently(static fn () => ldap_get_entries($conn, $result));
-        if (!is_array($entries) || (int)($entries['count'] ?? 0) === 0) {
+        $entries = $result instanceof \LDAP\Result && $this->silently(static fn () => ldap_errno($conn)) === 0
+            ? $this->silently(static fn () => ldap_get_entries($conn, $result))
+            : false;
+        if (!is_array($entries)) {
+            // The search failed, did not run to the end here (a referral, a
+            // size limit), or its answer could not be read: that says
+            // nothing about the user's groups.
+            $this->captureError(self::GROUP_SEARCH_FAILED);
             return [];
         }
         $names = [];

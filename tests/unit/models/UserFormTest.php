@@ -6,31 +6,20 @@ namespace app\tests\unit\models;
 
 use app\models\User;
 use app\models\UserForm;
+use app\services\RoleGrantPolicy;
 use PHPUnit\Framework\TestCase;
-use yii\db\BaseActiveRecord;
+use yii\rbac\ManagerInterface;
 
 /**
- * Tests for UserForm — role options, validation rules, fromUser().
+ * Tests for UserForm — role options and validation rules.
  * DB-requiring validators (unique) are excluded; we test pure logic.
+ * fromUser() reads the roles assigned to the user from the database:
+ * tests/integration/models/UserFormAssignedRoleTest.php. The forms here are
+ * a superadmin's, who may assign every role (RoleGrantPolicy), unless a test
+ * says otherwise; what others may give: UserFormGrantTest.
  */
 class UserFormTest extends TestCase
 {
-    private mixed $originalAuthManager = null;
-
-    protected function setUp(): void
-    {
-        if (\Yii::$app->has('authManager')) {
-            $this->originalAuthManager = \Yii::$app->get('authManager');
-        }
-    }
-
-    protected function tearDown(): void
-    {
-        if ($this->originalAuthManager !== null) {
-            \Yii::$app->set('authManager', $this->originalAuthManager);
-        }
-    }
-
     public function testRoleOptionsContainsThreeEntries(): void
     {
         $options = UserForm::roleOptions();
@@ -113,36 +102,6 @@ class UserFormTest extends TestCase
         }
     }
 
-    public function testFromUserPopulatesFields(): void
-    {
-        $user = $this->makeUser(5, 'alice', 'alice@example.com');
-
-        $auth = $this->getMockBuilder(\yii\rbac\ManagerInterface::class)->getMock();
-        $auth->method('getRolesByUser')->willReturn([]);
-        \Yii::$app->set('authManager', $auth);
-
-        $form = UserForm::fromUser($user);
-        $this->assertSame('alice', $form->username);
-        $this->assertSame('alice@example.com', $form->email);
-        $this->assertSame(User::STATUS_ACTIVE, $form->status);
-        $this->assertFalse($form->is_superadmin);
-    }
-
-    public function testFromUserSetsRoleFromAuthManager(): void
-    {
-        $user = $this->makeUser(7, 'bob', 'bob@x.com');
-
-        $roleObj       = new \yii\rbac\Role();
-        $roleObj->name = 'operator';
-
-        $auth = $this->getMockBuilder(\yii\rbac\ManagerInterface::class)->getMock();
-        $auth->method('getRolesByUser')->willReturn(['operator' => $roleObj]);
-        \Yii::$app->set('authManager', $auth);
-
-        $form = UserForm::fromUser($user);
-        $this->assertSame('operator', $form->role);
-    }
-
     public function testAuthSourceOptionsContainsBothChoices(): void
     {
         $opts = UserForm::authSourceOptions();
@@ -191,32 +150,42 @@ class UserFormTest extends TestCase
         $this->assertTrue($form->hasErrors('ldap_uid'));
     }
 
-    public function testFromUserPopulatesLdapFields(): void
+    /**
+     * Fails closed: a form without a signed-in user, as in a console
+     * application, assigns no role and takes no superadmin flag.
+     */
+    public function testWithoutASignedInUserTheFormAssignsNoRoleAndTakesNoFlag(): void
     {
-        $user = $this->makeUser(11, 'ldapuser', 'l@x.com');
-        $user->auth_source = User::AUTH_SOURCE_LDAP;
-        $user->ldap_dn = 'uid=ldapuser,dc=test';
-        $user->ldap_uid = 'guid-1';
+        $form = new UserForm();
+        $this->assertTrue($form->load(['UserForm' => ['role' => 'viewer', 'is_superadmin' => '1']]));
 
-        $auth = $this->getMockBuilder(\yii\rbac\ManagerInterface::class)->getMock();
-        $auth->method('getRolesByUser')->willReturn([]);
-        \Yii::$app->set('authManager', $auth);
+        $this->assertFalse($form->validate(['role']));
+        $this->assertSame([sprintf(RoleGrantPolicy::ROLE_REFUSED, 'viewer')], $form->getErrors('role'));
+        $this->assertFalse($form->is_superadmin, 'the posted flag is ignored');
+        $this->assertFalse($form->canSetSuperadmin());
+    }
 
-        $form = UserForm::fromUser($user);
-        $this->assertSame(User::AUTH_SOURCE_LDAP, $form->auth_source);
-        $this->assertSame('uid=ldapuser,dc=test', $form->ldap_dn);
-        $this->assertSame('guid-1', $form->ldap_uid);
+    public function testASuperadminsFormTakesTheFlag(): void
+    {
+        $form = $this->makeForm();
+        $this->assertTrue($form->load(['is_superadmin' => '1'], ''));
+
+        $this->assertTrue($form->is_superadmin);
+        $this->assertTrue($form->canSetSuperadmin());
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /**
-     * Returns a UserForm subclass that strips unique validators so tests
-     * don't need a DB connection.
+     * Returns a superadmin's UserForm subclass that strips unique validators
+     * so tests don't need a DB connection.
      */
     private function makeForm(array $overrides = []): UserForm
     {
-        $form = new class extends UserForm {
+        /** @var ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+        $grants = new RoleGrantPolicy($auth, new User(['is_superadmin' => true]));
+        $form = new class ($grants) extends UserForm {
             public function rules(): array
             {
                 return array_values(array_filter(parent::rules(), static function ($rule) {
@@ -228,32 +197,5 @@ class UserFormTest extends TestCase
             $form->$k = $v;
         }
         return $form;
-    }
-
-    private function makeUser(int $id, string $username, string $email): User
-    {
-        $user = $this->getMockBuilder(User::class)
-            ->disableOriginalConstructor()
-            ->onlyMethods(['attributes', 'save'])
-            ->getMock();
-        $user->method('attributes')->willReturn([
-            'id', 'username', 'email', 'status', 'is_superadmin',
-            'auth_source', 'ldap_dn', 'ldap_uid', 'last_synced_at',
-        ]);
-        $user->method('save')->willReturn(true);
-        $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
-        $ref->setValue($user, [
-            'id'             => $id,
-            'username'       => $username,
-            'email'          => $email,
-            'status'         => User::STATUS_ACTIVE,
-            'is_superadmin'  => false,
-            'auth_source'    => User::AUTH_SOURCE_LOCAL,
-            'ldap_dn'        => null,
-            'ldap_uid'       => null,
-            'last_synced_at' => null,
-        ]);
-        return $user;
     }
 }

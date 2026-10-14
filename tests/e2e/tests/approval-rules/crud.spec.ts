@@ -11,6 +11,24 @@ const CRUD_RULE = 'e2e-crud-approval-rule';
 const DELETE_BLOCKED = 'In use: remove it from the job templates and workflow steps below, '
   + 'and let its pending requests be decided or their jobs canceled, before deleting it.';
 
+/**
+ * models/ApprovalRule.php ROLE_HINT, the hint under Role
+ * (#approver-role-hint). A role rule counts the users assigned the role
+ * directly (regression: it said "All users with this role can approve.").
+ */
+const ROLE_HINT = 'Approvers are the users assigned this role directly, not through another role, nor as the '
+  + 'default role every signed-in user holds. Those of them who are active, hold approval.decide '
+  + '(or are superadmins) and may see the job can approve, never the user who launched it.';
+
+/**
+ * models/ApprovalRule.php TEAM_HINT, the hint under Team
+ * (#approver-team-hint). A team rule counts every member of the team, of
+ * whom only those who may decide can approve (regression: it said "All
+ * members of this team can approve.").
+ */
+const TEAM_HINT = 'Approvers are the members of this team. Those of them who are active, hold approval.decide '
+  + '(or are superadmins) and may see the job can approve, never the user who launched it.';
+
 /** models/ApprovalRule.php LAUNCHER_NOTE */
 const LAUNCHER_NOTE = 'The user who launches a job never approves it: a launch is refused '
   + 'unless enough other approvers may decide.';
@@ -63,6 +81,7 @@ test.describe('Approval Rules CRUD', () => {
 
     // Default is "role" — role panel visible, others hidden
     await expect(page.locator('#config-role')).toBeVisible();
+    await expect(page.locator('#approver-role-hint')).toHaveText(ROLE_HINT);
     await expect(page.locator('#config-team')).toBeHidden();
     await expect(page.locator('#config-users')).toBeHidden();
 
@@ -70,6 +89,7 @@ test.describe('Approval Rules CRUD', () => {
     await page.locator('#approver-type').selectOption('team');
     await expect(page.locator('#config-role')).toBeHidden();
     await expect(page.locator('#config-team')).toBeVisible();
+    await expect(page.locator('#approver-team-hint')).toHaveText(TEAM_HINT);
     await expect(page.locator('#config-users')).toBeHidden();
 
     // Switch to "users"

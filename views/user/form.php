@@ -81,15 +81,16 @@ $isLdap = !$isNew && $user->isLdap();
             ->hint('Optional. Stable directory identifier (objectGUID/entryUUID). Filled automatically by the directory sync.') ?>
     <?php endif; ?>
 
-    <?= $f->field($form, 'role')->dropDownList(UserForm::roleOptions()) ?>
+    <?php $roleHint = $form->roleHint(); ?>
+    <?= $f->field($form, 'role')->dropDownList($form->roleChoices())
+        ->hint($roleHint !== null ? Html::encode($roleHint) : null) ?>
 
     <?= $f->field($form, 'status')->dropDownList([
         User::STATUS_ACTIVE => 'Active',
         User::STATUS_INACTIVE => 'Inactive',
     ]) ?>
 
-    <?php $identityCheck = \Yii::$app->user?->identity; ?>
-    <?php if ($identityCheck instanceof \app\models\User && $identityCheck->is_superadmin) : ?>
+    <?php if ($form->canSetSuperadmin()) : ?>
         <?= $f->field($form, 'is_superadmin')->checkbox()->hint('Superadmins bypass all RBAC checks.') ?>
     <?php endif; ?>
 

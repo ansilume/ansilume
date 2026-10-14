@@ -14,6 +14,7 @@ use app\helpers\TimeHelper;
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\RunnerGroup;
+use app\services\runstate\Texts;
 use yii\helpers\Html;
 use yii\widgets\LinkPager;
 
@@ -128,9 +129,17 @@ $this->title = 'Jobs';
                         <?php endif; ?>
                     </td>
                     <td>
-                        <?= Html::encode($job->jobTemplate->name ?? '—') ?>
-                        <?php if ($job->jobTemplate && $job->jobTemplate->isDeleted()) : ?>
-                            <span class="text-muted">(deleted)</span>
+                        <?php
+                        // The placeholder of a workflow approval step has no template: it only holds the step's request.
+                        $execution = $job->job_template_id === null ? $job->workflowJobStep : null;
+                        ?>
+                        <?php if ($execution !== null && $execution->isApprovalPlaceholder()) : ?>
+                            <?= Html::encode(sprintf(Texts::PLACEHOLDER_LABEL, $execution->stepName(), (int)$execution->workflow_job_id)) ?>
+                        <?php else : ?>
+                            <?= Html::encode($job->jobTemplate->name ?? '—') ?>
+                            <?php if ($job->jobTemplate && $job->jobTemplate->isDeleted()) : ?>
+                                <span class="text-muted">(deleted)</span>
+                            <?php endif; ?>
                         <?php endif; ?>
                     </td>
                     <?php $recap = JobHostSummary::aggregate($job->hostSummaries); ?>
@@ -150,7 +159,7 @@ $this->title = 'Jobs';
                                 <span class="badge text-bg-danger"><?= $recap['failed'] // xss-ok: integer?> failed</span>
                             <?php endif; ?>
                             <?php if ($recap['unreachable'] > 0) : ?>
-                                <span class="badge text-bg-dark"><?= $recap['unreachable'] // xss-ok: integer?> unreach</span>
+                                <span class="badge text-bg-danger"><?= $recap['unreachable'] // xss-ok: integer?> unreach</span>
                             <?php endif; ?>
                             <?php if ($recap['skipped'] > 0) : ?>
                                 <span class="badge text-bg-secondary"><?= $recap['skipped'] // xss-ok: integer?> skip</span>

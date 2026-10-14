@@ -20,12 +20,21 @@ use yii\db\ActiveRecord;
  * @property int|null    $deleted_at
  *
  * @property User $creator
- * @property WorkflowStep[] $steps
+ * @property WorkflowStep[] $steps in run order (RUN_ORDER)
  * @property WorkflowJob[] $workflowJobs
  */
 class WorkflowTemplate extends ActiveRecord
 {
     use TriggerTokenTrait;
+
+    /**
+     * The run order of a workflow's steps: by step_order, ties by ID. A
+     * step's position is its 1-based index in this order, and position 1 is
+     * the start step. step_order is an internal sort key: the web numbers the
+     * steps 10, 20, 30… and the API's bulk list 0, 1, 2…, and steps saved by
+     * older versions or edited in the database can share one.
+     */
+    public const RUN_ORDER = ['step_order' => SORT_ASC, 'id' => SORT_ASC];
 
     public static function tableName(): string
     {
@@ -104,14 +113,16 @@ class WorkflowTemplate extends ActiveRecord
 
 
     /**
-     * Get the first step (lowest step_order).
+     * The start step: the first step in the run order (RUN_ORDER), position
+     * 1; of steps that share the lowest step_order, the one with the lowest
+     * ID. Null for a workflow without steps.
      */
     public function getStartStep(): ?WorkflowStep
     {
         /** @var WorkflowStep|null $step */
         $step = WorkflowStep::find()
             ->where(['workflow_template_id' => $this->id])
-            ->orderBy(['step_order' => SORT_ASC])
+            ->orderBy(self::RUN_ORDER)
             ->one();
         return $step;
     }
@@ -121,10 +132,16 @@ class WorkflowTemplate extends ActiveRecord
         return $this->hasOne(User::class, ['id' => 'created_by']);
     }
 
+    /**
+     * The workflow's steps in run order (RUN_ORDER), so that their index is
+     * their position. The order names its columns without a table, as a
+     * query of the steps alone needs them: load the relation with with() or
+     * lazily, not with joinWith(), which would make "id" ambiguous.
+     */
     public function getSteps(): ActiveQuery
     {
         return $this->hasMany(WorkflowStep::class, ['workflow_template_id' => 'id'])
-            ->orderBy(['step_order' => SORT_ASC]);
+            ->orderBy(self::RUN_ORDER);
     }
 
     public function getWorkflowJobs(): ActiveQuery

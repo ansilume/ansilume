@@ -6,11 +6,14 @@ namespace app\tests\integration\models;
 
 use app\models\User;
 use app\models\UserForm;
+use app\services\RoleGrantPolicy;
 use app\tests\integration\DbTestCase;
+use yii\rbac\ManagerInterface;
 
 /**
  * Integration tests for UserForm::save() and fromUser() — require real DB
- * for uniqueness validation and RBAC role assignment.
+ * for uniqueness validation and RBAC role assignment. The forms are a
+ * superadmin's, who may assign every role (RoleGrantPolicy).
  */
 class UserFormIntegrationTest extends DbTestCase
 {
@@ -68,7 +71,7 @@ class UserFormIntegrationTest extends DbTestCase
     {
         $user = $this->createUser('editme');
         $user->refresh();
-        $form = UserForm::fromUser($user);
+        $form = UserForm::fromUser($user, $this->superadminGrants());
 
         $this->assertSame($user->username, $form->username);
         $this->assertSame($user->email, $form->email);
@@ -78,7 +81,7 @@ class UserFormIntegrationTest extends DbTestCase
     {
         $user = $this->createUser('updateme');
         $user->refresh();
-        $form = UserForm::fromUser($user);
+        $form = UserForm::fromUser($user, $this->superadminGrants());
         $form->email    = 'updated_' . uniqid('', true) . '@example.com';
         $form->password = ''; // no password change
 
@@ -93,7 +96,7 @@ class UserFormIntegrationTest extends DbTestCase
     {
         $user = $this->createUser('pwchange');
         $user->refresh();
-        $form = UserForm::fromUser($user);
+        $form = UserForm::fromUser($user, $this->superadminGrants());
         $form->password = 'NewSecurePass1!';
 
         $form->save();
@@ -119,9 +122,17 @@ class UserFormIntegrationTest extends DbTestCase
 
     // -------------------------------------------------------------------------
 
+    private function superadminGrants(): RoleGrantPolicy
+    {
+        /** @var ManagerInterface $auth */
+        $auth = \Yii::$app->authManager;
+
+        return new RoleGrantPolicy($auth, new User(['is_superadmin' => true]));
+    }
+
     private function makeValidForm(string $usernameSuffix = ''): UserForm
     {
-        $form           = new UserForm();
+        $form           = new UserForm($this->superadminGrants());
         $form->username = 'testform_' . ($usernameSuffix ?: uniqid('', true));
         $form->email    = 'form_' . uniqid('', true) . '@example.com';
         $form->password = 'ValidPass123!';

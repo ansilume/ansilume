@@ -108,7 +108,14 @@ class WorkflowRunVars extends Component
     /**
      * The extra vars that $next's extra_vars_template maps from the output
      * of $previous, the step that led to it: target key => output key. A key
-     * whose output value is missing or null is left out.
+     * whose output value is missing or null is left out, and so is an entry
+     * that does not map an extra var name (non-empty text) to the name of an
+     * output variable (text), which a mapping an older version stored can
+     * hold (WorkflowStepMapping): the job's extra vars stay a JSON object.
+     *
+     * Regression: a mapping stored as a list, such as ["build_version"],
+     * mapped the output value to the key 0, and the job's extra vars became
+     * the JSON list ["1.2.3"], which Ansible refuses.
      *
      * @return array<string, mixed>
      */
@@ -122,7 +129,7 @@ class WorkflowRunVars extends Component
         $outputVars = $previous->getParsedOutputVars();
         $result = [];
         foreach ($mapping as $targetKey => $sourceKey) {
-            if (!is_string($sourceKey)) {
+            if (!is_string($targetKey) || $targetKey === '' || !is_string($sourceKey)) {
                 continue;
             }
             $value = $outputVars[$sourceKey] ?? null;

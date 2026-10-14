@@ -1,5 +1,7 @@
 import { test, expect, Locator, Page } from '@playwright/test';
 import { ARTIFACT_JOB, LOGSTREAM_FINISHED_JOB, seededJobId } from '../../lib/jobs';
+import { LOGIN_PASSWORD, LOGIN_SUBMIT, LOGIN_USERNAME } from '../../lib/selectors';
+import { E2E_ADMIN, asUser } from '../../lib/session';
 
 /**
  * Job artifacts (views/job/view.php), on the job commands/E2eArtifactSeeder.php
@@ -9,7 +11,15 @@ import { ARTIFACT_JOB, LOGSTREAM_FINISHED_JOB, seededJobId } from '../../lib/job
  * The tests used to look for that job on the first page of the job list,
  * newest first, and skipped themselves when the jobs launched since the seed
  * had pushed it off: they tested nothing.
+ *
+ * The preview of a text artifact is fetched as JSON from
+ * /job/<id>/artifact/<artifact_id>/content; an answer that is not OK fails
+ * it with PREVIEW_FAILED, and opened again, the preview is fetched again.
  */
+
+/** views/job/view.php: what the preview of a text artifact shows when its fetch failed. */
+const PREVIEW_FAILED = 'Failed to load preview.';
+
 test.describe('Job Artifacts', () => {
   /** The ID of the seeded job with artifacts, looked up once per worker. */
   let artifactJobId = '';
@@ -24,6 +34,20 @@ test.describe('Job Artifacts', () => {
 
   function artifactsCard(page: Page): Locator {
     return page.locator('.card', { has: page.locator('.card-header', { hasText: /^\s*Artifacts\b/ }) });
+  }
+
+  /**
+   * The Preview button of the artifact `name` on the open job page, the
+   * text its preview shows, and the path of the address it fetches.
+   */
+  async function textPreview(page: Page, name: string): Promise<{ button: Locator; content: Locator; path: string }> {
+    const button = artifactsCard(page).locator('tbody tr', { has: page.locator(`td code:text-is("${name}")`) })
+      .locator('button.artifact-preview-btn');
+    await expect(button, `the Preview button of ${name}`).toHaveAttribute('data-preview-kind', 'text');
+    const id = (await button.getAttribute('data-artifact-id')) ?? '';
+    const path = (await button.getAttribute('data-url')) ?? '';
+    expect(path, `the content address of ${name}`).toBe(`/job/${artifactJobId}/artifact/${id}/content`);
+    return { button, content: page.locator(`#artifact-preview-${id} .artifact-preview-content`), path };
   }
 
   test('artifacts table is visible on job with artifacts', async ({ page }) => {
@@ -145,5 +169,86 @@ test.describe('Job Artifacts', () => {
     expect(bytes[1]).toBe(0x4b); // K
     expect(bytes[2]).toBe(0x03);
     expect(bytes[3]).toBe(0x04);
+  });
+
+  // regression: the preview read every answer as the artifact. An error
+  // answer is JSON too (yii\web\ErrorHandler: name, message, code, status),
+  // so a preview refused (403: no access any more) or not found (404: the
+  // artifact or its file gone) showed an empty preview instead of failing
+  // (git show HEAD:views/job/view.php, `.then(function (r) { return r.json(); })`).
+  // The answers here are the test's; opened again, the preview is fetched
+  // again, and the server's answer shows the artifact.
+  test('regression: a preview answered with an error showed an empty preview', async ({ page }) => {
+    await goToJobWithArtifacts(page);
+    const { button, content, path } = await textPreview(page, 'results.json');
+    const errors: Record<number, { name: string; message: string }> = {
+      403: { name: 'Forbidden', message: 'You do not have access to this resource.' },
+      404: { name: 'Not Found', message: 'Artifact file could not be read.' },
+    };
+    let answer: number | null = 403;
+    const accepts: string[] = [];
+    await page.route((url) => url.pathname === path, async (route) => {
+      accepts.push(route.request().headers()['accept'] ?? '');
+      if (answer === null) {
+        await route.continue();
+      } else {
+        await route.fulfill({ status: answer, json: { ...errors[answer], code: 0, status: answer } });
+      }
+    });
+
+    for (const status of [403, 404]) {
+      answer = status;
+      const fetches = accepts.length;
+      // Blank, so the preview shows only what this answer wrote.
+      await content.evaluate((element) => {
+        element.textContent = '';
+      });
+      await button.click();
+      await expect.poll(() => accepts.length, { message: `the preview is fetched (${status})` }).toBe(fetches + 1);
+      await expect(content, `the preview answered ${status}`).toHaveText(PREVIEW_FAILED);
+      await expect(content).toBeVisible();
+      await expect(button).toHaveText('Preview');
+      await expect(button).toBeEnabled();
+      // Closed; opened again, it is fetched again.
+      await button.click();
+      await expect(content).toBeHidden();
+    }
+
+    answer = null;
+    await button.click();
+    await expect(content).toContainText('tests_passed');
+    expect(accepts, 'every preview asks for JSON').toEqual(['application/json', 'application/json', 'application/json']);
+  });
+
+  // regression: after a sign-out, signing in again led to the artifact's
+  // JSON. The signed-out preview asked for anything (fetch's Accept: */*),
+  // so the server sent it to the login page and kept the artifact's
+  // address to return to after the next sign-in, and the preview read the
+  // login page as JSON. Asked for JSON, it is refused with 403 and keeps no
+  // address. In a session of its own, so no other spec's session ends.
+  test('regression: after a sign-out, signing in again led to the preview\'s JSON', async ({ browser }, testInfo) => {
+    await asUser(browser, testInfo, E2E_ADMIN, async (page) => {
+      await goToJobWithArtifacts(page);
+      const { button, content, path } = await textPreview(page, 'report.txt');
+
+      // Signed out in another tab: the session is gone.
+      await page.context().clearCookies();
+      const [refused] = await Promise.all([
+        page.waitForResponse((response) => new URL(response.url()).pathname === path),
+        button.click(),
+      ]);
+      expect(refused.status(), 'the preview of a signed-out page is refused, not sent to the login page').toBe(403);
+      await expect(content).toHaveText(PREVIEW_FAILED);
+      await expect(button).toBeEnabled();
+
+      await page.goto('/site/login');
+      await page.locator(LOGIN_USERNAME).fill(E2E_ADMIN.username);
+      await page.locator(LOGIN_PASSWORD).fill(E2E_ADMIN.password);
+      await Promise.all([
+        page.waitForURL((url) => !url.pathname.startsWith('/site/login'), { timeout: 10_000 }),
+        page.locator(LOGIN_SUBMIT).click(),
+      ]);
+      expect(new URL(page.url()).pathname, 'signed in again, the dashboard').toBe('/');
+    });
   });
 });

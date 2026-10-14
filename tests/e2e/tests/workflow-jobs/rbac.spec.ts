@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
+import { AWAITING_APPROVAL } from '../../lib/runs';
 import { forgePost, idWhere, indexRows } from '../../lib/scoping';
 
 /**
@@ -12,7 +13,7 @@ async function openWaitingBetaRun(page: Page): Promise<string> {
   // Columns of the index: #, Workflow, Status, ...; e2e-beta-approval-wf waits at its approval step.
   const id = idWhere(await indexRows(page, '/workflow-job/index'), 1, 'e2e-beta-approval-wf');
   await page.goto(`/workflow-job/view?id=${id}`);
-  await expect(page.locator('#wj-status')).toHaveText('Running');
+  await expect(page.locator('#wj-status')).toHaveText(AWAITING_APPROVAL);
   return id;
 }
 
@@ -47,6 +48,6 @@ test.describe('Workflow Jobs RBAC', () => {
     await expectForbidden(page);
 
     await page.goto(`/workflow-job/view?id=${id}`);
-    await expect(page.locator('#wj-status')).toHaveText('Running');
+    await expect(page.locator('#wj-status')).toHaveText(AWAITING_APPROVAL);
   });
 });

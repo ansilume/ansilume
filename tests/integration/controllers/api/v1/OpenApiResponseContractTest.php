@@ -32,11 +32,14 @@ use yii\web\Request;
  * documents them as optional and says who gets them.
  *
  * The approval and workflow responses of step 3 are checked in
- * OpenApiApprovalWorkflowResponseContractTest.
+ * OpenApiApprovalWorkflowResponseContractTest; the step endpoints and the
+ * route fields of 2.11.0 in OpenApiWorkflowStepsContractTest, the run states
+ * in OpenApiWorkflowRunStateContractTest.
  */
 class OpenApiResponseContractTest extends WebControllerTestCase
 {
     use OpenApiSchemaAssertions;
+    use OpenApiWorkflowAssertions;
 
     /** Returned only to callers who may change the job or workflow template. */
     private const TRIGGER_FIELDS = ['has_trigger_token', 'trigger_user_id'];
@@ -171,6 +174,23 @@ class OpenApiResponseContractTest extends WebControllerTestCase
         $this->assertCount(1, $steps);
         $this->assertIsArray($steps[0]);
         $this->assertMatchesSchema('WorkflowStep', $steps[0]);
+
+        // 2.11.0: each step says where runs start and where its branches
+        // lead, the workflow its start step and its success path, as the
+        // nested schemas document them.
+        $this->assertSame([1, true, true, null], [$steps[0]['position'], $steps[0]['is_start'], $steps[0]['reachable'], $steps[0]['cannot_run']]);
+        $this->assertMatchesNested('WorkflowStep', 'routes', $steps[0]['routes']);
+        $this->assertIsArray($steps[0]['routes']);
+        foreach ($steps[0]['routes'] as $outcome => $route) {
+            $this->assertMatchesNested('WorkflowStepRoutes', (string)$outcome, $route);
+        }
+        $this->assertSame(
+            ['kind' => 'end', 'via' => 'next', 'step_id' => null, 'position' => null, 'run_outcome' => 'fails', 'loop' => false],
+            $steps[0]['routes']['failure'],
+            'The last step ends the run when it fails.'
+        );
+        $this->assertSame($steps[0]['id'], $detail['start_step_id']);
+        $this->assertMatchesNested('WorkflowTemplateDetail', 'success_path', $detail['success_path']);
 
         $this->assertMatchesSchema('WorkflowTemplate', $this->listItem($ctrl->actionIndex(), (int)$workflow->id));
     }

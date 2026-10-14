@@ -175,6 +175,10 @@ log. Per row you get:
 | **Preview** (image) | Inline `<img>` for PNG / JPEG / GIF / WebP via `?inline=1` download |
 | **Download** | Stream the single file with `Content-Disposition: attachment` |
 
+A text preview that the server refuses (signed out, or no access any more)
+or cannot find shows `Failed to load preview.`; open it again to fetch it
+again.
+
 PDFs are rendered inline in a sandboxed `<iframe>` on the job view. The
 server response sets `Content-Security-Policy: default-src 'none';
 object-src 'self'; plugin-types application/pdf; sandbox;` together with
@@ -356,11 +360,14 @@ not hold up the schedules; what is left goes on at the next run. See
   cap.
 - Symlinks are intentionally skipped — copy the real file instead.
 
-**“The file shows in the list but Preview returns 415.”**
+**“The content of an artifact answers 415.”**
 
-The MIME type is not in the previewable allowlist (text/\*, JSON, XML,
-YAML). Use **Download** instead. To make a custom type previewable,
-extend `ArtifactService::PREVIEWABLE_TYPES`.
+`GET /api/v1/jobs/{id}/artifacts/{aid}/content` answers `415`
+`Artifact type is not previewable.` for a MIME type outside the previewable
+allowlist (text/\*, JSON, XML, YAML). The job page offers **Preview** only
+for the types it can show, and **Download** for every file. Use
+**Download** instead. To make a custom type previewable, extend
+`ArtifactService::PREVIEWABLE_TYPES`.
 
 **“Download All times out for jobs with many large artifacts.”**
 

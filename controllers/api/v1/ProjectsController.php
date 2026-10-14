@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\GitSyncDiagnostics;
 use app\models\AuditLog;
 use app\models\Project;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
@@ -235,9 +236,9 @@ class ProjectsController extends BaseApiController
     }
 
     /**
-     * @param array<string, mixed> $body
+     * @param array<string, mixed> $body The request body, credentials in the userinfo of its scm_url included.
      */
-    private function applyBody(Project $model, array $body): void
+    private function applyBody(Project $model, #[\SensitiveParameter] array $body): void
     {
         foreach (['name', 'description', 'scm_type', 'scm_url', 'scm_branch', 'vault_password_source'] as $field) {
             if (!array_key_exists($field, $body)) {
@@ -265,7 +266,7 @@ class ProjectsController extends BaseApiController
             'name' => $p->name,
             'description' => $p->description,
             'scm_type' => $p->scm_type,
-            'scm_url' => $p->scm_url,
+            'scm_url' => $this->shownScmUrl($p),
             'scm_branch' => $p->scm_branch,
             'status' => $p->status,
             'last_synced_at' => $p->last_synced_at,
@@ -273,6 +274,31 @@ class ProjectsController extends BaseApiController
             'vault_password_source' => (string)$p->vault_password_source,
             'vault_scanned_at' => $p->vault_scanned_at === null ? null : (int)$p->vault_scanned_at,
         ];
+    }
+
+    /**
+     * The repository URL as the caller may see it: in full for a caller who
+     * may update the project, so a GET→PUT round trip keeps it; for every
+     * other caller without the credentials of its userinfo
+     * (GitSyncDiagnostics::redactUrl).
+     */
+    private function shownScmUrl(Project $p): ?string
+    {
+        $url = $p->scm_url;
+        if ($url === null) {
+            return null;
+        }
+        $redacted = GitSyncDiagnostics::redactUrl($url);
+
+        return $redacted === $url || $this->mayUpdate($p) ? $url : $redacted;
+    }
+
+    /** Whether the caller may update $p: project.update and operator access to it, as actionUpdate() requires. */
+    private function mayUpdate(Project $p): bool
+    {
+        $userId = $this->currentUserId();
+
+        return $userId !== null && $this->userCan('project.update') && $this->checker()->canOperate($userId, (int)$p->id);
     }
 
     private function findModel(int $id): Project

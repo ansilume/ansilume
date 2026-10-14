@@ -75,6 +75,31 @@ class WorkflowTemplatesLegacyStepTest extends WebControllerTestCase
         $this->assertSame(['pause', 'approval', 'job'], array_column($steps, 'step_type'));
         $this->assertSame([null, null, $s['own']->id], array_column($steps, 'job_template_id'));
         $this->assertSame([null, $rule->id, null], array_column($steps, 'approval_rule_id'));
+        // The leftovers change nothing in how a run goes: every step can run.
+        $this->assertSame([1, 2, 3], array_column($steps, 'position'));
+        $this->assertSame([null, null, null], array_column($steps, 'cannot_run'));
+    }
+
+    /**
+     * A step that an older version stored with a type that is not job,
+     * approval or pause (such as "JOB") reads as one a run fails at: no
+     * branch is taken, and the success path ends there.
+     */
+    public function testAStepOfAnUnknownTypeReadsAsOneARunFailsAt(): void
+    {
+        $s = $this->teamScope();
+        $workflow = $this->createWorkflowTemplate($s['admin']->id);
+        $legacy = $this->createWorkflowStep($workflow->id, 0, 'JOB', $s['own']->id);
+        $this->authenticate($s['admin']);
+
+        $data = (new WorkflowTemplatesController('api/v1/workflow-templates', \Yii::$app))->actionView($workflow->id)['data'] ?? [];
+
+        $this->assertSame(['JOB', null, 'unknown_type'], [$data['steps'][0]['step_type'], $data['steps'][0]['job_template_id'], $data['steps'][0]['cannot_run']]);
+        $this->assertSame(['success' => null, 'failure' => null, 'closed_gate' => null], $data['steps'][0]['routes']);
+        $this->assertSame(
+            ['step_ids' => [(int)$legacy->id], 'end' => 'cannot_run', 'loop_to_step_id' => null, 'missing_step_id' => null],
+            $data['success_path']
+        );
     }
 
     private function authenticate(User $user): void

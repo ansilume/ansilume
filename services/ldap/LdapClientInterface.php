@@ -17,6 +17,12 @@ namespace app\services\ldap;
  * report a generic "invalid credentials" message without leaking timing or
  * directory existence information. Truly broken states (PHP ldap extension
  * missing, malformed config) throw {@see LdapException}.
+ *
+ * {@see findUser()} and {@see findUserGroups()} clear the last error when
+ * they start and set it when the directory cannot answer, so that a caller
+ * tells "the directory has no such user" (or "no such group membership")
+ * from "the directory could not be read": ldap/sync disables an account only
+ * for the first.
  */
 interface LdapClientInterface
 {
@@ -28,8 +34,14 @@ interface LdapClientInterface
     public function bindServiceAccount(): bool;
 
     /**
-     * Look up a user by the username submitted at login. Returns the entry
-     * or null when no user matches the configured filter.
+     * Look up a user by the username submitted at login. Returns the entry,
+     * or null.
+     *
+     * A null with no last error ({@see getLastError()} answers null) means
+     * that the search ran and no entry matches the configured filter. When
+     * the search cannot run (the service bind or the search fails) or
+     * matches more than one entry, the result is null too, and the last
+     * error says why: such a null says nothing about the user.
      *
      * Must be called after {@see bindServiceAccount()}.
      */
@@ -45,6 +57,10 @@ interface LdapClientInterface
      * Return the names of groups the user (identified by their DN) is a
      * direct or indirect member of. Names come from the configured
      * groupNameAttr (typically `cn`).
+     *
+     * An empty list with no last error ({@see getLastError()} answers null)
+     * means that the user is in no group. When the group search cannot run
+     * or fails, the list is empty too, and the last error says why.
      *
      * @return list<string>
      */

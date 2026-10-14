@@ -21,24 +21,28 @@ import {
   LATE_GATE_JOB,
   LATE_GATE_TEMPLATE,
   LATE_GATE_WORKFLOW,
+  LEGEND,
   LOCKED_WORKFLOW,
   OPERATOR_STEPS_JOB,
   OPERATOR_STEPS_WORKFLOW,
+  POSITION_SELECT,
   STEPS_BUILD,
   STEPS_CLEANUP,
   STEPS_LOCKED_NOTICE,
   STEPS_WORKFLOW,
-  STEP_ORDER_HINT,
-  STEP_ORDER_INPUT,
-  STEP_ORDER_PLACEHOLDER,
   activeRunId,
   addStepFormErrors,
   addStepThroughForm,
+  positionEnd,
+  removeTemplateStep,
   removingSteps,
+  stepAdded,
+  stepLabel,
   stepsLockedNotice,
   templateStepNames,
-  templateStepNumbers,
+  templateStepPositions,
   templateStepRow,
+  typeBadge,
 } from '../../lib/workflows';
 
 /** The job template select of the add-step form. */
@@ -104,13 +108,16 @@ test.describe('Workflow Templates RBAC', () => {
     await expect(page.locator('#page-content')).toContainText('No steps defined yet.');
   });
 
-  // The hint below the steps belongs to the add-step form: only users who
-  // may change the steps see it (workflow-templates/step-order.spec.ts).
-  test('viewer sees neither the add-step form nor the Step Order hint on a workflow with steps', async ({ page }) => {
+  // Everyone who may view a workflow sees the positions and the legend; the
+  // step actions and the add-step form are for users who may change the
+  // steps (workflow-templates/step-editing-rbac.spec.ts).
+  test('viewer sees the positions and the legend, but neither the add-step form nor step actions, on a workflow with steps', async ({ page }) => {
     await openWorkflowTemplate(page, PAUSE_ONLY_WORKFLOW);
     await expect(page.locator('#workflow-steps-table tbody tr')).toHaveCount(1);
+    await expect(templateStepPositions(page)).toHaveText(['1']);
+    await expect(page.locator('#wf-steps-legend')).toHaveText(LEGEND);
     await expect(page.locator('#add-step-form')).toHaveCount(0);
-    await expect(page.getByText(STEP_ORDER_HINT)).toHaveCount(0);
+    await expect(page.locator('#page-content [data-action]')).toHaveCount(0);
   });
 
   test('operator can create workflow templates', async ({ page }) => {
@@ -177,6 +184,7 @@ test.describe('Workflow Templates RBAC', () => {
     await expect(notice).toBeVisible();
     await expect(notice).toHaveText(stepsLockedNotice(GATED_JOB_WORKFLOW_STEPS_REFUSED));
     await expect(page.locator('#add-step-form')).toHaveCount(0);
+    await expect(page.locator('#page-content [data-action]')).toHaveCount(0);
     await expect(page.locator('#page-content form[action*="/workflow-template/move-step"]')).toHaveCount(0);
     await expect(page.locator('#page-content form[action*="/workflow-template/remove-step"]')).toHaveCount(0);
     // Name and description, launching and the trigger token stay open.
@@ -250,7 +258,8 @@ test.describe('Workflow Templates RBAC', () => {
 
       await page.locator('#workflowstep-name').fill(name);
       await page.locator('#ws-step-type').selectOption(type);
-      await page.locator('#workflowstep-step_order').fill('20');
+      // Position stays as the form shows it: at the end.
+      await expect(page.locator(POSITION_SELECT)).toHaveValue('end');
       if (type === 'job') {
         await page.locator('#workflowstep-job_template_id').selectOption({ label: 'e2e-template' });
       }
@@ -258,25 +267,23 @@ test.describe('Workflow Templates RBAC', () => {
       // The form was sent: no field, hidden or not, refused it.
       expect(await addStepFormErrors(page)).toEqual([]);
 
-      await expectFlash(page, 'success', `Step "${name}" added.`);
+      await expectFlash(page, 'success', stepAdded(name, 2, 2, OPERATOR_STEPS_JOB));
       const added = templateStepRow(page, name);
-      await expect(added.locator('td').nth(2)).toHaveText(type === 'job' ? 'Job' : 'Pause');
+      await expect(typeBadge(added)).toHaveText(type === 'job' ? 'Job' : 'Pause');
       await expect(added.locator('td').nth(3)).toHaveText(type === 'job' ? 'e2e-template' : '—');
       expect(await stepNames(page)).toEqual([OPERATOR_STEPS_JOB, name]);
 
-      page.once('dialog', (dialog) => dialog.accept());
-      await added.locator('form[action*="/workflow-template/remove-step"] button').click();
-      await expectFlash(page, 'success', 'Step removed.');
+      await removeTemplateStep(page, name);
       expect(await stepNames(page)).toEqual([OPERATOR_STEPS_JOB]);
     });
   }
 
-  // Regression: the form pre-filled Step Order with the number of steps,
-  // which sorts before the 10, 20, 30… the steps are renumbered to, so a
-  // step added without changing it landed first and became the start step.
-  // An empty Step Order adds the step after the last one (admins:
-  // workflow-templates/step-order.spec.ts).
-  test('operator adds steps without changing Step Order: they land at the end, in the order added', async ({ page }) => {
+  // Regression (2.10.0): the form pre-filled Step Order with the number of
+  // steps, which sorts before the 10, 20, 30… the steps are renumbered to,
+  // so a step added without changing it landed first and became the start
+  // step. The Position "At the end" adds the step after the last one
+  // (admins: workflow-templates/step-position.spec.ts).
+  test('operator adds steps with the default Position: they land at the end, in the order added', async ({ page }) => {
     const added = ['e2e-operator-default-job', 'e2e-operator-default-pause'];
     await openWorkflowTemplate(page, OPERATOR_STEPS_WORKFLOW);
     expect(await stepNames(page)).toEqual([OPERATOR_STEPS_JOB]);
@@ -286,11 +293,11 @@ test.describe('Workflow Templates RBAC', () => {
       await expect(templateStepNames(page)).toHaveText([OPERATOR_STEPS_JOB, added[0]]);
       await addStepThroughForm(page, { name: added[1], type: 'pause' });
       await expect(templateStepNames(page)).toHaveText([OPERATOR_STEPS_JOB, ...added]);
-      await expect(templateStepNumbers(page)).toHaveText(['10', '20', '30']);
-      // The operator gets the same field and hint as admins.
-      await expect(page.locator(STEP_ORDER_INPUT)).toHaveValue('');
-      await expect(page.locator(STEP_ORDER_INPUT)).toHaveAttribute('placeholder', STEP_ORDER_PLACEHOLDER);
-      await expect(page.locator('#workflow-steps-table + *')).toHaveText(STEP_ORDER_HINT);
+      await expect(templateStepPositions(page)).toHaveText(['1', '2', '3']);
+      // The operator gets the same Position and legend as admins.
+      await expect(page.locator(POSITION_SELECT)).toHaveValue('end');
+      await expect(page.locator(`${POSITION_SELECT} option:checked`)).toHaveText(positionEnd(stepLabel(3, added[1])));
+      await expect(page.locator('#wf-steps-legend')).toHaveText(LEGEND);
     });
     expect(await stepNames(page)).toEqual([OPERATOR_STEPS_JOB]);
   });
@@ -323,8 +330,9 @@ test.describe('Workflow Templates RBAC', () => {
     await expect(page.locator('#add-step-form')).toHaveCount(0);
     await expect(page.locator('#page-content form[action*="/workflow-template/move-step"]')).toHaveCount(0);
     await expect(page.locator('#page-content form[action*="/workflow-template/remove-step"]')).toHaveCount(0);
-    // Nor the hint on where new steps go.
-    await expect(page.getByText(STEP_ORDER_HINT)).toHaveCount(0);
+    await expect(page.locator('#page-content [data-action]')).toHaveCount(0);
+    // The legend is for everyone who may view the workflow.
+    await expect(page.locator('#wf-steps-legend')).toHaveText(LEGEND);
     // Name and description, launching and the trigger token stay open.
     await expect(page.locator('#page-content').getByRole('link', { name: 'Edit', exact: true })).toBeVisible();
     await expect(page.locator('#page-content form[action*="/workflow-template/launch"] button')).toBeVisible();

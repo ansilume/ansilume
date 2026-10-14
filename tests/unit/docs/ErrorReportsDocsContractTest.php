@@ -8,6 +8,7 @@ use app\components\ErrorText;
 use app\components\WorkflowRunOperationFailure;
 use app\controllers\api\v1\NotificationTemplatesController;
 use app\controllers\NotificationTemplateController;
+use app\controllers\ProjectController;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\models\WorkflowJobStep;
@@ -15,6 +16,7 @@ use app\services\ApprovalSettlement;
 use app\services\AuditService;
 use app\services\JobCancellationService;
 use app\services\NotificationDispatcher;
+use app\services\runstate\Texts;
 use app\services\ScheduleService;
 use app\services\StrandedJobSweep;
 use app\services\WorkflowCancellationService;
@@ -85,9 +87,15 @@ class ErrorReportsDocsContractTest extends TestCase
             'updating.md'
         );
         // Regression (wave 8, C9): the messages are the API's answers too, and
-        // an API caller has no page to reload.
+        // an API caller has no page to reload. The notes of a page whose live
+        // updates stopped (2.11.0: a run's, a job's and a project's sync
+        // output) ask for a reload of that page, rightly.
+        $liveNotes = [Texts::LIVE_STOPPED_RUN, Texts::LIVE_STOPPED_JOB, ProjectController::SYNC_LIVE_STOPPED];
         foreach (['docs/troubleshooting.md', 'docs/updating.md', 'web/openapi.yaml'] as $file) {
-            $this->assertStringNotContainsString('Reload the page', $this->read($file), "{$file} quotes the old wording.");
+            $this->assertStringNotContainsString('Reload the page', str_replace($liveNotes, '', $this->read($file)), "{$file} quotes the old wording.");
+        }
+        foreach ([WorkflowRunOperationFailure::CANCEL_FAILED, WorkflowRunOperationFailure::RESUME_FAILED] as $format) {
+            $this->assertStringNotContainsString('Reload the page', $format);
         }
     }
 

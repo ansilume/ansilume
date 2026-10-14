@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace app\controllers\traits;
 
+use app\components\SubmittedId;
+use app\controllers\BaseController;
 use app\services\ProjectAccessChecker;
 use app\services\WorkflowAccessChecker;
 use yii\base\Model;
-use yii\validators\NumberValidator;
 use yii\web\ForbiddenHttpException;
 
 /**
@@ -59,7 +60,7 @@ trait TeamScopingTrait
         $pid = $this->normalizeProjectId($projectId);
         $userId = $this->currentUserId();
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $pid)) {
-            throw new ForbiddenHttpException('You do not have permission to modify this resource.');
+            throw new ForbiddenHttpException(BaseController::MODIFY_FORBIDDEN);
         }
     }
 
@@ -79,18 +80,21 @@ trait TeamScopingTrait
     /**
      * 403 unless the current user may change, launch, resume or cancel the
      * workflow template: operator access to the project of every job step.
+     * The template page answers the same text (BaseController::MODIFY_FORBIDDEN)
+     * when the step write path finds the same with the workflow locked.
      */
     protected function requireWorkflowOperate(int $workflowTemplateId): void
     {
         $userId = $this->currentUserId();
         if ($userId === null || !$this->workflowChecker()->canOperateWorkflowTemplate($userId, $workflowTemplateId)) {
-            throw new ForbiddenHttpException('You do not have permission to modify this resource.');
+            throw new ForbiddenHttpException(BaseController::MODIFY_FORBIDDEN);
         }
     }
 
     /**
      * The submitted reference ID as the model stores it, assigned back to
-     * the attribute, so that the access check and the save use one value.
+     * the attribute, so that the access check and the save use one value
+     * (SubmittedId::normalize(), which the step write path uses too).
      *
      * The model's integer rule accepts more than filter_var() does, such as
      * "0112709" and "+0112709", and the integer column stores both as
@@ -101,15 +105,7 @@ trait TeamScopingTrait
      */
     protected function normalizeSubmittedId(Model $model, string $attribute): ?int
     {
-        $value = $model->$attribute;
-        $integerRule = new NumberValidator(['integerOnly' => true]);
-        if (!(is_int($value) || is_float($value) || is_string($value)) || !$integerRule->validate($value)) {
-            return null;
-        }
-        $id = (int)$value;
-        $model->$attribute = $id;
-
-        return $id;
+        return SubmittedId::normalize($model, $attribute);
     }
 
     /**

@@ -179,9 +179,9 @@ class NotificationTemplatesController extends BaseApiController
     }
 
     /**
-     * @param array<string, mixed> $body
+     * @param array<string, mixed> $body The request body, the channel secrets of its config included.
      */
-    private function applyBody(NotificationTemplate $model, array $body): void
+    private function applyBody(NotificationTemplate $model, #[\SensitiveParameter] array $body): void
     {
         $nullable = ['description', 'config', 'subject_template', 'body_template'];
 
@@ -201,6 +201,11 @@ class NotificationTemplatesController extends BaseApiController
     }
 
     /**
+     * The template as the API answers it: its config with
+     * SurveySecrets::PLACEHOLDER for every channel secret, for every caller
+     * (viewers read the list and the detail); a PUT that sends the
+     * placeholder back keeps the stored value (NotificationConfigSecrets).
+     *
      * @return array{id: int, name: string, description: string|null, channel: string, config: mixed, events: string[], subject_template: string|null, body_template: string|null, created_by: int, created_at: int, updated_at: int}
      */
     private function serialize(NotificationTemplate $m): array
@@ -210,7 +215,7 @@ class NotificationTemplatesController extends BaseApiController
             'name' => $m->name,
             'description' => $m->description,
             'channel' => $m->channel,
-            'config' => $m->getParsedConfig(),
+            'config' => $m->getRedactedConfig(),
             'events' => $m->getEventList(),
             'subject_template' => $m->subject_template,
             'body_template' => $m->body_template,

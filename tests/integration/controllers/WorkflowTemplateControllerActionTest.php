@@ -4,14 +4,19 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\components\WorkflowStepPosition;
 use app\controllers\WorkflowTemplateController;
+use app\models\ApprovalRequest;
+use app\models\ApprovalRule;
 use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\User;
 use app\models\WorkflowJob;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\runstate\Texts;
 use app\services\WorkflowExecutionService;
+use app\services\WorkflowStepChangeSummary;
 use app\tests\integration\TeamScopeFixtures;
 use yii\data\ActiveDataProvider;
 use yii\helpers\Url;
@@ -35,7 +40,7 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         // Flashes live in $_SESSION, which outlasts a test: start without any.
         \Yii::$app->session->removeAllFlashes();
 
-        $this->swapService('workflowExecutionService', new class extends WorkflowExecutionService {
+        $this->swapService('workflowExecutionService', new class () extends WorkflowExecutionService {
             public int $launchCalls = 0;
             public bool $throwOnLaunch = false;
             /** Run the real launch: team scoping, audit entries, first step. */
@@ -326,7 +331,6 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->setPost([
             'WorkflowStep' => [
                 'name' => 'step-one',
-                'step_order' => 1,
                 'step_type' => WorkflowStep::TYPE_JOB,
                 'job_template_id' => $tpl->id,
             ],
@@ -338,6 +342,11 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->assertInstanceOf(Response::class, $result);
         $step = WorkflowStep::findOne(['workflow_template_id' => $wf->id, 'name' => 'step-one']);
         $this->assertNotNull($step);
+        $this->assertSame(['view', 'id' => (int)$wf->id, '#' => 'step-' . $step->id], $ctrl->redirectedTo, 'the page shows the new step');
+        $this->assertSame(
+            ['success' => sprintf(WorkflowStepChangeSummary::ADDED, 'step-one', 1, 1, '')],
+            \Yii::$app->session->getAllFlashes(true)
+        );
     }
 
     public function testAddStepThrowsNotFound(): void
@@ -366,6 +375,30 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
 
         $this->assertInstanceOf(Response::class, $result);
         $this->assertNull(WorkflowStep::findOne($stepId));
+        $this->assertSame(['view', 'id' => (int)$wf->id, '#' => 'workflow-steps'], $ctrl->redirectedTo);
+    }
+
+    /**
+     * regression: "Step removed." did not name the step. The flash names it
+     * and says where it stood.
+     */
+    public function testRegressionTheRemoveFlashNamesTheStepAndWhereItStood(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $deploy = $this->createWorkflowStep($wf->id, 20, WorkflowStep::TYPE_PAUSE);
+        $deploy->name = 'Deploy';
+        $deploy->save(false);
+        $this->createWorkflowStep($wf->id, 30, WorkflowStep::TYPE_PAUSE);
+        $this->setPost(['step_id' => (string)$deploy->id]);
+
+        $this->makeController()->actionRemoveStep((int)$wf->id);
+
+        $flashes = \Yii::$app->session->getAllFlashes(true);
+        $this->assertStringStartsWith(sprintf(WorkflowStepChangeSummary::REMOVED, 'Deploy', 2, 3), (string)($flashes['success'] ?? ''));
+        $this->assertNull(WorkflowStep::findOne($deploy->id));
     }
 
     public function testRemoveStepIgnoresUnknownStep(): void
@@ -380,6 +413,8 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $result = $ctrl->actionRemoveStep((int)$wf->id);
 
         $this->assertInstanceOf(Response::class, $result);
+        $this->assertSame([], \Yii::$app->session->getAllFlashes(), 'nothing to say');
+        $this->assertSame(['view', 'id' => (int)$wf->id, '#' => 'workflow-steps'], $ctrl->redirectedTo);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -398,6 +433,8 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
             public string $capturedView = '';
             /** @var array<string, mixed> */
             public array $capturedParams = [];
+            /** @var array<int|string, mixed>|string|null where the action redirected to */
+            public array|string|null $redirectedTo = null;
 
             public function render($view, $params = []): string
             {
@@ -409,6 +446,7 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
 
             public function redirect($url, $statusCode = 302): \yii\web\Response
             {
+                $this->redirectedTo = $url;
                 $r = new \yii\web\Response();
                 $r->content = 'redirected';
                 return $r;
@@ -423,8 +461,8 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $user = $this->createUser();
         $this->loginAs($user);
         $wf = $this->createWorkflowTemplate($user->id);
-        $a = $this->createWorkflowStep($wf->id, 10);
-        $b = $this->createWorkflowStep($wf->id, 20);
+        $a = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $b = $this->createWorkflowStep($wf->id, 20, WorkflowStep::TYPE_PAUSE);
 
         $this->setQueryParams(['id' => (string)$wf->id]);
         $this->setPost(['step_id' => (string)$b->id, 'direction' => 'up']);
@@ -437,7 +475,94 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $b->refresh();
         $this->assertSame(10, (int)$b->step_order);
         $this->assertSame(20, (int)$a->step_order);
-        $this->assertArrayHasKey('success', \Yii::$app->session->getAllFlashes());
+        $this->assertSame([
+            'success' => sprintf(WorkflowStepChangeSummary::MOVED, 'step-20', 1, 2, WorkflowStepChangeSummary::AT_START)
+                . ' ' . sprintf(WorkflowStepChangeSummary::NOW_CONTINUES, 'step-20', 'step-10', '', WorkflowStepChangeSummary::WAS_END)
+                . ' ' . sprintf(WorkflowStepChangeSummary::NOW_ENDS, 'step-10', '', 'step-20'),
+            'warning' => [sprintf(WorkflowStepChangeSummary::START_CHANGED, 'step-20', 'step-10')],
+        ], \Yii::$app->session->getAllFlashes(true), 'the summary, and one warning flash per warning');
+    }
+
+    /**
+     * regression: a move redirected without the step's anchor, so the page
+     * jumped to the top and the moved step had to be looked for. It shows
+     * the step (#step-<id>, highlighted by tr:target), also after a refusal.
+     */
+    public function testRegressionAMoveShowsTheMovedStep(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $b = $this->createWorkflowStep($wf->id, 20, WorkflowStep::TYPE_PAUSE);
+
+        foreach (['moved' => ['direction' => 'up'], 'refused' => ['direction' => 'sideways']] as $case => $place) {
+            $this->setPost(['step_id' => (string)$b->id] + $place);
+            $ctrl = $this->makeController();
+            $ctrl->actionMoveStep((int)$wf->id);
+
+            $this->assertSame(['view', 'id' => (int)$wf->id, '#' => 'step-' . $b->id], $ctrl->redirectedTo, $case);
+        }
+    }
+
+    /**
+     * Move to… places a step anywhere in one post: after a step, at the
+     * start or at the end.
+     */
+    public function testMoveStepTakesAPosition(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $b = $this->createWorkflowStep($wf->id, 20, WorkflowStep::TYPE_PAUSE);
+        $c = $this->createWorkflowStep($wf->id, 30, WorkflowStep::TYPE_PAUSE);
+        $d = $this->createWorkflowStep($wf->id, 40, WorkflowStep::TYPE_PAUSE);
+
+        $this->setPost(['step_id' => (string)$d->id, 'position' => WorkflowStepPosition::WEB_AFTER_PREFIX . $a->id]);
+        $this->makeController()->actionMoveStep((int)$wf->id);
+        $this->assertSame([$a->id, $d->id, $b->id, $c->id], $this->runOrder($wf), 'over two steps in one move');
+        $flashes = \Yii::$app->session->getAllFlashes(true);
+        $this->assertStringStartsWith(
+            sprintf(WorkflowStepChangeSummary::MOVED, 'step-40', 2, 4, sprintf(WorkflowStepChangeSummary::AFTER, 'step-10')),
+            (string)($flashes['success'] ?? '')
+        );
+
+        $this->setPost(['step_id' => (string)$a->id, 'position' => WorkflowStepPosition::KIND_END]);
+        $this->makeController()->actionMoveStep((int)$wf->id);
+        $this->assertSame([$d->id, $b->id, $c->id, $a->id], $this->runOrder($wf));
+        \Yii::$app->session->removeAllFlashes();
+
+        $this->setPost(['step_id' => (string)$c->id, 'position' => WorkflowStepPosition::KIND_START]);
+        $this->makeController()->actionMoveStep((int)$wf->id);
+        $this->assertSame([$c->id, $d->id, $b->id, $a->id], $this->runOrder($wf));
+    }
+
+    /**
+     * regression: ▲ on a step tied with its neighbour reported a move and
+     * changed nothing. With three steps at step order 5 (saved by an older
+     * version, or by hand), ▲ on the second swapped two equal values, the
+     * renumbering put the steps back in ID order, and the page still
+     * flashed "moved up". ▲ moves the step in the run order now.
+     */
+    public function testRegressionMoveUpOnAStepTiedWithItsNeighbourMovesIt(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 5, WorkflowStep::TYPE_PAUSE);
+        $b = $this->createWorkflowStep($wf->id, 5, WorkflowStep::TYPE_PAUSE);
+        $c = $this->createWorkflowStep($wf->id, 5, WorkflowStep::TYPE_PAUSE);
+        $this->setPost(['step_id' => (string)$b->id, 'direction' => 'up']);
+
+        $this->makeController()->actionMoveStep((int)$wf->id);
+
+        $this->assertSame([$b->id, $a->id, $c->id], $this->runOrder($wf));
+        $flashes = \Yii::$app->session->getAllFlashes(true);
+        $this->assertStringStartsWith(
+            sprintf(WorkflowStepChangeSummary::MOVED, 'step-5', 1, 3, WorkflowStepChangeSummary::AT_START),
+            (string)($flashes['success'] ?? '')
+        );
     }
 
     public function testMoveStepDownSwapsWithSuccessor(): void
@@ -445,8 +570,8 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $user = $this->createUser();
         $this->loginAs($user);
         $wf = $this->createWorkflowTemplate($user->id);
-        $a = $this->createWorkflowStep($wf->id, 10);
-        $b = $this->createWorkflowStep($wf->id, 20);
+        $a = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $b = $this->createWorkflowStep($wf->id, 20, WorkflowStep::TYPE_PAUSE);
 
         $this->setQueryParams(['id' => (string)$wf->id]);
         $this->setPost(['step_id' => (string)$a->id, 'direction' => 'down']);
@@ -475,7 +600,35 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
 
         $a->refresh();
         $this->assertSame(10, (int)$a->step_order, 'Bad direction must not move anything.');
-        $this->assertArrayHasKey('danger', \Yii::$app->session->getAllFlashes());
+        $this->assertSame(
+            ['danger' => WorkflowTemplateController::FLASH_STEP_NOT_MOVED . WorkflowStepPosition::DIRECTION_INVALID],
+            \Yii::$app->session->getAllFlashes(true)
+        );
+    }
+
+    /**
+     * A move needs exactly one of direction and position: a post with
+     * neither would otherwise read as "to the end".
+     */
+    public function testMoveStepRefusesAPostWithoutExactlyOnePlace(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $a = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $this->createWorkflowStep($wf->id, 20, WorkflowStep::TYPE_PAUSE);
+
+        foreach ([[], ['direction' => 'down', 'position' => WorkflowStepPosition::KIND_END]] as $place) {
+            $this->setPost(['step_id' => (string)$a->id] + $place);
+            $this->makeController()->actionMoveStep((int)$wf->id);
+
+            $this->assertSame(
+                ['danger' => WorkflowTemplateController::FLASH_STEP_NOT_MOVED . WorkflowStepPosition::FORM_INVALID],
+                \Yii::$app->session->getAllFlashes(true)
+            );
+            $a->refresh();
+            $this->assertSame(10, (int)$a->step_order);
+        }
     }
 
     public function testMoveStepThrowsForUnknownStep(): void
@@ -511,6 +664,10 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $ctrl->actionMoveStep((int)$myWf->id);
     }
 
+    /**
+     * A move to where the step stands (▲ on the first step) writes nothing
+     * and says so: an info flash, not a success one, and no audit entry.
+     */
     public function testMoveStepUpAtTopIsSoftNoOp(): void
     {
         $user = $this->createUser();
@@ -527,9 +684,8 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->assertInstanceOf(Response::class, $result);
         $a->refresh();
         $this->assertSame(10, (int)$a->step_order);
-        // No flash for soft no-op — controller must not lie about a move
-        // that didn't happen.
-        $this->assertEmpty(\Yii::$app->session->getAllFlashes());
+        $this->assertSame(['info' => sprintf(WorkflowStepChangeSummary::STAYS, 'step-10', 1)], \Yii::$app->session->getAllFlashes(true));
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_MOVED, 'object_id' => $wf->id])->exists());
     }
 
     // ── actionGenerateTriggerToken / actionRevokeTriggerToken ────────────────
@@ -598,11 +754,13 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $ctrl->actionGenerateTriggerToken(9999999);
     }
 
-    public function testAddStepResequencesToSparseLayout(): void
+    /**
+     * The user places a new step between two others with Position "After
+     * <step>"; the steps are renumbered 10, 20, 30 around it. A typed Step
+     * Order (a forged field: the form has none since 2.11) decides nothing.
+     */
+    public function testAddStepAfterAStepWedgesItAndRenumbers(): void
     {
-        // The user types step_order=15 to wedge between 10 and 20; the
-        // controller's post-save resequence normalises the layout to
-        // 10/20/30 so the new step lands neatly in the middle.
         $user = $this->createUser();
         $this->loginAs($user);
         $wf = $this->createWorkflowTemplate($user->id);
@@ -613,9 +771,10 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->setPost([
             'WorkflowStep' => [
                 'name' => 'wedged',
-                'step_order' => '15',
+                'step_order' => '99',
                 'step_type' => WorkflowStep::TYPE_PAUSE,
             ],
+            'position' => WorkflowStepPosition::WEB_AFTER_PREFIX . $a->id,
         ]);
 
         $ctrl = $this->makeController();
@@ -625,14 +784,33 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $b->refresh();
         $wedged = WorkflowStep::find()->where(['workflow_template_id' => $wf->id, 'name' => 'wedged'])->one();
         $this->assertNotNull($wedged);
-
-        // Not sorted first: that let a step land anywhere (2.10.1 found
-        // steps added with the form's default landing first).
         $this->assertSame(
             [10, 20, 30],
             [(int)$a->step_order, (int)$wedged->step_order, (int)$b->step_order],
-            'The step typed as 15 lands between #10 and #20, then the steps are 10/20/30.'
+            'after the first step, whatever the typed order; then the steps are 10/20/30'
         );
+        $flashes = \Yii::$app->session->getAllFlashes(true);
+        $this->assertStringStartsWith(
+            sprintf(WorkflowStepChangeSummary::ADDED, 'wedged', 2, 3, sprintf(WorkflowStepChangeSummary::AFTER, 'step-10')),
+            (string)($flashes['success'] ?? '')
+        );
+    }
+
+    /**
+     * A refused add shows its reason at the form (#add-step).
+     */
+    public function testARefusedAddIsShownAtTheForm(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $this->setPost(['WorkflowStep' => ['name' => '', 'step_type' => WorkflowStep::TYPE_PAUSE]]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionAddStep((int)$wf->id);
+
+        $this->assertSame(['view', 'id' => (int)$wf->id, '#' => 'add-step'], $ctrl->redirectedTo);
+        $this->assertSame(['danger' => 'Step not added: Name cannot be blank.'], \Yii::$app->session->getAllFlashes(true));
     }
 
     // ── Team scoping (regression) ────────────────────────────────────────────
@@ -891,7 +1069,62 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $audit = AuditLog::findOne(['action' => AuditLog::ACTION_WORKFLOW_LAUNCHED, 'object_id' => $run->id]);
         $this->assertNotNull($audit);
         $this->assertSame('web', $this->metadata($audit)['source'] ?? null);
-        $this->assertArrayHasKey('success', \Yii::$app->session->getAllFlashes());
+        $this->assertSame(['success' => sprintf(Texts::LAUNCHED, $wf->name)], \Yii::$app->session->getAllFlashes(true));
+    }
+
+    /**
+     * regression: a workflow whose first step waits for approval flashed
+     * only "Workflow … launched.", and the operator had to open the run to
+     * learn that it waits. The flash names the step and the request.
+     */
+    public function testRegressionALaunchThatWaitsForAnApprovalSaysSo(): void
+    {
+        $s = $this->teamScope();
+        $rule = $this->createApprovalRule(
+            $s['admin']->id,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            (string)json_encode(['user_ids' => [$s['member']->id]])
+        );
+        $wf = $this->createWorkflowTemplate($s['admin']->id);
+        $gate = $this->createWorkflowStep((int)$wf->id, 10, WorkflowStep::TYPE_APPROVAL, null, (int)$rule->id);
+        $gate->name = 'Change board';
+        $gate->save(false);
+        $this->createWorkflowStep((int)$wf->id, 20, WorkflowStep::TYPE_JOB, $s['open']->id);
+        $this->loginAs($s['admin']);
+        $this->realLaunches();
+        $this->setQueryParams(['id' => (string)$wf->id]);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionLaunch();
+
+        $run = WorkflowJob::findOne(['workflow_template_id' => $wf->id]);
+        $this->assertNotNull($run);
+        $request = ApprovalRequest::find()->orderBy(['id' => SORT_DESC])->one();
+        $this->assertInstanceOf(ApprovalRequest::class, $request);
+        $this->assertSame(
+            ['success' => sprintf(Texts::LAUNCHED_AWAITING_APPROVAL, $wf->name, 'Change board', $request->id)],
+            \Yii::$app->session->getAllFlashes(true)
+        );
+        $this->assertSame(['/workflow-job/view', 'id' => $run->id], $ctrl->redirectedTo);
+    }
+
+    public function testALaunchThatPausesSaysWhere(): void
+    {
+        $s = $this->teamScope();
+        $wf = $this->createWorkflowTemplate($s['admin']->id);
+        $wait = $this->createWorkflowStep((int)$wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $wait->name = 'Wait for the window';
+        $wait->save(false);
+        $this->loginAs($s['admin']);
+        $this->realLaunches();
+        $this->setQueryParams(['id' => (string)$wf->id]);
+
+        $this->makeController()->actionLaunch();
+
+        $this->assertSame(
+            ['success' => sprintf(Texts::LAUNCHED_PAUSED, $wf->name, 'Wait for the window')],
+            \Yii::$app->session->getAllFlashes(true)
+        );
     }
 
     public function testLaunchOfViewedOnlyWorkflowIsForbiddenAndAudited(): void
@@ -971,7 +1204,14 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
             'step_type' => WorkflowStep::TYPE_JOB,
             'job_template_id' => $s['own']->id,
             'approval_rule_id' => null,
-        ], $this->metadata($audit));
+            'on_success_step_id' => null,
+            'on_failure_step_id' => null,
+            'on_always_step_id' => null,
+            'position' => 2,
+            'step_count' => 2,
+            'source' => 'web',
+        ], $this->metadata($audit), 'the step write service audits the add, once');
+        $this->assertSame(1, (int)AuditLog::find()->where(['action' => AuditLog::ACTION_WORKFLOW_TEMPLATE_STEP_ADDED, 'object_id' => $wf->id])->count());
         $this->assertArrayHasKey('success', \Yii::$app->session->getAllFlashes());
     }
 
@@ -1355,9 +1595,16 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->loginAs($user);
         $wf = $this->createWorkflowTemplate($user->id);
         $existing = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $template = $this->createJobTemplate(
+            (int)$this->createProject($user->id)->id,
+            (int)$this->createInventory($user->id)->id,
+            (int)$this->createRunnerGroup($user->id)->id,
+            $user->id
+        );
         $this->postStep([
             'name' => 'branching',
-            'step_type' => WorkflowStep::TYPE_PAUSE,
+            'step_type' => WorkflowStep::TYPE_JOB,
+            'job_template_id' => (string)$template->id,
             'on_success_step_id' => '0',
             'on_failure_step_id' => (string)$existing->id,
             'on_always_step_id' => '',
@@ -1369,6 +1616,33 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
         $this->assertNotNull($step);
         $this->assertSame(WorkflowStep::END_WORKFLOW, $step->on_success_step_id);
         $this->assertSame($existing->id, $step->on_failure_step_id);
+        $this->assertNull($step->on_always_step_id);
+    }
+
+    /**
+     * A pause step takes only On Success (Resume continues there): the On
+     * Failure and Always the form posts for it are not saved.
+     */
+    public function testAddStepIgnoresTheBranchesAPauseStepNeverTakes(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $wf = $this->createWorkflowTemplate($user->id);
+        $existing = $this->createWorkflowStep($wf->id, 10, WorkflowStep::TYPE_PAUSE);
+        $this->postStep([
+            'name' => 'wait',
+            'step_type' => WorkflowStep::TYPE_PAUSE,
+            'on_success_step_id' => (string)$existing->id,
+            'on_failure_step_id' => (string)$existing->id,
+            'on_always_step_id' => '0',
+        ]);
+
+        $this->makeController()->actionAddStep((int)$wf->id);
+
+        $step = WorkflowStep::findOne(['workflow_template_id' => $wf->id, 'name' => 'wait']);
+        $this->assertNotNull($step);
+        $this->assertSame($existing->id, $step->on_success_step_id);
+        $this->assertNull($step->on_failure_step_id);
         $this->assertNull($step->on_always_step_id);
     }
 
@@ -1481,6 +1755,20 @@ class WorkflowTemplateControllerActionTest extends WebControllerTestCase
                 \Yii::$app->set($id, $definition);
             }
         }
+    }
+
+    /**
+     * The IDs of the workflow's steps in run order.
+     *
+     * @return list<int>
+     */
+    private function runOrder(WorkflowTemplate $workflow): array
+    {
+        return array_map('intval', WorkflowStep::find()
+            ->select('id')
+            ->where(['workflow_template_id' => $workflow->id])
+            ->orderBy(WorkflowTemplate::RUN_ORDER)
+            ->column());
     }
 
     private function realLaunches(): void

@@ -53,8 +53,13 @@ return [
             'channel' => 'ansilume-test-queue',
         ],
         'redis' => $redis,
+        // The class of config/web.php and config/console.php, but without
+        // their default role viewer: tests build users without the viewer's
+        // permissions, as an admin can by editing the viewer role. Tests that
+        // need the production default role set it themselves
+        // (GuestAccessTest, AuthManagerTest).
         'authManager' => [
-            'class' => 'yii\rbac\DbManager',
+            'class' => 'app\components\AuthManager',
         ],
         'auditService' => [
             'class' => 'app\services\AuditService',
@@ -83,6 +88,18 @@ return [
         ],
         'workflowStepReorderService' => [
             'class' => 'app\services\WorkflowStepReorderService',
+        ],
+        'workflowStepWriteService' => [
+            'class' => 'app\services\WorkflowStepWriteService',
+        ],
+        'workflowRunStates' => [
+            'class' => 'app\services\runstate\WorkflowRunStates',
+        ],
+        'approvalWaits' => [
+            'class' => 'app\services\runstate\ApprovalWaits',
+        ],
+        'approvalRequestContexts' => [
+            'class' => 'app\services\runstate\ApprovalRequestContexts',
         ],
         'webhookService' => [
             'class' => 'app\services\WebhookService',

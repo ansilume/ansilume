@@ -31,6 +31,12 @@ class JobTask extends ActiveRecord
         return '{{%job_task}}';
     }
 
+    /**
+     * The badge colour of $status. Never "dark": the layout's dark theme
+     * draws a dark badge on a background of the same colour
+     * (tests/unit/views/DarkThemeColoursTest.php). An unreachable host is
+     * red, as in Ansible's own recap.
+     */
     public static function statusCssClass(string $status): string
     {
         return match ($status) {
@@ -38,7 +44,7 @@ class JobTask extends ActiveRecord
             self::STATUS_CHANGED => 'warning',
             self::STATUS_FAILED => 'danger',
             self::STATUS_SKIPPED => 'secondary',
-            self::STATUS_UNREACHABLE => 'dark',
+            self::STATUS_UNREACHABLE => 'danger',
             default => 'secondary',
         };
     }

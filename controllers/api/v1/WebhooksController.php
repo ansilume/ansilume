@@ -177,7 +177,11 @@ class WebhooksController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, name: string, url: string, events: string, enabled: bool, created_at: int, updated_at: int}
+     * The webhook as the API answers it: never its signing secret, only
+     * whether it has one (has_secret), which is whether its deliveries are
+     * signed (WebhookService), as the webhook pages say.
+     *
+     * @return array{id: int, name: string, url: string, events: string, enabled: bool, has_secret: bool, created_at: int, updated_at: int}
      */
     private function serialize(Webhook $w): array
     {
@@ -187,6 +191,7 @@ class WebhooksController extends BaseApiController
             'url' => $w->url,
             'events' => $w->events,
             'enabled' => (bool)$w->enabled,
+            'has_secret' => !empty($w->secret),
             'created_at' => $w->created_at,
             'updated_at' => $w->updated_at,
         ];

@@ -16,8 +16,42 @@ export const E2E_ADMIN: E2eUser = { username: 'e2e-admin', password: 'E2eAdminPa
  */
 export const E2E_OPERATOR: E2eUser = { username: 'e2e-operator', password: 'E2eOperatorPass1!' };
 
+/**
+ * The watcher of waiting runs: a plain viewer member of e2e-team-beta
+ * (commands/E2eController.php, E2eTeamScopingSeeder.php), the user of the
+ * viewer project's saved session. They see the run of e2e-beta-approval-wf
+ * and its request, named and linked, but may decide nothing
+ * (commands/E2eWorkflowWaitSeeder.php).
+ */
+export const E2E_WATCHER: E2eUser = { username: 'e2e-viewer', password: 'E2eViewerPass1!' };
+
 /** commands/E2eCancelOnlyUserSeeder.php: may view and cancel jobs, not launch them. */
 export const E2E_CANCELER: E2eUser = { username: 'e2e-canceler', password: 'E2eCancelerPass1!' };
+
+/**
+ * commands/E2eUserManagerSeeder.php HELP_DESK: holds only e2e-user-manager
+ * (user.view, user.update, user.delete), so it may change only users who are
+ * no superadmins and all of whose roles it may assign
+ * (app\services\UserChangePolicy): viewers, not e2e-admin or an operator.
+ */
+export const E2E_HELP_DESK: E2eUser = { username: 'e2e-help-desk', password: 'E2eHelpDeskPass1!' };
+
+/**
+ * commands/E2eRoleManagerSeeder.php USERNAME: holds only e2e-role-manager
+ * (role.view, role.create, role.update, role.delete) and the default role
+ * viewer, so it creates roles only with permissions it holds and changes or
+ * deletes only roles it may assign (app\services\RoleChangePolicy): its own
+ * and viewer, not admin or operator.
+ */
+export const E2E_ROLE_EDITOR: E2eUser = { username: 'e2e-role-editor', password: 'E2eRoleEditorPass1!' };
+
+/**
+ * commands/E2eAdminRoleSeeder.php USERNAME: holds only e2e-allperm-role,
+ * which holds every permission of the admin role as its own but not the
+ * admin role, so it neither assigns the admin role nor changes a user who
+ * holds it or the role itself (app\services\RoleGrantPolicy).
+ */
+export const E2E_ALLPERM_USER: E2eUser = { username: 'e2e-allperm-user', password: 'E2eAllpermUserPass1!' };
 
 /**
  * commands/E2eApprovalSeeder.php LAUNCHER: an operator in the team of

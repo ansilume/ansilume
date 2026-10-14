@@ -4,16 +4,14 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
-use app\controllers\WorkflowTemplateController;
 use app\models\ApprovalRule;
 use app\models\JobTemplate;
 use app\models\WorkflowStep;
-use app\services\WorkflowTemplatePage;
+use app\models\WorkflowTemplate;
+use app\services\WorkflowRouteMap;
+use app\services\WorkflowStepFormView;
+use app\services\WorkflowStepsTable;
 use app\tests\integration\TeamScopeFixtures;
-use yii\base\Module;
-use yii\web\AssetManager;
-use yii\web\Response;
-use yii\web\View;
 
 /**
  * The workflow template page on a job step whose job template has an
@@ -26,11 +24,14 @@ use yii\web\View;
  * On Failure, and the job-step help said only that Always overrides both.
  * Regression (open need 1 of the wave-6 check): then it showed only "end
  * workflow (failed)", which holds after a refused approval only; the label
- * names both cases.
+ * names both cases. Since 2.11.0 the steps table names both by position
+ * (WorkflowStepsTable), and a job step's Always takes over a failed job, but
+ * not a refused approval.
  */
 class WorkflowTemplateGatedStepViewTest extends WebControllerTestCase
 {
     use TeamScopeFixtures;
+    use WorkflowStepsViews;
 
     public function testRegressionTheStepsTableSaysWhatAClosedGateOfAJobStepDoes(): void
     {
@@ -52,22 +53,31 @@ class WorkflowTemplateGatedStepViewTest extends WebControllerTestCase
         $gone = $this->createWorkflowStep((int)$workflow->id, 50, WorkflowStep::TYPE_JOB, $s['viewed']->id);
         $this->loginAs($s['admin']);
 
-        $html = $this->renderPage($this->viewParams((int)$workflow->id));
+        $html = $this->stepsSection($workflow);
 
-        $next = WorkflowTemplatePage::ROUTE_NEXT_STEP;
+        $unused = WorkflowStepsTable::ROUTE_UNUSED;
         $this->assertSame(
-            [$next, WorkflowTemplatePage::GATED_JOB_FAILURE_ROUTE, '—'],
+            ['→ 2. step-20 (next)', '→ 2. step-20 (next), also after a failed job; end · run fails after a refused approval', $unused],
             $this->routes($html, $gated),
             'a failed job goes on, a refused approval ends the run'
         );
-        $this->assertStringContainsString('title="' . WorkflowTemplatePage::GATED_JOB_FAILURE_TITLE . '"', $this->row($html, $gated));
         $this->assertSame(
-            [$next, WorkflowTemplatePage::GATED_JOB_FAILURE_ROUTE, '#10 step-10 ' . WorkflowTemplatePage::GATED_JOB_ALWAYS_NOTE],
-            $this->routes($html, $always)
+            [WorkflowStepsTable::REFUSED_APPROVAL_TITLE],
+            $this->titles($html, $gated, 'failure', 1),
+            'the second part says what a refused approval is'
         );
-        $this->assertSame([$next, '#10 step-10', '—'], $this->routes($html, $failure), 'an explicit On Failure is followed');
-        $this->assertSame([$next, $next, '#10 step-10'], $this->routes($html, $open), 'no approval rule, no gate');
-        $this->assertSame([$next, $next, '—'], $this->routes($html, $gone), 'a deleted job template runs nothing');
+        $this->assertSame(
+            [$unused, 'end · run fails after a refused approval', '↺ 1. step-10 ' . WorkflowStepsTable::GATED_JOB_ALWAYS_NOTE],
+            $this->routes($html, $always),
+            'Always takes over a failed job, but not a refused approval'
+        );
+        $this->assertSame(['→ 4. step-40 (next)', '↺ 1. step-10', $unused], $this->routes($html, $failure), 'an explicit On Failure is followed either way');
+        $this->assertSame([$unused, $unused, '↺ 1. step-10'], $this->routes($html, $open), 'no approval rule, no gate');
+        $this->assertSame([$unused, $unused, $unused], $this->routes($html, $gone), 'a deleted job template runs nothing');
+        $this->assertSame(
+            [WorkflowStepsTable::CANNOT_RUN_TITLE],
+            $this->titles($html, $gone, 'success', 0)
+        );
     }
 
     public function testTheJobStepHelpSaysWhatAClosedGateDoes(): void
@@ -76,30 +86,38 @@ class WorkflowTemplateGatedStepViewTest extends WebControllerTestCase
         $workflow = $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id);
         $this->loginAs($s['admin']);
 
-        $html = $this->renderPage($this->viewParams((int)$workflow->id));
+        $html = $this->renderStepsPartial('_step-form', [
+            'form' => WorkflowStepFormView::forAdd(WorkflowRouteMap::forTemplate($workflow), null),
+            'model' => new WorkflowStep(),
+            'jobTemplateOptions' => [(int)$s['own']->id => (string)$s['own']->name],
+            'approvalRuleOptions' => [],
+            'mayAssignRules' => true,
+            'action' => ['/workflow-template/add-step', 'id' => (int)$workflow->id],
+            'error' => null,
+        ]);
 
-        $this->assertMatchesRegularExpression('#<span id="ws-routing-help-job" class="d-none">(.*?)</span>#s', $html);
-        preg_match('#<span id="ws-routing-help-job" class="d-none">(.*?)</span>\s*<span id="ws-routing-help-approval"#s', $html, $help);
-        $text = (string)preg_replace('/\s+/', ' ', trim(strip_tags($help[1] ?? '')));
+        $help = $this->one($this->xpathOf($html), '//span[@id="ws-routing-help-job"]');
         $this->assertSame(
             'Job step: success = exit code 0. Failure = any non-zero exit, timeout, or unreachable host. Always overrides both. '
             . 'If the job template has an approval rule and the approval is rejected, times out or is canceled, the job does not run: '
             . 'then only On Failure is followed (left empty, the run ends as failed), and Always is not.',
-            $text
+            $this->textOf($help)
         );
     }
 
     // -- Helpers --------------------------------------------------------------------
 
     /**
-     * The HTML of $step's row.
+     * The steps section of $workflow's page, as a viewer sees it. The
+     * regression test is checked against the 2.10.1 page by overriding this.
      */
-    private function row(string $html, WorkflowStep $step): string
+    protected function stepsSection(WorkflowTemplate $workflow): string
     {
-        $found = preg_match('#<tr data-step-id="' . $step->id . '">(.*?)</tr>#s', $html, $row);
-        $this->assertSame(1, $found, "row of step #{$step->id}");
-
-        return $row[1];
+        return $this->renderStepsPartial('_steps', [
+            'model' => $workflow,
+            'stepsTable' => $this->stepsTableOf($workflow, false),
+            'canChangeSteps' => false,
+        ]);
     }
 
     /**
@@ -109,73 +127,26 @@ class WorkflowTemplateGatedStepViewTest extends WebControllerTestCase
      */
     private function routes(string $html, WorkflowStep $step): array
     {
-        preg_match_all('#<td data-route="(?:success|failure|always)">(.*?)</td>#s', $this->row($html, $step), $cells);
+        $xpath = $this->xpathOf($html);
+        $row = $this->one($xpath, '//tr[@data-step-id="' . $step->id . '"]');
 
         return array_map(
-            static fn (string $cell): string => (string)preg_replace('/\s+/', ' ', trim(html_entity_decode(strip_tags($cell)))),
-            $cells[1]
+            fn (\DOMElement $cell): string => $this->textOf($cell),
+            $this->all($xpath, './td[@data-route="success" or @data-route="failure" or @data-route="always"]', $row)
         );
     }
 
     /**
-     * @return array<string, mixed> what actionView passes to the view
-     */
-    private function viewParams(int $workflowId): array
-    {
-        $ctrl = new class ('workflow-template', $this->app()) extends WorkflowTemplateController {
-            /** @var array<string, mixed> */
-            public array $capturedParams = [];
-
-            public function render($view, $params = []): string
-            {
-                /** @var array<string, mixed> $params */
-                $this->capturedParams = $params;
-                return 'rendered:' . $view;
-            }
-
-            /**
-             * @param array<int|string, mixed>|string $url
-             */
-            public function redirect($url, $statusCode = 302): Response
-            {
-                return new Response();
-            }
-        };
-        $ctrl->actionView($workflowId);
-
-        return $ctrl->capturedParams;
-    }
-
-    private function app(): Module
-    {
-        $app = \Yii::$app;
-        $this->assertInstanceOf(Module::class, $app);
-
-        return $app;
-    }
-
-    /**
-     * The real page, rendered with $params, with dummy asset bundles; view,
-     * asset manager and controller are restored.
+     * The title of the part $index of $step's $route cell.
      *
-     * @param array<string, mixed> $params
+     * @return list<string>
      */
-    private function renderPage(array $params): string
+    private function titles(string $html, WorkflowStep $step, string $route, int $index): array
     {
-        $components = \Yii::$app->getComponents(true);
-        $originals = ['view' => $components['view'] ?? null, 'assetManager' => $components['assetManager'] ?? null];
-        $previousController = \Yii::$app->controller;
-        \Yii::$app->set('assetManager', new AssetManager(['bundles' => false, 'basePath' => sys_get_temp_dir(), 'baseUrl' => '/assets']));
-        \Yii::$app->set('view', new View());
-        $ctrl = new WorkflowTemplateController('workflow-template', $this->app());
-        \Yii::$app->controller = $ctrl;
-        try {
-            return $ctrl->renderPartial('view', $params);
-        } finally {
-            \Yii::$app->controller = $previousController;
-            foreach ($originals as $id => $definition) {
-                \Yii::$app->set($id, $definition);
-            }
-        }
+        $xpath = $this->xpathOf($html);
+        $parts = $this->all($xpath, '//tr[@data-step-id="' . $step->id . '"]/td[@data-route="' . $route . '"]/span');
+        $this->assertArrayHasKey($index, $parts);
+
+        return [$parts[$index]->getAttribute('title')];
     }
 }

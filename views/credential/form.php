@@ -183,15 +183,27 @@ document.addEventListener('DOMContentLoaded', function () {
             btnGenerate.disabled = true;
             btnGenerate.textContent = 'Generating…';
 
+            // Asked for JSON, a signed-out request is refused with 403
+            // instead of being sent to the login page, whose HTML the
+            // script would then read as JSON. A refusal (401 or 403: signed
+            // out, or no permission) is said before the answer is read.
             fetch(<?= Json::htmlEncode(\yii\helpers\Url::to(['/credential/generate-ssh-key'])) ?>, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                     'X-CSRF-Token': csrfToken,
                 },
                 body: '{}',
             })
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+                if (r.status === 401 || r.status === 403) {
+                    var refused = new Error('The server refused the request (HTTP ' + r.status + '): your session may have ended, or you are not allowed to do this; reload the page and sign in.');
+                    refused.name = 'RequestRefused';
+                    throw refused;
+                }
+                return r.json();
+            })
             .then(function (data) {
                 if (data.ok) {
                     privateKeyEl.value = data.private_key;
@@ -201,7 +213,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     alert('Key generation failed: ' + (data.error || 'unknown error'));
                 }
             })
-            .catch(function (e) { alert('Request failed: ' + e); })
+            .catch(function (e) { alert(e.name === 'RequestRefused' ? e.message : 'Request failed: ' + e); })
             .finally(function () {
                 btnGenerate.disabled = false;
                 btnGenerate.textContent = 'Generate Ed25519 Key Pair';

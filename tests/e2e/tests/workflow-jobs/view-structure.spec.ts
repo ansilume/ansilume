@@ -18,7 +18,8 @@ test.describe('Workflow-job view structure', () => {
     const stepsTable = page.locator('#wj-steps-table');
     await expect(stepsTable).toBeVisible({ timeout: 5_000 });
     // The Type column shows what each step was when it ran.
-    await expect(stepsTable.locator('thead th')).toHaveText(['#', 'Step', 'Type', 'Status', 'Child Job', 'Started', 'Duration', 'Finished']);
+    await expect(stepsTable.locator('thead th')).toHaveText(['#', 'Step', 'Type', 'Status', 'Job / Request', 'Started', 'Duration', 'Finished']);
+    await expect(stepsTable.locator('thead th').first()).toHaveAttribute('title', 'Order in this run');
     const pause = runStepRow(page, LOCKED_PAUSE);
     await expect(pause.locator('td').nth(0)).toHaveText('1');
     await expect(pause.locator('[data-wjs-type-cell]')).toHaveText('Pause');

@@ -61,6 +61,11 @@ use Symfony\Component\Yaml\Yaml;
  * answer order of the workflow template writes, what failed cancels leave,
  * the timeout grace and average decision time, approver_config as an
  * object, and the step errors of the maintenance run's sweep.
+ *
+ * Regressions from 2.11.0, each fails on the spec of 2.10.1: a branch to a
+ * removed step names its step ID ("step ID 7"), no longer a "#7" that read
+ * like a run; the user who started a workflow run is refused with
+ * LAUNCHER_REFUSED_RUN, which the spec did not quote.
  */
 class OpenApiApprovalWorkflowContractTest extends TestCase
 {
@@ -103,6 +108,10 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
 
         $refusals = [
             [ApprovalDecisionRefusedException::launcher($this->withStatus($request, ApprovalRequest::STATUS_PENDING)), null],
+            // Regression (2.11.0): the user who started a workflow run reads
+            // LAUNCHER_REFUSED_RUN for the job of its step, which the spec
+            // did not quote.
+            [ApprovalDecisionRefusedException::launcher($this->withStatus($request, ApprovalRequest::STATUS_PENDING), true), null],
             [ApprovalDecisionRefusedException::notEligible($this->withStatus($request, ApprovalRequest::STATUS_PENDING)), null],
             [ApprovalDecisionRefusedException::resolved($this->withStatus($request, ApprovalRequest::STATUS_APPROVED)), ApprovalRequest::STATUS_APPROVED],
             [ApprovalDecisionRefusedException::expired($this->withStatus($request, ApprovalRequest::STATUS_PENDING)), ApprovalRequest::STATUS_PENDING],
@@ -122,6 +131,10 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
             }
         }
         $this->assertContains('Forbidden.', array_column($this->examples('ApprovalDecisionForbidden'), 'message'));
+        $approve = $this->textAt(['paths', '/api/v1/approvals/{id}/approve', 'post', 'description']);
+        foreach ([ApprovalDecisionRefusedException::LAUNCHER_REFUSED, ApprovalDecisionRefusedException::LAUNCHER_REFUSED_RUN] as $launcher) {
+            $this->assertStringContainsString('403 `' . $launcher . '`', $approve);
+        }
     }
 
     public function testTheDecisionCommentIsDocumentedWithItsLimit(): void
@@ -267,6 +280,13 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
         }
         $this->assertStringContainsString('`... timed out.`', $error);
         $this->assertStringContainsString('`... was canceled.`', $error);
+        // Regression (2.11.0): the message named the step ID like a run or a
+        // job ("#7"). Steps that failed before keep the text they stored, so
+        // the spec quotes it for them, as a literal: the constant changed.
+        $this->assertStringContainsString(
+            'Steps that ran before 2.11.0 keep the text they stored then: `The next step #7 of this workflow no longer exists.`',
+            $error
+        );
         $stepId = $this->at([...self::SCHEMAS, 'WorkflowJobStep', 'properties', 'workflow_step_id']);
         $this->assertIsArray($stepId);
         $this->assertTrue($stepId['nullable'] ?? false, 'Executions of removed steps stay, with a null step ID.');
@@ -301,21 +321,62 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
      * template before they read the steps or check the approval steps, but
      * the spec gave another order. The order sentences start with the
      * template's validation; PUT with the access check before it.
+     *
+     * Regression (2.11.0): PUT's order left out the 403 `Forbidden.` that
+     * the steps' replacement answers, with the workflow locked, to a caller
+     * who lost operator access meanwhile
+     * (WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED): after the 404 for a
+     * workflow deleted meanwhile, before the 409.
+     *
+     * Regression (2.11.0; the spec of 2.10.1 has the gap too): PUT's order
+     * left out the 403 of rule 12 that the guard checks again with the
+     * workflow locked (ApprovalRuleAssignmentPolicy::
+     * workflowStepsChangeRefusal()), for steps locked meanwhile, such as by
+     * an approval step that an admin added: after the team scope, before
+     * the 409 (WorkflowTemplatesStepGuardTest replays it).
+     *
+     * Regression (2.11.0, W5c): both orders left out the 403 of the new
+     * steps' re-check in the write's transaction
+     * (WorkflowTemplatesController::assertMayAddSteps()), which
+     * WorkflowTemplatesStepGuardTest::testRegressionAJobTemplateGatedMeanwhileStopsTheStepsList
+     * replays: a job template that got an approval rule meanwhile, after the
+     * 409 of PUT, before the 422 of a template or step that cannot be saved.
+     * The descriptions say that the re-check answers the same 403
+     * (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED).
      */
     public function testTheAnswerOrderOfTheWorkflowTemplateWritesIsTheControllers(): void
     {
         $orders = [
             'POST' => [
                 $this->orderSentence(['paths', '/api/v1/workflow-templates', 'post', 'description']),
-                '422 for a template that is not valid, such as one without a name (`Name cannot be blank.`); 422 for steps that cannot be read; 403 for approval steps and gated job steps; 422 for unknown approval rules; 422 or 403 for job templates; 422 for a template or step that cannot be saved.',
+                '422 for a template that is not valid, such as one without a name (`Name cannot be blank.`); 422 for steps that cannot be read; 403 for approval steps and gated job steps; 422 for unknown approval rules; 422 or 403 for job templates; 403 for a job template that got an approval rule meanwhile; 422 for a template or step that cannot be saved.',
             ],
             'PUT' => [
                 $this->orderSentence(['paths', '/api/v1/workflow-templates/{id}', 'put', 'description']),
-                '403 `Forbidden.` without access to the workflow; 422 for a template that is not valid, such as an empty name (`Name cannot be blank.`); 422 for steps that cannot be read; 403 for approval steps and gated job steps; 422 for unknown approval rules; 422 or 403 for job templates; 404 for a workflow deleted meanwhile; 409 for an active run; 422 for a template or step that cannot be saved.',
+                '403 `Forbidden.` without access to the workflow; 422 for a template that is not valid, such as an empty name (`Name cannot be blank.`); 422 for steps that cannot be read; 403 for approval steps and gated job steps; 422 for unknown approval rules; 422 or 403 for job templates; 404 for a workflow deleted meanwhile; 403 `Forbidden.` for operator access lost meanwhile; 403 for steps locked meanwhile; 409 for an active run; 403 for a job template that got an approval rule meanwhile; 422 for a template or step that cannot be saved.',
             ],
         ];
         foreach ($orders as $method => [$sentence, $expected]) {
             $this->assertSame($expected, $sentence, "{$method} /api/v1/workflow-templates names the answers in the controller's order.");
+        }
+        $this->assertSame('Forbidden.', WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED, 'the 403 under the lock is the quoted text');
+        $gated = '`' . ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED . '`';
+        $this->assertStringContainsString(
+            'Whether a job step\'s job template is gated is checked again in the transaction that writes the steps: an approval rule assigned to it meanwhile answers the same 403 ' . $gated . ', and nothing is written.',
+            $this->textAt(['paths', '/api/v1/workflow-templates', 'post', 'description'])
+        );
+        $this->assertStringContainsString(
+            'The new steps are checked again while the workflow is locked: an approval rule assigned meanwhile to the job template of a new job step answers the same 403 ' . $gated . ', and nothing is written.',
+            $this->textAt(['paths', '/api/v1/workflow-templates/{id}', 'put', 'description'])
+        );
+        foreach (['/api/v1/workflow-templates' => 'post', '/api/v1/workflow-templates/{id}' => 'put'] as $path => $method) {
+            $this->assertStringContainsString(
+                'gated job steps without `approval-rule.update` (also a job template of the new steps that got an approval rule while they were written)',
+                $this->textAt(['paths', $path, $method, 'responses', '403', 'description']),
+                "{$method} {$path}: the 403"
+            );
+            $messages = array_map(static fn (mixed $error): mixed => is_array($error) ? ($error['message'] ?? null) : null, $this->inlineExamples($path, $method, '403'));
+            $this->assertContains(ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED, $messages, "{$method} {$path}: the 403 examples");
         }
     }
 
