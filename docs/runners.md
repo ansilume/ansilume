@@ -80,7 +80,8 @@ runner that talks plain HTTP from outside the trusted networks is flagged, see
 | `API_URL` | Yes | Full URL of the Ansilume server, e.g. `https://ansilume.example.com` or `http://192.168.1.10:8080`. No trailing slash. |
 | `RUNNER_NAME` | Yes (for bootstrap) | Unique name for this runner. Used during self-registration. |
 | `RUNNER_BOOTSTRAP_SECRET` | Yes (for bootstrap) | Shared secret that authorizes self-registration. Must match the server's `RUNNER_BOOTSTRAP_SECRET`. |
-| `RUNNER_TOKEN` | Alternative | Pre-configured runner token. If set, skips self-registration. Obtain from the Ansilume UI under Runner Groups. |
+| `RUNNER_GROUP` | No | Name of the runner group to register in, used during self-registration. The group must exist: otherwise the server refuses the registration with `Runner group "<name>" not found.` and the runner exits without a token. Empty or not set: the group `default`, which the server creates if no group has that name. |
+| `RUNNER_TOKEN` | Alternative | Pre-configured runner token. If set, skips self-registration. An admin creates it with **Add Runner** under Runner Groups, see [Option B: Pre-configured token](#option-b-pre-configured-token). |
 | `RUNNER_ENV_PASSTHROUGH` | No | Comma- or space-separated names of runner environment variables that playbooks may see, e.g. `AWS_PROFILE, OP_SERVICE_ACCOUNT_TOKEN`. See [What playbooks can see](#what-playbooks-can-see). |
 
 You need either `RUNNER_BOOTSTRAP_SECRET` + `RUNNER_NAME` (self-registration)
@@ -126,10 +127,11 @@ health check and every `docker exec`, carry the full container environment.
 In the official image they run as the same user as playbooks, and that user may
 use `sudo` without a password for `become`. A playbook can therefore still read
 `RUNNER_BOOTSTRAP_SECRET` from such a process. The bootstrap secret lets anyone
-register a runner in any runner group. On runners where not everyone who can
-run playbooks is trusted with that, configure `RUNNER_TOKEN` instead of
-`RUNNER_BOOTSTRAP_SECRET`. A runner token only grants access to that runner's
-own group.
+register a runner in any runner group, and so take over the jobs of that group
+(see [Who manages runners](#who-manages-runners)). On runners where not
+everyone who can run playbooks is trusted with that, configure `RUNNER_TOKEN`
+instead of `RUNNER_BOOTSTRAP_SECRET`. A runner token only grants access to that
+runner's own group.
 
 ### Vault settings of the repository
 
@@ -282,12 +284,18 @@ them.
 ### Option A: Self-registration (recommended for automated deployments)
 
 1. Runner starts and finds no `RUNNER_TOKEN` in the environment
-2. Runner sends `POST /api/runner/v1/register` with `{ name, bootstrap_secret }`
+2. Runner sends `POST /api/runner/v1/register` with `{ name, bootstrap_secret }`,
+   and `group` with the value of `RUNNER_GROUP` when that is set
 3. Server validates the secret and returns a token. It creates the runner in
-   the requested group ("default" if none), or, when a runner with this name
-   already exists in that group, issues it a new token and revokes the old
-   one. Both are recorded in the audit log (`runner.created`,
-   `runner.reregistered`).
+   the group that `group` names, or in the group `default` when it names
+   none, or, when a runner with this name already exists in that group,
+   issues it a new token and revokes the old one. Both are recorded in the
+   audit log (`runner.created`, `runner.reregistered`). The server creates
+   the group `default` if no group has that name, but never a group that
+   `group` names: for a group that does not exist it answers `400`
+   `Runner group "<name>" not found.` and creates nothing, and the runner
+   logs `ERROR: Registration failed: Runner group "<name>" not found.` and
+   exits.
 4. Runner caches the token in `runtime/` and uses it for all subsequent requests
 5. On restart, the cached token is reused; if invalid, re-registration is attempted
 
@@ -303,7 +311,8 @@ update does not re-register them.
 
 ### Option B: Pre-configured token
 
-1. In the Ansilume UI, go to **Runner Groups** → select a group → **Add Runner**
+1. As an admin, go to **Runner Groups** → select a group → **Add Runner**; only
+   admins add runners, see [Who manages runners](#who-manages-runners)
 2. Copy the generated token from the card on the group's page: it is shown
    only this once (**Regen Token** gives the runner a new one)
 3. Set `RUNNER_TOKEN=<token>` in the runner's environment
@@ -569,12 +578,20 @@ Use cases:
 - **Network zone**: `dmz`, `internal`, `cloud`
 - **Capability**: `linux`, `windows`, `high-memory`
 
-Runners that self-register are placed in the "default" group. To assign a runner
-to a different group:
+A runner group has no token: each runner authenticates with a token of
+its own. A runner that registers itself joins the group that its
+`RUNNER_GROUP` names, which must exist, or the group `default` when
+`RUNNER_GROUP` is empty (see
+[Option A: Self-registration](#option-a-self-registration-recommended-for-automated-deployments)).
+When the server creates `default` for such a runner, it also makes it the
+runner group of the job templates that have none and whose names begin
+with `Selftest` or `Demo —`, as those it seeds do. An admin assigns a
+runner to a different group (see [Who manages runners](#who-manages-runners)):
 
 1. Create the group in the UI under **Runner Groups**
-2. Either pre-configure the runner with a token from that group, or move the
-   runner to the group after it self-registers
+2. Either add the runner to that group with **Add Runner** on the group's
+   page and give it the token shown there (`RUNNER_TOKEN`), or move the
+   runner to the group after it registered itself
 
 A runner group is deleted only while no runner belongs to it and no job
 template uses it; the web UI and `DELETE /api/v1/runner-groups/{id}` refuse
@@ -586,6 +603,57 @@ first, see
 
 ---
 
+## Who manages runners
+
+Only admins register runners (**Add Runner** on a runner group's page),
+regenerate runner tokens (**Regen Token**,
+`POST /api/v1/runners/{id}/regenerate-token`), move runners between runner
+groups (**Move**, `POST /api/v1/runners/{id}/move`) and delete them
+(**Delete**, `DELETE /api/v1/runners/{id}`), and create, change and delete
+runner groups (**New Group**, **Edit** and **Delete** on the list of runner
+groups, `POST /api/v1/runner-groups`, `PUT /api/v1/runner-groups/{id}` and
+`DELETE /api/v1/runner-groups/{id}`). Creating a runner group needs
+`runner-group.create` and deleting one `runner-group.delete`; everything
+else needs `runner-group.update`. Of the built-in roles only admin holds
+these permissions, and without them a request answers `403` and changes
+nothing. Everyone with `runner-group.view`, which every built-in role
+holds, sees the runner groups and their runners; to users without
+`runner-group.update` the group's page shows, in place of the Add Runner
+form,
+`Only admins register, move and delete runners and regenerate their tokens: that needs runner-group.update.`
+
+A runner claims every queued job of its group and receives the job's
+decrypted credentials, its inventory and its extra vars, whatever the
+team, approved jobs included: runner groups have no team scope. Whoever
+registers a runner or holds a runner's token can therefore take over the
+jobs of its group. Up to 2.11.0 the operator role held
+`runner-group.create` and `runner-group.update` as well, see
+[updating.md](updating.md#after-updating-from-2110-or-older-only-admins-manage-runners).
+
+Two documented limits remain:
+
+- **A custom role** with `runner-group.create` and `runner-group.update`
+  lets its users register runners, regenerate their tokens, move and
+  delete runners, and create and change runner groups, and so take over the
+  jobs of every runner group. Give such a role only to users you trust with
+  every credential that jobs use. The role editor calls
+  `runner-group.update`
+  `Update runner groups and manage their runners: register, move, delete, regenerate tokens`.
+- **The bootstrap secret** (`RUNNER_BOOTSTRAP_SECRET`) lets whoever holds
+  it register runners in any runner group without any permission, and
+  re-register an existing runner of a group under its name, which gives
+  the runner a new token (see
+  [Option A: Self-registration](#option-a-self-registration-recommended-for-automated-deployments)).
+  Where no runner group is named `default`, registering a runner without
+  a group creates that group, and makes it the runner group of the job
+  templates without one whose names begin with `Selftest` or `Demo —`
+  (see [Runner Groups](#runner-groups)).
+  Playbooks can read it on runners that have it set (see
+  [What playbooks can see](#what-playbooks-can-see)); guard it like the
+  credentials of every job, see [Security Considerations](#security-considerations).
+
+---
+
 ## Verifying Connectivity
 
 After starting a runner, verify it registered and is online:
@@ -593,19 +661,27 @@ After starting a runner, verify it registered and is online:
 1. **UI**: Go to **Runner Groups** → the runner should appear with a green
    "Online" badge (last seen within 60 seconds)
 2. **API**: `GET /api/v1/runner-groups` lists groups with their runners
-3. **Logs**: The runner logs its registration and polling activity to stdout:
+3. **Logs**: The runner logs its registration, its start and every job it
+   runs to stdout. The runner of the compose example above, which registers
+   itself without `RUNNER_GROUP`, prints:
    ```
-   Runner registered: dc2-runner-1 (group: default, id: 7)
-   Polling for jobs...
-   Heartbeat sent.
+   No token found — registering as 'dc2-runner-1' with the server...
+   Registered successfully. Token cached.
+   Runner 'dc2-runner-1' started. Group: 'default'. Polling https://ansilume.example.com
+   Claimed job #42. Playbook: site.yml, SCM: git
+   Job #42 finished with exit code 0.
    ```
+   With a token (`RUNNER_TOKEN`, or the one an earlier registration cached)
+   the first two lines are missing. Polls and heartbeats are not logged: the
+   runner group page shows when each runner was last seen.
 
 ### Common issues
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `ERROR: API_URL environment variable is required` | `API_URL` not set | Set the environment variable |
-| `403 Invalid bootstrap secret` | Secret mismatch | Ensure `RUNNER_BOOTSTRAP_SECRET` matches the server |
+| `ERROR: Registration failed: Invalid bootstrap secret.` | Secret mismatch: the server answers `403` | Ensure `RUNNER_BOOTSTRAP_SECRET` matches the server |
+| `ERROR: Registration failed: Runner group "<name>" not found.` | `RUNNER_GROUP` names a runner group that does not exist: the server answers `400` and creates nothing | Fix `RUNNER_GROUP`, or have an admin create the group (**Runner Groups** → **New Group**); the runner exits and tries again when it restarts |
 | `Server is not ready for runner registration yet (...) — retrying in 5s` | Server answers 503 (no admin user yet) or 502 (app container still booting) | Normal during first boot. The runner retries 12 times at 5 s intervals (about one minute), then exits and lets the container restart policy try again. Finish the initial setup or check `docker compose logs app`. |
 | `Registration failed: ... The server never became ready (503)` | Initial setup was never completed | Create the admin user (`php yii setup/admin ...`) — the runner keeps retrying on every restart |
 | `Registration failed: ... The app container never answered (502 from nginx)` | App container unhealthy or not started | Check `docker compose ps` and `docker compose logs app` on the server |
@@ -624,13 +700,21 @@ After starting a runner, verify it registered and is online:
 
 ## Security Considerations
 
+- **Runner management**: Only admins register runners and hand out their
+  tokens, regenerate tokens, move and delete runners, and create and change
+  runner groups, as a runner receives the decrypted credentials of every
+  job of its group. A custom role with `runner-group.create` and
+  `runner-group.update` allows the same, and the bootstrap secret registers
+  runners: documented limits, see [Who manages runners](#who-manages-runners).
 - **Bootstrap secret**: Treat this like a password. Anyone with this secret can
-  register runners in any runner group. Rotate it periodically and use a strong
+  register runners in any runner group, and so take over the jobs of that
+  group. Rotate it periodically and use a strong
   random value (`openssl rand -hex 24`). Playbooks can read it on runners that
   have it set, see [What playbooks can see](#what-playbooks-can-see); use
   `RUNNER_TOKEN` there if playbook authors must not obtain it.
 - **Runner token**: The self-registration token is cached in `runtime/`. Protect
-  this directory. If compromised, regenerate the runner's token from the UI.
+  this directory. If compromised, an admin regenerates the runner's token with
+  **Regen Token** on its runner group's page.
 - **Network**: Use HTTPS in production. When a runner claims a job, the server
   sends it the job's credentials and password survey answers in decrypted
   form over this connection. The runner group page flags plain HTTP, see

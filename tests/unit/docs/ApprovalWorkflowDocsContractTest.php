@@ -101,17 +101,19 @@ class ApprovalWorkflowDocsContractTest extends TestCase
     private const GATED_JOB_FAILURE_2101 = '→ next step; end workflow (failed) after a refused approval';
 
     /**
-     * The section follows those of the releases after it (2.11.0, the
-     * newest, and the patch 2.10.1), and the one before it keeps its
-     * heading, which the contract tests of 2.9.0 read.
+     * The section follows those of the releases after it (the update that
+     * leaves runner management to admins, the newest, 2.11.0 and the patch
+     * 2.10.1), and the one before it keeps its heading, which the contract
+     * tests of 2.9.0 read.
      */
     public function testTheSectionFollowsThePatchAndTheOlderOnesStay(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The patch 2.10.1 follows.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][2] ?? null, 'This section comes next.');
-        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][3] ?? '');
+        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.11.0 follows.');
+        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The patch 2.10.1 follows.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][3] ?? null, 'This section comes next.');
+        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][4] ?? '');
     }
 
     public function testTheChecklistStartsWithTheChecksBeforeTheUpdate(): void

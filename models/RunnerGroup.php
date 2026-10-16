@@ -38,7 +38,9 @@ class RunnerGroup extends ActiveRecord
             [['name'], 'required'],
             [['name'], 'string', 'max' => 128],
             [['description'], 'string', 'max' => 1000],
-            [['created_by'], 'integer'],
+            // Set in code only: the creator is whoever creates the group, so
+            // a form must not set it (load() skips attributes marked "!").
+            [['!created_by'], 'integer'],
         ];
     }
 

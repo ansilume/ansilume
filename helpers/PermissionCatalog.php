@@ -93,7 +93,12 @@ final class PermissionCatalog
                 'permissions' => [
                     ['name' => 'runner-group.view', 'label' => 'View runner groups'],
                     ['name' => 'runner-group.create', 'label' => 'Create runner groups'],
-                    ['name' => 'runner-group.update', 'label' => 'Update runner groups'],
+                    // A runner receives the credentials of every job of its group: whoever
+                    // registers runners or regenerates their tokens can take those jobs over.
+                    [
+                        'name' => 'runner-group.update',
+                        'label' => 'Update runner groups and manage their runners: register, move, delete, regenerate tokens',
+                    ],
                     ['name' => 'runner-group.delete', 'label' => 'Delete runner groups'],
                 ],
             ],

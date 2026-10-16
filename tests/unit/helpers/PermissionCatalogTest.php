@@ -43,6 +43,23 @@ class PermissionCatalogTest extends TestCase
         $this->assertSame('Delete users', PermissionCatalog::labelFor('user.delete'));
     }
 
+    /**
+     * runner-group.update registers runners, moves and deletes them and
+     * regenerates their tokens, and the role editor says so: a runner
+     * receives the credentials of every job of its group (only admins hold
+     * the permission, m000087_000000_restrict_runner_management).
+     */
+    public function testTheRunnerGroupLabelsSayWhatThePermissionsAllow(): void
+    {
+        $this->assertSame('View runner groups', PermissionCatalog::labelFor('runner-group.view'));
+        $this->assertSame('Create runner groups', PermissionCatalog::labelFor('runner-group.create'));
+        $this->assertSame(
+            'Update runner groups and manage their runners: register, move, delete, regenerate tokens',
+            PermissionCatalog::labelFor('runner-group.update')
+        );
+        $this->assertSame('Delete runner groups', PermissionCatalog::labelFor('runner-group.delete'));
+    }
+
     public function testLabelForFallsBackToRawName(): void
     {
         $this->assertSame('unknown.permission', PermissionCatalog::labelFor('unknown.permission'));

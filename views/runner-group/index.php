@@ -8,14 +8,20 @@ declare(strict_types=1);
 /** @var array $online  group_id → online runner count */
 /** @var array $templateCounts  group_id → linked template count */
 
+use app\controllers\RunnerGroupController;
 use yii\helpers\Html;
 use yii\helpers\Url;
 
 $this->title = 'Runner Groups';
+
+// Of the built-in roles only admin holds runner-group.create, .update and .delete.
+$canCreate = (bool)\Yii::$app->user?->can('runner-group.create');
+$canUpdate = (bool)\Yii::$app->user?->can('runner-group.update');
+$canDelete = (bool)\Yii::$app->user?->can('runner-group.delete');
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0">Runner Groups</h2>
-    <?php if (\Yii::$app->user?->can('runner-group.create')) : ?>
+    <?php if ($canCreate) : ?>
         <?= Html::a('New Group', ['create'], ['class' => 'btn btn-success']) ?>
     <?php endif; ?>
 </div>
@@ -23,7 +29,7 @@ $this->title = 'Runner Groups';
 <div class="alert alert-info d-flex align-items-start gap-2 mb-3">
     <span class="fs-5">&#9432;</span>
     <div>
-        Runners register themselves against a group using the group token.
+        <span data-testid="runner-tokens-note"><?= Html::encode(RunnerGroupController::RUNNER_TOKENS_NOTE) ?></span>
         See the <a href="https://github.com/ansilume/ansilume/blob/main/docs/runners.md" target="_blank" rel="noopener">Runner setup docs</a> for how to install and connect a new runner.
     </div>
 </div>
@@ -31,7 +37,10 @@ $this->title = 'Runner Groups';
 <?php if (empty($groups)) : ?>
     <div class="card">
         <div class="card-body text-muted">
-            No runner groups yet. <a href="<?= Url::to(['create']) ?>">Create one</a> to get started.
+            No runner groups yet.
+            <?php if ($canCreate) : ?>
+                <?= Html::a('Create one', ['create']) ?> to get started.
+            <?php endif; ?>
         </div>
     </div>
 <?php else : ?>
@@ -62,10 +71,10 @@ $this->title = 'Runner Groups';
                         <span class="badge text-bg-<?= $badge ?>"><?= $on ?>/<?= $cnt ?> online</span>
                     </td>
                     <td class="text-end">
-                        <?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
+                        <?php if ($canUpdate) : ?>
                             <?= Html::a('Edit', ['update', 'id' => $group->id], ['class' => 'btn btn-sm btn-outline-secondary me-1']) ?>
                         <?php endif; ?>
-                        <?php if (\Yii::$app->user?->can('runner-group.delete')) : ?>
+                        <?php if ($canDelete) : ?>
                             <form method="post" action="<?= Url::to(['delete', 'id' => $group->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this runner group?')">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>

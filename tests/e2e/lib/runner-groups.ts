@@ -16,6 +16,28 @@ export const GROUP_WITH_RUNNER = 'e2e-group-with-runner';
 export const GROUP_RUNNER = 'e2e-group-runner';
 
 /**
+ * controllers/RunnerGroupController.php RUNNER_MANAGEMENT_ADMIN_ONLY: the note
+ * of the runner group page, where the Add Runner form would be, for users
+ * without runner-group.update (operators and viewers).
+ */
+export const RUNNER_MANAGEMENT_ADMIN_ONLY = 'Only admins register, move and delete runners and regenerate their tokens: that needs runner-group.update.';
+
+/**
+ * controllers/RunnerGroupController.php RUNNER_TOKENS_NOTE: the note of the
+ * runner group list (data-testid runner-tokens-note). A runner group has no
+ * token: each runner has one of its own.
+ */
+export const RUNNER_TOKENS_NOTE = 'Each runner authenticates with a token of its own: an admin hands it out with Add Runner on the runner group\'s page, or the runner registers itself with the bootstrap secret.';
+
+/**
+ * controllers/RunnerGroupController.php NO_RUNNERS and NO_RUNNERS_ADD_ONE: the
+ * page of a group without runners (data-testid runner-group-empty), without
+ * and with the Add Runner form above it (runner-group.update).
+ */
+export const NO_RUNNERS = 'No runners yet.';
+export const NO_RUNNERS_ADD_ONE = 'No runners yet. Add one above.';
+
+/**
  * The confirm dialog of Delete on the runner group list (views/runner-group/index.php).
  * It asked 'Delete this runner group and all its runners?', but a group that
  * runners belong to is not deleted (RunnerGroupDeletionService).
@@ -50,7 +72,9 @@ export async function groupId(page: Page, name: string): Promise<string> {
  * Deletes every runner group named `name`, its runners first, through the
  * delete forms of the runner group pages (the page's CSRF token, no confirm
  * dialog): the cleanup after a spec that stopped half-way. Needs
- * runner-group.update and runner-group.delete. Loads the list again after
+ * runner-group.update and runner-group.delete, which only admins hold
+ * (m000087_000000_restrict_runner_management took runner-group.update from
+ * the operator role): call it with an admin's page. Loads the list again after
  * each group, which uses up the flashes of these deletes, so the next spec
  * of the same session does not find them on its first page.
  */

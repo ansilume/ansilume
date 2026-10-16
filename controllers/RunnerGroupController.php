@@ -14,6 +14,31 @@ use yii\web\Response;
 class RunnerGroupController extends BaseController
 {
     /**
+     * The note of the runner group page, where the Add Runner form would be,
+     * for users who may see the group but not manage its runners: a runner
+     * receives the decrypted credentials, inventory and extra vars of every
+     * job of its group, so only admins hand out runner tokens.
+     */
+    public const RUNNER_MANAGEMENT_ADMIN_ONLY = 'Only admins register, move and delete runners and regenerate their tokens: '
+        . 'that needs runner-group.update.';
+
+    /**
+     * The note of the list of runner groups, on how runners get their
+     * tokens. A runner group has no token: each runner has one of its own,
+     * from Add Runner or Regen Token on its group's page (RunnerController,
+     * runner-group.update), or from self-registration with
+     * RUNNER_BOOTSTRAP_SECRET (api\runner\RegisterController).
+     */
+    public const RUNNER_TOKENS_NOTE = 'Each runner authenticates with a token of its own: an admin hands it out '
+        . 'with Add Runner on the runner group\'s page, or the runner registers itself with the bootstrap secret.';
+
+    /** The runner group page of a group without runners, for users without runner-group.update. */
+    public const NO_RUNNERS = 'No runners yet.';
+
+    /** The runner group page of a group without runners, below the Add Runner form. */
+    public const NO_RUNNERS_ADD_ONE = 'No runners yet. Add one above.';
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     protected function accessRules(): array

@@ -130,6 +130,305 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
+## After updating from 2.11.0 or older: only admins manage runners
+
+Only admins register runners, regenerate runner tokens, move and delete
+runners, and create or change runner groups: the operator role no longer
+holds `runner-group.create` and `runner-group.update` (see **Only admins
+manage runners**). A runner receives the decrypted credentials, the
+inventory and the extra vars of every job of its runner group, whatever
+the team, approved jobs included, so whoever registers a runner or holds
+its token can take over the jobs of its group (see **Why runners are for
+admins**). Operators still see runner groups and their runners, custom
+roles keep what they hold, and existing runners keep running with their
+tokens (see **Existing runners keep running**). The update has one
+migration, which changes only the roles; runners need no update (see
+**Database and deployment**). What to do:
+
+1. Before or after the update, run the read-only query under **Who loses
+   runner management**. Give the users it lists who should keep managing
+   runners the admin role, or a custom role with `runner-group.create` and
+   `runner-group.update`, with which they can take over the jobs of every
+   runner group.
+2. After the update, read what the migration printed (see **Database and
+   deployment**). Where a line says that operators or every signed-in user
+   still hold a permission through a role, take the permission from that
+   role in the role editor (**Roles** → the role → **Edit**) unless its
+   users should take over the jobs of every runner group: viewer is the
+   role of every signed-in user. A line that names a permission comes from
+   a change made outside the role editor, which does not change what a
+   permission includes: undo that change.
+3. Run the read-only queries under **Check who managed runners**. As an
+   admin, regenerate the token of every runner whose current token a user
+   who is neither an admin nor a superadmin received, and give the new
+   token to the runner, or delete the runner.
+4. Before you delete a runner you do not trust, list the job templates
+   whose jobs it ran, and rotate their credentials (see **A runner you do
+   not trust**).
+5. Run the read-only query under **Roles that still manage runners**, and
+   take `runner-group.create` and `runner-group.update` from every role it
+   lists whose users should not take over the jobs of every runner group.
+6. Tell the operators who added runners that an admin adds them now and
+   hands out their tokens.
+
+**Who loses runner management.** Run the read-only queries of this section
+with the database client of the `db` container, or with your own client
+for an external database:
+
+```bash
+docker compose exec db sh -c 'mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"'
+```
+
+This one lists the users who register runners, regenerate runner tokens,
+move runners or create and change runner groups only as operators: through
+the operator role, or a custom role that includes it, without the admin
+role, the superadmin flag or another role that holds `runner-group.create`
+or `runner-group.update`. They lose this with the update. The query reads
+the roles assigned to the users, so it lists the same users after the
+update:
+
+```sql
+-- Users who manage runners only as operators
+SELECT u.id, u.username, a.item_name AS role
+FROM user u
+JOIN auth_assignment a ON a.user_id = u.id
+WHERE (a.item_name = 'operator'
+       OR a.item_name IN (SELECT c.parent FROM auth_item_child c
+                          WHERE c.child = 'operator'))
+  AND u.is_superadmin = 0
+  AND NOT EXISTS (
+    SELECT 1 FROM auth_assignment x
+    WHERE x.user_id = u.id
+      AND (x.item_name = 'admin' OR x.item_name IN (
+        SELECT g.parent FROM auth_item_child g
+        WHERE g.parent <> 'operator'
+          AND g.child IN ('runner-group.create', 'runner-group.update'))))
+ORDER BY u.id;
+```
+
+**Only admins manage runners.** Migration
+`m000087_000000_restrict_runner_management` takes `runner-group.create` and
+`runner-group.update` from the operator role, and so from custom roles that
+include it. Admins keep both: the migration grants them to the admin role
+directly where it held them only through operator. For users without these
+permissions, operators included:
+
+- the page of a runner group offers neither the **Add Runner** form, nor
+  **Regen Token**, **Move** and **Delete** beside its runners, nor **Edit
+  Group**, and says
+  `Only admins register, move and delete runners and regenerate their tokens: that needs runner-group.update.`
+  where the form was; the list of runner groups offers **Edit** only with
+  `runner-group.update` and **New Group** only with `runner-group.create`;
+- registering a runner, regenerating its token, moving or deleting it, and
+  creating or changing a runner group answer `403` in the web UI and change
+  nothing;
+- `POST /api/v1/runner-groups`, `PUT /api/v1/runner-groups/{id}`,
+  `POST /api/v1/runners/{id}/move`, `DELETE /api/v1/runners/{id}` and
+  `POST /api/v1/runners/{id}/regenerate-token` answer `403`
+  `{"error":{"message":"Forbidden."}}`, change nothing and return no token.
+
+Deleting runner groups (`runner-group.delete`) was for admins already.
+Operators and viewers keep `runner-group.view`: they see the runner groups,
+and on a group's page its runners with their status, version, transport,
+last contact and address, and `GET /api/v1/runner-groups` and
+`GET /api/v1/runners` answer them as before, without tokens. Operators
+still choose the runner group of the job templates they may change, which
+decides which of the runners that admins registered run their jobs. Custom
+roles keep what they hold. The role editor and `GET /api/v1/permissions`
+call `runner-group.update`
+`Update runner groups and manage their runners: register, move, delete, regenerate tokens`.
+To let other users manage runners, give them a custom role with
+`runner-group.view`, `runner-group.create` and `runner-group.update`; with
+it they can take over the jobs of every runner group (see
+[Who manages runners](runners.md#who-manages-runners)).
+
+**Why runners are for admins.** A runner claims every queued job of its
+runner group, and with each job it receives the decrypted credentials of
+the job template and the SCM credential of its project, the inventory, the
+extra vars and the password survey answers. Runner groups have no team
+scope: the jobs of every team whose job templates use a group go to its
+runners, approved jobs included. Registering a runner shows its token once,
+and regenerating a runner's token returns a new token and revokes the old
+one, on the group's page or in the answer of
+`POST /api/v1/runners/{id}/regenerate-token`. Whoever holds a runner's
+token can therefore take over the jobs of its group. Up to 2.11.0 the
+operator role could register runners in every runner group, regenerate the
+token of every runner and move runners between groups.
+
+**Existing runners keep running.** The update changes no runner: their
+tokens, names and groups stay, runners need neither an update nor a
+restart, and self-registration with `RUNNER_BOOTSTRAP_SECRET` works as
+before (see [Who manages runners](runners.md#who-manages-runners) for what
+the secret allows). A token that an operator received before the update
+keeps working as well, until an admin regenerates it or deletes the
+runner; the queries under **Check who managed runners** list such tokens.
+
+**Check who managed runners.** The audit log records each change of a
+runner or a runner group with the user who made it. This read-only query
+lists the changes made by users who are neither admins nor superadmins:
+registering a runner (`runner.created`), regenerating its token
+(`runner.token.regenerated`), moving it (`runner.updated`), deleting it
+(`runner.deleted`), and creating or changing a runner group
+(`runner-group.created`, `runner-group.updated`). A user who no longer
+exists shows without a username; runners that registered themselves with
+the bootstrap secret record no user and are left out:
+
+```sql
+-- Runner and runner group changes by users who are neither admins nor superadmins
+SELECT l.id, FROM_UNIXTIME(l.created_at) AS changed_at, l.action,
+       l.object_type, l.object_id, l.user_id, u.username, l.metadata
+FROM audit_log l
+LEFT JOIN user u ON u.id = l.user_id
+WHERE l.action IN ('runner.created', 'runner.token.regenerated', 'runner.updated',
+                   'runner.deleted', 'runner-group.created', 'runner-group.updated')
+  AND l.user_id IS NOT NULL
+  AND COALESCE(u.is_superadmin, 0) = 0
+  AND NOT EXISTS (SELECT 1 FROM auth_assignment x
+                  WHERE x.user_id = l.user_id AND x.item_name = 'admin')
+ORDER BY l.id;
+```
+
+`metadata` names the runner or the group, with `group_id` for a runner that
+was registered or deleted, and `from_group_id` and `to_group_id` for a
+move; an entry made through the API adds `"source":"api"`. The next
+read-only query lists the runners whose current token such a user
+received, by registering the runner or regenerating its token, and that
+got no token since:
+
+```sql
+-- Runners whose current token a user who is neither an admin nor a superadmin received
+SELECT r.id AS runner_id, r.name AS runner, g.name AS runner_group, l.action,
+       FROM_UNIXTIME(l.created_at) AS received_at, l.user_id, u.username
+FROM runner r
+JOIN runner_group g ON g.id = r.runner_group_id
+JOIN audit_log l ON l.object_type = 'runner' AND l.object_id = r.id
+     AND l.action IN ('runner.created', 'runner.token.regenerated')
+LEFT JOIN user u ON u.id = l.user_id
+WHERE l.user_id IS NOT NULL
+  AND COALESCE(u.is_superadmin, 0) = 0
+  AND NOT EXISTS (SELECT 1 FROM auth_assignment x
+                  WHERE x.user_id = l.user_id AND x.item_name = 'admin')
+  AND NOT EXISTS (SELECT 1 FROM audit_log later
+                  WHERE later.object_type = 'runner' AND later.object_id = r.id
+                    AND later.action IN ('runner.token.regenerated', 'runner.reregistered')
+                    AND later.id > l.id)
+ORDER BY r.id;
+```
+
+As an admin, regenerate the token of each runner it lists, with **Regen
+Token** on its group's page or `POST /api/v1/runners/{id}/regenerate-token`,
+and give the new token to the runner, or delete the runner: either way its
+old token stops working at once.
+
+**A runner you do not trust.** Whoever holds the token of a runner that the
+query above lists may have run the jobs of its group since `received_at`.
+Before you delete such a runner, list the job templates whose jobs it ran,
+with its ID in place of `<runner id>`: deleting a runner clears the runner
+of its jobs (`job.runner_id`), so the query finds none of them afterwards.
+
+```sql
+-- Job templates whose jobs runner <runner id> ran
+SELECT j.job_template_id, t.name AS job_template, t.project_id,
+       COUNT(*) AS jobs, FROM_UNIXTIME(MIN(j.started_at)) AS first_started,
+       FROM_UNIXTIME(MAX(j.started_at)) AS last_started
+FROM job j
+LEFT JOIN job_template t ON t.id = j.job_template_id
+WHERE j.runner_id = <runner id>
+GROUP BY j.job_template_id, t.name, t.project_id
+ORDER BY j.job_template_id;
+```
+
+Rotate the credentials of these job templates, for a runner that the query
+above lists those whose `last_started` comes after its `received_at`, and
+the SCM credentials of their projects, and change the secrets that their
+inventories, extra vars and password survey answers carry. Each job's page
+lists the credentials the job got, and the `job.started` entry of each job
+in the audit log names the runner (`runner_id`, `runner_name`) and these
+credentials (`credentials`), also after the runner is deleted.
+
+**Roles that still manage runners.** After the update, this read-only
+query lists the roles besides admin that hold `runner-group.create` or
+`runner-group.update`, one row for each user the role is assigned to; a
+role that is assigned to nobody shows once, without a user. On a default
+installation it lists nothing. Each role it lists lets its users take over
+the jobs of every runner group (see
+[Who manages runners](runners.md#who-manages-runners)): take the
+permissions from it unless its users should do that. If it lists viewer,
+every signed-in user holds them, as viewer is the default role; if it
+lists operator, someone gave them back after the update. The query lists
+the roles that hold the permissions themselves. The users of a role that
+includes a listed one hold them too: the lines the migration printed name
+what viewer and operator include (see **Database and deployment**).
+
+```sql
+-- Roles besides admin that hold runner-group.create or runner-group.update, with their users
+SELECT r.role, r.permissions, u.id AS user_id, u.username
+FROM (SELECT c.parent AS role,
+             GROUP_CONCAT(c.child ORDER BY c.child) AS permissions
+      FROM auth_item_child c
+      WHERE c.child IN ('runner-group.create', 'runner-group.update')
+        AND c.parent <> 'admin'
+      GROUP BY c.parent) r
+LEFT JOIN auth_assignment a ON a.item_name = r.role
+LEFT JOIN user u ON u.id = a.user_id
+ORDER BY r.role, u.id;
+```
+
+**Database and deployment.** One migration runs when the app container
+starts, `m000087_000000_restrict_runner_management`. It changes only the
+roles: it takes `runner-group.create` and `runner-group.update` from the
+operator role, grants a permission to the admin role directly where admin
+held it only through operator, and changes no runner, runner group, custom
+role or user. It prints what it changed to the output of the app container
+(`docker compose logs app`); on a default installation:
+
+```
+> Removed runner-group.create from the operator role.
+> Removed runner-group.update from the operator role.
+> Operators no longer register, move or delete runners, regenerate runner tokens, or create and change runner groups. To let other users do so, give them a custom role with runner-group.create and runner-group.update; with it they can take over the jobs of every runner group.
+```
+
+Where the admin role held a permission only through operator,
+`> Granted runner-group.update to the admin role directly.` comes before
+the line that removes it. On an installation without the operator role the
+migration prints `> Role operator does not exist: nothing to change for it.`
+and changes nothing; without the admin role it prints
+`> Role admin does not exist: nothing to change for it.` and still takes
+both permissions from operator. A permission that does not exist is
+reported, such as
+`> Permission runner-group.create does not exist: nothing to change.`, and
+skipped.
+
+The migration takes the two permissions from the operator role itself, not
+from the roles and permissions that operator includes: viewer, whose
+permissions admins can change in the role editor, keeps what it holds. For
+each of them that still grants one of the two permissions, the migration
+prints a line that names it, in place of the last line of the block above,
+as operators still manage runners then. For viewer, the default role of
+every signed-in user, and for what viewer includes, the line reads
+`> Every signed-in user still holds runner-group.update through the viewer role: take it from that role to leave runner management to admins.`
+For what only operator includes, such as a role `runner-admins` that a
+change outside the role editor put below operator, it reads
+`> Operators still hold runner-group.update through the runner-admins role: take it from that role to leave runner management to admins.`
+A permission that includes one of the two is named the same way, as
+`the <name> permission`. No new setting is needed in `.env`, and runners
+need no update:
+
+- Prebuilt images and quickstart: `docker compose pull && docker compose
+  up -d`, or quickstart `--update`.
+- Git checkout: right after `git pull`, run
+  `docker compose up -d --build --force-recreate`.
+- Ansible deploy role: run the playbook again.
+
+To roll back to 2.11.0, deploy it as [Rollback](#rollback) describes.
+2.11.0 runs with the roles as the migration left them, so operators do not
+manage runners there either. To give the operator role
+`runner-group.create` and `runner-group.update` back, revert the migration
+before you deploy 2.11.0, which does not have it:
+`docker compose exec app php yii migrate/down 1 --interactive=0` reverts
+`m000087_000000_restrict_runner_management`. The direct grants it gave the
+admin role stay.
+
 ## After updating from 2.10.1 or older: workflow steps and waiting runs
 
 Workflow steps are placed by position instead of a Step Order, can be
@@ -4687,6 +4986,11 @@ To roll back from the update to approvals and workflows (migrations
 To roll back from 2.11.0 (migration `m000086`), revert its migration
 before you deploy the older version, see **Database and deployment** under
 [After updating from 2.10.1 or older](#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs).
+
+To roll back from the update that leaves runner management to admins
+(migration `m000087`), see **Database and deployment** under
+[After updating from 2.11.0 or older](#after-updating-from-2110-or-older-only-admins-manage-runners):
+the older version keeps the roles as the migration left them.
 
 ---
 

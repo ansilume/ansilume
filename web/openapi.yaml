@@ -139,7 +139,34 @@ tags:
       it; renaming and disabling keep the user. This user is the launcher of
       the schedule's jobs and never approves them.
   - name: Runner Groups
+    description: |
+      A job template names the runner group whose runners run its jobs. A
+      runner claims every queued job of its group, whatever the team,
+      approved jobs included, and receives the job's decrypted credentials,
+      inventory and extra vars: runner groups have no team scope. Runner
+      groups are managed by admins: viewing them needs `runner-group.view`,
+      which every built-in role holds; creating, changing and deleting them
+      need `runner-group.create`, `runner-group.update` and
+      `runner-group.delete`, which of the built-in roles only admin holds
+      (403 `Forbidden.` otherwise, operators included). A custom role can
+      be given these permissions: whoever holds `runner-group.update`
+      can take over the jobs of every runner group. A runner group has no
+      token: each runner has one of its own. Self-registration with the
+      bootstrap secret, through the runner API outside `/api/v1/`, creates
+      the group `default` for a runner that names no group, where no group
+      has that name.
   - name: Runners
+    description: |
+      Viewing runners needs `runner-group.view`, which every built-in role
+      holds. Moving and deleting runners and regenerating their tokens need
+      `runner-group.update`, which of the built-in roles only admin holds
+      (403 `Forbidden.` otherwise, operators included): whoever holds a
+      runner's token receives the jobs of its group with their decrypted
+      credentials. Admins register runners in the web UI (Add Runner on a
+      runner group's page); runners also register themselves with the
+      bootstrap secret, through the runner API outside `/api/v1/`. No
+      response of these endpoints carries a token, except that of
+      regenerate-token.
   - name: Teams
   - name: Users
   - name: Webhooks
@@ -1298,6 +1325,7 @@ paths:
     get:
       tags: [Runner Groups]
       summary: List runner groups
+      description: Requires `runner-group.view`, which every built-in role holds.
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
@@ -1307,7 +1335,10 @@ paths:
     post:
       tags: [Runner Groups]
       summary: Create a runner group
-      description: Requires `runner-group.create`.
+      description: |
+        Requires `runner-group.create`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included).
+        Audited as `runner-group.created` with source `api`.
       requestBody:
         required: true
         content:
@@ -1318,13 +1349,14 @@ paths:
               description: Runners in the production datacenter
       responses:
         '201': { $ref: '#/components/responses/RunnerGroupResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RunnerManagementForbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/runner-groups/{id}:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
     get:
       tags: [Runner Groups]
       summary: Get a single runner group
+      description: Requires `runner-group.view`, which every built-in role holds.
       responses:
         '200': { $ref: '#/components/responses/RunnerGroupResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1332,7 +1364,10 @@ paths:
     put:
       tags: [Runner Groups]
       summary: Update a runner group
-      description: Requires `runner-group.update`.
+      description: |
+        Requires `runner-group.update`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included).
+        Audited as `runner-group.updated` with source `api`.
       requestBody:
         required: true
         content:
@@ -1340,14 +1375,16 @@ paths:
             schema: { $ref: '#/components/schemas/RunnerGroupInput' }
       responses:
         '200': { $ref: '#/components/responses/RunnerGroupResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RunnerManagementForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
     delete:
       tags: [Runner Groups]
       summary: Delete a runner group
       description: |
-        Requires `runner-group.delete`. Refused with 422, and nothing is
+        Requires `runner-group.delete`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included).
+        Refused with 422, and nothing is
         deleted, while runners belong to the group or job templates use it
         (deleted job templates do not count): deleting it would delete its
         runners and take it off the templates, whose jobs no runner would
@@ -1357,7 +1394,7 @@ paths:
         deletes with the same messages.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RunnerManagementForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422':
           description: |
@@ -1383,6 +1420,7 @@ paths:
     get:
       tags: [Runners]
       summary: List runners
+      description: Requires `runner-group.view`, which every built-in role holds.
       parameters:
         - { $ref: '#/components/parameters/Page' }
         - name: group_id
@@ -1399,6 +1437,7 @@ paths:
     get:
       tags: [Runners]
       summary: Get a single runner
+      description: Requires `runner-group.view`, which every built-in role holds.
       responses:
         '200': { $ref: '#/components/responses/RunnerResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1406,10 +1445,13 @@ paths:
     delete:
       tags: [Runners]
       summary: Delete a runner
-      description: Requires `runner-group.update`.
+      description: |
+        Requires `runner-group.update`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included). Its
+        token stops working. Audited as `runner.deleted` with source `api`.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RunnerManagementForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
   /api/v1/runners/{id}/move:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
@@ -1417,8 +1459,11 @@ paths:
       tags: [Runners]
       summary: Move runner to a different group
       description: |
-        Requires `runner-group.update`. Refuses if the runner has active
-        or pending jobs.
+        Requires `runner-group.update`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included): the
+        runner then claims the jobs of the target group. Refuses if the
+        runner has active or pending jobs. Audited as `runner.updated` with
+        source `api`.
       requestBody:
         required: true
         content:
@@ -1428,7 +1473,7 @@ paths:
               target_group_id: 2
       responses:
         '200': { $ref: '#/components/responses/RunnerResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RunnerManagementForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
   /api/v1/runners/{id}/regenerate-token:
@@ -1437,7 +1482,12 @@ paths:
       tags: [Runners]
       summary: Regenerate runner token
       description: |
-        Requires `runner-group.update`. Returns the new raw token (shown once).
+        Requires `runner-group.update`, which of the built-in roles only
+        admin holds (403 `Forbidden.` otherwise, operators included).
+        Returns the new raw token (shown once); the old token stops working
+        at once. Whoever holds the token receives the jobs of the runner's
+        group with their decrypted credentials. Audited as
+        `runner.token.regenerated` with source `api`.
       responses:
         '200':
           description: New token
@@ -1451,7 +1501,7 @@ paths:
                     properties:
                       runner: { $ref: '#/components/schemas/Runner' }
                       token: { type: string, description: Raw token (shown once) }
-        '403': { $ref: '#/components/responses/Forbidden' }
+        '403': { $ref: '#/components/responses/RunnerManagementForbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ────────────────────────────── Teams ──────────────────────────────
@@ -4126,6 +4176,21 @@ components:
         The caller lacks the required permission, or access to the resource:
         view or operator access to the project it belongs to (team scope).
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+    RunnerManagementForbidden:
+      description: |
+        The caller lacks the permission the request needs:
+        `runner-group.create` to create a runner group, `runner-group.delete`
+        to delete one, and `runner-group.update` to change one and to move or
+        delete a runner or regenerate its token. Of the built-in roles only
+        admin holds them, so operators get this answer too. The check comes
+        first, before the `404` of an unknown ID: nothing is changed or
+        audited, and no token is returned.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example:
+            error:
+              message: Forbidden.
     ValidationError:
       description: Invalid input
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }

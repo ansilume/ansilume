@@ -9,7 +9,9 @@ use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\Runner;
 use app\models\RunnerGroup;
+use app\models\User;
 use app\services\RunnerGroupDeletionService;
+use yii\helpers\Html;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
@@ -18,10 +20,13 @@ use yii\web\Response;
  * token, so a hijacked or duplicated RUNNER_NAME becomes visible.
  *
  * Deleting a group refuses, as the API does, while runners belong to it or
- * job templates run on it.
+ * job templates run on it. Creating and changing a group never take its
+ * creator from the form. The list says how runners get their tokens.
  */
 class RunnerGroupControllerActionTest extends WebControllerTestCase
 {
+    use RendersRealViews;
+
     /**
      * @return RunnerGroupController&object{capturedParams: array<string, mixed>, redirectedTo: mixed}
      */
@@ -188,6 +193,121 @@ class RunnerGroupControllerActionTest extends WebControllerTestCase
 
         $this->expectException(NotFoundHttpException::class);
         $this->makeController()->actionDelete(999999999);
+    }
+
+    // -- actionCreate() and actionUpdate(): the creator -------------------------------
+
+    /**
+     * Regression (review of the runner step, finding 4): created_by was a
+     * safe attribute of RunnerGroup, and actionCreate() loads the form after
+     * it sets the creator, so a posted RunnerGroup[created_by] made another
+     * user the creator of a new group.
+     */
+    public function testRegressionAPostedCreatorIsIgnoredOnCreate(): void
+    {
+        $admin = $this->signedInAdmin('rg-create-admin');
+        $other = $this->createUser('rg-create-forged');
+        $name = 'rg-created-' . uniqid();
+        $this->setPost(['RunnerGroup' => ['name' => $name, 'description' => 'made by an admin', 'created_by' => (string)$other->id]]);
+
+        $ctrl = $this->makeController();
+        $this->assertInstanceOf(Response::class, $ctrl->runAction('create'));
+
+        $group = RunnerGroup::findOne(['name' => $name]);
+        $this->assertNotNull($group, 'the rest of the form is saved');
+        $this->assertSame((int)$admin->id, (int)$group->created_by, 'the creator is the signed-in user');
+        $this->assertSame('made by an admin', $group->description);
+        $this->assertSame(['view', 'id' => (int)$group->id], $ctrl->redirectedTo);
+    }
+
+    /**
+     * Regression (review of the runner step, finding 4): a posted
+     * RunnerGroup[created_by] changed the creator of an existing group.
+     */
+    public function testRegressionAPostedCreatorIsIgnoredOnUpdate(): void
+    {
+        $owner = $this->createUser('rg-update-owner');
+        $group = $this->createRunnerGroup((int)$owner->id);
+        $this->signedInAdmin('rg-update-admin');
+        $other = $this->createUser('rg-update-forged');
+        $this->setPost(['RunnerGroup' => ['name' => 'rg-renamed-' . uniqid(), 'created_by' => (string)$other->id]]);
+
+        $ctrl = $this->makeController();
+        $this->assertInstanceOf(Response::class, $ctrl->runAction('update', ['id' => (int)$group->id]));
+
+        $group->refresh();
+        $this->assertSame((int)$owner->id, (int)$group->created_by, 'the creator stays');
+        $this->assertStringStartsWith('rg-renamed-', $group->name, 'the rest of the form is saved');
+        $this->assertSame(['view', 'id' => (int)$group->id], $ctrl->redirectedTo);
+    }
+
+    // -- actionIndex(): the note on runner tokens ------------------------------------
+
+    /**
+     * Regression: the list of runner groups said that runners register
+     * against a group "using the group token", but a runner group has no
+     * token. Each runner has one of its own, which an admin hands out on the
+     * group's page, or which self-registration with the bootstrap secret
+     * gives it; the note says so to every role, with or without groups.
+     */
+    public function testRegressionTheListSaysEachRunnerHasATokenOfItsOwn(): void
+    {
+        $this->createRunnerGroup((int)$this->createUser('rg-note-owner')->id);
+        foreach (['viewer', 'operator', 'admin'] as $role) {
+            $this->signedInAs('rg-note-' . $role, $role);
+            foreach (['with groups' => $this->listPage(null), 'without groups' => $this->listPage([])] as $case => $html) {
+                $this->assertStringContainsString(
+                    '<span data-testid="runner-tokens-note">' . Html::encode(RunnerGroupController::RUNNER_TOKENS_NOTE) . '</span>',
+                    $html,
+                    "{$role}, {$case}"
+                );
+                $this->assertStringNotContainsString('group token', $html, "{$role}, {$case}");
+                $this->assertStringContainsString('href="https://github.com/ansilume/ansilume/blob/main/docs/runners.md"', $html, "{$role}, {$case}: the docs link stays");
+            }
+        }
+        $this->assertSame([], preg_grep('/token/', RunnerGroup::getTableSchema()->getColumnNames()), 'A runner group has no token.');
+        $this->assertNotNull(Runner::getTableSchema()->getColumn('token_hash'), 'Each runner has one.');
+    }
+
+    /**
+     * A user with the admin role, signed in: the access rules of create and
+     * update run as for a real request (runAction()).
+     */
+    private function signedInAdmin(string $suffix): User
+    {
+        return $this->signedInAs($suffix, 'admin');
+    }
+
+    private function signedInAs(string $suffix, string $roleName): User
+    {
+        $user = $this->createUser($suffix);
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $role = $auth->getRole($roleName);
+        $this->assertNotNull($role, $roleName);
+        $auth->assign($role, (string)$user->id);
+        $this->loginAs($user);
+
+        return $user;
+    }
+
+    /**
+     * The list of runner groups as the real view renders it: the groups of
+     * the database (null), or those of $groups.
+     *
+     * @param list<RunnerGroup>|null $groups
+     */
+    private function listPage(?array $groups): string
+    {
+        /** @var \yii\base\Module $app the test application */
+        $app = \Yii::$app;
+        $ctrl = new RunnerGroupController('runner-group', $app);
+        $ctrl->layout = false;
+        $render = $groups === null
+            ? static fn (): string => $ctrl->actionIndex()
+            : static fn (): string => $ctrl->render('index', ['groups' => $groups, 'total' => [], 'online' => [], 'templateCounts' => []]);
+
+        return $this->withRealViews($ctrl, '/runner-group/index', $render);
     }
 
     /**

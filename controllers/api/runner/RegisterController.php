@@ -33,6 +33,21 @@ use yii\web\Response;
  */
 class RegisterController extends Controller
 {
+    /** 403: the server has no bootstrap secret. */
+    public const NOT_ENABLED = 'Runner self-registration is not enabled (RUNNER_BOOTSTRAP_SECRET not set).';
+
+    /** 403: the request's bootstrap secret is not the server's. */
+    public const INVALID_BOOTSTRAP_SECRET = 'Invalid bootstrap secret.';
+
+    /** 400: the request names no runner. */
+    public const NAME_REQUIRED = 'Runner name is required.';
+
+    /** 503: the initial setup has not created a user yet. */
+    public const NO_USERS_YET = 'No users exist yet. Run setup/admin first.';
+
+    /** 400, sprintf: the runner group's name. */
+    public const GROUP_NOT_FOUND = 'Runner group "%s" not found.';
+
     public $enableCsrfValidation = false;
 
     public function behaviors(): array
@@ -59,7 +74,7 @@ class RegisterController extends Controller
         $bootstrapSecret = $_ENV['RUNNER_BOOTSTRAP_SECRET'] ?? '';
         if ($bootstrapSecret === '') {
             \Yii::$app->response->statusCode = 403;
-            return ['ok' => false, 'error' => 'Runner self-registration is not enabled (RUNNER_BOOTSTRAP_SECRET not set).'];
+            return ['ok' => false, 'error' => self::NOT_ENABLED];
         }
 
         $body = (array)\Yii::$app->request->bodyParams;
@@ -69,24 +84,24 @@ class RegisterController extends Controller
 
         if (!hash_equals($bootstrapSecret, $secret)) {
             \Yii::$app->response->statusCode = 403;
-            return ['ok' => false, 'error' => 'Invalid bootstrap secret.'];
+            return ['ok' => false, 'error' => self::INVALID_BOOTSTRAP_SECRET];
         }
 
         if ($name === '') {
             \Yii::$app->response->statusCode = 400;
-            return ['ok' => false, 'error' => 'Runner name is required.'];
+            return ['ok' => false, 'error' => self::NAME_REQUIRED];
         }
 
         $systemUserId = $this->resolveSystemUserId();
         if ($systemUserId === null) {
             \Yii::$app->response->statusCode = 503;
-            return ['ok' => false, 'error' => 'No users exist yet. Run setup/admin first.'];
+            return ['ok' => false, 'error' => self::NO_USERS_YET];
         }
 
         $group = $this->resolveGroup($groupName, $systemUserId);
         if ($group === null) {
             \Yii::$app->response->statusCode = 400;
-            return ['ok' => false, 'error' => "Runner group \"{$groupName}\" not found."];
+            return ['ok' => false, 'error' => sprintf(self::GROUP_NOT_FOUND, $groupName)];
         }
 
         /** @var Runner|null $existing */

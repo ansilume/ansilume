@@ -9,6 +9,7 @@ declare(strict_types=1);
 /** @var array<int, array{last_at: int, recent: int}> $reregistrations */
 
 use app\components\RunnerTransportClassifier;
+use app\controllers\RunnerGroupController;
 use app\helpers\ConfirmHelper;
 use app\helpers\TimeHelper;
 use app\models\AuditLog;
@@ -16,6 +17,11 @@ use yii\helpers\Html;
 use yii\helpers\Url;
 
 $this->title = $group->name;
+
+// Registering, moving and deleting runners, regenerating their tokens and
+// editing the group: runner-group.update, which of the built-in roles only
+// admin holds.
+$canManageRunners = (bool)\Yii::$app->user?->can('runner-group.update');
 
 $apiUrl = \Yii::$app->request->hostInfo;
 
@@ -38,7 +44,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token', null, true);
             <p class="text-muted mt-1 mb-0"><?= Html::encode($group->description) ?></p>
         <?php endif; ?>
     </div>
-    <?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
+    <?php if ($canManageRunners) : ?>
         <?= Html::a('Edit Group', ['update', 'id' => $group->id], ['class' => 'btn btn-outline-secondary']) ?>
     <?php endif; ?>
 </div>
@@ -81,7 +87,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token', null, true);
 <?php endif; ?>
 
 <!-- Add Runner form -->
-<?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
+<?php if ($canManageRunners) : ?>
 <div class="card mb-4">
     <div class="card-header">Add Runner</div>
     <div class="card-body">
@@ -102,6 +108,8 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token', null, true);
         </form>
     </div>
 </div>
+<?php else : ?>
+<p class="text-muted small mb-4" data-testid="runner-management-admin-only"><?= Html::encode(RunnerGroupController::RUNNER_MANAGEMENT_ADMIN_ONLY) ?></p>
 <?php endif; ?>
 
 <?php $insecureRunners = array_values(array_filter($runners, fn ($r) => $r->hasInsecureTransport())); ?>
@@ -127,7 +135,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token', null, true);
         <span class="badge text-bg-<?= $badge ?>"><?= $onlineCount ?>/<?= count($runners) ?> online</span>
     </div>
     <?php if (empty($runners)) : ?>
-        <div class="card-body text-muted small">No runners yet. Add one above.</div>
+        <div class="card-body text-muted small" data-testid="runner-group-empty"><?= Html::encode($canManageRunners ? RunnerGroupController::NO_RUNNERS_ADD_ONE : RunnerGroupController::NO_RUNNERS) ?></div>
     <?php else : ?>
     <div class="card-body p-0">
         <table class="table table-sm table-hover mb-0">
@@ -202,7 +210,7 @@ $tokenFlash = \Yii::$app->session?->getFlash('runner_token', null, true);
                     </td>
                     <td class="text-muted small"><?= Html::encode($runner->description ?? '') ?></td>
                     <td class="text-end">
-                        <?php if (\Yii::$app->user?->can('runner-group.update')) : ?>
+                        <?php if ($canManageRunners) : ?>
                             <form method="post" action="<?= Url::to(['/runner/regenerate-token', 'id' => $runner->id]) ?>" style="display:inline" onsubmit="<?= ConfirmHelper::attribute('Regenerate token for "' . $runner->name . '"? The old token will stop working immediately.') ?>">
                                 <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-warning me-1">Regen Token</button>
