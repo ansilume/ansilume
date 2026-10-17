@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
+import { cancelJobIfActive } from '../../lib/runs';
 import { forgePost } from '../../lib/scoping';
 import {
   APPROVAL_RULE,
   GATED_TEMPLATE,
   LAUNCHER_REFUSED,
+  REQUIRED_BY,
   asOperator,
   cancelJob,
   decide,
@@ -12,8 +14,11 @@ import {
   decisionRows,
   flash,
   launchTemplate,
+  linkedInventoryId,
+  requestInventoryCell,
   requestOfJob,
   requestStatus,
+  requiredByCell,
   resolvedMessage,
   waitingForApproval,
 } from '../../lib/approvals';
@@ -25,22 +30,36 @@ import {
  * never decides on their own job, so e2e-operator, the rule's other
  * approver, decides.
  */
+
+/**
+ * The inventory of e2e-template, which e2e-gated-template shares
+ * (commands/E2eApprovalSeeder.php); it has no approval rule.
+ */
+const TEMPLATE_INVENTORY = 'e2e-inventory';
+
 test.describe('Approval Decisions', () => {
-  test('a launch of a gated template waits for approval and names its launcher and rule', async ({ page }) => {
+  test('a launch of a gated template waits for approval and names its launcher, rule and inventory', async ({ page }) => {
     const jobId = await launchTemplate(page, GATED_TEMPLATE);
-    await expect(flash(page, 'info')).toHaveText(waitingForApproval(jobId));
-    await expect(page.locator('#status-badge')).toHaveText('Awaiting Approval');
+    try {
+      await expect(flash(page, 'info')).toHaveText(waitingForApproval(jobId));
+      await expect(page.locator('#status-badge')).toHaveText('Awaiting Approval');
 
-    const requestId = await requestOfJob(page, jobId);
-    await page.goto(`/approval/view?id=${requestId}`);
-    await expect(requestStatus(page)).toHaveText('Pending');
-    await expect(page.locator('#approval-launched-by')).toHaveText('e2e-admin');
-    const rule = page.locator('#approval-rule a');
-    await expect(rule).toHaveText(APPROVAL_RULE);
-    await expect(rule).toHaveAttribute('href', /\/approval-rule\/view\?id=\d+/);
+      const requestId = await requestOfJob(page, jobId);
+      await page.goto(`/approval/view?id=${requestId}`);
+      await expect(requestStatus(page)).toHaveText('Pending');
+      await expect(page.locator('#approval-launched-by')).toHaveText('e2e-admin');
+      const rule = page.locator('#approval-rule a');
+      await expect(rule).toHaveText(APPROVAL_RULE);
+      await expect(rule).toHaveAttribute('href', /\/approval-rule\/view\?id=\d+/);
+      // The rule is the job template's own; its inventory has none.
+      await expect(requiredByCell(page)).toHaveText(REQUIRED_BY.job_template);
+      await linkedInventoryId(requestInventoryCell(page), TEMPLATE_INVENTORY);
 
-    await page.goto(`/job/view?id=${jobId}`);
-    await cancelJob(page);
+      await page.goto(`/job/view?id=${jobId}`);
+      await cancelJob(page);
+    } finally {
+      await cancelJobIfActive(page, jobId);
+    }
   });
 
   // Regression: the job page's live status replaced "Awaiting Approval" with

@@ -6,10 +6,12 @@ namespace app\tests\integration\services;
 
 use app\components\WorkflowRouteStep;
 use app\models\ApprovalRule;
+use app\models\Inventory;
 use app\models\JobTemplate;
 use app\models\User;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\JobTemplateGate;
 use app\services\WorkflowRouteMap;
 use app\tests\integration\CountsQueries;
 use app\tests\integration\DbTestCase;
@@ -19,13 +21,17 @@ use app\tests\integration\TeamScopeFixtures;
  * WorkflowRouteMap read from the database (contract C7): forTemplate() lists
  * the steps in run order (by step order, ties by ID) at the same cost for 3
  * and for 20 steps, and each step says what a run meets there: a gated job
- * step names its rule, and a step whose job template was deleted, whose
- * rule is gone or whose type is unknown (compared exactly: "JOB") cannot
- * run. The map's logic on steps in memory is WorkflowRouteMapTest.
+ * step names its rule, the rule of its job template or, failing that, of
+ * the template's inventory (C15, as JobTemplateGate gates the launch), and a
+ * step whose job template was deleted, whose rule is gone, whose job
+ * template and inventory have different rules, or whose type is unknown
+ * (compared exactly: "JOB") cannot run. The map's logic on steps in memory
+ * is WorkflowRouteMapTest.
  */
 class WorkflowRouteMapLoadTest extends DbTestCase
 {
     use CountsQueries;
+    use InventoryGatedStepFixtures;
     use TeamScopeFixtures;
     use WorkflowEngineFixtures;
 
@@ -87,7 +93,11 @@ class WorkflowRouteMapLoadTest extends DbTestCase
         $forTwenty = $this->queriesOf(static fn () => WorkflowRouteMap::forTemplate($twenty));
 
         $this->assertSame($forThree, $forTwenty);
-        $this->assertLessThanOrEqual(4, $forTwenty, 'steps, job templates, their rules, the approval steps\' rules');
+        $this->assertLessThanOrEqual(
+            6,
+            $forTwenty,
+            'steps, job templates, their rules, their inventories, the inventories\' rules, the approval steps\' rules'
+        );
     }
 
     public function testAGatedJobStepNamesItsRule(): void
@@ -236,10 +246,19 @@ class WorkflowRouteMapLoadTest extends DbTestCase
         $this->assertCount(8, $loaded);
         foreach ($loaded as $model) {
             $this->assertTrue($model->isRelationPopulated('jobTemplate') && $model->isRelationPopulated('approvalRule'));
+            $template = $model->jobTemplate;
+            if ($template !== null) {
+                $this->assertTrue($template->isRelationPopulated('inventory') && $template->isRelationPopulated('approvalRule'));
+                $this->assertTrue($template->inventory->isRelationPopulated('approvalRule'), 'the inventory\'s rule');
+            }
         }
 
         $this->assertSame(0, $this->queriesOf(static fn () => WorkflowRouteMap::fromModels($loaded)));
-        $this->assertSame(3, $this->queriesOf(static fn () => WorkflowRouteMap::fromModels($bare)), 'job templates, their rules, rules');
+        $this->assertSame(
+            5,
+            $this->queriesOf(static fn () => WorkflowRouteMap::fromModels($bare)),
+            'job templates, their rules, their inventories, the inventories\' rules, the approval steps\' rules'
+        );
         $this->assertEquals(WorkflowRouteMap::fromModels($loaded), WorkflowRouteMap::fromModels($bare));
     }
 
@@ -263,7 +282,213 @@ class WorkflowRouteMapLoadTest extends DbTestCase
         $this->assertTrue($models[0]->jobTemplate->isRelationPopulated('approvalRule'));
     }
 
+    // -- Gated through the inventory (C15) -----------------------------------------------
+
+    /**
+     * A model loaded with the relations of 2.11 (a job template and its
+     * rule, without its inventory) gets the inventory and the inventory's
+     * rule loaded too, in one batch, and the map sees that rule.
+     */
+    public function testAJobTemplateWithoutItsInventoryLoadedIsCompleted(): void
+    {
+        $rule = $this->usersRuleOf((int)$this->user->id, (int)$this->user->id);
+        $workflow = $this->createWorkflowTemplate((int)$this->user->id);
+        $template = $this->templateOnGatedInventory((int)$this->user->id, (int)$rule->id);
+        $this->createWorkflowStep((int)$workflow->id, 0, WorkflowStep::TYPE_JOB, (int)$template->id);
+        $models = $workflow->getSteps()->with(['jobTemplate.approvalRule', 'approvalRule'])->all();
+        $this->assertCount(1, $models);
+        $this->assertInstanceOf(WorkflowStep::class, $models[0]);
+        $this->assertNotNull($models[0]->jobTemplate);
+        $this->assertFalse($models[0]->jobTemplate->isRelationPopulated('inventory'));
+
+        $map = null;
+        $queries = $this->queriesOf(static function () use ($models, &$map): void {
+            $map = WorkflowRouteMap::fromModels([$models[0]]);
+        });
+
+        $this->assertSame(3, $queries, 'the job templates again, their inventories, the inventories\' rules: one batch');
+        $this->assertInstanceOf(WorkflowRouteMap::class, $map);
+        $this->assertSame([$rule->name, null, 'inventory'], $this->gateOf($map->steps()[0]));
+        $this->assertTrue($models[0]->jobTemplate->isRelationPopulated('inventory'));
+        $this->assertTrue($models[0]->jobTemplate->inventory->isRelationPopulated('approvalRule'));
+    }
+
+    /**
+     * What gates a job step, read from the database: the rule of its job
+     * template whenever it has one (also when its inventory has the same
+     * one), else the rule of the template's inventory; two different rules
+     * mean the launch is refused, so the step cannot run.
+     */
+    public function testAJobStepIsGatedByItsJobTemplateOrItsInventory(): void
+    {
+        $userId = (int)$this->user->id;
+        $own = $this->usersRuleOf($userId, $userId);
+        $other = $this->usersRuleOf($userId, $userId);
+        $workflow = $this->createWorkflowTemplate($userId);
+        $cases = [
+            'no rule' => [null, null],
+            'its own rule' => [null, (int)$own->id],
+            'its inventory\'s rule' => [(int)$own->id, null],
+            'the same rule on both' => [(int)$own->id, (int)$own->id],
+            'different rules' => [(int)$other->id, (int)$own->id],
+        ];
+        foreach (array_values($cases) as $order => [$inventoryRuleId, $ownRuleId]) {
+            $template = $this->templateOnGatedInventory($userId, $inventoryRuleId, $ownRuleId);
+            $this->createWorkflowStep((int)$workflow->id, $order, WorkflowStep::TYPE_JOB, (int)$template->id);
+        }
+
+        $map = WorkflowRouteMap::forTemplate($workflow);
+        $steps = array_combine(array_keys($cases), $map->steps());
+
+        $this->assertSame([null, null, null], $this->gateOf($steps['no rule']));
+        $this->assertSame([$own->name, null, 'job_template'], $this->gateOf($steps['its own rule']));
+        $this->assertSame([$own->name, null, 'inventory'], $this->gateOf($steps['its inventory\'s rule']));
+        $this->assertSame([$own->name, null, 'job_template'], $this->gateOf($steps['the same rule on both']));
+        $this->assertSame([$own->name, 'approval_rules_differ', 'job_template'], $this->gateOf($steps['different rules']));
+        $this->assertSame(['success', 'failure'], $map->outcomes($steps['no rule']));
+        foreach (['its own rule', 'its inventory\'s rule', 'the same rule on both', 'different rules'] as $case) {
+            $this->assertSame(['success', 'failure', 'closed_gate'], $map->outcomes($steps[$case]), $case);
+        }
+    }
+
+    /**
+     * regression: a job step whose job template had no rule of its own but
+     * whose inventory had one counted as ungated. Its job waits for an
+     * approval (the launch's gate since 2.12.0), and a refused approval
+     * fails the job without running it, but the map gave the step no closed
+     * gate: the API's routes.closed_gate was null and the step named no
+     * rule. Now it is a gated job step, by its inventory.
+     */
+    public function testRegressionAJobStepGatedByItsInventoryHadNoClosedGate(): void
+    {
+        $userId = (int)$this->user->id;
+        $rule = $this->usersRuleOf($userId, $userId);
+        $workflow = $this->createWorkflowTemplate($userId);
+        $deploy = $this->createWorkflowStep((int)$workflow->id, 0, WorkflowStep::TYPE_JOB, (int)$this->templateOnGatedInventory($userId, (int)$rule->id)->id);
+        $this->createWorkflowStep((int)$workflow->id, 1, WorkflowStep::TYPE_JOB, (int)$this->openTemplate($userId)->id);
+
+        $api = WorkflowRouteMap::forTemplate($workflow)->toApi()['steps'][(int)$deploy->id];
+
+        $this->assertSame(
+            ['kind' => 'end', 'via' => 'on_failure', 'step_id' => null, 'position' => null, 'run_outcome' => 'fails', 'loop' => false],
+            $api['routes']['closed_gate'],
+            'a refused approval ends the run as failed'
+        );
+        $this->assertNull($api['cannot_run']);
+        $step = WorkflowRouteMap::forTemplate($workflow)->find((int)$deploy->id);
+        $this->assertNotNull($step);
+        $this->assertSame([$rule->name, 'inventory'], [$step->gatedRuleName, $step->gatedBy]);
+    }
+
+    /**
+     * regression: a job step whose job template had a rule of its own and
+     * whose inventory another one looked runnable, gated by the template's
+     * rule. Its launch is refused (JobLaunchService::RULES_DIFFER), so the
+     * run fails there: the step cannot run, the success path ends at it, and
+     * the step after it is not reachable.
+     */
+    public function testRegressionAStepWhoseJobTemplateAndInventoryHaveDifferentRulesLookedRunnable(): void
+    {
+        $userId = (int)$this->user->id;
+        $own = $this->usersRuleOf($userId, $userId);
+        $other = $this->usersRuleOf($userId, $userId);
+        $workflow = $this->createWorkflowTemplate($userId);
+        $build = $this->createWorkflowStep((int)$workflow->id, 0, WorkflowStep::TYPE_JOB, (int)$this->openTemplate($userId)->id);
+        $deploy = $this->createWorkflowStep(
+            (int)$workflow->id,
+            1,
+            WorkflowStep::TYPE_JOB,
+            (int)$this->templateOnGatedInventory($userId, (int)$other->id, (int)$own->id)->id
+        );
+        $verify = $this->createWorkflowStep((int)$workflow->id, 2, WorkflowStep::TYPE_JOB, (int)$this->openTemplate($userId)->id);
+
+        $map = WorkflowRouteMap::forTemplate($workflow);
+
+        $this->assertSame(
+            ['step_ids' => [(int)$build->id, (int)$deploy->id], 'end' => 'cannot_run', 'loop_to_step_id' => null, 'missing_step_id' => null],
+            $map->successPath()
+        );
+        $this->assertFalse($map->isReachable((int)$verify->id), 'a run fails at the step whose rules differ');
+        $this->assertSame('approval_rules_differ', $map->toApi()['steps'][(int)$deploy->id]['cannot_run']);
+    }
+
+    /**
+     * The foreign key restricts deleting a rule that an inventory uses;
+     * should the row be gone all the same, the launch of the job is refused
+     * (JobLaunchService::INVENTORY_RULE_MISSING), so the step cannot run.
+     * A job template whose inventory row is gone is gated by its own rule
+     * only, as JobTemplateGate reads it.
+     */
+    public function testAStepWhoseInventoryRuleIsGoneCannotRun(): void
+    {
+        $userId = (int)$this->user->id;
+        $rule = $this->usersRuleOf($userId, $userId);
+        $ruleGone = $this->templateOnGatedInventory($userId, null);
+        $inventoryGone = $this->templateOnGatedInventory($userId, (int)$rule->id);
+        $this->withoutForeignKeyChecks(function () use ($ruleGone, $inventoryGone): void {
+            $this->giveInventoryRule((int)$ruleGone->inventory_id, 987654321);
+            $this->assertSame(1, Inventory::deleteAll(['id' => $inventoryGone->inventory_id]));
+        });
+        $workflow = $this->createWorkflowTemplate($userId);
+        $this->createWorkflowStep((int)$workflow->id, 0, WorkflowStep::TYPE_JOB, (int)$ruleGone->id);
+        $this->createWorkflowStep((int)$workflow->id, 1, WorkflowStep::TYPE_JOB, (int)$inventoryGone->id);
+
+        [$gone, $noInventory] = WorkflowRouteMap::forTemplate($workflow)->steps();
+
+        $this->assertSame(['', 'approval_rule_missing', 'inventory'], $this->gateOf($gone));
+        $this->assertSame([null, null, null], $this->gateOf($noInventory), 'no inventory row, no inventory rule');
+    }
+
+    /**
+     * The map gates a job step exactly as the launch does: for every kind
+     * of job template, the step is gated when JobTemplateGate::of() says the
+     * template is, by the same source, and cannot run when the gate's rules
+     * differ or its rule is gone.
+     */
+    public function testTheMapGatesEveryJobStepAsJobTemplateGateDoes(): void
+    {
+        $userId = (int)$this->user->id;
+        $a = $this->usersRuleOf($userId, $userId);
+        $b = $this->usersRuleOf($userId, $userId);
+        $templates = [
+            $this->templateOnGatedInventory($userId, null),
+            $this->templateOnGatedInventory($userId, null, (int)$a->id),
+            $this->templateOnGatedInventory($userId, (int)$a->id),
+            $this->templateOnGatedInventory($userId, (int)$a->id, (int)$a->id),
+            $this->templateOnGatedInventory($userId, (int)$b->id, (int)$a->id),
+            $this->templateOnGatedInventory($userId, (int)$b->id),
+        ];
+        $workflow = $this->createWorkflowTemplate($userId);
+        foreach ($templates as $order => $template) {
+            $this->createWorkflowStep((int)$workflow->id, $order, WorkflowStep::TYPE_JOB, (int)$template->id);
+        }
+
+        $steps = WorkflowRouteMap::forTemplate($workflow)->steps();
+
+        foreach ($templates as $index => $template) {
+            $fresh = JobTemplate::findOne($template->id);
+            $this->assertNotNull($fresh);
+            $gate = JobTemplateGate::of($fresh);
+            $step = $steps[$index];
+            $this->assertSame($gate->isGated(), $step->gatedRuleName !== null, "step {$index}: gated");
+            $this->assertSame($gate->source(), $step->gatedBy, "step {$index}: what gates it");
+            $this->assertSame($gate->rulesDiffer(), $step->problem === WorkflowRouteStep::PROBLEM_APPROVAL_RULES_DIFFER, "step {$index}");
+            $this->assertSame($gate->rule?->name, $step->gatedRuleName, "step {$index}: the rule");
+        }
+    }
+
     // -- Helpers ------------------------------------------------------------------------
+
+    /**
+     * The gated rule name, the problem and what gates $step.
+     *
+     * @return array{0: string|null, 1: string|null, 2: string|null}
+     */
+    private function gateOf(WorkflowRouteStep $step): array
+    {
+        return [$step->gatedRuleName, $step->problem, $step->gatedBy];
+    }
+
 
     private function namedStep(WorkflowTemplate $workflow, int $order, string $name): WorkflowStep
     {
@@ -275,12 +500,13 @@ class WorkflowRouteMapLoadTest extends DbTestCase
     }
 
     /**
-     * A workflow of $rounds rounds of three steps: a job step, a gated job
-     * step and an approval step; with more than one round, a pause step and
-     * a job step without a job template follow (3 steps for one round, 20
-     * for six). Every job step has a job template of its own, and every
-     * gated job step and approval step a rule of its own, unless $rule is
-     * given for all of them.
+     * A workflow of $rounds rounds of three steps: a job step whose job
+     * template's inventory has an approval rule, a gated job step (a rule of
+     * its job template) and an approval step; with more than one round, a
+     * pause step and a job step without a job template follow (3 steps for
+     * one round, 20 for six). Every job step has a job template and an
+     * inventory of its own, and every gated inventory, gated job step and
+     * approval step a rule of its own, unless $rule is given for all of them.
      */
     private function mixedWorkflow(int $rounds, ?ApprovalRule $rule = null): WorkflowTemplate
     {
@@ -288,8 +514,10 @@ class WorkflowRouteMapLoadTest extends DbTestCase
         $workflow = $this->createWorkflowTemplate($userId);
         $order = 0;
         for ($round = 0; $round < $rounds; $round++) {
+            $inventoryRule = $rule ?? $this->usersRuleOf($userId, $userId);
             $gateRule = $rule ?? $this->usersRuleOf($userId, $userId);
-            $this->createWorkflowStep((int)$workflow->id, $order++, WorkflowStep::TYPE_JOB, (int)$this->openTemplate($userId)->id);
+            $onGatedInventory = $this->templateOnGatedInventory($userId, (int)$inventoryRule->id);
+            $this->createWorkflowStep((int)$workflow->id, $order++, WorkflowStep::TYPE_JOB, (int)$onGatedInventory->id);
             $this->createWorkflowStep((int)$workflow->id, $order++, WorkflowStep::TYPE_JOB, (int)$this->gatedTemplate($userId, $gateRule)->id);
             $this->createWorkflowStep((int)$workflow->id, $order++, WorkflowStep::TYPE_APPROVAL, null, (int)($rule ?? $this->usersRuleOf($userId, $userId))->id);
         }

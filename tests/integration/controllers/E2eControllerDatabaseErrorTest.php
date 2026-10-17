@@ -7,6 +7,7 @@ namespace app\tests\integration\controllers;
 use app\commands\E2eDeletedTemplateApprovalSeeder;
 use app\controllers\E2eController;
 use app\models\ApprovalRule;
+use app\tests\integration\RestoresComponents;
 use yii\caching\ArrayCache;
 use yii\web\NotFoundHttpException;
 
@@ -22,30 +23,32 @@ use yii\web\NotFoundHttpException;
  */
 class E2eControllerDatabaseErrorTest extends WebControllerTestCase
 {
+    use RestoresComponents;
+
     private const MARKER = 'e2e-hook-marker-7319';
 
     private bool $hadDebugEnv = false;
     private mixed $savedDebugEnv = null;
-    private mixed $cache = null;
 
     protected function setUp(): void
     {
         parent::setUp();
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('cache');
         $this->hadDebugEnv = array_key_exists('YII_DEBUG', $_ENV);
         $this->savedDebugEnv = $_ENV['YII_DEBUG'] ?? null;
         $_ENV['YII_DEBUG'] = 'true';
         $this->setPost([]);
-        $this->cache = \Yii::$app->getComponents(true)['cache'] ?? null;
     }
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         if ($this->hadDebugEnv) {
             $_ENV['YII_DEBUG'] = $this->savedDebugEnv;
         } else {
             unset($_ENV['YII_DEBUG']);
         }
-        \Yii::$app->set('cache', $this->cache);
         parent::tearDown();
     }
 

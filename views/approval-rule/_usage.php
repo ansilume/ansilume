@@ -5,6 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\components\ApprovalRuleUsage $usage */
 
+use app\components\ApprovalRuleUsage;
 use yii\helpers\Html;
 
 ?>
@@ -12,8 +13,25 @@ use yii\helpers\Html;
     <div class="card-header">Used by</div>
     <div class="card-body">
         <?php if (!$usage->isInUse()) : ?>
-            <p class="text-muted mb-0">Not used by any job template, workflow step or pending approval request.</p>
+            <p class="text-muted mb-0"><?= Html::encode(ApprovalRuleUsage::NOT_IN_USE) ?></p>
         <?php else : ?>
+            <?php if ($usage->inventoryTotal > 0) : ?>
+                <?php // Every launch of a job template that uses one of these inventories waits for the rule.?>
+                <h6 class="mb-2">Inventories</h6>
+                <ul class="list-unstyled mb-3" id="approval-rule-usage-inventories">
+                    <?php foreach ($usage->inventories as $inventory) : ?>
+                        <li>
+                            <?= Html::a(Html::encode($inventory['name']), ['/inventory/view', 'id' => $inventory['id']]) ?>
+                            <?php if ($inventory['project_name'] !== null) : ?>
+                                <span class="text-muted small ms-1"><?= Html::encode($inventory['project_name']) ?></span>
+                            <?php endif; ?>
+                        </li>
+                    <?php endforeach; ?>
+                    <?php if ($usage->hiddenInventoryCount() > 0) : ?>
+                        <li class="text-muted small"><?= Html::encode(sprintf(ApprovalRuleUsage::HIDDEN_INVENTORIES, $usage->hiddenInventoryCount())) ?></li>
+                    <?php endif; ?>
+                </ul>
+            <?php endif; ?>
             <?php if ($usage->jobTemplateTotal > 0) : ?>
                 <h6 class="mb-2">Job templates</h6>
                 <ul class="list-unstyled mb-3" id="approval-rule-usage-templates">

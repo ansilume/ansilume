@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services;
 
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\services\JobLaunchService;
@@ -32,7 +33,13 @@ class JobLaunchServicePayloadTest extends TestCase
         };
     }
 
-    private function makeTemplate(array $attributes): JobTemplate
+    /**
+     * A template with $attributes whose inventory relation holds an
+     * inventory of its inventory_id named $inventoryName, as the launch's
+     * gate loaded it; with $inventoryName null the relation holds null (the
+     * inventory's row is gone).
+     */
+    private function makeTemplate(array $attributes, ?string $inventoryName = 'web-prod'): JobTemplate
     {
         $t = $this->getMockBuilder(JobTemplate::class)
             ->disableOriginalConstructor()
@@ -41,7 +48,23 @@ class JobLaunchServicePayloadTest extends TestCase
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
         $ref->setAccessible(true);
         $ref->setValue($t, $attributes);
+        $t->populateRelation('inventory', $inventoryName === null ? null : $this->makeInventory([
+            'id' => $attributes['inventory_id'] ?? null,
+            'name' => $inventoryName,
+        ]));
         return $t;
+    }
+
+    private function makeInventory(array $attributes): Inventory
+    {
+        $i = $this->getMockBuilder(Inventory::class)
+            ->disableOriginalConstructor()
+            ->onlyMethods([])
+            ->getMock();
+        $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
+        $ref->setAccessible(true);
+        $ref->setValue($i, $attributes);
+        return $i;
     }
 
     private function makeJob(array $attributes): Job
@@ -74,6 +97,53 @@ class JobLaunchServicePayloadTest extends TestCase
         $this->assertSame('Deploy', $payload['template_name']);
         $this->assertSame(3, $payload['project_id']);
         $this->assertSame('deploy.yml', $payload['playbook']);
+        $this->assertSame(2, $payload['inventory_id']);
+        $this->assertSame('web-prod', $payload[Job::PAYLOAD_INVENTORY_NAME], 'the inventory as launched');
+    }
+
+    /**
+     * The inventory's name follows its ID, so the job page names the
+     * inventory as it was launched (JobInventory).
+     */
+    public function testTheInventoryNameFollowsTheInventoryId(): void
+    {
+        $template = $this->makeTemplate([
+            'id' => 7, 'name' => 'Deploy', 'project_id' => 3, 'inventory_id' => 2,
+            'credential_id' => null, 'playbook' => 'deploy.yml',
+            'extra_vars' => null, 'limit' => null, 'verbosity' => 0,
+            'forks' => 5, 'become' => false, 'become_method' => 'sudo',
+            'become_user' => 'root', 'tags' => null, 'skip_tags' => null,
+            'timeout_minutes' => 120,
+        ], 'Prod "hosts" <b>');
+        $job = $this->makeJob(['extra_vars' => null, 'limit' => null, 'verbosity' => null]);
+
+        $keys = array_keys($this->service->exposePayload($template, $job));
+
+        $this->assertSame(Job::PAYLOAD_INVENTORY_NAME, $keys[array_search('inventory_id', $keys, true) + 1]);
+        $this->assertSame('Prod "hosts" <b>', $this->service->exposePayload($template, $job)[Job::PAYLOAD_INVENTORY_NAME], 'stored as named');
+    }
+
+    /**
+     * A template loaded after its inventory's row was deleted: the payload
+     * records the ID and no name (the launch then refuses it, INVENTORY_MISSING).
+     */
+    public function testTheInventoryNameIsNullWithoutTheInventory(): void
+    {
+        $template = $this->makeTemplate([
+            'id' => 7, 'name' => 'Deploy', 'project_id' => 3, 'inventory_id' => 2,
+            'credential_id' => null, 'playbook' => 'deploy.yml',
+            'extra_vars' => null, 'limit' => null, 'verbosity' => 0,
+            'forks' => 5, 'become' => false, 'become_method' => 'sudo',
+            'become_user' => 'root', 'tags' => null, 'skip_tags' => null,
+            'timeout_minutes' => 120,
+        ], null);
+        $job = $this->makeJob(['extra_vars' => null, 'limit' => null, 'verbosity' => null]);
+
+        $payload = $this->service->exposePayload($template, $job);
+
+        $this->assertSame(2, $payload['inventory_id']);
+        $this->assertArrayHasKey(Job::PAYLOAD_INVENTORY_NAME, $payload);
+        $this->assertNull($payload[Job::PAYLOAD_INVENTORY_NAME]);
     }
 
     public function testPayloadUsesJobExtraVarsOverTemplateWhenSet(): void

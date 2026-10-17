@@ -1,17 +1,24 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
-import { forgePost, indexRows, rowsWhere } from '../../lib/scoping';
+import { HOST_INVENTORY, HOST_RULE, HOST_TEMPLATE } from '../../lib/inventories';
+import { cancelJobIfActive } from '../../lib/runs';
+import { asAdmin, forgePost, indexRows, rowsWhere } from '../../lib/scoping';
 import {
   GATED_TEMPLATE,
   LAUNCHER_REFUSED,
   REQUEST_RULE_COLUMN,
+  REQUIRED_BY,
   cancelJob,
   decisionForms,
   decisionRows,
   expectClosedRequest,
   flash,
   launchTemplate,
+  linkedInventoryId,
+  requestInventoryCell,
   requestOfJob,
+  requiredByCell,
+  ruleOfInventory,
   waitingForApproval,
 } from '../../lib/approvals';
 
@@ -85,5 +92,59 @@ test.describe('Approvals RBAC', () => {
     await cancelJob(page);
     await expectClosedRequest(page, requestId, 'Canceled');
     await expect(decisionRows(page)).toHaveCount(0);
+  });
+
+  // commands/E2eInventoryGateSeeder.php: e2e-host-gated-template has no rule
+  // of its own; its inventory, e2e-gated-inventory, has e2e-host-gate-rule,
+  // on which e2e-admin and e2e-operator approve. Its project has no team, so
+  // every role sees its jobs and requests. Whatever rule gates the job, the
+  // user who launched it never decides on it.
+  test('operator launches a job template on a gated inventory: the job waits, its request names the inventory, and its launcher cannot decide', async ({ page }) => {
+    const jobId = await launchTemplate(page, HOST_TEMPLATE);
+    try {
+      await expect(flash(page, 'info')).toHaveText(waitingForApproval(jobId));
+      const requestId = await requestOfJob(page, jobId);
+
+      await page.goto(`/approval/view?id=${requestId}`);
+      await expect(requiredByCell(page)).toHaveText(REQUIRED_BY.inventory);
+      await linkedInventoryId(requestInventoryCell(page), HOST_INVENTORY);
+      await expect(page.locator('#approval-launched-by')).toHaveText('e2e-operator');
+      await expect(page.locator('#approval-decision-note')).toHaveText(LAUNCHER_REFUSED);
+      await expect(decisionForms(page)).toHaveCount(0);
+      await forgePost(page, `/approval/approve?id=${requestId}`, {}, /\/approval\/approve/);
+      await expectForbidden(page);
+      await expect(page.locator('#page-content')).toContainText(LAUNCHER_REFUSED);
+
+      // Canceling the job closes its request.
+      await page.goto(`/job/view?id=${jobId}`);
+      await cancelJob(page);
+      await expectClosedRequest(page, requestId, 'Canceled');
+      await expect(decisionRows(page)).toHaveCount(0);
+    } finally {
+      await cancelJobIfActive(page, jobId);
+    }
+  });
+
+  test('viewer sees that the inventory of a job required its request, and cannot decide on it', async ({ page, browser }, testInfo) => {
+    const jobId = await asAdmin(browser, testInfo, (admin) => launchTemplate(admin, HOST_TEMPLATE));
+    try {
+      const requestId = await requestOfJob(page, jobId);
+      await page.goto(`/approval/view?id=${requestId}`);
+      await expect(requiredByCell(page)).toHaveText(REQUIRED_BY.inventory);
+      await linkedInventoryId(requestInventoryCell(page), HOST_INVENTORY);
+      await expect(page.locator('#approval-rule a')).toHaveText(HOST_RULE);
+      await expect(decisionForms(page)).toHaveCount(0);
+
+      // The approval list names the inventory in the Rule cell.
+      await page.goto('/approval/index?status=pending');
+      await expect(page.locator(`#approval-requests-table tr[data-request-id="${requestId}"] td[data-approval-rule]`))
+        .toHaveText(ruleOfInventory(HOST_RULE, HOST_INVENTORY));
+
+      // A real form post with a valid CSRF token: only the permission check may stop it.
+      await forgePost(page, `/approval/approve?id=${requestId}`, {}, /\/approval\/approve/);
+      await expectForbidden(page);
+    } finally {
+      await asAdmin(browser, testInfo, (admin) => cancelJobIfActive(admin, jobId));
+    }
   });
 });

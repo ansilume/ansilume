@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\docs;
 
+use app\components\SurveyDefinition;
 use app\components\WorkflowStepChange;
 use app\components\WorkflowStepCommand;
 use app\components\WorkflowStepMapping;
@@ -20,6 +21,7 @@ use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
 use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\ApproverEligibility;
 use app\services\runstate\Display;
 use app\services\runstate\PollPayload;
 use app\services\runstate\Texts;
@@ -559,6 +561,9 @@ class WorkflowsGuideDocsContractTest extends TestCase
             WorkflowStepsTable::UNREACHABLE_BADGE,
             WorkflowStepsTable::UNREACHABLE_TITLE,
             WorkflowStepsTable::GATED_BADGE,
+            // 2.12.0: a gated job step is gated by its job template's rule or its inventory's.
+            sprintf(WorkflowStepsTable::GATED_TITLE, 'deploy-prod'),
+            sprintf(WorkflowStepsTable::GATED_INVENTORY_TITLE, 'deploy-prod'),
             WorkflowStepsTable::LEGEND,
             WorkflowStepsTable::SUCCESS_PATH_LOOP_NOTE,
             sprintf(WorkflowStepsTable::SUCCESS_PATH_CANNOT_RUN, WorkflowStepsTable::stepLabel(4, 'Verify')),
@@ -568,6 +573,7 @@ class WorkflowsGuideDocsContractTest extends TestCase
             WorkflowStepsTable::TARGET_TEMPLATE_NONE,
             sprintf(WorkflowStepsTable::TARGET_RULE_GONE, 9),
             WorkflowStepsTable::TARGET_RULE_NONE,
+            WorkflowStepsTable::TARGET_RULES_DIFFER,
             WorkflowStepsTable::TARGET_UNKNOWN_TYPE,
             sprintf(WorkflowStepsTable::ROUTE_TO, WorkflowStepsTable::stepLabel(5, 'Rollback')),
             sprintf(WorkflowStepsTable::ROUTE_TO_NEXT, WorkflowStepsTable::stepLabel(3, 'Deploy')),
@@ -628,6 +634,9 @@ class WorkflowsGuideDocsContractTest extends TestCase
             ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED,
             ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED,
             ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+            ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED,
+            ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+            sprintf(ApproverEligibility::REFUSAL_WORKFLOW_RULES_DIFFER, SurveyDefinition::quote('Deploy')),
             sprintf(WorkflowStepFormView::PREVIEW_SKIPPED_TO, 'Build', 'Deploy'),
             sprintf(WorkflowStepFormView::PREVIEW_AFTER_BROKEN, 'Build'),
             sprintf(WorkflowStepFormView::PREVIEW_AFTER, 'Build'),
@@ -695,6 +704,7 @@ class WorkflowsGuideDocsContractTest extends TestCase
             ApprovalController::ALL_PENDING,
             sprintf(Texts::FOR_WORKFLOW_STEP, 'Release web', 'Release approval', 12),
             sprintf(Texts::FOR_JOB_TEMPLATE, 'Deploy web'),
+            sprintf(Texts::RULE_OF_INVENTORY, 'deploy-prod', 'web-prod'),
             sprintf(Texts::JOB_APPROVAL_NOTE, 18),
             sprintf(Texts::JOB_WORKFLOW_ORIGIN, 12, 'Deploy'),
             sprintf(Texts::PLACEHOLDER_LABEL, 'Release approval', 12),

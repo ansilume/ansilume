@@ -12,6 +12,7 @@ use app\models\NotificationTemplate;
 use app\models\Schedule;
 use app\services\ScheduleService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\ScheduleAnswerFixtures;
 use app\tests\integration\TeamScopeFixtures;
 use yii\log\Logger;
@@ -25,6 +26,7 @@ use yii\log\Logger;
  */
 class ScheduleServiceSecretsTest extends DbTestCase
 {
+    use RestoresComponents;
     use ScheduleAnswerFixtures;
     use TeamScopeFixtures;
 
@@ -32,7 +34,6 @@ class ScheduleServiceSecretsTest extends DbTestCase
 
     private ScheduleService $service;
     private RecordingNotificationDispatcher $dispatcher;
-    private mixed $originalDispatcher = null;
     private mixed $originalKey;
     private int $userId;
     private JobTemplate $template;
@@ -40,19 +41,18 @@ class ScheduleServiceSecretsTest extends DbTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        $this->dispatcher = new RecordingNotificationDispatcher();
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
         $this->originalKey = $_ENV['APP_SECRET_KEY'] ?? null;
         $_ENV['APP_SECRET_KEY'] = 'scheduled-launch-test-key-0123456789';
         $this->service = \Yii::$app->get('scheduleService');
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
-        $this->dispatcher = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
         $this->userId = (int)$this->createUserWithRole('scheduled-secrets', 'operator')->id;
         $this->template = $this->createPasswordSurveyTemplate($this->userId);
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         if ($this->originalKey === null) {
             unset($_ENV['APP_SECRET_KEY']);
         } else {

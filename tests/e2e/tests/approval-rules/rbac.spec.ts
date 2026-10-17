@@ -2,6 +2,7 @@ import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
 import { forgePost, idWhere, indexRows } from '../../lib/scoping';
 import { APPROVAL_RULE, GATED_TEMPLATE } from '../../lib/approvals';
+import { HOST_INVENTORY, HOST_RULE } from '../../lib/inventories';
 
 /**
  * Approval rules are managed by admins: creating, changing and deleting a
@@ -81,4 +82,29 @@ test.describe('Approval Rules RBAC', () => {
     await expect(page.locator('h2').first()).toHaveText(APPROVAL_RULE);
     await expect(page.locator('#page-content table').first()).toContainText('Users: e2e-admin, e2e-operator');
   });
+
+  // commands/E2eInventoryGateSeeder.php: e2e-host-gate-rule gates
+  // e2e-gated-inventory, which has no project, so every role sees it; only
+  // admins change or delete the rule.
+  for (const role of ['viewer', 'operator']) {
+    test(`${role} sees the inventory a rule gates under Used by, without Edit or Delete`, async ({ page }) => {
+      const id = idWhere(await indexRows(page, '/approval-rule/index'), 0, HOST_RULE);
+      await page.goto(`/approval-rule/view?id=${id}`);
+      const inventory = page.locator('#approval-rule-usage-inventories li')
+        .filter({ has: page.getByRole('link', { name: HOST_INVENTORY, exact: true }) });
+      await expect(inventory).toHaveCount(1);
+      await expect(inventory.getByRole('link')).toHaveAttribute('href', /\/inventory\/view\?id=\d+$/);
+      // Nothing is hidden from them: the inventory has no project.
+      await expect(page.locator('#approval-rule-usage-inventories li.text-muted')).toHaveCount(0);
+      for (const control of ['#approval-rule-edit', '#approval-rule-delete-form', '#approval-rule-delete-blocked', '#approval-rule-delete-blocked-reason']) {
+        await expect(page.locator(control), control).toHaveCount(0);
+      }
+
+      // The link opens the inventory, which they may view.
+      await inventory.getByRole('link').click();
+      await expect(page).toHaveURL(/\/inventory\/view\?id=\d+$/);
+      await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+      await expect(page.locator('#inventory-approval-rule')).toContainText(HOST_RULE);
+    });
+  }
 });

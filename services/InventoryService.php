@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\DbErrorSummary;
 use app\components\VaultIsolation;
 use app\components\VaultValueMasker;
 use app\models\Inventory;
 use app\models\Project;
 use yii\base\Component;
+use yii\db\Exception as DbException;
 
 /**
  * Resolves Ansible inventory content into structured host/group data.
@@ -21,9 +23,25 @@ use yii\base\Component;
  * host_vars are skipped with a notice, inline vault values are masked, and an
  * encrypted inventory source is reported as such instead of as an empty
  * inventory.
+ *
+ * The output of ansible-inventory holds every host with its variables, the
+ * static inventory's content among them, so every parameter that carries it
+ * is marked #[\SensitiveParameter] (CLAUDE.md rule 11).
  */
 class InventoryService extends Component
 {
+    /**
+     * What resolveAndCache() keeps instead of a parse too large to keep:
+     * sprintf() the bytes of its JSON.
+     */
+    public const PARSED_TOO_LARGE = 'The parsed hosts and groups are too large to keep (%d bytes): parse the inventory again to see them.';
+
+    /**
+     * What ends a parse error that resolveAndCache() kept cut to what
+     * inventory.parsed_error holds (ERROR_MAX_BYTES).
+     */
+    public const ERROR_CUT = ' […]';
+
     public const NOTICE_VARS_SKIPPED = 'Variables from group_vars/ and host_vars/ were not loaded because they '
         . 'contain vault-encrypted files. Ansilume never decrypts vault content on the server. Hosts and groups '
         . 'are complete; only variables defined inline in the inventory are shown.';
@@ -37,6 +55,19 @@ class InventoryService extends Component
 
     public const VAULT_ERROR_HINT = 'The inventory contains vault-encrypted content, which Ansilume never '
         . 'decrypts on the server.';
+
+    /** The columns of the parse cache. */
+    private const CACHE_COLUMNS = ['parsed_hosts', 'parsed_error', 'parsed_at'];
+
+    /** The most bytes inventory.parsed_hosts stores: MEDIUMTEXT (m000088). */
+    private const CACHE_MAX_BYTES = 16777215;
+
+    /** The most bytes inventory.parsed_error stores: TEXT (m000069). */
+    private const ERROR_MAX_BYTES = 65535;
+
+    /** The SQLSTATE and the MariaDB/MySQL error code of a value too long for its column. */
+    private const SQLSTATE_TOO_LONG = '22001';
+    private const ERROR_TOO_LONG = '1406';
 
     /** @var int Timeout in seconds for ansible-inventory execution. */
     public int $timeout = 30;
@@ -89,6 +120,9 @@ class InventoryService extends Component
     /**
      * Parse inventory and cache results in the database.
      *
+     * A parse too large to keep is still returned; the cache keeps
+     * PARSED_TOO_LARGE instead (saveCache()).
+     *
      * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
     public function resolveAndCache(Inventory $inventory): array
@@ -102,7 +136,7 @@ class InventoryService extends Component
             : null;
         $inventory->parsed_error = $result['error'];
         $inventory->parsed_at = time();
-        $inventory->save(false, ['parsed_hosts', 'parsed_error', 'parsed_at']);
+        $this->saveCache($inventory);
 
         return $result;
     }
@@ -132,6 +166,74 @@ class InventoryService extends Component
             // Caches written before vault isolation have no notices.
             'notices' => $data['notices'] ?? [],
         ];
+    }
+
+    /**
+     * Saves the parse cache that resolveAndCache() set. A JSON longer than
+     * inventory.parsed_hosts holds (MEDIUMTEXT) is not sent to the
+     * database, and a save that the column refuses as too long (SQLSTATE
+     * 22001, driver error 1406, such as a column that is still TEXT) keeps
+     * nothing either: PARSED_TOO_LARGE is kept instead, and the parse is
+     * shown only to whoever ran it. A parse error is saved cut to what its
+     * column holds (fitError()), and any other database error is thrown.
+     */
+    private function saveCache(Inventory $inventory): void
+    {
+        $bytes = strlen((string)$inventory->parsed_hosts);
+        if ($bytes === 0) {
+            $inventory->parsed_error = self::fitError($inventory->parsed_error);
+            $inventory->save(false, self::CACHE_COLUMNS);
+            return;
+        }
+        if ($bytes > self::CACHE_MAX_BYTES) {
+            $this->keepTooLarge($inventory, $bytes);
+            return;
+        }
+        try {
+            $inventory->save(false, self::CACHE_COLUMNS);
+        } catch (DbException $e) {
+            if (!self::isTooLong($e)) {
+                throw $e;
+            }
+            $this->keepTooLarge($inventory, $bytes);
+        }
+    }
+
+    /**
+     * Keeps PARSED_TOO_LARGE, with the time of the parse, instead of a parse
+     * whose JSON has $bytes bytes, and drops the cache of an earlier parse.
+     */
+    private function keepTooLarge(Inventory $inventory, int $bytes): void
+    {
+        $inventory->parsed_hosts = null;
+        $inventory->parsed_error = sprintf(self::PARSED_TOO_LARGE, $bytes);
+        $inventory->save(false, self::CACHE_COLUMNS);
+    }
+
+    /**
+     * $error cut to what inventory.parsed_error holds, between two
+     * characters and ending in ERROR_CUT: the stderr of ansible-inventory
+     * can be longer, and a longer value made the save fail (SQLSTATE 22001,
+     * driver error 1406).
+     */
+    private static function fitError(#[\SensitiveParameter] ?string $error): ?string
+    {
+        if ($error === null || strlen($error) <= self::ERROR_MAX_BYTES) {
+            return $error;
+        }
+
+        return mb_strcut($error, 0, self::ERROR_MAX_BYTES - strlen(self::ERROR_CUT), 'UTF-8') . self::ERROR_CUT;
+    }
+
+    /**
+     * Whether $e is a value too long for its column, by its codes
+     * (DbErrorSummary), never by its message.
+     */
+    private static function isTooLong(DbException $e): bool
+    {
+        [, $state, $code] = DbErrorSummary::of($e);
+
+        return $state === self::SQLSTATE_TOO_LONG && $code === self::ERROR_TOO_LONG;
     }
 
     /**
@@ -238,7 +340,7 @@ class InventoryService extends Component
     /**
      * @param array{stdout: string, stderr: string, exit_code: int|null, error: string|null} $result
      */
-    private static function isEncryptedVarsFailure(array $result): bool
+    private static function isEncryptedVarsFailure(#[\SensitiveParameter] array $result): bool
     {
         return $result['error'] !== null
             && $result['exit_code'] === AnsibleInventoryRunner::EXIT_PARSER_ERROR
@@ -252,7 +354,7 @@ class InventoryService extends Component
      *
      * @param array{stdout: string, stderr: string, exit_code: int|null, error: string|null} $result
      */
-    private static function vaultAwareError(array $result): ?string
+    private static function vaultAwareError(#[\SensitiveParameter] array $result): ?string
     {
         $mentionsVault = VaultIsolation::mentionsDecryptionFailure($result['stderr'] . "\n" . ($result['error'] ?? ''));
         if ($result['error'] !== null) {
@@ -267,7 +369,7 @@ class InventoryService extends Component
      *
      * @return array{groups: array<string, mixed>, hosts: array<string, mixed>, error: string|null, notices?: list<string>}
      */
-    protected function parseOutput(string $json): array
+    protected function parseOutput(#[\SensitiveParameter] string $json): array
     {
         $data = json_decode($json, true);
         if (!is_array($data)) {
@@ -294,7 +396,7 @@ class InventoryService extends Component
      * @param array<string, mixed> $data
      * @return array<string, array{hosts: array<int, string>, children: array<int, string>, vars: array<string, mixed>}>
      */
-    protected function extractGroups(array $data): array
+    protected function extractGroups(#[\SensitiveParameter] array $data): array
     {
         $groups = [];
         foreach ($data as $groupName => $groupData) {
@@ -318,7 +420,7 @@ class InventoryService extends Component
      * @param array<string, array{hosts: array<int, string>, children: array<int, string>, vars: array<string, mixed>}> $groups
      * @return array<string, mixed>
      */
-    protected function extractHosts(array $data, array $groups): array
+    protected function extractHosts(#[\SensitiveParameter] array $data, #[\SensitiveParameter] array $groups): array
     {
         $hosts = [];
         /** @var array<string, mixed> $meta */

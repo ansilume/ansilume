@@ -4,18 +4,26 @@ declare(strict_types=1);
 
 namespace app\services;
 
-use app\models\ApprovalRule;
 use app\models\JobTemplate;
 
 /**
  * What a gated job template runs is for admins to change. A job template is
- * gated when its stored approval_rule_id names an existing rule. Only users
- * who may assign approval rules (approval-rule.update, see
- * ApprovalRuleAssignmentPolicy::mayAssign()) may change any other column of
- * it, the extra vars and the survey among them, or its ordered credential
- * list. Everyone who may change the template keeps changing its name and
- * description (OPEN_ATTRIBUTES), launching it, managing its trigger token,
- * cloning it (the clone keeps the rule, and so the lock) and deleting it.
+ * gated when its stored approval_rule_id names an existing rule, or else
+ * when its stored inventory has an approval rule (JobTemplateGate: its own
+ * rule first, else its inventory's). Only users who may assign approval
+ * rules (approval-rule.update, see ApprovalRuleAssignmentPolicy::mayAssign())
+ * may change any other column of it, the extra vars, the survey and the
+ * inventory among them, or its ordered credential list: CHANGE_REFUSED for
+ * a template with its own rule, CHANGE_REFUSED_INVENTORY for one gated
+ * through its inventory. Everyone who may change the template keeps
+ * changing its name and description (OPEN_ATTRIBUTES), launching it,
+ * managing its trigger token, cloning it (the clone keeps the rule and the
+ * inventory, and so the lock) and deleting it.
+ *
+ * Giving a job template an inventory with an approval rule gates it, so
+ * that is for admins too, on a new template as well (GATED_INVENTORY_REFUSED,
+ * GatedInventoryChoice). An inventory the user may not see is never refused
+ * here: the template's validation answers that it does not exist.
  *
  * Why: otherwise user B changes a template that A's schedule, trigger token
  * or workflow launches as A, and then approves what B alone chose.
@@ -30,26 +38,73 @@ use app\models\JobTemplate;
  *
  * JobTemplateCredentialService asks for every save a user makes, twice:
  * before validation, so that a refused change gets this answer first, and
- * inside the save's transaction, on the template row locked FOR UPDATE as
- * its first statement, so that a rule assigned meanwhile is seen. The changes
- * compared are those the save writes: the template's dirty attributes,
- * against the stored row.
+ * inside the save's transaction, so that a rule assigned meanwhile, to the
+ * template or to an inventory, is seen. The changes compared are those the
+ * save writes: the template's dirty attributes, against the stored row.
+ *
+ * Lock order (C16), inside the save's transaction: the template row FOR
+ * UPDATE as its first statement (an existing template), then, as the next
+ * statement and in ONE statement, the stored and the new inventory LOCK IN
+ * SHARE MODE in ascending ID order (JobTemplateGate::readInventoryRules()).
+ * A new template share-locks its one inventory as its first statement. No
+ * later statement of the save locks another inventory row: the persist veto
+ * (JobTemplateRuleAssignment::persistVetoes(): whether the inventory the
+ * save stores still exists, and whether the template's own rule is its
+ * rule) reads the template row without a lock and that inventory row,
+ * which this lock share-locked already. A launch locks in the same order
+ * (JobLaunchService); an inventory save locks only its own row and never
+ * takes a locking read of job_template (InventoryWriteService), so the
+ * orders cannot cross, with one exception. A project delete
+ * (ProjectDeletionService) locks the project row and then, through the
+ * foreign key's ON DELETE SET NULL (fk_inventory_project_id), the rows of
+ * the project's inventories, while a save locks the row of the template's
+ * project only when it writes the template (the check of its foreign key),
+ * after its inventories. So a save that moves a template into a project
+ * being deleted, or creates one there, while its inventory belongs to that
+ * project, can deadlock with the delete (before 2.12.0 it ended in a
+ * foreign key error): either way the save writes nothing and answers a
+ * server error, and saving again answers that the project does not exist.
  */
 final class GatedJobTemplateLock
 {
     /** The columns of a gated template that everyone who may change the template may still change. */
     public const OPEN_ATTRIBUTES = ['name', 'description'];
 
-    /** Why a change was refused: web 403 (ForbiddenHttpException), API 403. */
+    /** Why a change of a template with its own rule was refused: web 403 (ForbiddenHttpException), API 403. */
     public const CHANGE_REFUSED = 'This job template has an approval rule: only admins may change what it runs '
         . '(approval-rule.update). You may change its name and description.';
 
-    /** The notice on the template's page and edit form, for users the lock applies to. */
+    /** Why a change of a template gated through its inventory was refused: web 403, API 403. */
+    public const CHANGE_REFUSED_INVENTORY = 'The inventory of this job template has an approval rule: only admins may '
+        . 'change what it runs (approval-rule.update). You may change its name and description.';
+
+    /** The notice on the page and edit form of a template with its own rule, for users the lock applies to. */
     public const NOTICE = 'This job template has an approval rule: only admins may change what it runs '
         . '(approval-rule.update). You may still change its name and description, launch it and manage its trigger token.';
 
-    /** The key under which a save the lock refused carries CHANGE_REFUSED among the template's errors. */
+    /** The notice on the page and edit form of a template gated through its inventory, for users the lock applies to. */
+    public const NOTICE_INVENTORY = 'The inventory of this job template has an approval rule: only admins may change '
+        . 'what it runs (approval-rule.update). You may still change its name and description, launch it and manage '
+        . 'its trigger token.';
+
+    /** Why giving a job template an inventory with an approval rule was refused: web 403, API 403. */
+    public const GATED_INVENTORY_REFUSED = 'The selected inventory has an approval rule: only admins may give a job '
+        . 'template an inventory with an approval rule (approval-rule.update).';
+
+    /** The key under which a save the lock refused carries its reason among the template's errors (refusalOf()). */
     public const ERROR_KEY = 'gated_job_template';
+
+    /** The change refusal by what gates the stored template (GatedInventoryChoice::storedSource()). */
+    private const CHANGE_REFUSALS = [
+        JobTemplateGate::SOURCE_JOB_TEMPLATE => self::CHANGE_REFUSED,
+        JobTemplateGate::SOURCE_INVENTORY => self::CHANGE_REFUSED_INVENTORY,
+    ];
+
+    /** The notice by what gates the stored template. */
+    private const NOTICES = [
+        JobTemplateGate::SOURCE_JOB_TEMPLATE => self::NOTICE,
+        JobTemplateGate::SOURCE_INVENTORY => self::NOTICE_INVENTORY,
+    ];
 
     /** The columns compared as JSON values. */
     private const JSON_ATTRIBUTES = ['extra_vars', 'survey_fields'];
@@ -66,29 +121,53 @@ final class GatedJobTemplateLock
         . ' WHERE [[job_template_id]] = :id ORDER BY [[sort_order]], [[credential_id]]';
 
     /**
-     * Whether the lock keeps $userId from changing what $template runs: the
-     * template is saved, its stored rule exists, and the user may not assign
-     * approval rules. For the template's page and edit form (the notice and
-     * the disabled fields).
+     * Whether the lock keeps $userId from changing what $template runs
+     * (notice() has a text). For the template's page and edit form (the
+     * notice and the disabled fields).
      */
     public function appliesTo(int $userId, JobTemplate $template): bool
     {
-        return !$template->isNewRecord
-            && self::ruleExists($template->getOldAttribute('approval_rule_id'))
-            && !$this->policy()->mayAssign($userId);
+        return $this->notice($userId, $template) !== null;
+    }
+
+    /**
+     * The notice for $userId on the page and edit form of $template, or null
+     * when the lock does not keep them from changing what it runs: null for
+     * a template not saved yet, for an ungated one and for users who may
+     * assign approval rules; else NOTICE when its stored rule exists, or
+     * NOTICE_INVENTORY when its stored inventory has a rule. Reads the
+     * stored values as loaded, the inventory's rule as stored, without a
+     * lock.
+     */
+    public function notice(int $userId, JobTemplate $template): ?string
+    {
+        if ($template->isNewRecord) {
+            return null;
+        }
+        $inventoryId = self::positiveId($template->getOldAttribute('inventory_id')) ?? 0;
+        $source = GatedInventoryChoice::storedSource(
+            $template->getOldAttribute('approval_rule_id'),
+            $inventoryId,
+            JobTemplateGate::readInventoryRules([$inventoryId], false)
+        );
+
+        return $source === null || $this->policy()->mayAssign($userId) ? null : self::NOTICES[$source];
     }
 
     /**
      * Whether the lock refuses the save of $template's change by $actorId,
      * or by the signed-in user when $actorId is null (the user the audit
      * entry names; console runs have none, and the lock does not concern
-     * them). A refusal adds CHANGE_REFUSED to the template's errors under
-     * ERROR_KEY (refused() tells).
+     * them). A refusal adds its reason (CHANGE_REFUSED,
+     * CHANGE_REFUSED_INVENTORY or GATED_INVENTORY_REFUSED) to the template's
+     * errors under ERROR_KEY (refused() tells, refusalOf() says which).
      *
      * @param list<mixed>|null $additionalIds the additional credentials the
      *     save stores, in order; null keeps the stored ones
-     * @param bool $forUpdate read the template's row FOR UPDATE: inside the
-     *     save's transaction, as its first statement
+     * @param bool $forUpdate read the template's row FOR UPDATE, then its
+     *     stored and its new inventory LOCK IN SHARE MODE (a new template:
+     *     its inventory, first): inside the save's transaction, as its first
+     *     statements
      */
     public function vetoes(JobTemplate $template, ?array $additionalIds, ?int $actorId, bool $forUpdate): bool
     {
@@ -111,30 +190,60 @@ final class GatedJobTemplateLock
     }
 
     /**
+     * Why the lock refused the last save of $template (vetoes()): the web
+     * and the API answer 403 with it. Null when it did not refuse.
+     */
+    public static function refusalOf(JobTemplate $template): ?string
+    {
+        return $template->getFirstError(self::ERROR_KEY);
+    }
+
+    /**
      * Why $userId may not save the change of $template, or null when they
-     * may: only a change of a gated template is refused, and only for users
-     * who may not assign approval rules. A new template is no gated one:
-     * whether it may get a rule is ApprovalRuleAssignmentPolicy's to say.
+     * may. A new template is refused only an inventory with an approval
+     * rule (GatedInventoryChoice::refusal()); whether it may get a rule of
+     * its own is ApprovalRuleAssignmentPolicy's to say. A stored one is
+     * decided on its stored row: an ungated one is refused only a new
+     * inventory with a rule; a gated one, for users who may not assign
+     * approval rules, every change of a column but the open ones or of its
+     * credential list, with the text of what gates it (CHANGE_REFUSALS).
+     * Re-pointing a gated template to an inventory without a rule is a
+     * change of a column, so it is refused too.
      *
      * @param list<mixed>|null $additionalIds
      */
     private function refusal(int $userId, JobTemplate $template, ?array $additionalIds, bool $forUpdate): ?string
     {
+        $inventoryId = self::positiveId($template->getAttribute('inventory_id')) ?? 0;
         if ($template->isNewRecord) {
-            return null;
+            // Its one inventory, first: a new template has no row to lock.
+            $rules = JobTemplateGate::readInventoryRules([$inventoryId], $forUpdate);
+
+            return GatedInventoryChoice::refusal($userId, $template, null, $rules);
         }
         // The row the save updates (its stored ID), first: inside the save's
         // transaction, nothing is read before its lock.
         $templateId = (int)$template->getOldAttribute('id');
         $stored = self::storedRow($templateId, $forUpdate);
-        if ($stored === null || !self::ruleExists($stored['approval_rule_id'] ?? null) || $this->policy()->mayAssign($userId)) {
+        if ($stored === null) {
+            return null;
+        }
+        // Then the stored and the new inventory, in one statement, in
+        // ascending ID order: no later statement locks another inventory row.
+        $storedInventoryId = self::positiveId($stored['inventory_id'] ?? null) ?? 0;
+        $rules = JobTemplateGate::readInventoryRules([$storedInventoryId, $inventoryId], $forUpdate);
+        $source = GatedInventoryChoice::storedSource($stored['approval_rule_id'] ?? null, $storedInventoryId, $rules);
+        if ($source === null) {
+            return GatedInventoryChoice::refusal($userId, $template, $storedInventoryId, $rules);
+        }
+        if ($this->policy()->mayAssign($userId)) {
             return null;
         }
         $storedPrimary = self::positiveId($stored['credential_id'] ?? null);
         $changes = self::changesColumns($template, $stored)
             || ($additionalIds !== null && self::changesCredentials($template, $templateId, $storedPrimary, $additionalIds));
 
-        return $changes ? self::CHANGE_REFUSED : null;
+        return $changes ? self::CHANGE_REFUSALS[$source] : null;
     }
 
     /**
@@ -150,16 +259,6 @@ final class GatedJobTemplateLock
             ->queryOne();
 
         return is_array($row) ? $row : null;
-    }
-
-    /**
-     * Whether $ruleId names an existing approval rule.
-     */
-    private static function ruleExists(mixed $ruleId): bool
-    {
-        $id = self::positiveId($ruleId);
-
-        return $id !== null && ApprovalRule::find()->where(['id' => $id])->exists();
     }
 
     /**

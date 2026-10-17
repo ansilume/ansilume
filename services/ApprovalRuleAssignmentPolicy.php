@@ -8,7 +8,6 @@ use app\models\JobTemplate;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use yii\base\Component;
-use yii\validators\NumberValidator;
 
 /**
  * Who may assign approval rules. A rule gates launches, so choosing which
@@ -23,15 +22,19 @@ use yii\validators\NumberValidator;
  *   source's rule for everyone: copying is not assigning, and dropping the
  *   rule would create an ungated twin.
  * - Workflows: a gated step is an approval step, or a job step whose job
- *   template has an approval rule (a gated job step). Adding one needs the
+ *   template is gated, by an approval rule of its own or by the rule of its
+ *   inventory (a gated job step, GatedJobSteps). Adding one needs the
  *   permission, and so does every change of the steps (add, remove, move,
  *   replace) of a workflow that has one. Name and description, launching
  *   and trigger tokens are not affected. A run launches its jobs as the
  *   user who started it (or whose trigger token did), and the launcher is
  *   the one user who may not approve them: whoever else chose a gated step
  *   could otherwise approve it alone. Whether a workflow has a gated job
- *   step is read when asked, so a job template that gets a rule locks the
- *   workflows that use it from then on.
+ *   step is read when asked, so a job template or an inventory that gets a
+ *   rule, or a job template moved to an inventory with one, locks the
+ *   workflows that use it from then on. The refusal names what gates the
+ *   step: the job template's own rule (GATED_JOB_*) before the inventory's
+ *   (GATED_INVENTORY_JOB_*).
  *
  * Callers refuse with the message, before anything is written: the web
  * with a 403 (ForbiddenHttpException), the API with a 403 error.
@@ -48,6 +51,10 @@ class ApprovalRuleAssignmentPolicy extends Component
         . 'that needs approval-rule.update.';
     public const GATED_JOB_WORKFLOW_STEPS_REFUSED = 'This workflow has a job step whose job template has an approval rule: '
         . 'only admins may change its steps (approval-rule.update).';
+    public const GATED_INVENTORY_JOB_STEP_ADD_REFUSED = 'Only admins may add a job step whose job template\'s '
+        . 'inventory has an approval rule: that needs approval-rule.update.';
+    public const GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED = 'This workflow has a job step whose job template\'s '
+        . 'inventory has an approval rule: only admins may change its steps (approval-rule.update).';
 
     /**
      * Whether $userId may assign and remove approval rules: an active
@@ -108,8 +115,10 @@ class ApprovalRuleAssignmentPolicy extends Component
      * may. $addsApprovalStep: the change adds an approval step, or (an API
      * replacement) the new steps include one. Otherwise the workflow's own
      * steps decide: an approval step (APPROVAL_WORKFLOW_STEPS_REFUSED) or a
-     * gated job step (GATED_JOB_WORKFLOW_STEPS_REFUSED) locks them. A change
-     * that adds a gated job step is stepsAddRefusal()'s to tell.
+     * gated job step (GATED_JOB_WORKFLOW_STEPS_REFUSED, or
+     * GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED when only an inventory
+     * gates it) locks them. A change that adds a gated job step is
+     * stepsAddRefusal()'s to tell.
      */
     public function workflowStepsChangeRefusal(int $userId, WorkflowTemplate $template, bool $addsApprovalStep): ?string
     {
@@ -121,8 +130,9 @@ class ApprovalRuleAssignmentPolicy extends Component
      * new step; API: the steps that replace all of them), or null when they
      * may. In this order: an approval step among them
      * (APPROVAL_STEP_ADD_REFUSED), a gated job step among them
-     * (GATED_JOB_STEP_ADD_REFUSED, see includesGatedJobStep()), then what
-     * locks the workflow's steps (workflowStepsChangeRefusal()).
+     * (GATED_JOB_STEP_ADD_REFUSED, or GATED_INVENTORY_JOB_STEP_ADD_REFUSED
+     * when only inventories gate them; see GatedJobSteps::visibleSourceOf()),
+     * then what locks the workflow's steps (workflowStepsChangeRefusal()).
      *
      * @param array<int, WorkflowStep> $added
      */
@@ -131,7 +141,11 @@ class ApprovalRuleAssignmentPolicy extends Component
         if (self::includesApprovalStep($added)) {
             return $this->workflowStepsChangeRefusal($userId, $template, true);
         }
-        $reason = $this->includesGatedJobStep($userId, $added) ? self::GATED_JOB_STEP_ADD_REFUSED : $this->stepsLock($template);
+        $reason = match (GatedJobSteps::visibleSourceOf($userId, $added)) {
+            JobTemplateGate::SOURCE_JOB_TEMPLATE => self::GATED_JOB_STEP_ADD_REFUSED,
+            JobTemplateGate::SOURCE_INVENTORY => self::GATED_INVENTORY_JOB_STEP_ADD_REFUSED,
+            default => $this->stepsLock($template),
+        };
 
         return $this->refusalFor($userId, $reason);
     }
@@ -152,19 +166,14 @@ class ApprovalRuleAssignmentPolicy extends Component
 
     /**
      * Whether $template has a gated job step: a job step whose job template
-     * has an approval rule. Only job templates that are not deleted count, as
-     * a step of a deleted one runs nothing; the type is compared exactly, as
-     * dispatch compares it.
+     * has an approval rule, or whose job template's inventory has one
+     * (GatedJobSteps::sourceIn()). Only job templates that are not deleted
+     * count, as a step of a deleted one runs nothing; the type is compared
+     * exactly, as dispatch compares it.
      */
     public function hasGatedJobStep(WorkflowTemplate $template): bool
     {
-        return WorkflowStep::find()
-            ->alias('ws')
-            ->innerJoin(['jt' => JobTemplate::tableName()], '[[jt.id]] = [[ws.job_template_id]]')
-            ->where(['ws.workflow_template_id' => $template->id, 'jt.deleted_at' => null])
-            ->andWhere(['not', ['jt.approval_rule_id' => null]])
-            ->andWhere('CAST([[ws.step_type]] AS BINARY) = :job', [':job' => WorkflowStep::TYPE_JOB])
-            ->exists();
+        return GatedJobSteps::sourceIn((int)$template->id) !== null;
     }
 
     /**
@@ -185,59 +194,39 @@ class ApprovalRuleAssignmentPolicy extends Component
     }
 
     /**
-     * Whether $steps (submitted, not saved) include a gated job step, among
-     * the job templates $userId may see. A job template the user may not see
-     * counts as none: the step is refused as not found, and the answer must
-     * not tell whether that template has a rule. The ID is read as the
-     * step's integer rule reads it ("05" and "+5" stand for 5); a value
-     * that is no ID is no job template.
+     * Whether $steps (submitted, not saved) include a gated job step, by
+     * the rule of its job template or of that template's inventory, among
+     * the job templates $userId may see (GatedJobSteps::visibleSourceOf()).
+     * A job template the user may not see counts as none: the step is
+     * refused as not found, and the answer must not tell whether that
+     * template, or its inventory, has a rule. The ID is read as the step's
+     * integer rule reads it ("05" and "+5" stand for 5); a value that is no
+     * ID is no job template.
      *
      * @param iterable<WorkflowStep> $steps
      */
     public function includesGatedJobStep(int $userId, iterable $steps): bool
     {
-        $integer = new NumberValidator(['integerOnly' => true]);
-        $ids = [];
-        foreach ($steps as $step) {
-            $id = $step->job_template_id;
-            if ($step->step_type === WorkflowStep::TYPE_JOB && (is_int($id) || is_string($id)) && $integer->validate($id)) {
-                $ids[] = (int)$id;
-            }
-        }
-        $gated = self::gatedJobTemplateIds($ids);
-        if ($gated === []) {
-            return false;
-        }
-
-        return count($this->access()->classifyStepTemplateIds($userId, $gated)['missing']) < count($gated);
+        return GatedJobSteps::visibleSourceOf($userId, $steps) !== null;
     }
 
     /**
-     * Those of the job templates $ids that have an approval rule, deleted
-     * ones left out, ascending.
+     * Those of the job templates $ids that are gated, by an approval rule
+     * of their own or by the rule of their inventory
+     * (GatedJobSteps::sourcesOf()), deleted ones left out, ascending.
      *
      * @param array<int, int> $ids
      * @return list<int>
      */
     public static function gatedJobTemplateIds(array $ids): array
     {
-        if ($ids === []) {
-            return [];
-        }
-        // andWhere(): find() leaves deleted templates out.
-        $gated = JobTemplate::find()
-            ->select('job_template.id')
-            ->andWhere(['job_template.id' => array_values(array_unique($ids))])
-            ->andWhere(['not', ['job_template.approval_rule_id' => null]])
-            ->orderBy(['job_template.id' => SORT_ASC])
-            ->column();
-
-        return array_values(array_map('intval', $gated));
+        return array_keys(GatedJobSteps::sourcesOf($ids));
     }
 
     /**
      * What locks the steps of $template for users who may not assign
-     * approval rules, or null when nothing does.
+     * approval rules, or null when nothing does: an approval step, then a
+     * gated job step (GatedJobSteps::sourceIn()).
      */
     private function stepsLock(WorkflowTemplate $template): ?string
     {
@@ -245,7 +234,11 @@ class ApprovalRuleAssignmentPolicy extends Component
             return self::APPROVAL_WORKFLOW_STEPS_REFUSED;
         }
 
-        return $this->hasGatedJobStep($template) ? self::GATED_JOB_WORKFLOW_STEPS_REFUSED : null;
+        return match (GatedJobSteps::sourceIn((int)$template->id)) {
+            JobTemplateGate::SOURCE_JOB_TEMPLATE => self::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+            JobTemplateGate::SOURCE_INVENTORY => self::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+            default => null,
+        };
     }
 
     /**

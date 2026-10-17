@@ -11,6 +11,7 @@ use app\models\NotificationTemplate;
 use app\services\NotificationDispatcher;
 use app\services\notification\ChannelInterface;
 use app\tests\integration\controllers\WebControllerTestCase;
+use app\tests\integration\RestoresComponents;
 
 /**
  * POST /api/v1/notification-templates/{id}/test through runAction(), as an
@@ -20,18 +21,18 @@ use app\tests\integration\controllers\WebControllerTestCase;
  */
 class NotificationTemplatesTestActionTest extends WebControllerTestCase
 {
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
+    use RestoresComponents;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('notificationDispatcher');
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

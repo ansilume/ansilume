@@ -1,25 +1,48 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden, templateId } from '../../lib/helpers';
-import { asAdmin, forgePost, idWhere, indexRows } from '../../lib/scoping';
+import { asAdmin, forgePost, idWhere, indexRows, optionLabels } from '../../lib/scoping';
 import { PLACEHOLDER, expectNotInPage } from '../../lib/survey-secrets';
 import { generateTriggerToken, revokeTriggerTokenIfPresent } from '../../lib/triggers';
+import { jobIdsOfTemplate } from '../../lib/schedules';
 import { APPROVAL_RULE, GATED_TEMPLATE, SOLO_RULE, flash, ruleLabel } from '../../lib/approvals';
 import {
+  ASSIGN_REFUSED,
+  HOST_ASSIGN_INVENTORY,
+  HOST_ASSIGN_TEMPLATE,
+  HOST_CONFLICT_INVENTORY,
+  HOST_INVENTORY,
+  HOST_PROJECT,
+  HOST_RENAMED_TEMPLATE,
+  HOST_RULE,
+  HOST_SOLO_INVENTORY,
+  HOST_SOLO_RULE,
+  HOST_SOLO_TEMPLATE,
+  HOST_TEMPLATE,
+  inventoryId,
+} from '../../lib/inventories';
+import {
   GATED_CHANGE_REFUSED,
+  GATED_INVENTORIES_HINT,
+  GATED_INVENTORY_CHANGE_REFUSED,
+  GATED_INVENTORY_LOCK_NOTICE,
+  GATED_INVENTORY_REFUSED,
   GATED_LOCK_NOTICE,
+  LAUNCH_NOTE_INVENTORY,
   LOCKED_INPUTS,
   LOCKED_PLAYBOOK,
   LOCKED_RENAMED,
   LOCKED_TEMPLATE,
+  approverRefusal,
   deleteOpenTemplate,
   expectLockedForm,
+  gatedInventoryOption,
+  launchApprovalNote,
+  launchFailed,
+  launchRefusal,
   lockedNotice,
   runsWhat,
   surveyOf,
 } from '../../lib/job-templates';
-
-/** services/ApprovalRuleAssignmentPolicy.php ASSIGN_REFUSED */
-const ASSIGN_REFUSED = 'Only admins may assign or remove an approval rule: that needs approval-rule.update.';
 
 /** The ID of the approval rule `name`, from the rule list (column 0: Name). */
 async function approvalRuleId(page: Page, name: string): Promise<string> {
@@ -61,6 +84,17 @@ async function formFields(page: Page): Promise<Record<string, string>> {
     });
     return values;
   });
+}
+
+/** The names of the job templates the job list's template filter offers: every template the user may see. */
+async function templateNames(page: Page): Promise<string[]> {
+  await page.goto('/job/index');
+  return (await page.locator('select[name="template_id"] option').allTextContents()).map((label) => label.trim());
+}
+
+/** The labels the inventory select of the open template form offers, without its prompt. */
+async function inventoryOptions(page: Page): Promise<string[]> {
+  return (await optionLabels(page, '#jobtemplate-inventory_id')).filter((label) => label !== '— Select inventory —');
 }
 
 /** Opens a template's page, paging through the list sorted by name. */
@@ -408,5 +442,214 @@ test.describe('Job Templates RBAC', () => {
     expect(await runsWhat(page)).toEqual(before);
     await page.goto(`/job-template/update?id=${id}`);
     await expect(page.locator('#jobtemplate-description')).not.toHaveValue(marker);
+  });
+
+  // A job template on an inventory with an approval rule is gated by that
+  // rule: only admins change what it runs, and only admins give a job
+  // template such an inventory (services/GatedJobTemplateLock.php).
+  // commands/E2eInventoryGateSeeder.php: e2e-host-gated-template, without a
+  // rule of its own, on e2e-gated-inventory (gated by e2e-host-gate-rule), in
+  // e2e-host-gate-project, which has no team, so every role sees it.
+  test('operator is not offered inventories with an approval rule in the template form, and is told so', async ({ page }) => {
+    await page.goto('/job-template/create');
+    let labels = await inventoryOptions(page);
+    expect(labels).toContain(HOST_CONFLICT_INVENTORY);
+    expect(labels).not.toContain(HOST_INVENTORY);
+    expect(labels).not.toContain(HOST_SOLO_INVENTORY);
+    expect(labels.filter((label) => label.includes(' \u00b7 needs approval: ')), 'no gated inventory is offered').toEqual([]);
+    await expect(page.locator('#job-template-gated-inventories-hint')).toHaveText(GATED_INVENTORIES_HINT);
+
+    // The form of a template on an inventory without a rule is not locked: the same choice.
+    await page.goto(`/job-template/update?id=${await templateId(page, HOST_ASSIGN_TEMPLATE)}`);
+    await expect(lockedNotice(page)).toHaveCount(0);
+    await expect(page.locator('#jobtemplate-inventory_id option:checked')).toHaveText(HOST_ASSIGN_INVENTORY);
+    labels = await inventoryOptions(page);
+    expect(labels).not.toContain(HOST_INVENTORY);
+    expect(labels.filter((label) => label.includes(' \u00b7 needs approval: '))).toEqual([]);
+    await expect(page.locator('#job-template-gated-inventories-hint')).toHaveText(GATED_INVENTORIES_HINT);
+  });
+
+  // Only admins give a job template an inventory with an approval rule. The browser twin of
+  // JobTemplateControllerInventoryLockTest::testRegressionAnOperatorGaveANewTemplateAGatedInventory and
+  // ::testRegressionAnOperatorRepointedAnUngatedTemplateToAGatedInventory.
+  test('operator gets 403 on CSRF-valid creates and updates that give a template an inventory with an approval rule, and nothing changes', async ({ page }) => {
+    // The inventory is not offered, but the operator may see it: its ID from the inventory list.
+    const gatedInventory = await inventoryId(page, HOST_INVENTORY);
+    const name = `e2e-forged-host-gate-${Date.now()}`;
+    await page.goto('/job-template/create');
+    const projectId = await page.locator('#jobtemplate-project_id option', { hasText: new RegExp(`^${HOST_PROJECT}$`) }).getAttribute('value');
+    expect(projectId, `the operator may create templates in ${HOST_PROJECT}`).toBeTruthy();
+
+    await page.goto('/job-template/index');
+    await forgePost(page, '/job-template/create', {
+      'JobTemplate[name]': name,
+      'JobTemplate[project_id]': projectId ?? '',
+      'JobTemplate[playbook]': 'site.yml',
+      'JobTemplate[inventory_id]': gatedInventory,
+    }, /\/job-template\/create/);
+    await expectForbidden(page);
+    await expect(page.locator('#page-content')).toContainText(GATED_INVENTORY_REFUSED);
+    expect(await templateNames(page)).not.toContain(name);
+
+    // An ungated template moved onto the gated inventory.
+    const id = await templateId(page, HOST_ASSIGN_TEMPLATE);
+    await page.goto(`/job-template/view?id=${id}`);
+    const before = await runsWhat(page);
+    await page.goto(`/job-template/update?id=${id}`);
+    const posted = await formFields(page);
+    await page.goto(`/job-template/view?id=${id}`);
+    await forgePost(page, `/job-template/update?id=${id}`, {
+      ...posted,
+      'JobTemplate[inventory_id]': gatedInventory,
+    }, /\/job-template\/update/);
+    await expectForbidden(page);
+    await expect(page.locator('#page-content')).toContainText(GATED_INVENTORY_REFUSED);
+
+    await page.goto(`/job-template/view?id=${id}`);
+    expect(await runsWhat(page)).toEqual(before);
+    expect(before.Inventory).toBe(HOST_ASSIGN_INVENTORY);
+  });
+
+  test('operator sees on a template gated through its inventory that only its name and description are open', async ({ page }) => {
+    const id = await templateId(page, HOST_TEMPLATE);
+    await page.goto(`/job-template/view?id=${id}`);
+    await expect(page.locator('h2').first()).toHaveText(HOST_TEMPLATE);
+    await expect(lockedNotice(page)).toHaveText(GATED_INVENTORY_LOCK_NOTICE);
+    await expect(page.locator('#job-template-approval-rule')).toHaveText('None');
+    const inventoryRule = page.locator('#job-template-inventory-rule a');
+    await expect(inventoryRule).toHaveText(ruleLabel(HOST_RULE));
+    await expect(inventoryRule).toHaveAttribute('href', /\/approval-rule\/view\?id=\d+$/);
+    await expect(page.locator('#page-content').getByRole('link', { name: 'Edit', exact: true })).toBeVisible();
+    await expect(page.locator('#page-content').getByRole('link', { name: 'Launch', exact: true })).toBeVisible();
+
+    await page.goto(`/job-template/update?id=${id}`);
+    await expectLockedForm(page, GATED_INVENTORY_LOCK_NOTICE);
+    // The stored inventory stays selected, with its mark.
+    await expect(page.locator('#jobtemplate-inventory_id option:checked')).toHaveText(gatedInventoryOption(HOST_INVENTORY, HOST_RULE));
+    await expect(page.locator('#job-template-gated-inventories-hint')).toHaveCount(0);
+    await expect(page.locator('#job-template-approval-rule-readonly .form-control-plaintext')).toHaveText('None');
+  });
+
+  test('operator renames a template gated through its inventory through its form, which keeps everything it runs', async ({ page }) => {
+    const id = await templateId(page, HOST_TEMPLATE);
+    await page.goto(`/job-template/view?id=${id}`);
+    const before = await runsWhat(page);
+    expect(before.Inventory).toBe(HOST_INVENTORY);
+    await page.goto(`/job-template/update?id=${id}`);
+    const description = await page.locator('#jobtemplate-description').inputValue();
+    const renamedDescription = `renamed by e2e-operator ${Date.now()}`;
+
+    try {
+      await saveNameAndDescription(page, HOST_RENAMED_TEMPLATE, renamedDescription);
+      await expect(flash(page, 'success')).toHaveText(`Template "${HOST_RENAMED_TEMPLATE}" updated.`);
+      await expect(page.locator('h2').first()).toHaveText(HOST_RENAMED_TEMPLATE);
+      expect(await runsWhat(page)).toEqual(before);
+
+      await page.goto(`/job-template/update?id=${id}`);
+      await expect(page.locator('#jobtemplate-description')).toHaveValue(renamedDescription);
+      await expectLockedForm(page, GATED_INVENTORY_LOCK_NOTICE);
+    } finally {
+      await page.goto(`/job-template/update?id=${id}`);
+      await saveNameAndDescription(page, HOST_TEMPLATE, description);
+    }
+    await expect(page.locator('h2').first()).toHaveText(HOST_TEMPLATE);
+    expect(await runsWhat(page)).toEqual(before);
+  });
+
+  // Only admins change what a template gated through its inventory runs. The browser twin of
+  // JobTemplateControllerInventoryLockTest::testRegressionAnOperatorChangedWhatATemplateGatedThroughItsInventoryRuns and
+  // ::testRegressionAnOperatorUngatedATemplateByRepointingIt.
+  test('operator gets 403 on CSRF-valid updates that change what a template gated through its inventory runs, and nothing changes', async ({ page }) => {
+    const ungatedInventory = await inventoryId(page, HOST_ASSIGN_INVENTORY);
+    const id = await templateId(page, HOST_TEMPLATE);
+    await page.goto(`/job-template/view?id=${id}`);
+    const before = await runsWhat(page);
+    await page.goto(`/job-template/update?id=${id}`);
+    const posted = await formFields(page);
+    expect(posted['JobTemplate[name]']).toBe(HOST_TEMPLATE);
+    const marker = `forged-${Date.now()}`;
+    // Its playbook, and its inventory: moving it onto an inventory without a rule would ungate it.
+    const changes: Record<string, string>[] = [
+      { 'JobTemplate[playbook]': 'forged.yml' },
+      { 'JobTemplate[inventory_id]': ungatedInventory },
+    ];
+
+    for (const change of changes) {
+      await page.goto(`/job-template/view?id=${id}`);
+      await forgePost(page, `/job-template/update?id=${id}`, {
+        ...posted,
+        'JobTemplate[description]': marker,
+        ...change,
+      }, /\/job-template\/update/);
+      await expectForbidden(page);
+      await expect(page.locator('#page-content'), JSON.stringify(change)).toContainText(GATED_INVENTORY_CHANGE_REFUSED);
+    }
+
+    await page.goto(`/job-template/view?id=${id}`);
+    expect(await runsWhat(page)).toEqual(before);
+    await page.goto(`/job-template/update?id=${id}`);
+    await expect(page.locator('#jobtemplate-description')).not.toHaveValue(marker);
+  });
+
+  test('operator clone of a template gated through its inventory keeps the inventory and opens a locked form', async ({ page, browser }, testInfo) => {
+    // A copy on the same inventory is gated by the same rule: only its name and description are open.
+    const id = await templateId(page, HOST_TEMPLATE);
+    await page.goto(`/job-template/view?id=${id}`);
+    await Promise.all([
+      page.waitForURL(/\/job-template\/update\?id=\d+/),
+      page.getByRole('button', { name: 'Clone' }).click(),
+    ]);
+    const cloneId = openTemplateId(page);
+    try {
+      expect(cloneId).not.toBe(id);
+      await expect(page.locator('#jobtemplate-name')).toHaveValue(new RegExp(`^${HOST_TEMPLATE} \\(copy( \\d+)?\\)$`));
+      await expectLockedForm(page, GATED_INVENTORY_LOCK_NOTICE);
+      await expect(page.locator('#jobtemplate-inventory_id option:checked')).toHaveText(gatedInventoryOption(HOST_INVENTORY, HOST_RULE));
+
+      await page.goto(`/job-template/view?id=${cloneId}`);
+      await expect(page.locator('#job-template-approval-rule')).toHaveText('None');
+      await expect(page.locator('#job-template-inventory-rule')).toHaveText(ruleLabel(HOST_RULE));
+    } finally {
+      // Operators may not delete templates; the admin removes the clone again.
+      await asAdmin(browser, testInfo, async (admin) => {
+        await admin.goto(`/job-template/view?id=${cloneId}`);
+        await deleteOpenTemplate(admin);
+      });
+    }
+  });
+
+  test('operator sees before the click that their launch of a template gated through its inventory could never be approved', async ({ page }) => {
+    // e2e-host-solo-rule, the rule of e2e-host-solo-inventory, has e2e-operator as its only approver.
+    const id = await templateId(page, HOST_SOLO_TEMPLATE);
+    const jobsBefore = await jobIdsOfTemplate(page, id);
+    const refusal = approverRefusal(HOST_SOLO_RULE, 1, 0);
+    await page.goto(`/job-template/launch?id=${id}`);
+    await expect(launchRefusal(page)).toHaveText(refusal);
+    await expect(launchRefusal(page)).toHaveAttribute('role', 'alert');
+    await expect(launchApprovalNote(page)).toHaveText(LAUNCH_NOTE_INVENTORY(HOST_SOLO_RULE, HOST_SOLO_INVENTORY));
+    const launch = page.locator('#launch-form button[type="submit"]');
+    await expect(launch).toBeEnabled();
+
+    await launch.click();
+    await expect(flash(page, 'danger')).toHaveText(launchFailed(refusal));
+    await expect(page).toHaveURL(/\/job-template\/launch/);
+    await expect(launchRefusal(page)).toHaveCount(0);
+    // Nothing was written: no job of the template.
+    expect(await jobIdsOfTemplate(page, id)).toEqual(jobsBefore);
+  });
+
+  test('viewer sees the inventory\'s approval rule on a template gated through its inventory, without the locked notice, and may not open its form', async ({ page }) => {
+    const id = await templateId(page, HOST_TEMPLATE);
+    await page.goto(`/job-template/view?id=${id}`);
+    await expect(page.locator('h2').first()).toHaveText(HOST_TEMPLATE);
+    await expect(page.locator('#job-template-approval-rule')).toHaveText('None');
+    // Viewers hold approval-rule.view: the rule is a link.
+    await expect(page.locator('#job-template-inventory-rule a')).toHaveText(ruleLabel(HOST_RULE));
+    await expect(lockedNotice(page)).toHaveCount(0);
+    await expect(page.locator('#page-content').getByRole('link', { name: 'Edit', exact: true })).toHaveCount(0);
+    await expect(page.locator('#page-content form[action*="/job-template/delete"]')).toHaveCount(0);
+
+    await page.goto(`/job-template/update?id=${id}`);
+    await expectForbidden(page);
   });
 });

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\WorkflowRouteStep;
+use app\models\JobTemplate;
 use app\models\WorkflowStep;
 
 /**
@@ -23,9 +24,10 @@ final class WorkflowStepTargetCell
 {
     /**
      * The Target cell of $step, whose model $model has its job template
-     * (with that template's approval rule) and its approval rule loaded:
-     * text and route of the link (route null: no link), and the problem
-     * (null when the step can run).
+     * (with that template's approval rule, its inventory and that
+     * inventory's approval rule) and its approval rule loaded: text and
+     * route of the link (route null: no link), and the problem (null when
+     * the step can run).
      *
      * @return Target
      */
@@ -41,7 +43,8 @@ final class WorkflowStepTargetCell
 
     /**
      * A job step's job template; the relation leaves deleted templates out.
-     * A gated job step whose approval rule no longer exists cannot run.
+     * A gated job step whose approval rule no longer exists cannot run, nor
+     * can one whose job template and inventory have different rules.
      *
      * @return Target
      */
@@ -55,11 +58,33 @@ final class WorkflowStepTargetCell
                 WorkflowStepsTable::TARGET_TEMPLATE_NONE
             ));
         }
-        $problem = $step->problem === WorkflowRouteStep::PROBLEM_APPROVAL_RULE_MISSING
-            ? self::gone((int)$template->approval_rule_id, WorkflowStepsTable::TARGET_RULE_GONE, WorkflowStepsTable::TARGET_RULE_NONE)
-            : null;
 
-        return self::cell((string)$template->name, ['/job-template/view', 'id' => (int)$template->id], $problem);
+        return self::cell(
+            (string)$template->name,
+            ['/job-template/view', 'id' => (int)$template->id],
+            self::gateProblem($step, $template)
+        );
+    }
+
+    /**
+     * Why the gate of the job step $step keeps it from running, from its
+     * job template $template: the gating rule is gone (its ID from the
+     * inventory when the inventory gates the step, else from the job
+     * template), or the job template and its inventory have different
+     * rules. Null when nothing does.
+     */
+    private static function gateProblem(WorkflowRouteStep $step, JobTemplate $template): ?string
+    {
+        if ($step->problem === WorkflowRouteStep::PROBLEM_APPROVAL_RULES_DIFFER) {
+            return WorkflowStepsTable::TARGET_RULES_DIFFER;
+        }
+        if ($step->problem !== WorkflowRouteStep::PROBLEM_APPROVAL_RULE_MISSING) {
+            return null;
+        }
+        $gate = JobTemplateGate::of($template);
+        $ruleId = $step->gatedBy === JobTemplateGate::SOURCE_INVENTORY ? $gate->inventoryRuleId : $gate->templateRuleId;
+
+        return self::gone((int)$ruleId, WorkflowStepsTable::TARGET_RULE_GONE, WorkflowStepsTable::TARGET_RULE_NONE);
     }
 
     /**

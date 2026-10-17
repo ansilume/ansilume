@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services;
 
-use app\models\Inventory;
+use app\models\ApprovalRequest;
 use app\models\Project;
 use app\services\CredentialResolutionException;
+use app\services\JobClaimRefusedException;
 use app\services\JobClaimService;
 use PHPUnit\Framework\TestCase;
 use yii\db\BaseActiveRecord;
@@ -44,6 +45,11 @@ class JobClaimServiceTest extends TestCase
                 private readonly array $scmData,
                 private readonly string $vaultSource,
             ) {
+            }
+
+            protected function checkClaimable(\app\models\Job $job, array $raw): void
+            {
+                // no approval gate in unit tests (no DB)
             }
 
             protected function resolveProjectPath(array $payload): string
@@ -88,6 +94,15 @@ class JobClaimServiceTest extends TestCase
         $service = new class extends JobClaimService {
             public bool $commandStored = false;
 
+            protected function checkClaimable(\app\models\Job $job, array $raw): void
+            {
+            }
+
+            protected function resolveInventory(array $payload): array
+            {
+                return ['type' => 'static', 'content' => "localhost\n", 'path' => null];
+            }
+
             protected function resolveTemplateCredentials(array $raw): array
             {
                 throw CredentialResolutionException::fromFailures([
@@ -110,6 +125,61 @@ class JobClaimServiceTest extends TestCase
         $this->assertFalse($service->commandStored);
     }
 
+    /**
+     * The approval and the inventory are checked before the credentials are
+     * resolved, so a job that must not run fails before any credential is
+     * decrypted (JobClaimGate, JobClaimService::resolveInventory()).
+     */
+    public function testTheClaimChecksTheApprovalThenTheInventoryThenTheCredentials(): void
+    {
+        $service = $this->spyService(null);
+
+        $payload = $service->buildExecutionPayload($this->makeJob(1, ['inventory_id' => 3, 'credential_id' => 5]));
+
+        $this->assertSame(1, $payload['job_id']);
+        $this->assertSame(
+            ['checkClaimable', 'resolveInventory', 'resolveTemplateCredentials', 'resolveProjectPath', 'resolveProjectScm'],
+            $service->calls
+        );
+        $this->assertTrue($service->commandStored);
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: string, 2: list<string>}>
+     */
+    public static function refusingStepProvider(): array
+    {
+        return [
+            'the approval' => ['checkClaimable', JobClaimRefusedException::REASON_NOT_APPROVED, ['checkClaimable']],
+            'the inventory' => [
+                'resolveInventory',
+                JobClaimRefusedException::REASON_INVENTORY_MISSING,
+                ['checkClaimable', 'resolveInventory'],
+            ],
+        ];
+    }
+
+    /**
+     * A refusal of the approval or of the inventory stops the payload before
+     * any credential is resolved, and no command is stored.
+     *
+     * @dataProvider refusingStepProvider
+     * @param list<string> $calls
+     */
+    public function testARefusalStopsThePayloadBeforeAnyCredentialIsResolved(string $refusingStep, string $reason, array $calls): void
+    {
+        $service = $this->spyService($refusingStep);
+
+        try {
+            $service->buildExecutionPayload($this->makeJob(1, ['inventory_id' => 3, 'credential_id' => 5]));
+            $this->fail('expected a JobClaimRefusedException');
+        } catch (JobClaimRefusedException $e) {
+            $this->assertSame($reason, $e->reason);
+        }
+        $this->assertSame($calls, $service->calls, 'nothing after the refusal runs, no credential is resolved');
+        $this->assertFalse($service->commandStored);
+    }
+
     public function testThePayloadCarriesEveryCredentialInOrder(): void
     {
         $primary = ['credential_type' => 'ssh_key', 'username' => 'deploy', 'env_var_name' => null, 'secrets' => ['private_key' => 'k']];
@@ -120,6 +190,10 @@ class JobClaimServiceTest extends TestCase
              * @param array<string, mixed> $token
              */
             public function __construct(private readonly array $primary, private readonly array $token)
+            {
+            }
+
+            protected function checkClaimable(\app\models\Job $job, array $raw): void
             {
             }
 
@@ -442,7 +516,102 @@ class JobClaimServiceTest extends TestCase
         $this->assertSame('ansible-playbook', $ansilume['command'][0]);
     }
 
+    /**
+     * The clock of the claim budget (CLAIM_BUDGET_SECONDS) counts seconds:
+     * counted in milliseconds or nanoseconds, every claim request would stop
+     * after its first failure.
+     */
+    public function testTheClockOfTheClaimBudgetCountsSeconds(): void
+    {
+        $service = new class extends JobClaimService {
+            public function seconds(): float
+            {
+                return $this->now();
+            }
+        };
+
+        $before = $service->seconds();
+        usleep(50000);
+        $elapsed = $service->seconds() - $before;
+
+        $this->assertGreaterThanOrEqual(0.05, $elapsed, '50 ms passed');
+        $this->assertLessThan(5.0, $elapsed, 'counted in seconds');
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * A service that records which steps of the claim ran, in order, and
+     * refuses the job at $refusingStep (checkClaimable or resolveInventory;
+     * null: never).
+     *
+     * @return JobClaimService&object{calls: list<string>, commandStored: bool}
+     */
+    private function spyService(?string $refusingStep): JobClaimService
+    {
+        return new class ($refusingStep) extends JobClaimService {
+            /** @var list<string> */
+            public array $calls = [];
+            public bool $commandStored = false;
+
+            public function __construct(private readonly ?string $refusingStep)
+            {
+            }
+
+            protected function checkClaimable(\app\models\Job $job, array $raw): void
+            {
+                $this->record('checkClaimable');
+            }
+
+            protected function resolveInventory(array $payload): array
+            {
+                $this->record('resolveInventory');
+
+                return ['type' => 'static', 'content' => "web1\n", 'path' => null];
+            }
+
+            protected function resolveTemplateCredentials(array $raw): array
+            {
+                $this->record('resolveTemplateCredentials');
+
+                return ['credential' => null, 'credentials' => []];
+            }
+
+            protected function resolveProjectPath(array $payload): string
+            {
+                $this->record('resolveProjectPath');
+
+                return '/var/projects/1';
+            }
+
+            protected function resolveProjectScm(array $payload): array
+            {
+                $this->record('resolveProjectScm');
+
+                return ['scm_type' => 'manual', 'scm_url' => null, 'scm_branch' => null, 'scm_credential' => null];
+            }
+
+            protected function resolveVaultPasswordSource(array $payload): string
+            {
+                return Project::VAULT_SOURCE_ANSILUME;
+            }
+
+            protected function storeExecutionCommand(\app\models\Job $job, array $command): void
+            {
+                $this->commandStored = true;
+            }
+
+            private function record(string $step): void
+            {
+                $this->calls[] = $step;
+                if ($step === $this->refusingStep) {
+                    throw $step === 'checkClaimable'
+                        ? JobClaimRefusedException::notApproved(4, ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE, 2, null, null)
+                        : JobClaimRefusedException::inventoryMissing(3);
+                }
+            }
+        };
+    }
 
     private function makeJob(int $id, array $rawPayload): \app\models\Job
     {

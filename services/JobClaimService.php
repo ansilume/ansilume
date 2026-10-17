@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\JobInventory;
 use app\components\RunnerCommandBuilder;
 use app\models\Inventory;
 use app\models\Job;
@@ -17,6 +18,19 @@ use yii\base\Component;
  *
  * Uses an optimistic UPDATE … WHERE runner_id IS NULL to ensure only
  * one runner in a group can claim a given job, even under concurrent load.
+ *
+ * A claimed job runs only when it may: a job whose job template or
+ * inventory has an approval rule needs an approval (JobClaimGate), and the
+ * inventory it was launched with must exist and name its hosts
+ * (resolveInventory()). Both are checked before any credential is
+ * decrypted; a job that fails them fails before execution
+ * (JobClaimRefusedException). The runner's payload keys stay the same.
+ *
+ * Once a job it claimed has failed before execution (refused, or with
+ * credentials that cannot be resolved), a claim request claims no further
+ * job after CLAIM_BUDGET_SECONDS, so the effects of failed jobs, which run
+ * within the request, cannot make it hand out a job after its runner gave up
+ * waiting for the answer.
  */
 class JobClaimService extends Component
 {
@@ -24,14 +38,35 @@ class JobClaimService extends Component
     public const MAX_CLAIM_ATTEMPTS = 3;
 
     /**
-     * Claims the next job and builds its payload. A job whose credentials
-     * cannot be resolved is failed with an operator message and the next
-     * one is tried, so a broken job never blocks the queue.
+     * The seconds, counted from the start of a claim request, after which
+     * it claims no further job once it has failed one before execution: it
+     * answers that there is no job, and the runner asks again at its next
+     * poll. The failure's effects run within the request (the job.failure
+     * webhooks, the job.failed notifications, the next step of a workflow),
+     * each up to its endpoint's timeout, while the runner waits 30 seconds
+     * for the answer (RunnerHttpClient). A job claimed after the runner gave
+     * up reached no runner and stayed running: JobReclaimService takes back
+     * only the jobs of a runner that went offline.
+     */
+    public const CLAIM_BUDGET_SECONDS = 10;
+
+    /**
+     * Claims the next job and builds its payload. A job that must not run
+     * (JobClaimRefusedException: it needs an approval it does not have, or
+     * its inventory is gone or names no hosts) or whose credentials cannot
+     * be resolved is failed with an operator message, and the next one is
+     * tried, so a broken job never blocks the queue. Such failures count
+     * toward MAX_CLAIM_ATTEMPTS; job.finished records the refusal's
+     * auditContext(). After such a failure no further job is claimed once
+     * CLAIM_BUDGET_SECONDS have passed since this call began (now()): the
+     * answer is null, and the next poll claims the next job.
      *
-     * @return array<string, mixed>|null null when there is nothing to run
+     * @return array<string, mixed>|null null when there is nothing to run,
+     *     or when the claim request has run out of time after a failure
      */
     public function claimNextPayload(RunnerGroup $group, Runner $runner): ?array
     {
+        $startedAt = $this->now();
         for ($attempt = 0; $attempt < self::MAX_CLAIM_ATTEMPTS; $attempt++) {
             $job = $this->claim($group, $runner);
             if ($job === null) {
@@ -39,14 +74,31 @@ class JobClaimService extends Component
             }
             try {
                 return $this->buildExecutionPayload($job, $runner);
-            } catch (CredentialResolutionException $e) {
+            } catch (CredentialResolutionException | JobClaimRefusedException $e) {
                 /** @var JobCompletionService $completion */
                 $completion = \Yii::$app->get('jobCompletionService');
-                $completion->failBeforeExecution($job, $e->getMessage());
+                $completion->failBeforeExecution(
+                    $job,
+                    $e->getMessage(),
+                    $e instanceof JobClaimRefusedException ? $e->auditContext() : []
+                );
+            }
+            if ($this->now() - $startedAt >= self::CLAIM_BUDGET_SECONDS) {
+                return null;
             }
         }
 
         return null;
+    }
+
+    /**
+     * The time base of CLAIM_BUDGET_SECONDS, in seconds: a monotonic clock,
+     * which a wall clock that is set back or forward does not move. A test
+     * overrides it to let time pass without sleeping.
+     */
+    protected function now(): float
+    {
+        return hrtime(true) / 1000000000;
     }
 
     /**
@@ -137,7 +189,14 @@ class JobClaimService extends Component
      * pinned) for any other runner or when $runner is null. The stored
      * command shows the placeholder instead.
      *
+     * The job's approval (checkClaimable()) and its inventory
+     * (resolveInventory()) are checked first, so a job that must not run
+     * fails before any credential or password answer is decrypted.
+     *
      * @param Runner|null $runner the claiming runner
+     * @throws JobClaimRefusedException when the job needs an approval it does
+     *     not have, or its inventory is gone or names no hosts; nothing is
+     *     decrypted or stored in that case
      * @throws CredentialResolutionException when a credential of the job was
      *     deleted or cannot be decrypted, or its password answers cannot be
      *     decrypted; nothing is stored in that case
@@ -146,7 +205,11 @@ class JobClaimService extends Component
     public function buildExecutionPayload(Job $job, ?Runner $runner = null): array
     {
         $raw = $job->decodedRunnerPayload();
-        // First, so a job with an unusable credential fails before anything else.
+        // The approval and the inventory first: a job that must not run fails
+        // before any credential is decrypted.
+        $this->checkClaimable($job, $raw);
+        $inventory = $this->resolveInventory($raw);
+        // Then the credentials, so a job with an unusable credential fails before anything else.
         $credentials = $this->resolveTemplateCredentials($raw);
         $secrets = JobClaimSecrets::resolve(
             $job,
@@ -158,7 +221,6 @@ class JobClaimService extends Component
         $projectPath = $this->resolveProjectPath($raw);
         $playbookPath = rtrim($projectPath, '/') . '/' . ltrim((string)($raw['playbook'] ?? 'site.yml'), '/');
 
-        $inventory = $this->resolveInventory($raw);
         $scm = $this->resolveProjectScm($raw);
 
         $payload = [
@@ -217,6 +279,20 @@ class JobClaimService extends Component
     }
 
     /**
+     * Refuses a job that needs an approval it does not have (JobClaimGate):
+     * its job template, the inventory it was launched with or the template's
+     * current inventory has an approval rule, and its approval request is
+     * neither approved nor timed out.
+     *
+     * @param array<string, mixed> $raw the job's decoded runner payload
+     * @throws JobClaimRefusedException
+     */
+    protected function checkClaimable(Job $job, #[\SensitiveParameter] array $raw): void
+    {
+        (new JobClaimGate())->check($job, $raw);
+    }
+
+    /**
      * The primary credential and every credential in precedence order
      * (primary first, then the additional ones by position). Elements match
      * the {@see \app\components\CredentialInjector::injectAll()} contract.
@@ -225,7 +301,7 @@ class JobClaimService extends Component
      * @return array{credential: array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}|null, credentials: list<array{credential_type: string, username: string|null, env_var_name: string|null, secrets: array<string, string>}>}
      * @throws CredentialResolutionException
      */
-    protected function resolveTemplateCredentials(array $raw): array
+    protected function resolveTemplateCredentials(#[\SensitiveParameter] array $raw): array
     {
         return $this->credentialResolver()->resolveTemplateCredentials($raw);
     }
@@ -241,7 +317,7 @@ class JobClaimService extends Component
     /**
      * @param array<string, mixed> $payload
      */
-    protected function resolveProjectPath(array $payload): string
+    protected function resolveProjectPath(#[\SensitiveParameter] array $payload): string
     {
         /** @var Project|null $project */
         $project = Project::findOne($payload['project_id'] ?? 0);
@@ -258,7 +334,7 @@ class JobClaimService extends Component
      * }
      * @throws CredentialResolutionException when the SCM credential cannot be decrypted
      */
-    protected function resolveProjectScm(array $payload): array
+    protected function resolveProjectScm(#[\SensitiveParameter] array $payload): array
     {
         /** @var Project|null $project */
         $project = Project::findOne($payload['project_id'] ?? 0);
@@ -284,7 +360,7 @@ class JobClaimService extends Component
      * @param array<string, mixed> $payload
      * @return 'ansilume'|'repository'
      */
-    protected function resolveVaultPasswordSource(array $payload): string
+    protected function resolveVaultPasswordSource(#[\SensitiveParameter] array $payload): string
     {
         /** @var Project|null $project */
         $project = Project::findOne($payload['project_id'] ?? 0);
@@ -294,19 +370,41 @@ class JobClaimService extends Component
     }
 
     /**
-     * @param array<string, mixed> $payload
+     * The hosts of the inventory the job was launched with, as the runner
+     * gets them: a static inventory's content, or the source path of a file
+     * or dynamic one in the project's checkout. It fails closed: a job whose
+     * launch record names no inventory, whose inventory is gone, whose static
+     * inventory has no content or whose file inventory names no source path
+     * is refused, never run against the runner itself. A dynamic inventory
+     * without a source path still runs: its repository names its inventory.
+     *
+     * @param array<string, mixed> $payload the job's decoded runner payload
      * @return array{type: string, content: string|null, path: string|null}
+     * @throws JobClaimRefusedException (REASON_INVENTORY_NOT_RECORDED, _MISSING, _EMPTY, _NO_SOURCE)
      */
-    protected function resolveInventory(array $payload): array
+    protected function resolveInventory(#[\SensitiveParameter] array $payload): array
     {
+        $inventoryId = JobInventory::idOf($payload);
+        if ($inventoryId === null) {
+            throw JobClaimRefusedException::inventoryNotRecorded();
+        }
         /** @var Inventory|null $inventory */
-        $inventory = Inventory::findOne($payload['inventory_id'] ?? 0);
+        $inventory = Inventory::findOne($inventoryId);
         if ($inventory === null) {
-            return ['type' => 'static', 'content' => "localhost\n", 'path' => null];
+            throw JobClaimRefusedException::inventoryMissing($inventoryId);
         }
         if ($inventory->inventory_type === Inventory::TYPE_STATIC) {
-            return ['type' => 'static', 'content' => $inventory->content ?? "localhost\n", 'path' => null];
+            $content = (string)$inventory->content;
+            if (trim($content) === '') {
+                throw JobClaimRefusedException::inventoryEmpty($inventory);
+            }
+
+            return ['type' => 'static', 'content' => $content, 'path' => null];
         }
+        if ($inventory->inventory_type === Inventory::TYPE_FILE && trim((string)$inventory->source_path) === '') {
+            throw JobClaimRefusedException::inventoryWithoutSource($inventory);
+        }
+
         return ['type' => 'file', 'content' => null, 'path' => $inventory->source_path];
     }
 }

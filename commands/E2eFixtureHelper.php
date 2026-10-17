@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\models\ApprovalRule;
 use app\models\Credential;
 use app\models\Inventory;
 use app\models\JobTemplate;
@@ -132,6 +133,31 @@ final class E2eFixtureHelper
         $inventory->save(false);
 
         return $inventory;
+    }
+
+    /**
+     * An approval rule of the users $approverIds that needs
+     * $requiredApprovals approvals and rejects on its timeout (null: never
+     * times out), restored by name: a rule an earlier seed or a spec changed
+     * gets these settings again.
+     *
+     * @param list<int> $approverIds
+     */
+    public static function approvalRule(string $name, int $userId, array $approverIds, int $requiredApprovals, ?int $timeoutMinutes): ApprovalRule
+    {
+        $rule = ApprovalRule::findOne(['name' => $name]) ?? new ApprovalRule();
+        $rule->name = $name;
+        $rule->description = 'E2E approval rule';
+        $rule->job_template_id = null;
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $rule->approver_config = (string)json_encode(['user_ids' => $approverIds]);
+        $rule->required_approvals = $requiredApprovals;
+        $rule->timeout_minutes = $timeoutMinutes;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = $userId;
+        $rule->save(false);
+
+        return $rule;
     }
 
     /**

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services\runstate;
 
+use app\components\JobInventory;
 use app\models\ApprovalRequest;
 use app\models\Job;
 use app\models\JobTemplate;
@@ -17,7 +18,9 @@ use yii\db\Query;
 /**
  * What approval requests are for and where jobs come from (component
  * approvalRequestContexts): the workflow run and step a job was created for,
- * else its job template.
+ * else its job template; for a request also what required it
+ * (ApprovalRequest::requiredBy()) and the inventory its job was launched
+ * with (JobInventory, from the job's runner payload).
  *
  * The workflow, its run and the step are set only when the viewer may view
  * that workflow (team scoping, one batched query through
@@ -29,11 +32,12 @@ use yii\db\Query;
  * workflow-template.view) are for the pages to check.
  *
  * Callers pass requests and jobs the viewer may see. The cost does not grow
- * with their number: forRequests() reads the jobs' templates (one query),
- * the step executions with their runs, workflows and steps (four queries,
- * one when no job belongs to a workflow) and, for a viewer restricted by
- * team scoping, which of those workflows they may view (one query, after
- * the access checker's own lookups).
+ * with their number: forRequests() reads the jobs' templates and runner
+ * payloads (one query), the inventories those payloads name (one query, none
+ * when no payload names an inventory), the step executions with their runs,
+ * workflows and steps (four queries, one when no job belongs to a workflow)
+ * and, for a viewer restricted by team scoping, which of those workflows
+ * they may view (one query, after the access checker's own lookups).
  */
 class ApprovalRequestContexts extends Component
 {
@@ -61,7 +65,7 @@ class ApprovalRequestContexts extends Component
         foreach ($requests as $request) {
             $jobId = (int)$request->job_id;
             $contexts[(int)$request->id] = self::requestContext(
-                (int)$request->id,
+                $request,
                 $templates[$jobId] ?? null,
                 $executions[$jobId] ?? null,
                 $origins[$jobId] ?? null
@@ -93,11 +97,12 @@ class ApprovalRequestContexts extends Component
     }
 
     /**
-     * @param array{template_id: int|null, template_name: string|null, template_deleted: bool}|null $template
-     *     the template of the request's job; null when the job no longer exists
+     * @param array{template_id: int|null, template_name: string|null, template_deleted: bool, inventory: JobInventory}|null $template
+     *     the template of the request's job and the inventory it was launched with; null when the job no
+     *     longer exists
      */
     private static function requestContext(
-        int $requestId,
+        ApprovalRequest $request,
         ?array $template,
         ?WorkflowJobStep $execution,
         ?WorkflowOrigin $origin
@@ -108,12 +113,14 @@ class ApprovalRequestContexts extends Component
             && ($execution === null || !$execution->isApprovalPlaceholder());
 
         return new RequestContext(
-            $requestId,
+            (int)$request->id,
             $origin,
             $templateId,
             $template['template_name'] ?? null,
             $purged || ($template['template_deleted'] ?? false),
-            $origin !== null
+            $origin !== null,
+            $request->requiredBy(),
+            $template['inventory'] ?? JobInventory::none()
         );
     }
 
@@ -121,11 +128,18 @@ class ApprovalRequestContexts extends Component
      * The job template of each job, by job ID, in one query: its ID (null
      * when the job has none: the placeholder of an approval step, or a job
      * whose template was purged), its name, and whether it is deleted
-     * (soft-deleted, or its row is gone). A job that no longer exists is
+     * (soft-deleted, or its row is gone). With it the inventory the job was
+     * launched with, as its runner payload records it (JobInventory): one
+     * JobInventory::ofPayloads() for all jobs, which costs one more query
+     * only when a payload names an inventory. A job that no longer exists is
      * left out.
      *
+     * The payloads hold the launch's extra vars with their survey answers:
+     * they stay in this method and go to JobInventory only, whose
+     * parameters are marked #[\SensitiveParameter].
+     *
      * @param list<int> $jobIds
-     * @return array<int, array{template_id: int|null, template_name: string|null, template_deleted: bool}>
+     * @return array<int, array{template_id: int|null, template_name: string|null, template_deleted: bool, inventory: JobInventory}>
      */
     private function templatesOfJobs(array $jobIds): array
     {
@@ -134,7 +148,8 @@ class ApprovalRequestContexts extends Component
          *     job_id: int|string,
          *     template_id: int|string|null,
          *     template_name: string|null,
-         *     deleted_at: int|string|null
+         *     deleted_at: int|string|null,
+         *     runner_payload: string|null
          * }> $rows
          */
         $rows = (new Query())
@@ -143,20 +158,30 @@ class ApprovalRequestContexts extends Component
                 'template_id' => 'j.job_template_id',
                 'template_name' => 'jt.name',
                 'deleted_at' => 'jt.deleted_at',
+                'runner_payload' => 'j.runner_payload',
             ])
             ->from(['j' => Job::tableName()])
             ->leftJoin(['jt' => JobTemplate::tableName()], 'jt.id = j.job_template_id')
             ->where(['j.id' => $jobIds])
             ->all();
 
+        $payloads = [];
+        foreach ($rows as $row) {
+            $payload = json_decode((string)$row['runner_payload'], true);
+            $payloads[(int)$row['job_id']] = is_array($payload) ? $payload : [];
+        }
+        $inventories = JobInventory::ofPayloads($payloads);
+
         $templates = [];
         foreach ($rows as $row) {
+            $jobId = (int)$row['job_id'];
             $templateId = $row['template_id'] === null ? null : (int)$row['template_id'];
-            $templates[(int)$row['job_id']] = [
+            $templates[$jobId] = [
                 'template_id' => $templateId,
                 'template_name' => $row['template_name'],
                 'template_deleted' => $templateId !== null
                     && ($row['template_name'] === null || $row['deleted_at'] !== null),
+                'inventory' => $inventories[$jobId],
             ];
         }
 

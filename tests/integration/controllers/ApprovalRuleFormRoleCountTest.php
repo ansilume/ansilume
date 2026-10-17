@@ -13,18 +13,23 @@ use yii\rbac\DbManager;
 
 /**
  * The approval rule form warns when a rule needs more approvals than it has
- * approvers (#approver-count-warning, which its script fills from
- * roleCounts). For a role rule it counts the rule's candidates as the server
- * reads them, as far as the form can know them: the users assigned the role
- * directly (ApprovalRule::resolveRoleIds()) whose account is active, the
- * only accounts ApproverFilter lets decide. An inactive user, a user who
- * holds the role only through another role, and an assignment of a user that
- * no longer exists do not count; a role without such users counts 0. All
- * roles cost one query.
+ * approvers who may decide, and when none of them may
+ * (#approver-count-warning, which its script fills from roleCounts,
+ * teamCounts and the users' data-eligible). The controller counts them
+ * (ApproverCounts), as far as the form can know them: of a role rule's
+ * candidates (the users assigned the role directly,
+ * ApprovalRule::resolveRoleIds()), a team rule's (the team's members) and a
+ * users rule's (the users chosen), those whom ApproverFilter lets decide: an
+ * active account, and a superadmin or holding approval.decide. An inactive
+ * user, a user without approval.decide, a user who holds the role only
+ * through another role, and an assignment of a user that no longer exists do
+ * not count; a role or team without such users counts 0. All roles and all
+ * teams cost a constant number of queries.
  *
- * Whether those users hold approval.decide and may see the job (it depends
- * on what the rule gates) the count leaves out, and the launcher never
- * approves (ApprovalRule::LAUNCHER_NOTE).
+ * Whether those users may see the job (it depends on what the rule gates)
+ * the counts leave out, and the launcher never approves
+ * (ApprovalRule::LAUNCHER_NOTE): a count is the most a launch can find, not
+ * the number of users who can approve one.
  */
 class ApprovalRuleFormRoleCountTest extends WebControllerTestCase
 {
@@ -44,7 +49,8 @@ class ApprovalRuleFormRoleCountTest extends WebControllerTestCase
     public function testRegressionARoleCountsTheActiveUsersAssignedItDirectly(): void
     {
         $admin = $this->signedInAdmin();
-        $roles = ['counted' => $this->freshRole('counted'), 'dormant' => $this->freshRole('dormant'), 'empty' => $this->freshRole('empty')];
+        // Its holders hold approval.decide, so that activity alone decides here.
+        $roles = ['counted' => $this->deciding($this->freshRole('counted')), 'dormant' => $this->freshRole('dormant'), 'empty' => $this->freshRole('empty')];
         $roles['wrapper'] = $this->freshRole('wrapper', $roles['counted']);
         $this->createUserWithRole('rule-count-active-a', $roles['counted']);
         $this->createUserWithRole('rule-count-active-b', $roles['counted']);
@@ -84,6 +90,107 @@ class ApprovalRuleFormRoleCountTest extends WebControllerTestCase
         $this->formPage('/approval-rule/create', null);
 
         $this->assertSame($few, $this->queriesOf(fn (): string => $this->formPage('/approval-rule/create', null)));
+    }
+
+    /**
+     * regression: a role rule counted every active user assigned the role
+     * directly, also those who may not decide: without approval.decide and
+     * the superadmin flag they never approve, so a rule of such a role got
+     * no warning although no launch it gates could ever be approved. Only
+     * those who may decide count: here the superadmin. Fails on the form
+     * from before, which counted 3.
+     */
+    public function testRegressionARoleCountedDirectHoldersWhoCannotDecide(): void
+    {
+        $admin = $this->signedInAdmin();
+        $role = $this->freshRole('without-decide');
+        $this->createUserWithRole('rule-count-no-decide-a', $role);
+        $this->createUserWithRole('rule-count-no-decide-b', $role);
+        $this->assignRole((int)$this->superadmin('rule-count-no-decide-superadmin')->id, $role);
+        $rule = $this->createApprovalRule((int)$admin->id, ApprovalRule::APPROVER_TYPE_ROLE, (string)json_encode(['role' => $role]));
+
+        foreach ($this->formPages((int)$rule->id) as $url => $html) {
+            $this->assertSame(1, $this->roleCountsOf($html)[$role] ?? null, $url);
+        }
+    }
+
+    /**
+     * regression: a team rule counted every member of the team, also
+     * inactive members and members who may not decide, so a rule of such a
+     * team got no warning although its launches could never be approved.
+     * Only the members who may decide count: here the operator and the
+     * superadmin without roles; a team without members counts 0. Fails on
+     * the form from before, which counted 5.
+     */
+    public function testRegressionATeamRuleCountedMembersWhoCannotDecide(): void
+    {
+        $admin = $this->signedInAdmin();
+        $team = (int)$this->createTeam((int)$admin->id)->id;
+        $empty = (int)$this->createTeam((int)$admin->id)->id;
+        foreach (
+            [
+                $this->createUserWithRole('rule-count-team-operator', 'operator'),
+                $this->createUserWithRole('rule-count-team-viewer', 'viewer'),
+                $this->inactiveUserWithRole('rule-count-team-inactive', 'operator'),
+                $this->superadmin('rule-count-team-superadmin'),
+                $this->createUser('rule-count-team-plain'),
+            ] as $member
+        ) {
+            $this->addTeamMember($team, (int)$member->id);
+        }
+        $rule = $this->createApprovalRule((int)$admin->id, ApprovalRule::APPROVER_TYPE_TEAM, (string)json_encode(['team_id' => $team]));
+
+        foreach ($this->formPages((int)$rule->id) as $url => $html) {
+            $counts = $this->scriptValueOf($html, 'teamCounts');
+            $this->assertSame([2, 0], [$counts[$team] ?? null, $counts[$empty] ?? null], $url);
+        }
+    }
+
+    /**
+     * regression: the form counted the members of each team with a query of
+     * its own. All teams cost a constant number of queries now, so the form
+     * costs as much with 10 teams more as with 3. Fails on the form from
+     * before, which cost 10 queries more.
+     */
+    public function testRegressionTheTeamCountsCostTheSameHoweverManyTeams(): void
+    {
+        $admin = $this->signedInAdmin();
+        $this->teamsWithAMember((int)$admin->id, 3);
+        $this->formPage('/approval-rule/create', null);
+        $few = $this->queriesOf(fn (): string => $this->formPage('/approval-rule/create', null));
+
+        $this->teamsWithAMember((int)$admin->id, 10);
+        $this->formPage('/approval-rule/create', null);
+
+        $this->assertSame($few, $this->queriesOf(fn (): string => $this->formPage('/approval-rule/create', null)));
+    }
+
+    /**
+     * regression: a users rule counted every user chosen, also users who
+     * may not decide. Each option of the users list now says whether its
+     * user may decide (data-eligible "1" or "0"), and the script counts only
+     * the eligible ones. Fails on the form from before, whose options said
+     * nothing.
+     */
+    public function testRegressionAUsersRuleCountedUsersWhoCannotDecide(): void
+    {
+        $admin = $this->signedInAdmin();
+        $users = [
+            '1' => [$admin, $this->createUserWithRole('rule-count-users-operator', 'operator'), $this->superadmin('rule-count-users-superadmin')],
+            '0' => [$this->createUserWithRole('rule-count-users-viewer', 'viewer'), $this->createUser('rule-count-users-plain')],
+        ];
+        $chosen = [(int)$users['0'][0]->id, (int)$users['0'][1]->id];
+        $rule = $this->createApprovalRule((int)$admin->id, ApprovalRule::APPROVER_TYPE_USERS, (string)json_encode(['user_ids' => $chosen]));
+
+        foreach ($this->formPages((int)$rule->id) as $url => $html) {
+            $eligible = $this->eligibilityOf($html);
+            foreach ($users as $expected => $group) {
+                foreach ($group as $user) {
+                    $this->assertSame((string)$expected, $eligible[(int)$user->id] ?? null, "{$url}: {$user->username}");
+                }
+            }
+            $this->assertNotContains(null, $eligible, "{$url}: every option says it");
+        }
     }
 
     /**
@@ -133,12 +240,81 @@ class ApprovalRuleFormRoleCountTest extends WebControllerTestCase
      */
     private function roleCountsOf(string $html): array
     {
-        $this->assertSame(1, preg_match('/^[ \t]*var roleCounts = (.*);$/m', $html, $match), 'the page has the line var roleCounts = ...;');
-        $counts = json_decode($match[1], true);
-        $this->assertIsArray($counts, $match[1]);
-
         /** @var array<string, int> $counts */
+        $counts = $this->scriptValueOf($html, 'roleCounts');
+
         return $counts;
+    }
+
+    /**
+     * The value of the script's line "var $name = <JSON>;", decoded.
+     *
+     * @return array<array-key, mixed>
+     */
+    private function scriptValueOf(string $html, string $name): array
+    {
+        $this->assertSame(1, preg_match('/^[ \t]*var ' . preg_quote($name, '/') . ' = (.*);$/m', $html, $match), "the page has the line var {$name} = ...;");
+        $value = json_decode($match[1], true);
+        $this->assertIsArray($value, $match[1]);
+
+        return $value;
+    }
+
+    /**
+     * The data-eligible of each option of the users list, by user ID; null
+     * for an option without it.
+     *
+     * @return array<int, string|null>
+     */
+    private function eligibilityOf(string $html): array
+    {
+        $this->assertSame(1, preg_match('#<select id="approver-users"[^>]*>(.*?)</select>#s', $html, $list), 'the page has the users list');
+        preg_match_all('#<option value="(\d+)"([^>]*)>#', $list[1], $options, PREG_SET_ORDER);
+        $this->assertNotSame([], $options, 'the list offers users');
+        $eligible = [];
+        foreach ($options as $option) {
+            $eligible[(int)$option[1]] = preg_match('/\sdata-eligible="([^"]*)"/', $option[2], $attribute) === 1 ? $attribute[1] : null;
+        }
+
+        return $eligible;
+    }
+
+    /**
+     * $count new teams, each with a new operator as its member.
+     */
+    private function teamsWithAMember(int $createdBy, int $count): void
+    {
+        for ($i = 0; $i < $count; $i++) {
+            $team = $this->createTeam($createdBy);
+            $this->addTeamMember((int)$team->id, (int)$this->createUserWithRole('rule-count-team-cost', 'operator')->id);
+        }
+    }
+
+    /**
+     * $role with approval.decide as a child: its holders may decide.
+     */
+    private function deciding(string $role): string
+    {
+        $auth = $this->auth();
+        $item = $auth->getRole($role);
+        $this->assertNotNull($item, $role);
+        $permission = $auth->getPermission('approval.decide');
+        $this->assertNotNull($permission);
+        $auth->addChild($item, $permission);
+
+        return $role;
+    }
+
+    /**
+     * An active superadmin without roles: may decide.
+     */
+    private function superadmin(string $suffix): User
+    {
+        $user = $this->createUser($suffix);
+        $user->is_superadmin = true;
+        $this->assertTrue($user->save(false));
+
+        return $user;
     }
 
     /**

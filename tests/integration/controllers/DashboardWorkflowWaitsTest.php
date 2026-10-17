@@ -21,6 +21,7 @@ use app\services\runstate\Viewer;
 use app\tests\integration\CountsQueries;
 use app\tests\integration\services\runstate\RunStateFixtures;
 use app\tests\integration\TeamScopeFixtures;
+use yii\helpers\Html;
 
 /**
  * The dashboard says what running workflows wait for and what pending
@@ -28,7 +29,9 @@ use app\tests\integration\TeamScopeFixtures;
  * request contexts (ApprovalRequestContexts) derive them, with the real
  * services. Durations read in two units, never as a clock time. A workflow
  * is named only to a user who may view it, and the dashboard reads all of
- * this in a number of queries that does not grow with the runs.
+ * this in a number of queries that does not grow with the runs. The Rule
+ * cell of a pending request that the inventory of its job required names
+ * that inventory (2.12.0).
  */
 class DashboardWorkflowWaitsTest extends WebControllerTestCase
 {
@@ -37,6 +40,7 @@ class DashboardWorkflowWaitsTest extends WebControllerTestCase
     use WaitingRunFixtures;
     use CountsQueries;
     use RendersRealViews;
+    use InventoryRequestFixtures;
 
     /**
      * regression: the dashboard flagged pauses but not approval waits: a run
@@ -361,7 +365,108 @@ class DashboardWorkflowWaitsTest extends WebControllerTestCase
         $this->assertSame((int)$admin->id, $params['viewer']->userId);
     }
 
+    // -- What required a pending request (2.12.0) --------------------------------------
+
+    /**
+     * The Rule cell of Pending Approvals names the inventory of a request
+     * that the inventory of its job required, by the inventory's name at
+     * launch, as the approval list does; a request that its job template's
+     * own rule required shows the rule alone. Headers and columns stay.
+     */
+    public function testPendingApprovalsNameTheInventoryOfARequestThatTheInventoryRequired(): void
+    {
+        $admin = $this->createUserWithRole('dash-inventory', 'admin');
+        $launcher = $this->createUserWithRole('dash-inventory-launcher', 'operator');
+        $rule = $this->ruleNamed($admin, 'Change board');
+        $byInventory = $this->inventoryGatedRequest($launcher, $rule, 'web-prod');
+        $byTemplate = $this->templateGatedRequest($launcher, $rule, 'db-prod');
+        $byInventory['inventory']->name = 'web-prod-renamed';
+        $byInventory['inventory']->save(false);
+
+        $xpath = $this->xpathOf($this->dashboardPage($admin));
+
+        $card = '//div[@id="dashboard-pending-approvals"]';
+        $headers = [];
+        foreach ($xpath->query($card . '//thead//th') ?: [] as $th) {
+            $headers[] = self::textOf($th);
+        }
+        $this->assertSame(['Rule', 'For', 'Job', 'Requested', 'Expires', ''], $headers);
+        $inventoryRow = $this->elementAt($xpath, sprintf('%s//tr[@data-request-id="%d"]', $card, $byInventory['request']->id));
+        $this->assertSame(
+            ['Change board (of inventory web-prod)', sprintf(Texts::FOR_JOB_TEMPLATE, $byInventory['template']->name), '#' . $byInventory['job']->id],
+            array_slice(self::cellsOf($inventoryRow), 0, 3)
+        );
+        $this->assertSame(sprintf(Texts::RULE_OF_INVENTORY, 'Change board', 'web-prod'), $this->pendingRuleCell($xpath, $byInventory['request']->id));
+        $this->assertSame('Change board', $this->pendingRuleCell($xpath, $byTemplate['request']->id), 'the job template required it');
+    }
+
+    public function testTheRuleCellOfPendingApprovalsIsEncoded(): void
+    {
+        $evil = '<img src=x onerror=alert(1)> "q" \'a\'';
+        $admin = $this->createUserWithRole('dash-encoded', 'admin');
+        $launcher = $this->createUserWithRole('dash-encoded-launcher', 'operator');
+        $wait = $this->inventoryGatedRequest($launcher, $this->ruleNamed($admin, $evil . ' rule'), $evil);
+
+        $html = $this->dashboardPage($admin);
+
+        $this->assertStringNotContainsString('<img src=x', $html);
+        $this->assertStringContainsString(
+            '<td data-approval-rule>' . Html::encode(sprintf(Texts::RULE_OF_INVENTORY, $evil . ' rule', $evil)) . '</td>',
+            $html
+        );
+        $this->assertSame(sprintf(Texts::RULE_OF_INVENTORY, $evil . ' rule', $evil), $this->pendingRuleCell($this->xpathOf($html), $wait['request']->id));
+    }
+
+    /**
+     * The inventories of the pending requests are read at once: the
+     * dashboard costs as many queries with 12 requests whose jobs were
+     * launched with 12 inventories as with 2, for an admin and for a team
+     * member.
+     */
+    public function testTheDashboardReadsTheInventoriesOfPendingRequestsInAConstantNumberOfQueries(): void
+    {
+        $s = $this->teamScope();
+        $rule = $this->ruleOf((int)$s['admin']->id, [$s['member'], $s['admin']]);
+        $projectId = (int)$s['own']->project_id;
+        $this->inventoryAndTemplateRequests($s['admin'], $rule, $projectId, 1);
+        $before = [];
+        foreach (['admin', 'member'] as $key) {
+            $this->dashboardPage($s[$key]);
+            $before[$key] = $this->queriesOf(fn (): string => $this->dashboardPage($s[$key]));
+        }
+
+        $this->inventoryAndTemplateRequests($s['admin'], $rule, $projectId, 5);
+
+        foreach (['admin', 'member'] as $key) {
+            $html = '';
+            $this->assertSame($before[$key], $this->queriesOf(function () use (&$html, $s, $key): void {
+                $html = $this->dashboardPage($s[$key]);
+            }), $key);
+            $this->assertStringContainsString(' (of inventory cost-', $html, $key . ': the inventory requests name their inventories');
+        }
+    }
+
     // -- Helpers ----------------------------------------------------------------------
+
+    private function ruleNamed(User $admin, string $name): ApprovalRule
+    {
+        $rule = $this->ruleOf((int)$admin->id, [$admin]);
+        $rule->name = $name;
+        $rule->save(false);
+
+        return $rule;
+    }
+
+    /**
+     * The text of the Rule cell of request #$requestId on the dashboard's
+     * Pending Approvals.
+     */
+    private function pendingRuleCell(\DOMXPath $xpath, int $requestId): string
+    {
+        $path = sprintf('//div[@id="dashboard-pending-approvals"]//tr[@data-request-id="%d"]/td[@data-approval-rule]', $requestId);
+
+        return self::textOf($this->elementAt($xpath, $path));
+    }
 
     /**
      * $rounds times: a run of a workflow the member may view at an approval

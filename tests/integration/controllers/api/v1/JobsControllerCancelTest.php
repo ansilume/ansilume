@@ -13,6 +13,7 @@ use app\models\User;
 use app\services\JobCancellationService;
 use app\services\WorkflowAccessChecker;
 use app\tests\integration\controllers\WebControllerTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\CancellationFixtures;
 use app\tests\integration\TeamScopeFixtures;
 
@@ -28,15 +29,16 @@ class JobsControllerCancelTest extends WebControllerTestCase
 {
     use TeamScopeFixtures;
     use CancellationFixtures;
+    use RestoresComponents;
 
     private User $operator;
-    private mixed $originalChecker = null;
 
     protected function setUp(): void
     {
         parent::setUp();
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('workflowAccessChecker');
         $this->recordNotifications();
-        $this->originalChecker = \Yii::$app->getComponents(true)['workflowAccessChecker'] ?? null;
         $this->operator = $this->createUserWithRole('cancel-api', 'operator');
         ['raw' => $raw] = ApiToken::generate((int)$this->operator->id, 'cancel-api');
         \Yii::$app->request->headers->set('Authorization', 'Bearer ' . $raw);
@@ -47,7 +49,7 @@ class JobsControllerCancelTest extends WebControllerTestCase
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('workflowAccessChecker', $this->originalChecker);
+        $this->restoreComponents();
         $this->restoreNotifications();
         parent::tearDown();
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\JobInventory;
 use app\components\JobTemplateWarnings;
 use app\models\AuditLog;
 use app\models\Job;
@@ -33,6 +34,14 @@ use yii\web\NotFoundHttpException;
  * The detail, the launch and the cancel answer a JobDetail, which links the
  * job to its approval request and to the workflow run and step execution
  * it was created for, as far as the caller may see them (serializeJob()).
+ *
+ * Every job names the inventory it was launched with, as its runner payload
+ * records it (JobInventory): inventory_id, and inventory_name, its name at
+ * launch (for jobs launched before 2.12.0 its current name). Both stay when
+ * the template moves to another inventory or the inventory is renamed or
+ * deleted; both are null for a job launched without one, such as the
+ * placeholder of a workflow approval step, and the name is null when it is
+ * unknown.
  */
 class JobsController extends BaseApiController
 {
@@ -66,7 +75,9 @@ class JobsController extends BaseApiController
 
     /**
      * The jobs the caller may see, newest first. Their artifacts are counted
-     * in one query for the page, not one per job.
+     * in one query for the page, not one per job, and the inventories they
+     * were launched with are read in one query for the page
+     * (JobInventory::ofPayloads()), none when no job names one.
      *
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
@@ -88,12 +99,21 @@ class JobsController extends BaseApiController
             'artifacts',
             'job_id'
         ));
+        // The payloads carry the launch's survey answers: they go to JobInventory only.
+        $payloads = [];
+        foreach ($jobs as $job) {
+            $payloads[(int)$job->id] = $job->decodedRunnerPayload();
+        }
+        $inventories = JobInventory::ofPayloads($payloads);
         $total = $dp->totalCount;
         $page = $this->requestedPage();
         $per = 25;
 
         return $this->paginated(
-            array_map(fn (Job $j) => $this->serializeJob($j, false, $artifactCounts[(int)$j->id] ?? 0), $jobs),
+            array_map(
+                fn (Job $j) => $this->serializeJob($j, false, $artifactCounts[(int)$j->id] ?? 0, $inventories[(int)$j->id]),
+                $jobs
+            ),
             (int)$total,
             $page,
             $per
@@ -436,16 +456,19 @@ class JobsController extends BaseApiController
      * (ApprovalRequestContexts::forJob()). Single-job responses only, so the
      * list needs no extra queries. $artifactCount: the job's artifacts as the
      * list counted them for all its jobs at once; null counts them here.
+     * $inventory: the inventory the job was launched with, as the list read
+     * it for all its jobs at once; null reads it here (JobInventory::ofJob()).
      *
      * @return array<string, mixed>
      */
-    private function serializeJob(Job $job, bool $detail = false, ?int $artifactCount = null): array
+    private function serializeJob(Job $job, bool $detail = false, ?int $artifactCount = null, ?JobInventory $inventory = null): array
     {
         $data = [
             'id' => $job->id,
             'status' => $job->status,
             'job_template_id' => $job->job_template_id,
             'template_name' => $job->jobTemplate->name ?? null,
+        ] + ($inventory ?? JobInventory::ofJob($job))->apiFields() + [
             'launched_by' => $job->launcher->username ?? null,
             'extra_vars' => $job->extra_vars ? json_decode($job->extra_vars, true) : null,
             'limit' => $job->limit,

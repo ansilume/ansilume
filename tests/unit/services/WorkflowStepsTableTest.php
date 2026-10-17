@@ -46,6 +46,8 @@ class WorkflowStepsTableTest extends TestCase
                 'UNREACHABLE_TITLE' => 'No branch that a run takes leads to this step, so runs never start it.',
                 'GATED_BADGE' => 'needs approval',
                 'GATED_TITLE' => 'Its job template has the approval rule "%s": the job waits for an approval before it runs.',
+                'GATED_INVENTORY_TITLE' => 'Its job template\'s inventory has the approval rule "%s": the job waits for an approval '
+                    . 'before it runs.',
                 'STEP_LABEL' => '%1$d. %2$s',
                 'STEP_REFERENCE' => 'step %1$d "%2$s"',
                 'APPROVAL_STEP_SUFFIX' => ' (approval step)',
@@ -80,6 +82,7 @@ class WorkflowStepsTableTest extends TestCase
                 'TARGET_TEMPLATE_NONE' => 'no job template · runs fail here',
                 'TARGET_RULE_GONE' => 'approval rule ID %d no longer exists · runs fail here',
                 'TARGET_RULE_NONE' => 'no approval rule · runs fail here',
+                'TARGET_RULES_DIFFER' => 'job template and inventory have different approval rules · runs fail here',
                 'TARGET_UNKNOWN_TYPE' => 'unknown step type · runs fail here',
                 'SUCCESS_PATH_LABEL' => 'Success path:',
                 'SUCCESS_PATH_SEPARATOR' => ' → ',
@@ -273,6 +276,20 @@ class WorkflowStepsTableTest extends TestCase
         $this->assertCells($expected, self::job(self::S, 'S', $routes, 'Change board'));
     }
 
+    /**
+     * A job step gated by the rule of its job template's inventory (C15)
+     * routes as any gated job step: a refused approval follows only On
+     * Failure, and Always only after its job ran.
+     *
+     * @dataProvider gatedJobStepProvider
+     * @param array{success?: int|null, failure?: int|null, always?: int|null} $routes
+     * @param array<string, array{0: string, 1: string, 2: list<string|null>}> $expected
+     */
+    public function testAJobStepGatedByItsInventoryRoutesAsAGatedJobStep(array $routes, array $expected): void
+    {
+        $this->assertCells($expected, self::job(self::S, 'S', $routes, null, 'Prod hosts'));
+    }
+
     public function testAGatedLastStepsEmptyOnFailureEndsTheRunEitherWay(): void
     {
         $table = self::table([self::job(self::P, 'P'), self::job(self::S, 'Last', [], 'Change board')]);
@@ -390,6 +407,7 @@ class WorkflowStepsTableTest extends TestCase
         $gatedGone->name = 'gated-template';
         $gatedGone->approval_rule_id = 66;
         $gatedGone->populateRelation('approvalRule', null);
+        $gatedGone->populateRelation('inventory', null);
         $table = self::table([
             self::job(1, 'job'),
             self::approval(2, 'approval'),
@@ -457,6 +475,66 @@ class WorkflowStepsTableTest extends TestCase
             array_column($rows, 'gatedTitle')
         );
         $this->assertSame([null, '2 run(s) waiting', null], array_column($rows, 'waiting'));
+    }
+
+    /**
+     * The badge of a job step gated by its inventory names the inventory's
+     * rule (GATED_INVENTORY_TITLE). A step whose job template has a rule of
+     * its own is named by that rule, also when its inventory has the same
+     * one. A step whose job template and inventory have different rules
+     * cannot run (TARGET_RULES_DIFFER), and the badge says so; one whose
+     * inventory names a rule that is gone names that rule's ID.
+     */
+    public function testTheBadgeAndTargetOfAJobStepGatedByItsInventory(): void
+    {
+        $same = self::job(4, 'Same', [], 'Board');
+        $sameTemplate = $same->jobTemplate;
+        $this->assertNotNull($sameTemplate);
+        $sameTemplate->inventory->setAttribute('approval_rule_id', 304);
+        $sameTemplate->inventory->populateRelation('approvalRule', $sameTemplate->approvalRule);
+        $gone = self::job(5, 'Gone');
+        $goneTemplate = $gone->jobTemplate;
+        $this->assertNotNull($goneTemplate);
+        $goneTemplate->inventory->setAttribute('approval_rule_id', 77);
+        $ownGone = self::job(6, 'Own gone', [], 'Board', 'Prod hosts');
+        $ownGoneTemplate = $ownGone->jobTemplate;
+        $this->assertNotNull($ownGoneTemplate);
+        $ownGoneTemplate->populateRelation('approvalRule', null);
+        $table = self::table([
+            self::job(1, 'Inventory', [], null, 'Prod hosts'),
+            self::job(2, 'Own', [], 'Board'),
+            self::job(3, 'Differ', [], 'Board', 'Prod hosts'),
+            $same,
+            $gone,
+            $ownGone,
+        ]);
+
+        $rows = $table->rows();
+
+        $this->assertSame(
+            [
+                sprintf(WorkflowStepsTable::GATED_INVENTORY_TITLE, 'Prod hosts'),
+                sprintf(WorkflowStepsTable::GATED_TITLE, 'Board'),
+                WorkflowStepsTable::TARGET_RULES_DIFFER,
+                sprintf(WorkflowStepsTable::GATED_TITLE, 'Board'),
+                'approval rule ID 77 no longer exists · runs fail here',
+                WorkflowStepsTable::TARGET_RULES_DIFFER,
+            ],
+            array_column($rows, 'gatedTitle')
+        );
+        $this->assertSame(
+            [null, null, WorkflowStepsTable::TARGET_RULES_DIFFER, null, 'approval rule ID 77 no longer exists · runs fail here', WorkflowStepsTable::TARGET_RULES_DIFFER],
+            array_map(static fn (array $row): ?string => $row['target']['problem'], $rows)
+        );
+        $this->assertSame(
+            ['template-Inventory', 'template-Own', 'template-Differ', 'template-Same', 'template-Gone', 'template-Own gone'],
+            array_map(static fn (array $row): string => $row['target']['text'], $rows),
+            'the Target cell links the job template'
+        );
+        $unused = ['unused', '—', [WorkflowStepsTable::CANNOT_RUN_TITLE]];
+        $this->assertSame(['success' => $unused, 'failure' => $unused, 'always' => $unused], self::flatCells($rows[2]['routes']));
+        $this->assertSame(['success' => $unused, 'failure' => $unused, 'always' => $unused], self::flatCells($rows[4]['routes']));
+        $this->assertSame([true, true, true, false, false, false], array_column($rows, 'reachable'), 'runs fail at the step whose rules differ');
     }
 
     /**

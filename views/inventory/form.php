@@ -5,8 +5,16 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\Inventory $model */
 /** @var app\models\Project[] $projects */
+/** @var bool $canAssignRule approval-rule.update: the rule select, else the rule as text */
+/** @var array<int, string> $approvalRuleOptions the rules by ID, for the select */
+/** @var bool $changeLocked a gated inventory, a user without approval-rule.update: only name and description are enabled */
+/** @var string|null $repositoryHostsNote GatedInventoryLock::REPOSITORY_HOSTS_NOTE for rule assigners and on a gated inventory, else null */
 
 use app\models\Inventory;
+use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\GatedInventoryLock;
+use app\services\InventoryRuleAssignment;
+use app\services\JobTemplateRuleAssignment;
 use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
 use yii\widgets\ActiveForm;
@@ -26,10 +34,17 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
 </nav>
 <h2><?= Html::encode($this->title) ?></h2>
 
+<?php if ($changeLocked) : ?>
+    <div class="alert alert-info" id="inventory-locked-notice"><?= Html::encode(GatedInventoryLock::NOTICE) ?></div>
+<?php endif; ?>
+
 <?php $form = ActiveForm::begin(['id' => 'inventory-form']); ?>
 
     <?= $form->field($model, 'name')->textInput(['maxlength' => 128, 'autofocus' => true]) ?>
     <?= $form->field($model, 'description')->textarea(['rows' => 2]) ?>
+
+    <?php // Where the hosts come from. Where the lock applies, every field in here is disabled, so none is posted.?>
+    <?= Html::beginTag('fieldset', ['id' => 'inventory-host-fields', 'disabled' => $changeLocked]) ?>
 
     <?= $form->field($model, 'inventory_type')->dropDownList([
         Inventory::TYPE_STATIC => 'Static (inline YAML)',
@@ -43,7 +58,8 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
             'rows' => 12,
             'class' => 'form-control font-monospace',
             'placeholder' => "all:\n  hosts:\n    192.168.1.10:\n    192.168.1.11:\n      ansible_user: ubuntu",
-            'data-yaml-editor' => '1',
+            // A locked form keeps the plain field: the editor would take edits that are not posted.
+            'data-yaml-editor' => $changeLocked ? null : '1',
         ])->label('Inventory Content (YAML)') ?>
     </div>
 
@@ -57,7 +73,29 @@ $this->title = $model->isNewRecord ? 'New Inventory' : 'Edit: ' . $model->name;
             'placeholder' => 'inventories/production.yml',
             'maxlength' => 512,
         ])->hint('Path relative to the project root') ?>
+        <?php if ($repositoryHostsNote !== null) : ?>
+            <p class="form-text" id="inventory-repository-hosts-note"><?= Html::encode($repositoryHostsNote) ?></p>
+        <?php endif; ?>
     </div>
+
+    <?= Html::endTag('fieldset') ?>
+
+    <?php // A schema cached from before m000088 has no rule column: then the inventory has no rule to show.?>
+    <?php if ($model->hasAttribute(InventoryRuleAssignment::FIELD)) : ?>
+        <h5 class="mt-3 text-muted">Approval</h5>
+        <?php if ($canAssignRule) : ?>
+            <?= $form->field($model, 'approval_rule_id')->dropDownList($approvalRuleOptions, ['prompt' => '— None —'])
+                ->hint(Html::encode(InventoryRuleAssignment::FORM_HINT)) ?>
+        <?php else : ?>
+            <?php // The rule as text: nothing is posted, so the stored rule stays.?>
+            <?php $currentRule = $model->getAttribute(InventoryRuleAssignment::FIELD) === null ? null : $model->approvalRule; ?>
+            <div class="mb-3" id="inventory-approval-rule-readonly">
+                <span class="form-label d-block">Approval rule</span>
+                <span class="form-control-plaintext py-0"><?= Html::encode($currentRule === null ? 'None' : JobTemplateRuleAssignment::label($currentRule)) ?></span>
+                <div class="form-text"><?= Html::encode(ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED) ?></div>
+            </div>
+        <?php endif; ?>
+    <?php endif; ?>
 
     <div class="mt-3">
         <?= Html::submitButton($model->isNewRecord ? 'Create Inventory' : 'Save Changes', ['class' => 'btn btn-primary']) ?>

@@ -9,6 +9,7 @@ use app\models\ApiToken;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
@@ -153,12 +154,21 @@ class ApprovalRulesControllerTest extends WebControllerTestCase
         $workflow = $this->createWorkflowWithJobSteps((int)$s['admin']->id, (int)$s['own']->id);
         $step = $this->createWorkflowStep((int)$workflow->id, 5, WorkflowStep::TYPE_APPROVAL, null, (int)$rule->id);
         $this->pendingRequest($rule, $s['own'], $s['admin']);
+        $visibleInventory = $this->gatedInventory($rule, $s['admin'], (int)$s['own']->project_id);
+        $this->gatedInventory($rule, $s['admin'], (int)$s['foreign']->project_id);
         $this->authenticateAs($s['member']);
 
         $usage = $this->dataOf($this->call('view', ['id' => $rule->id]))['used_by'];
 
         $this->assertSame([
             'in_use' => true,
+            'inventories' => [[
+                'id' => (int)$visibleInventory->id,
+                'name' => (string)$visibleInventory->name,
+                'project_id' => (int)$s['own']->project_id,
+                'project_name' => $s['own']->project->name,
+            ]],
+            'hidden_inventory_count' => 1,
             'job_templates' => [[
                 'id' => (int)$s['own']->id,
                 'name' => (string)$s['own']->name,
@@ -240,6 +250,41 @@ class ApprovalRulesControllerTest extends WebControllerTestCase
         $request->refresh();
         $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
         $this->assertSame((int)$rule->id, (int)$request->approval_rule_id);
+    }
+
+    /**
+     * regression: a rule that an inventory uses was reported as not in use.
+     * DELETE reached the inventory's RESTRICT foreign key and answered 409
+     * with "Approval rule ... is not in use." and in_use false.
+     */
+    public function testRegressionARuleAnInventoryUsesWasReportedNotInUse(): void
+    {
+        $admin = $this->authenticateWithRoles(['admin']);
+        $rule = $this->ruleOf($admin);
+        $inventory = $this->gatedInventory($rule, $admin, null);
+
+        $result = $this->call('delete', ['id' => $rule->id]);
+
+        $this->assertSame(409, \Yii::$app->response->statusCode);
+        $this->assertIsArray($result);
+        $error = $result['error'];
+        $this->assertTrue($error['used_by']['in_use'], 'the inventory is a use');
+        $this->assertSame([[
+            'id' => (int)$inventory->id,
+            'name' => (string)$inventory->name,
+            'project_id' => null,
+            'project_name' => null,
+        ]], $error['used_by']['inventories']);
+        $this->assertSame(0, $error['used_by']['hidden_inventory_count']);
+        $this->assertSame(
+            'Approval rule ' . json_encode($rule->name) . ' is in use by 1 inventory(ies). '
+            . 'Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.',
+            $error['message']
+        );
+        $this->assertNotNull(ApprovalRule::findOne($rule->id));
+        $inventory->refresh();
+        $this->assertSame((int)$rule->id, (int)$inventory->getAttribute('approval_rule_id'), 'the inventory stays gated');
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_APPROVAL_RULE_DELETED, 'object_id' => $rule->id])->exists());
     }
 
     public function testDeletingAnUnusedRuleWorksAndIsAudited(): void
@@ -637,6 +682,16 @@ class ApprovalRulesControllerTest extends WebControllerTestCase
             (int)$this->createRunnerGroup($userId)->id,
             $userId
         );
+    }
+
+    private function gatedInventory(ApprovalRule $rule, User $creator, ?int $projectId): Inventory
+    {
+        $inventory = $this->createInventory((int)$creator->id);
+        $inventory->project_id = $projectId;
+        $inventory->setAttribute('approval_rule_id', (int)$rule->id);
+        $inventory->save(false);
+
+        return $inventory;
     }
 
     private function pendingRequest(ApprovalRule $rule, JobTemplate $template, User $launcher): ApprovalRequest

@@ -140,8 +140,11 @@ export const JOB_TEMPLATE = 'e2e-template';
 
 /**
  * Only admins (approval-rule.update) add approval steps and job steps whose
- * job template has an approval rule ("gated job steps"), and change the steps
- * of a workflow that has either (services/ApprovalRuleAssignmentPolicy.php).
+ * job template has an approval rule, its own or its inventory's ("gated job
+ * steps"), and change the steps of a workflow that has either
+ * (services/ApprovalRuleAssignmentPolicy.php). The refusal names the job
+ * template's own rule first (GATED_JOB_*), else its inventory's
+ * (GATED_INVENTORY_JOB_*).
  */
 export const APPROVAL_STEP_ADD_REFUSED = 'Only admins may add approval steps: that needs approval-rule.update.';
 export const APPROVAL_WORKFLOW_STEPS_REFUSED = 'This workflow has an approval step: only admins may change its steps (approval-rule.update).';
@@ -149,13 +152,21 @@ export const GATED_JOB_STEP_ADD_REFUSED = 'Only admins may add a job step whose 
   + 'that needs approval-rule.update.';
 export const GATED_JOB_WORKFLOW_STEPS_REFUSED = 'This workflow has a job step whose job template has an approval rule: '
   + 'only admins may change its steps (approval-rule.update).';
+/** ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED: also for an edit that gives a job step such a job template. */
+export const GATED_INVENTORY_JOB_STEP_ADD_REFUSED = 'Only admins may add a job step whose job template\'s inventory has an '
+  + 'approval rule: that needs approval-rule.update.';
+/** ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED */
+export const GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED = 'This workflow has a job step whose job template\'s inventory has an '
+  + 'approval rule: only admins may change its steps (approval-rule.update).';
 
 /**
  * services/WorkflowTemplatePage.php GATED_TEMPLATES_HINT: the hint under the
  * job template select of the add-step form, for users who may not add gated
- * job steps.
+ * job steps: job templates with a rule of their own, or on an inventory with
+ * one, are left out of the select.
  */
-export const GATED_TEMPLATES_HINT = 'Job templates with an approval rule are not listed: only admins may add a job step for them.';
+export const GATED_TEMPLATES_HINT = 'Job templates with an approval rule, or on an inventory with one, are not listed: '
+  + 'only admins may add a job step for them.';
 
 /**
  * The notice of a workflow whose steps the user may not change
@@ -218,9 +229,18 @@ export const POSITION_FIELD_ID = 'ws-position-field';
 /** The column headings of the steps table; the Actions column only for users who may change the steps. */
 export const STEPS_COLUMNS = ['#', 'Name', 'Type', 'Target', 'On Success', 'On Failure', 'Always'];
 
-/** GATED_TITLE: the hover text of the "needs approval" badge of a step whose job template has the rule `rule`. */
+/** GATED_TITLE: the hover text of the "needs approval" badge of a step whose job template has the rule `rule` of its own. */
 export function gatedTitle(rule: string): string {
   return `Its job template has the approval rule "${rule}": the job waits for an approval before it runs.`;
+}
+
+/**
+ * GATED_INVENTORY_TITLE: the hover text of the "needs approval" badge of a
+ * step whose job template has no rule of its own, but whose inventory has
+ * the rule `rule`.
+ */
+export function gatedInventoryTitle(rule: string): string {
+  return `Its job template's inventory has the approval rule "${rule}": the job waits for an approval before it runs.`;
 }
 
 /** STEP_LABEL: the step at `position` named `name`, "3. Deploy". */
@@ -285,6 +305,17 @@ export const ROUTED_BY_PAUSE_FAILURE = 'Not used: a pause step does not fail. Sa
 /** THIS_APPROVAL_OFF_PATH: the Position warning of an approval step that no success would lead to. */
 export const THIS_APPROVAL_OFF_PATH = 'This approval step will not be on the success path: '
   + 'runs whose steps all succeed will not wait for it.';
+/**
+ * HELP_JOB_TITLE and HELP_JOB: the routing help of a job step
+ * (#ws-routing-help-job), the title, then the text. A job step waits for an
+ * approval when its job template or that template's inventory has an
+ * approval rule; a closed gate follows only On Failure.
+ */
+export const HELP_JOB_TITLE = 'Job step:';
+export const HELP_JOB = 'success = exit code 0. Failure = any non-zero exit, timeout, or unreachable host. Always '
+  + 'overrides both. If the job needs approval (an approval rule of its job template or of its inventory) and the '
+  + 'approval is rejected, times out or is canceled, the job does not run: then only On Failure is followed (left '
+  + 'empty, the run ends as failed), and Always is not.';
 
 /** POSITION_END: the Position choice after the last step, named by its label. */
 export function positionEnd(lastLabel: string): string {

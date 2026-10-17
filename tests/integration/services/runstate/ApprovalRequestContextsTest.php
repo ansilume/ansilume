@@ -554,7 +554,12 @@ class ApprovalRequestContextsTest extends DbTestCase
         /** @var ApprovalService $approvals */
         $approvals = \Yii::$app->get('approvalService');
 
-        return $approvals->openRequest($job, $this->createApprovalRule($userId));
+        // As they are written: a placeholder's by its approval step, a job's by its template's rule.
+        $requiredBy = $job->job_template_id === null
+            ? ApprovalRequest::REQUIRED_BY_APPROVAL_STEP
+            : ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE;
+
+        return $approvals->openRequest($job, $this->createApprovalRule($userId), $requiredBy);
     }
 
     /**

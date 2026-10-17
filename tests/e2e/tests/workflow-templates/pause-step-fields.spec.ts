@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test';
 import { openWorkflowTemplate } from '../../lib/triggers';
 import {
   END_FAILS_OPTION,
+  HELP_JOB,
+  HELP_JOB_TITLE,
   NEXT_OPTION_NONE_FAILS,
   STEPS_WORKFLOW,
   SUCCESS_LABEL,
@@ -51,12 +53,9 @@ test.describe('Workflow step editor — routing fields per step type', () => {
     await expect(always).toBeVisible();
     await expect(alwaysSelect).toBeEnabled();
     await expect(help('job')).toBeVisible();
-    // A job template with an approval rule gates the step: a closed gate
-    // follows only On Failure.
-    await expect(help('job')).toContainText(
-      'If the job template has an approval rule and the approval is rejected, times out or is canceled, the job does not run: '
-      + 'then only On Failure is followed (left empty, the run ends as failed), and Always is not.',
-    );
+    // An approval rule of the job template, or of its inventory, gates the
+    // step: a closed gate follows only On Failure.
+    await expect(help('job')).toHaveText(`${HELP_JOB_TITLE} ${HELP_JOB}`);
     await expect(help('approval')).toBeHidden();
     await expect(help('pause')).toBeHidden();
     await expect(page.locator('#ws-target-job')).toBeVisible();

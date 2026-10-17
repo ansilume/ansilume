@@ -23,6 +23,13 @@ use yii\db\IntegrityException;
  * the lock. Every write is conditional on the state that was checked
  * (request WHERE status = 'pending', job WHERE status = 'pending_approval').
  *
+ * Job templates and inventories, which no settlement touches, are locked
+ * job_template first (FOR UPDATE), then the inventories (LOCK IN SHARE MODE,
+ * in one statement in ascending ID order, JobTemplateGate::readInventoryRules()):
+ * by a launch (JobLaunchService) and a template save (GatedJobTemplateLock).
+ * An inventory save locks only its own row and reads job templates without a
+ * lock (InventoryWriteService).
+ *
  * The two locks are the transaction's first two statements, before any
  * plain (consistent) read. InnoDB takes a transaction's snapshot at its
  * first consistent read, so every later read of the settlement (the rule,

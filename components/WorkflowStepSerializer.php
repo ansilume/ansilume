@@ -24,18 +24,21 @@ use app\services\WorkflowRouteMap;
  *   start step (is_start);
  * - reachable: whether a run can reach the step;
  * - cannot_run: why a run that reaches it fails there (job_template_missing,
- *   approval_rule_missing, unknown_type), or null;
+ *   approval_rule_missing, unknown_type, approval_rules_differ), or null;
  * - routes: where a run goes when the step succeeds, fails, or ends with a
- *   closed approval gate (success, failure, closed_gate), each a
- *   WorkflowRouteTarget {kind, via, step_id, position, run_outcome, loop},
- *   or null for an outcome the step cannot end with.
+ *   closed approval gate (success, failure, closed_gate: an approval step,
+ *   and a job step whose job template or its inventory has an approval
+ *   rule), each a WorkflowRouteTarget {kind, via, step_id, position,
+ *   run_outcome, loop}, or null for an outcome the step cannot end with.
  * For the workflow itself: its start step (startStepId()) and the steps a
  * run passes when every step succeeds (successPath()).
  *
  * The steps are given in run order, as WorkflowRouteMap::stepsOf() reads
  * them, or as the step write path read them under the workflow's lock
- * (WorkflowStepChange::stepsAfter). Their job templates and approval rules
- * are loaded in one batch when they are not loaded yet.
+ * (WorkflowStepChange::stepsAfter). Their job templates (with the
+ * templates' approval rules, inventories and the inventories' approval
+ * rules) and approval rules are loaded in one batch when they are not
+ * loaded yet.
  */
 final class WorkflowStepSerializer
 {

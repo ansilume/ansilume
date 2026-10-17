@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var yii\data\ActiveDataProvider $dataProvider */
-/** @var array<int, app\services\runstate\RequestContext> $contexts what each listed request is for, by request ID */
+/** @var array<int, app\services\runstate\RequestContext> $contexts what each listed request is for, and its Rule cell (ruleText(): the inventory of a request that it required), by request ID */
 /** @var string|null $activeStatus the status the list is filtered by; null: every request */
 /** @var app\services\runstate\Viewer $viewer who looks at the page */
 
 use app\controllers\ApprovalController;
 use app\helpers\TimeHelper;
 use app\models\ApprovalRequest;
+use app\services\runstate\RequestContext;
 use yii\helpers\Html;
 
 $this->title = ApprovalController::LIST_TITLE;
@@ -50,12 +51,16 @@ foreach (ApprovalRequest::statuses() as $status) {
         <tbody>
             <?php /** @var ApprovalRequest $model */ ?>
             <?php foreach ($dataProvider->getModels() as $model) : ?>
-                <?php $pending = $model->status === ApprovalRequest::STATUS_PENDING; ?>
+                <?php
+                $pending = $model->status === ApprovalRequest::STATUS_PENDING;
+                $context = $contexts[(int)$model->id] ?? null;
+                $ruleName = $model->approvalRule?->name;
+                ?>
                 <tr data-request-id="<?= (int)$model->id ?>">
                     <td><?= Html::a(Html::encode((string)$model->id), ['view', 'id' => $model->id]) ?></td>
                     <td><?= Html::a('#' . Html::encode((string)$model->job_id), ['/job/view', 'id' => $model->job_id]) ?></td>
-                    <td data-approval-for><?= $this->render('_for', ['context' => $contexts[(int)$model->id] ?? null, 'viewer' => $viewer]) ?></td>
-                    <td><?= Html::encode($model->approvalRule?->name ?? '—') ?></td>
+                    <td data-approval-for><?= $this->render('_for', ['context' => $context, 'viewer' => $viewer]) ?></td>
+                    <td data-approval-rule><?= Html::encode($context !== null ? $context->ruleText($ruleName) : ($ruleName ?? RequestContext::UNKNOWN)) ?></td>
                     <td><span class="badge text-bg-<?= Html::encode(ApprovalRequest::statusCssClass($model->status)) ?>"><?= Html::encode(ApprovalRequest::statusLabel($model->status)) ?></span></td>
                     <td><?= TimeHelper::relative($model->requested_at !== null ? (int)$model->requested_at : null) ?></td>
                     <td data-approval-expires>

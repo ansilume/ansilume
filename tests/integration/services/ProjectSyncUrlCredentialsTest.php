@@ -10,6 +10,7 @@ use app\models\ProjectSyncLog;
 use app\services\ProjectService;
 use app\services\ProjectSyncProcessRunner;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use yii\log\Logger;
 
 /**
@@ -29,6 +30,8 @@ use yii\log\Logger;
  */
 class ProjectSyncUrlCredentialsTest extends DbTestCase
 {
+    use RestoresComponents;
+
     /** Test values, not secrets. */
     private const SECRET = 'w5c-sync-token-5521';
     private const URL = 'https://deploy:' . self::SECRET . '@git.example.com/org/playbooks.git';
@@ -40,9 +43,6 @@ class ProjectSyncUrlCredentialsTest extends DbTestCase
 
     private RecordingNotificationDispatcher $dispatcher;
 
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
-
     private string $workspace;
 
     private Logger $logger;
@@ -52,9 +52,8 @@ class ProjectSyncUrlCredentialsTest extends DbTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
         $this->dispatcher = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
         $this->workspace = sys_get_temp_dir() . '/project-sync-url-credentials-' . uniqid('', true);
         $this->previousLogger = \Yii::getLogger();
         $this->logger = new Logger();
@@ -64,8 +63,8 @@ class ProjectSyncUrlCredentialsTest extends DbTestCase
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         \Yii::setLogger($this->previousLogger);
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
         if (is_dir($this->workspace)) {
             \app\helpers\FileHelper::removeDirectory($this->workspace);
         }

@@ -50,6 +50,13 @@ use yii\base\InvalidArgumentException;
  * key. GitSyncDiagnostics::redactUrl(), which every sync path hands the URL,
  * the git command and git's output before it hides their credentials, was
  * unmarked too.
+ *
+ * Regression (2.12.0 review, SEC-2): rule 11 names static inventory content,
+ * but Parse Inventory handed ansible-inventory's output of it, every host
+ * with its variables, through unmarked parameters: InventoryService's
+ * parseOutput(), extractGroups(), extractHosts() and the checks of the
+ * runner's result, AnsibleInventoryRunner's output buffers and the error
+ * made of them, and VaultValueMasker, which walks every value.
  */
 class SensitiveParametersTest extends TestCase
 {
@@ -71,6 +78,7 @@ class SensitiveParametersTest extends TestCase
         'app\commands\RunnerController::vaultMode($payload)',
         'app\commands\RunnerController::writeJobFiles($payload)',
         'app\commands\SetupController::actionAdmin($password)',
+        'app\components\ApiBodyValues::listValueRefusal($body)',
         'app\components\CredentialInjectionResult::__construct($env)',
         'app\components\CredentialInjector::inject($credentialData)',
         'app\components\CredentialInjector::injectAll($credentials)',
@@ -94,6 +102,9 @@ class SensitiveParametersTest extends TestCase
         'app\components\GitEnvBuilder::isSshUrl($url)',
         'app\components\GitEnvBuilder::writeSshKeyFile($scmCredential)',
         'app\components\GitSyncDiagnostics::redactUrl($text)',
+        'app\components\JobInventory::idOf($payload)',
+        'app\components\JobInventory::launchedName($payload)',
+        'app\components\JobInventory::ofPayloads($payloads)',
         'app\components\OutputMasker::__construct($answers)',
         'app\components\OutputMasker::feed($bytes)',
         'app\components\OutputMasker::forms($answer)',
@@ -214,6 +225,9 @@ class SensitiveParametersTest extends TestCase
         'app\components\VaultCheckRun::check($password)',
         'app\components\VaultCheckRun::opens($password)',
         'app\components\VaultCheckRun::unopened($password)',
+        'app\components\VaultIsolation::mentionsDecryptionFailure($output)',
+        'app\components\VaultValueMasker::isVaultObject($value)',
+        'app\components\VaultValueMasker::mask($value)',
         'app\components\WebLaunchOverrides::fromRequest($overrides)',
         'app\components\WebLaunchOverrides::fromRequest($survey)',
         'app\components\vault\VaultEnvelope::normalizePassword($password)',
@@ -225,6 +239,7 @@ class SensitiveParametersTest extends TestCase
         'app\controllers\api\v1\BaseApiController::success($data)',
         'app\controllers\api\v1\CredentialsController::applyBody($body)',
         'app\controllers\api\v1\CredentialsController::secretsFrom($body)',
+        'app\controllers\api\v1\InventoriesController::applyBody($body)',
         'app\controllers\api\v1\JobsController::buildOverrides($body)',
         'app\controllers\api\v1\JobsController::templateIdFrom($body)',
         'app\controllers\api\v1\NotificationTemplatesController::applyBody($body)',
@@ -251,6 +266,13 @@ class SensitiveParametersTest extends TestCase
         'app\models\User::validatePassword($password)',
         'app\models\WorkflowJob::setLaunchExtraVars($vars)',
         'app\models\traits\TriggerTokenTrait::findByTriggerToken($token)',
+        'app\services\AnsibleInventoryRunner::drainPipes($stderr)',
+        'app\services\AnsibleInventoryRunner::drainPipes($stdout)',
+        'app\services\AnsibleInventoryRunner::openProcess($env)',
+        'app\services\AnsibleInventoryRunner::result($error)',
+        'app\services\AnsibleInventoryRunner::result($stderr)',
+        'app\services\AnsibleInventoryRunner::result($stdout)',
+        'app\services\AnsibleInventoryRunner::runProcess($env)',
         'app\services\CredentialService::analyzePrivateKey($privateKey)',
         'app\services\CredentialService::encrypt($plaintext)',
         'app\services\CredentialService::encryptSecrets($secrets)',
@@ -259,11 +281,32 @@ class SensitiveParametersTest extends TestCase
         'app\services\CredentialWriteService::buildSecrets($provided)',
         'app\services\CredentialWriteService::create($secretInput)',
         'app\services\CredentialWriteService::update($secretInput)',
+        'app\services\GatedInventoryLock::changedAttributes($stored)',
+        'app\services\GatedInventoryLock::sameValue($stored)',
+        'app\services\GatedInventoryLock::sameValue($value)',
         'app\services\GatedJobTemplateLock::changesColumns($stored)',
         'app\services\GatedJobTemplateLock::comparable($value)',
         'app\services\GatedJobTemplateLock::jsonKey($text)',
+        'app\services\InventoryRuleAssignment::apply($submitted)',
+        'app\services\InventoryService::extractGroups($data)',
+        'app\services\InventoryService::extractHosts($data)',
+        'app\services\InventoryService::extractHosts($groups)',
+        'app\services\InventoryService::fitError($error)',
+        'app\services\InventoryService::isEncryptedVarsFailure($result)',
+        'app\services\InventoryService::parseOutput($json)',
+        'app\services\InventoryService::vaultAwareError($result)',
+        'app\services\InventoryWriteService::create($submitted)',
+        'app\services\InventoryWriteService::rebase($stored)',
+        'app\services\InventoryWriteService::update($submitted)',
+        'app\services\JobClaimGate::check($raw)',
         'app\services\JobClaimSecrets::encode($vars)',
         'app\services\JobClaimSecrets::view($secretExtraVars)',
+        'app\services\JobClaimService::checkClaimable($raw)',
+        'app\services\JobClaimService::resolveInventory($payload)',
+        'app\services\JobClaimService::resolveProjectPath($payload)',
+        'app\services\JobClaimService::resolveProjectScm($payload)',
+        'app\services\JobClaimService::resolveTemplateCredentials($raw)',
+        'app\services\JobClaimService::resolveVaultPasswordSource($payload)',
         'app\services\JobCompletionService::appendLog($content)',
         'app\services\JobCompletionService::persistTask($data)',
         'app\services\JobCompletionService::saveTasks($tasks)',
@@ -338,12 +381,14 @@ class SensitiveParametersTest extends TestCase
     /**
      * Marked parameters of closures and arrow functions, which class
      * reflection cannot see, per class: SurveySecretBackfill's masking
-     * closures take a job, schedule or template row.
+     * closures take a job, schedule or template row, and VaultValueMasker's
+     * takes each value of a parsed inventory.
      *
      * @var array<string, list<string>>
      */
     private const MARKED_CLOSURES = [
         'app\components\SurveySecretBackfill' => ['row', 'row', 'row'],
+        'app\components\VaultValueMasker' => ['item'],
     ];
 
     /**
@@ -405,6 +450,13 @@ class SensitiveParametersTest extends TestCase
         'app\services\LaunchContext' => ['secrets', 'carriedSecrets'],
         'app\services\RelaunchService' => ['secrets'],
         'app\services\JobClaimSecrets' => ['vars', 'secretExtraVars'],
+        // The claim's checks and resolvers read the job's decoded runner payload, whose extra vars hold the launch's
+        // survey answers.
+        'app\services\JobClaimGate' => ['raw'],
+        'app\services\JobClaimService' => ['raw', 'payload'],
+        // The inventory a job was launched with, read from its decoded runner payload, whose extra vars hold the
+        // launch's survey answers.
+        'app\components\JobInventory' => ['payload', 'payloads'],
         // reencode($json): the extra vars as stored or submitted, with plaintext answers.
         'app\components\SurveySecrets' => ['secret', 'json'],
         'app\components\SecretCipher' => ['plaintext', 'result'],
@@ -423,6 +475,18 @@ class SensitiveParametersTest extends TestCase
         'app\components\TemplateSurveyValidator' => ['extraVars', 'json', 'value', 'values', 'baseline'],
         // The gated-template lock compares a template's stored row and submitted columns, the Extra Vars among them.
         'app\services\GatedJobTemplateLock' => ['stored', 'value', 'text'],
+        // Inventory writes: the form's fields or the request body (static inventory content among them), the
+        // inventory's row as stored or locked, and the values the inventory lock compares.
+        'app\services\InventoryWriteService' => ['submitted', 'stored'],
+        'app\services\InventoryRuleAssignment' => ['submitted'],
+        'app\services\GatedInventoryLock' => ['stored', 'value'],
+        'app\controllers\api\v1\InventoriesController' => ['body'],
+        // Parse Inventory: ansible-inventory's output of an inventory (static inventory content among it, every host
+        // with its variables), the result and the error made of it, and the values the vault masker walks.
+        'app\services\InventoryService' => ['json', 'data', 'groups', 'result', 'error'],
+        'app\services\AnsibleInventoryRunner' => ['stdout', 'stderr', 'error', 'env'],
+        'app\components\VaultValueMasker' => ['value'],
+        'app\components\VaultIsolation' => ['output'],
         // Trigger tokens, and the other secrets whose cipher the release shares.
         'app\controllers\TriggerController' => ['token'],
         'app\components\TriggerTokenResolver' => ['authorization', 'token'],
@@ -459,6 +523,9 @@ class SensitiveParametersTest extends TestCase
         'app\controllers\api\v1\NotificationTemplatesController' => ['body'],
         'app\controllers\api\v1\ProjectsController' => ['body'],
         'app\controllers\api\v1\BaseApiController' => ['data'],
+        // A request body checked for lists and objects before it reaches the model, static inventory content among
+        // its values.
+        'app\components\ApiBodyValues' => ['body'],
         'app\services\CredentialWriteService' => ['secretInput', 'provided'],
         'app\components\CredentialSecretPolicy' => ['input', 'provided'],
         // Notification channels: what carries their channel secrets (NotificationTemplate::SECRET_CONFIG_KEYS,

@@ -22,6 +22,7 @@ use app\services\JobCancellationService;
 use app\services\WorkflowExecutionService;
 use app\services\WorkflowTemplateDeletionService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 
 /**
@@ -38,13 +39,12 @@ class ApprovalEndedWorkflowStepTest extends DbTestCase
     use TeamScopeFixtures;
     use CancellationFixtures;
     use ApprovalVoteFixtures;
+    use RestoresComponents;
 
     private RecordingNotificationDispatcher $notifications;
 
     /** @var list<array{job: int, approved: bool}> */
     public array $engineCalls = [];
-
-    private mixed $engineBefore = null;
 
     private User $launcher;
 
@@ -54,11 +54,10 @@ class ApprovalEndedWorkflowStepTest extends DbTestCase
     {
         parent::setUp();
         $this->notifications = $this->recordNotifications();
-        $this->launcher = $this->approverUser('ended-launcher');
-        $this->approver = $this->approverUser('ended-approver');
-        $this->engineBefore = \Yii::$app->get('workflowExecutionService');
         $test = $this;
-        \Yii::$app->set('workflowExecutionService', new class ($test) extends WorkflowExecutionService {
+        // Swapped before any write, so that tearDown() restores it also when
+        // a write fails.
+        $this->swapComponent('workflowExecutionService', new class ($test) extends WorkflowExecutionService {
             public function __construct(private readonly ApprovalEndedWorkflowStepTest $test)
             {
                 parent::__construct();
@@ -69,11 +68,13 @@ class ApprovalEndedWorkflowStepTest extends DbTestCase
                 $this->test->engineCalls[] = ['job' => (int)$job->id, 'approved' => $approved];
             }
         });
+        $this->launcher = $this->approverUser('ended-launcher');
+        $this->approver = $this->approverUser('ended-approver');
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('workflowExecutionService', $this->engineBefore);
+        $this->restoreComponents();
         $this->restoreNotifications();
         parent::tearDown();
     }

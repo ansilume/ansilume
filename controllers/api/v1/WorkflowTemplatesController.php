@@ -53,11 +53,11 @@ use yii\web\NotFoundHttpException;
  * - 422 for a template that is not valid, such as an empty name;
  * - 422 for steps that cannot be read;
  * - 403 when the caller may not change these steps: gated steps (approval
- *   steps, and job steps whose job template has an approval rule) are for
- *   admins (approval-rule.update), so a "steps" list that includes one, or
- *   any "steps" list for a workflow that has one, needs that permission
- *   (ApprovalRuleAssignmentPolicy); a job template the caller cannot see
- *   counts as none here and answers 422 below;
+ *   steps, and job steps whose job template or its inventory has an
+ *   approval rule) are for admins (approval-rule.update), so a "steps" list
+ *   that includes one, or any "steps" list for a workflow that has one,
+ *   needs that permission (ApprovalRuleAssignmentPolicy); a job template
+ *   the caller cannot see counts as none here and answers 422 below;
  * - 422 for unknown approval rules; then 422 for job templates that do not
  *   exist or that the caller cannot see, 403 for visible ones the caller may
  *   not operate, both naming them in error.job_template_ids;
@@ -67,11 +67,11 @@ use yii\web\NotFoundHttpException;
  *   of the workflow is active, naming the runs in error.workflow_job_ids
  *   (WorkflowStepChangeGuard), checked with the workflow's row locked, as a
  *   launch locks it;
- * - 403 (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED) when a
- *   job template of the new steps got an approval rule meanwhile: the rule
- *   of gated steps is checked again for the new steps in the write's
- *   transaction, with the workflow's row locked on update, as the per-step
- *   endpoints check it (WorkflowStepWriteService);
+ * - 403 (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED, or
+ *   GATED_INVENTORY_JOB_STEP_ADD_REFUSED) when a job template of the new
+ *   steps, or its inventory, got an approval rule meanwhile: checked again
+ *   in the write's transaction, the workflow's row locked on update, as on
+ *   the per-step endpoints (WorkflowStepWriteService);
  * - 422 for a template or step that cannot be saved.
  * Nothing is written unless the template and every step are valid; then the
  * template and its steps are written in one transaction. Runs keep the
@@ -381,11 +381,11 @@ class WorkflowTemplatesController extends BaseApiController
      * lock): 404 when the workflow was deleted meanwhile, 403 for a caller
      * who may not change them, and 409 while a run is active. Then, in that
      * transaction, saveAll() asks again whether the caller may add the new
-     * steps (asked before by stepsPolicyError()): a job template that got an
-     * approval rule in between makes its job step a gated job step, which
-     * answers 403 (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED)
-     * and writes nothing, as on the per-step endpoints. Returns the error
-     * response, or null.
+     * steps (asked before by stepsPolicyError()): a job template that, or
+     * whose inventory, got an approval rule in between makes its job step a
+     * gated job step, which answers 403 (GATED_JOB_STEP_ADD_REFUSED,
+     * GATED_INVENTORY_JOB_STEP_ADD_REFUSED) and writes nothing, as on the
+     * per-step endpoints. Returns the error response, or null.
      *
      * @param list<WorkflowStep>|null $steps null keeps the current steps
      * @return array{error: array<string, mixed>}|null
@@ -447,10 +447,10 @@ class WorkflowTemplatesController extends BaseApiController
      * 403 when the caller may not add $steps to $model, asked again in the
      * guard's transaction (with the workflow's row locked on update) by the
      * rule stepsPolicyError() asked before it: rule 12,
-     * ApprovalRuleAssignmentPolicy::stepsAddRefusal(). A job template that an
-     * admin gave an approval rule since then makes its job step a gated job
-     * step, which is for admins (GATED_JOB_STEP_ADD_REFUSED). The per-step
-     * endpoints check the same under the lock (WorkflowStepWriteService).
+     * ApprovalRuleAssignmentPolicy::stepsAddRefusal(): a job template that,
+     * or whose inventory, got an approval rule since then makes its job
+     * step a gated job step (GATED_JOB_STEP_ADD_REFUSED,
+     * GATED_INVENTORY_JOB_STEP_ADD_REFUSED), as on the per-step endpoints.
      *
      * Regression: the rule was checked only before the lock, so a job
      * template that got an approval rule in between was given to a new job

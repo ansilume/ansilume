@@ -6,6 +6,7 @@ namespace app\tests\integration\commands;
 
 use app\commands\E2eTeardownHelper;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use yii\db\IntegrityException;
 use yii\rbac\DbManager;
 
@@ -21,19 +22,20 @@ use yii\rbac\DbManager;
  */
 class TeardownHelperDatabaseErrorTest extends DbTestCase
 {
-    private const MARKER = 'teardown-marker-4402';
+    use RestoresComponents;
 
-    private mixed $authManager = null;
+    private const MARKER = 'teardown-marker-4402';
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->authManager = \Yii::$app->getComponents(true)['authManager'] ?? null;
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('authManager');
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('authManager', $this->authManager);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

@@ -42,6 +42,14 @@ class ApprovalRule extends ActiveRecord
         . 'unless enough other approvers may decide.';
 
     /**
+     * The warning of the rule form when none of the chosen approvers may
+     * decide (ApproverCounts counts 0 for the role, team or users chosen):
+     * every launch the rule gates would be refused.
+     */
+    public const NO_ELIGIBLE_APPROVERS = 'Warning: none of these approvers can approve: none of them is an active user '
+        . 'who holds approval.decide or is a superadmin, so every launch this rule gates would be refused.';
+
+    /**
      * The hint under Role on the rule form: a role rule counts the users
      * assigned the role directly (resolveRoleIds()), and of them those that
      * ApproverEligibility lets decide can approve.

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\Schedule $model */
+/** @var string|null $approvalNote the approval each run waits for (JobTemplateGate::scheduleNote()); null when none, or the template is gone */
 
 use app\components\SurveySecrets;
 use app\helpers\ConfirmHelper;
@@ -80,6 +81,12 @@ $this->title = Html::encode($model->name);
                         <span id="schedule-runs-as"><?= Html::encode($model->creator->username ?? '—') ?></span>
                         <div class="small text-muted" data-testid="schedule-runs-as"><?= Html::encode(ScheduleRunAs::VIEW_NOTE) ?></div>
                     </dd>
+
+                    <?php // isset(): a page rendered without the note (not by actionView) has none.?>
+                    <?php if (isset($approvalNote)) : ?>
+                        <dt class="col-sm-4">Approval</dt>
+                        <dd class="col-sm-8" id="schedule-approval"><?= Html::encode($approvalNote) ?></dd>
+                    <?php endif; ?>
 
                     <dt class="col-sm-4">Created</dt>
                     <dd class="col-sm-8"><?= date('Y-m-d H:i:s', $model->created_at) ?></dd>

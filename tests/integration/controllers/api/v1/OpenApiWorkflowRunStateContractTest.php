@@ -176,6 +176,12 @@ class OpenApiWorkflowRunStateContractTest extends WebControllerTestCase
             $this->assertContains($field, $this->required('ApprovalRequest'), "{$field} is always returned.");
             $this->assertTrue($this->properties('ApprovalRequest')[$field]['nullable'] ?? false, "{$field} is null for a request without a workflow run.");
         }
+        // 2.12.0: an approval step required the request, and its placeholder
+        // job has no inventory.
+        $this->assertSame(
+            [ApprovalRequest::REQUIRED_BY_APPROVAL_STEP, null, null],
+            [$data['required_by'], $data['inventory_id'], $data['inventory_name']]
+        );
 
         $this->setQueryParams(['status' => ApprovalRequest::STATUS_PENDING]);
         $this->assertMatchesSchema('ApprovalRequest', $this->listItem($ctrl->actionIndex(), (int)$request->id));
@@ -204,6 +210,7 @@ class OpenApiWorkflowRunStateContractTest extends WebControllerTestCase
             [(int)$request->id, (int)$run->id, (int)$execution->id],
             [$data['approval_request_id'], $data['workflow_job_id'], $data['workflow_job_step_id']]
         );
+        $this->assertSame([null, null], [$data['inventory_id'], $data['inventory_name']], '2.12.0: a placeholder job has no inventory, as Job documents.');
         $this->assertStringContainsString(
             '`approval_request_id`, `workflow_job_id` and `workflow_job_step_id` link the job to its approval request and to the workflow run and step execution it was created for',
             $this->specText(['paths', '/api/v1/jobs/{id}', 'get', 'description'])

@@ -9,6 +9,7 @@ declare(strict_types=1);
 /** @var app\models\JobHostSummary[] $hostSummaries */
 /** @var app\models\JobArtifact[] $artifacts */
 /** @var list<array{id: int, name: string|null, credential_type: string|null, role: string, deleted: bool}> $jobCredentials  as launched, primary first */
+/** @var app\components\JobInventory $jobInventory the inventory the job was launched with, as its runner payload records it */
 /** @var app\services\runstate\JobContext $context the workflow run and step the job was created for, and its approval request, as the viewer may see them */
 
 use app\models\Job;
@@ -105,6 +106,8 @@ $placeholderOrigin = $context->placeholder ? $origin : null;
                             —
                         <?php endif; ?>
                     </dd>
+                    <dt class="col-5">Inventory</dt>
+                    <dd class="col-7" id="detail-inventory"><?= $this->render('_inventory', ['inventory' => $jobInventory]) ?></dd>
                     <dt class="col-5">Credentials</dt>
                     <dd class="col-7"><?= $this->render('/credential/_credential-list', ['credentials' => $jobCredentials, 'listId' => 'job-credentials']) ?></dd>
                     <dt class="col-5">Status</dt>

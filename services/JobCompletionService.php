@@ -150,13 +150,19 @@ class JobCompletionService extends Component
 
     /**
      * The job was claimed but cannot run, for example because one of its
-     * credentials was deleted or cannot be decrypted. Ends it as failed,
-     * with the reason in the job log, so it never stays "running" and
-     * workflows, webhooks and notifications see the failure. A job that
-     * finished meanwhile (a cancel came first) keeps its outcome, and
-     * nothing is written.
+     * credentials was deleted or cannot be decrypted, or the claim refused
+     * it (JobClaimRefusedException: it needs an approval it does not have,
+     * or its inventory is gone or names no hosts). Ends it as failed, with
+     * the reason in the job log, so it never stays "running" and workflows,
+     * webhooks and notifications see the failure. A job that finished
+     * meanwhile (a cancel came first) keeps its outcome, and nothing is
+     * written.
+     *
+     * @param array<string, int|string> $auditContext what job.finished records after exit_code, status
+     *     and reason, which win over keys of the same name (for a refused claim
+     *     JobClaimRefusedException::auditContext())
      */
-    public function failBeforeExecution(Job $job, string $reason): void
+    public function failBeforeExecution(Job $job, string $reason, array $auditContext = []): void
     {
         if (!$this->transition($job, ['exit_code' => -1, 'status' => Job::STATUS_FAILED], $reason)) {
             return;
@@ -166,7 +172,7 @@ class JobCompletionService extends Component
             'exit_code' => -1,
             'status' => Job::STATUS_FAILED,
             'reason' => 'pre_execution_failure',
-        ]);
+        ] + $auditContext);
     }
 
     /**

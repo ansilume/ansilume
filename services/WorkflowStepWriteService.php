@@ -23,7 +23,8 @@ use yii\base\Component;
  * (WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED) when the user may no longer
  * operate the project of every job step, 403 when the user may not change
  * its steps (rule 12: the steps of a workflow with an approval step or a
- * gated job step are for admins), and 409 while a run of it is active. A
+ * gated job step, a job step whose job template or its inventory has an
+ * approval rule, are for admins), and 409 while a run of it is active. A
  * refusal is a WorkflowStepChangeRefusedException, and nothing is written.
  * The checks run in this order, which the API's answers follow:
  * - add: the step as the command sets it, with only the target of its type
@@ -33,8 +34,9 @@ use yii\base\Component;
  *   ApprovalRuleAssignmentPolicy::stepsAddRefusal()); its job template (422
  *   when it does not exist for the user, 403 when they may not operate it);
  *   422 for the model's rules; the guard; then, under the lock, a job
- *   step's job template again (403 with stepsAddRefusal()'s text when it
- *   got an approval rule meanwhile), the save, validated again (a step it
+ *   step's job template again (403 with stepsAddRefusal()'s text when it,
+ *   or its inventory, got an approval rule meanwhile, or it was moved to an
+ *   inventory with one), the save, validated again (a step it
  *   routes to may be gone), and its placement (422 for a position it cannot
  *   take).
  * - update: 404 when the workflow has no such step (STEP_NOT_FOUND); 422 for
@@ -276,10 +278,14 @@ class WorkflowStepWriteService extends Component
      * 403 when $userId may not give the job step $step its job template,
      * checked again under the workflow's lock with the rule the caller
      * checked before it (rule 12, ApprovalRuleAssignmentPolicy::
-     * stepsAddRefusal()): an approval rule that an admin assigned to the job
-     * template since then makes it a gated job step, which is for admins.
-     * Other step types have no job template, and the guard has checked the
-     * workflow's own steps again.
+     * stepsAddRefusal()): an approval rule that an admin assigned since then
+     * to the job template or to its inventory, or an inventory with one that
+     * the job template was given, makes it a gated job step, which is for
+     * admins. Other step types have no job template, and the guard has
+     * checked the workflow's own steps again. Like every read of a step
+     * change after the workflow's row lock, the re-check takes no lock (C16):
+     * a rule committed after this transaction's first read is not seen, a
+     * documented race.
      *
      * Regression: the rule was checked only before the lock, so a job
      * template that got an approval rule in between was given to the step

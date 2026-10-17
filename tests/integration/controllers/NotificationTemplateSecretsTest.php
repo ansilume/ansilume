@@ -10,6 +10,7 @@ use app\controllers\NotificationTemplateController;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\services\NotificationDispatcher;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\RecordingChannel;
 use app\tests\integration\TeamScopeFixtures;
 use yii\helpers\Html;
@@ -33,29 +34,28 @@ class NotificationTemplateSecretsTest extends WebControllerTestCase
 {
     use NotificationSecretFixtures;
     use RendersRealViews;
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     /** @var string[] */
     private array $savedDefaultRoles = [];
 
-    /** @var object|null the dispatcher the test replaced */
-    private ?object $originalDispatcher = null;
-
     protected function setUp(): void
     {
         parent::setUp();
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('notificationDispatcher');
         $auth = \Yii::$app->authManager;
         $this->assertInstanceOf(BaseManager::class, $auth);
         $this->savedDefaultRoles = $auth->getDefaultRoles();
-        $this->originalDispatcher = \Yii::$app->get('notificationDispatcher');
     }
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         $auth = \Yii::$app->authManager;
         $this->assertInstanceOf(BaseManager::class, $auth);
         $auth->setDefaultRoles($this->savedDefaultRoles);
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
         parent::tearDown();
     }
 

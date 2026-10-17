@@ -83,7 +83,7 @@ class JobWorkflowRelationsTest extends DbTestCase
         $rule = $this->createApprovalRule($this->userId);
         $template = $this->template($rule);
         $outside = $this->createJob((int)$template->id, $this->userId, Job::STATUS_PENDING_APPROVAL);
-        $request = $this->approvals()->openRequest($outside, $rule);
+        $request = $this->approvals()->openRequest($outside, $rule, ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE);
 
         $job = $this->reload($outside);
 
@@ -174,7 +174,7 @@ class JobWorkflowRelationsTest extends DbTestCase
             'run' => $this->runOf($execution),
             'execution' => $execution,
             'job' => $placeholder,
-            'request' => $this->approvals()->openRequest($placeholder, $rule),
+            'request' => $this->approvals()->openRequest($placeholder, $rule, ApprovalRequest::REQUIRED_BY_APPROVAL_STEP),
         ];
     }
 
@@ -196,7 +196,7 @@ class JobWorkflowRelationsTest extends DbTestCase
             'run' => $this->runOf($execution),
             'execution' => $execution,
             'job' => $job,
-            'request' => $this->approvals()->openRequest($job, $rule),
+            'request' => $this->approvals()->openRequest($job, $rule, ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE),
         ];
     }
 

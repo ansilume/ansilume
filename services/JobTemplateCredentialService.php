@@ -26,12 +26,36 @@ use yii\base\Component;
  * vault password is checked against the project's last vault scan
  * ({@see VaultCheckService}).
  *
- * What a gated job template runs is for admins to change
+ * What a gated job template runs is for admins to change, and so is giving
+ * a job template an inventory with an approval rule
  * ({@see GatedJobTemplateLock}): a save the lock refuses writes nothing and
- * returns false with GatedJobTemplateLock::CHANGE_REFUSED among the
- * template's errors (GatedJobTemplateLock::refused()). The lock is asked
- * before validation and again, on the template row locked FOR UPDATE, as the
- * first statement of the save's transaction.
+ * returns false with the lock's reason among the template's errors
+ * (GatedJobTemplateLock::refused(), refusalOf()). The lock is asked before
+ * validation and again inside the save's transaction, where
+ * JobTemplateRuleAssignment::persistVetoes() then checks the pair of own
+ * rule and inventory that the save stores (a column it writes as the
+ * template holds it, the other one as the locked row stores it) when the
+ * save creates the template or changes either: an own rule that differs
+ * from the inventory's (JobTemplateRuleAssignment::RULES_DIFFER, an error of
+ * approval_rule_id) and an inventory deleted after the validation
+ * (JobTemplateRuleAssignment::INVENTORY_NOT_FOUND, an error of inventory_id,
+ * instead of the foreign key's error) return false, with nothing written.
+ *
+ * Lock order (C16) of the save's transaction: the template row FOR UPDATE as
+ * its first statement (an existing template), then in one statement the
+ * stored and the new inventory LOCK IN SHARE MODE in ascending ID order
+ * (JobTemplateGate::readInventoryRules()); a new template share-locks its
+ * one inventory first. No later statement locks another inventory row. A
+ * launch takes the same order (JobLaunchService); an inventory save locks
+ * only its own row (InventoryWriteService); a project delete can deadlock
+ * with a save that moves a template into that project (GatedJobTemplateLock
+ * names the exception). A save without a user (a console run) asks no lock,
+ * so its persist veto may share-lock the inventory before its UPDATE locks
+ * the template row; no production caller saves so.
+ *
+ * A clone (copyWithCredentials()) asks no lock: it keeps its source's rule
+ * and inventory, and so the lock. Its validation checks RULES_DIFFER without
+ * a lock; the launch refuses what a race leaves.
  */
 class JobTemplateCredentialService extends Component
 {
@@ -66,7 +90,7 @@ class JobTemplateCredentialService extends Component
             $template,
             $syncPivot ? $extras : null,
             $before,
-            static fn (): bool => $lock->vetoes($template, $additionalIds, $actorId, true)
+            static fn (): bool => JobTemplateRuleAssignment::persistVetoes($lock, $template, $additionalIds, $actorId)
         );
         if ($after === null) {
             return false;
@@ -184,9 +208,10 @@ class JobTemplateCredentialService extends Component
     /**
      * Saves the template and, unless $extras is null, rewrites its pivot
      * rows, in one transaction whose first step is $vetoed: when it vetoes
-     * the save (GatedJobTemplateLock, on the locked template row), nothing
-     * is written. Returns the credential ids the template has afterwards,
-     * primary first; null when vetoed.
+     * the save (JobTemplateRuleAssignment::persistVetoes(), on the locked
+     * template and inventory rows), nothing is written. Returns the
+     * credential ids the template has afterwards, primary first; null when
+     * vetoed.
      *
      * @param list<int>|null $extras
      * @param list<int> $before

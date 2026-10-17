@@ -56,21 +56,30 @@ use yii\web\Response;
  *   { "extra_vars": { "env": "prod" } }   // stored on the run, they reach every job step
  *
  * Response (JSON unless noted):
- *   201: { "job_id": 42 }              (fire)
+ *   201: { "job_id": 42, "status": "queued" }   (fire)
+ *                                        status: "queued", or "pending_approval" when
+ *                                        the job waits for an approval, which the
+ *                                        approval rule of the job template or of its
+ *                                        inventory requires (JobTemplateGate)
  *   201: { "workflow_job_id": 17 }     (fire-workflow)
  *   400: no token (HTML error page)
  *   403: { "error": "Launch refused." } the user the trigger runs as may not launch it
  *   404: token not found or trigger not enabled (HTML error page)
  *   405: not a POST (HTML error page)
  *   422: { "error": "<why>" }           the launch was refused for a reason the caller can
- *                                        fix, e.g. a password survey answer was the
- *                                        placeholder $encrypted$, or for fire a limit or a
- *                                        verbosity the job record would refuse
- *                                        (JobLaunchInput); for fire-workflow also
- *                                        extra_vars that are not a JSON object, a deleted
- *                                        workflow or one without steps, or an approval
- *                                        step that too few approvers besides the user the
- *                                        trigger runs as may decide
+ *                                        fix, and nothing was launched: e.g. a password
+ *                                        survey answer was the placeholder $encrypted$, or
+ *                                        for fire a limit or a verbosity the job record
+ *                                        would refuse (JobLaunchInput), or the approval
+ *                                        the job would wait for (JobLaunchRejectedException:
+ *                                        too few approvers besides the user the trigger
+ *                                        runs as, a rule that is gone, a job template and
+ *                                        its inventory with different rules, a template
+ *                                        or inventory that changed or is gone meanwhile);
+ *                                        for fire-workflow also extra_vars that are not a
+ *                                        JSON object, a deleted workflow or one without
+ *                                        steps, or an approval step that too few approvers
+ *                                        besides the user the trigger runs as may decide
  *   500: { "error": "Launch failed." }
  */
 class TriggerController extends Controller
@@ -116,7 +125,8 @@ class TriggerController extends Controller
 
     /**
      * Fire a job for the template matching the presented trigger token, as
-     * the user who generated the token.
+     * the user who generated the token. 201 with the job's ID and status:
+     * queued, or pending_approval when the job waits for an approval.
      *
      * @throws BadRequestHttpException when the request carries no token
      * @throws NotFoundHttpException when no template has the token
@@ -154,7 +164,7 @@ class TriggerController extends Controller
             'job_id' => (int)$job->id,
         ]);
 
-        return $this->asJson(['job_id' => $job->id])->setStatusCode(201);
+        return $this->asJson(['job_id' => (int)$job->id, 'status' => (string)$job->status])->setStatusCode(201);
     }
 
     /**

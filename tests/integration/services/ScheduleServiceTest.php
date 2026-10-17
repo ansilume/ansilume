@@ -14,10 +14,12 @@ use app\services\NotificationDispatcher;
 use app\services\ScheduleEnablement;
 use app\services\ScheduleService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 
 class ScheduleServiceTest extends DbTestCase
 {
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     private ScheduleService $service;
@@ -25,21 +27,17 @@ class ScheduleServiceTest extends DbTestCase
     /** Records dispatched notifications instead of sending them. */
     private RecordingNotificationDispatcher $dispatcher;
 
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
-
     protected function setUp(): void
     {
         parent::setUp();
-        $this->service = \Yii::$app->get('scheduleService');
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
         $this->dispatcher = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
+        $this->service = \Yii::$app->get('scheduleService');
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

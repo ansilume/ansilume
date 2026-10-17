@@ -9,8 +9,10 @@ use app\models\Team;
 use app\models\User;
 use app\services\ApprovalRuleUsageService;
 use app\services\ApprovalRuleWriteService;
+use app\services\ApproverCounts;
 use yii\data\ActiveDataProvider;
 use yii\helpers\ArrayHelper;
+use yii\rbac\DbManager;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
@@ -119,18 +121,23 @@ class ApprovalRuleController extends BaseController
     }
 
     /**
-     * @return array{model: ApprovalRule, roles: array<string, string>, teams: array<int, string>, users: array<int, string>}
+     * The form's choices, and what its script compares with the required
+     * approvals: how many approvers of each role and team may decide, and
+     * which of the users may (ApproverCounts). The form knows neither who
+     * launches nor what the rule gates, so each count is the most a launch
+     * can find, not the number of users who can approve one.
+     *
+     * @return array{model: ApprovalRule, roles: array<string, string>, teams: array<int, string>, users: array<int, string>, approverCounts: array{roles: array<string, int>, teams: array<string, int>, users: list<int>}}
      */
     private function formParams(ApprovalRule $model): array
     {
+        /** @var DbManager $auth the application's RBAC manager (app\components\AuthManager) */
         $auth = \Yii::$app->authManager;
         $roleNames = [];
-        if ($auth !== null) {
-            foreach ($auth->getRoles() as $role) {
-                $roleNames[$role->name] = $role->name;
-            }
-            ksort($roleNames);
+        foreach ($auth->getRoles() as $role) {
+            $roleNames[$role->name] = $role->name;
         }
+        ksort($roleNames);
 
         /** @var array<int, string> $teams */
         $teams = ArrayHelper::map(
@@ -151,6 +158,11 @@ class ApprovalRuleController extends BaseController
             'roles' => $roleNames,
             'teams' => $teams,
             'users' => $users,
+            'approverCounts' => (new ApproverCounts($auth))->forRuleForm(
+                array_values($roleNames),
+                array_keys($teams),
+                array_keys($users)
+            ),
         ];
     }
 

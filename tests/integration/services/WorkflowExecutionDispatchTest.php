@@ -136,7 +136,7 @@ class WorkflowExecutionDispatchTest extends DbTestCase
                 parent::__construct();
             }
 
-            public function openRequest(Job $job, ApprovalRule $rule): ApprovalRequest
+            public function openRequest(Job $job, ApprovalRule $rule, string $requiredBy): ApprovalRequest
             {
                 throw $this->failure;
             }
@@ -172,7 +172,7 @@ class WorkflowExecutionDispatchTest extends DbTestCase
                 parent::__construct();
             }
 
-            public function openRequest(Job $job, ApprovalRule $rule): ApprovalRequest
+            public function openRequest(Job $job, ApprovalRule $rule, string $requiredBy): ApprovalRequest
             {
                 throw $this->failure;
             }

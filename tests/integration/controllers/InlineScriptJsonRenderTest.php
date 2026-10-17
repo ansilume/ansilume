@@ -60,10 +60,12 @@ class InlineScriptJsonRenderTest extends WebControllerTestCase
     }
 
     /**
-     * The view counts the approvers per role and per team, keyed by the role
-     * names and team ids the controller lists. Team ids are integers; the
-     * form is rendered with a team keyed by PAYLOAD, so the test shows that
-     * the line escapes whatever key it gets.
+     * The controller counts the approvers per role and per team who may
+     * decide (ApproverCounts), keyed by the role names and team ids it
+     * lists, and the view writes them into the form's script, with the
+     * warning for approvers of whom none may decide. Team ids are integers;
+     * the form is rendered with a team keyed by PAYLOAD, so the test shows
+     * that the line escapes whatever key it gets.
      */
     public function testTheApproverCountsReachTheFormScriptEscaped(): void
     {
@@ -77,6 +79,7 @@ class InlineScriptJsonRenderTest extends WebControllerTestCase
             'roles' => [self::PAYLOAD => self::PAYLOAD],
             'teams' => [self::PAYLOAD => 'e2e-team'],
             'users' => [],
+            'approverCounts' => ['roles' => [self::PAYLOAD => 0], 'teams' => [self::PAYLOAD => 0], 'users' => []],
         ];
         $ctrl = new ApprovalRuleController('approval-rule', $this->app());
 
@@ -84,6 +87,7 @@ class InlineScriptJsonRenderTest extends WebControllerTestCase
 
         $this->assertScriptValue($html, 'var roleCounts = ', ';', [self::PAYLOAD => 0]);
         $this->assertScriptValue($html, 'var teamCounts = ', ';', [self::PAYLOAD => 0]);
+        $this->assertScriptValue($html, 'var noApprovers = ', ';', ApprovalRule::NO_ELIGIBLE_APPROVERS);
         $this->assertPayloadOnlyEscaped($html);
     }
 

@@ -11,6 +11,7 @@ use app\controllers\api\v1\traits\ApiTeamScopingTrait;
 use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\GatedJobTemplateLock;
 use app\services\JobTemplateDeletionService;
+use app\services\JobTemplateGate;
 use app\services\JobTemplateRuleAssignment;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
@@ -30,12 +31,18 @@ use yii\web\NotFoundHttpException;
  * else and writes nothing (JobTemplateRuleAssignment). Sending the stored
  * value again, or leaving the field out, is allowed.
  *
- * What a gated template (one with an approval rule) runs is for admins too
- * (GatedJobTemplateLock): for everyone else an update that changes any
- * field but name and description, or credential_ids, answers 403 with
- * GatedJobTemplateLock::CHANGE_REFUSED and writes nothing. A field sent
- * with its stored value is no change, so the body of a GET sent back with
- * another name is a rename. A rule change is refused first.
+ * What a gated template (one with an approval rule of its own, or on an
+ * inventory with one) runs is for admins too (GatedJobTemplateLock): for
+ * everyone else an update that changes any field but name and description,
+ * or credential_ids, answers 403 with GatedJobTemplateLock::CHANGE_REFUSED
+ * (its own rule) or CHANGE_REFUSED_INVENTORY (its inventory's rule) and
+ * writes nothing; so does giving a template an inventory with a rule, on a
+ * create too (GATED_INVENTORY_REFUSED). A field sent with its stored value
+ * is no change, so the body of a GET sent back with another name is a
+ * rename. A rule change is refused first. An inventory the caller may not
+ * see answers 422 "The selected inventory does not exist.", whether it has
+ * a rule or not, and an own rule that differs from the inventory's answers
+ * 422 (JobTemplateRuleAssignment::RULES_DIFFER).
  */
 class JobTemplatesController extends BaseApiController
 {
@@ -54,14 +61,20 @@ class JobTemplatesController extends BaseApiController
 
     /**
      * Optional ?warning=<code> lists only templates with that warning
-     * (see JobTemplateWarnings).
+     * (see JobTemplateWarnings). The relations every item reads are loaded
+     * for the page at once, the approval gate's (JobTemplateGate::RELATIONS)
+     * included, so a page costs the same number of queries whatever its
+     * templates and their inventories are gated by.
      *
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}|array{error: array{message: string}}
      */
     public function actionIndex(): array
     {
         $query = JobTemplate::find()
-            ->with(['project', 'inventory', 'credential', 'jobTemplateCredentials.credential', 'vaultCheck.credential', 'approvalRule'])
+            ->with(array_merge(
+                ['project', 'inventory', 'credential', 'jobTemplateCredentials.credential', 'vaultCheck.credential'],
+                JobTemplateGate::RELATIONS
+            ))
             ->orderBy(['job_template.id' => SORT_DESC]);
         $filter = $this->checker()->buildChildResourceFilter($this->currentUserId(), 'job_template.project_id');
         if ($filter !== null) {
@@ -137,7 +150,7 @@ class JobTemplatesController extends BaseApiController
         }
         $audit = ['source' => 'api'] + $ruleAssignment->auditContext($model, null);
         if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, $audit, $userId)) {
-            return $this->error($this->firstError($model), 422);
+            return $this->saveError($model);
         }
 
         return $this->success($this->serialize($model, $this->mayChange($model)), 201);
@@ -177,9 +190,7 @@ class JobTemplatesController extends BaseApiController
         }
         $audit = ['source' => 'api'] + $ruleAssignment->auditContext($model, $storedRule);
         if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, $audit, $userId)) {
-            return GatedJobTemplateLock::refused($model)
-                ? $this->error(GatedJobTemplateLock::CHANGE_REFUSED, 403)
-                : $this->error($this->firstError($model), 422);
+            return $this->saveError($model);
         }
 
         return $this->success($this->serialize($model, $this->mayChange($model)));
@@ -286,11 +297,19 @@ class JobTemplatesController extends BaseApiController
      * inbound trigger launches as (who generated the token, or created_by
      * for older tokens; null without a token). Only callers who may change
      * the template get them, as only they see the trigger card on its page.
-     * The token and its hash are never returned. approval_rule_id and
-     * approval_rule_name name the rule that gates the template's launches
-     * (null for none), for every caller who may view the template.
+     * The token and its hash are never returned.
      *
-     * @return array{id: int, name: string, description: string|null, project_id: int, project_name: string|null, inventory_id: int, inventory_name: string|null, runner_group_id: int|null, credential_id: int|null, credential_ids: list<int>, credentials: list<array{id: int, name: string, credential_type: string, role: string}>, approval_rule_id: int|null, approval_rule_name: string|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, warnings: list<array{code: string, message: string, credential_ids: list<int>}>, created_by: int, created_at: int, updated_at: int, has_trigger_token?: bool, trigger_user_id?: int|null}
+     * For every caller who may view the template: approval_rule_id and
+     * approval_rule_name name the template's own approval rule (null for
+     * none), which only admins assign. approval_gate, read-only, names the
+     * rule its launches wait for, its own or else its inventory's
+     * (JobTemplateGate::toApi()): the rule's ID and name (null once its row
+     * is gone) and what requires it (required_by: job_template or
+     * inventory); null when nothing gates the template. So a template gated
+     * only through its inventory has approval_rule_id null and an
+     * approval_gate whose required_by is inventory.
+     *
+     * @return array{id: int, name: string, description: string|null, project_id: int, project_name: string|null, inventory_id: int, inventory_name: string|null, runner_group_id: int|null, credential_id: int|null, credential_ids: list<int>, credentials: list<array{id: int, name: string, credential_type: string, role: string}>, approval_rule_id: int|null, approval_rule_name: string|null, approval_gate: array{approval_rule_id: int, approval_rule_name: string|null, required_by: string}|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, warnings: list<array{code: string, message: string, credential_ids: list<int>}>, created_by: int, created_at: int, updated_at: int, has_trigger_token?: bool, trigger_user_id?: int|null}
      */
     private function serialize(JobTemplate $t, bool $withTrigger): array
     {
@@ -312,6 +331,7 @@ class JobTemplatesController extends BaseApiController
             'credentials' => $credentials,
             'approval_rule_id' => $t->approval_rule_id === null ? null : (int)$t->approval_rule_id,
             'approval_rule_name' => $rule?->name,
+            'approval_gate' => JobTemplateGate::of($t)->toApi(),
             'playbook' => $t->playbook,
             'verbosity' => $t->verbosity,
             'forks' => $t->forks,
@@ -402,6 +422,20 @@ class JobTemplatesController extends BaseApiController
             throw new NotFoundHttpException("Template #{$id} not found.");
         }
         return $t;
+    }
+
+    /**
+     * The answer to a save that wrote nothing: 403 with the reason when
+     * GatedJobTemplateLock refused it (refusalOf()), else 422 with the first
+     * validation error.
+     *
+     * @return array{error: array{message: string}}
+     */
+    private function saveError(JobTemplate $model): array
+    {
+        return GatedJobTemplateLock::refused($model)
+            ? $this->error((string)GatedJobTemplateLock::refusalOf($model), 403)
+            : $this->error($this->firstError($model), 422);
     }
 
     /**

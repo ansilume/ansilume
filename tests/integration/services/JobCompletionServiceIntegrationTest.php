@@ -764,6 +764,38 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $this->assertSame([\app\models\Webhook::EVENT_JOB_FAILURE], $webhooks->events);
     }
 
+    /**
+     * A refused claim's audit context follows the base keys in the stored
+     * job.finished entry, and cannot replace them.
+     */
+    public function testFailBeforeExecutionStoresTheAuditContextAfterTheBaseKeys(): void
+    {
+        $job = $this->makeRunningJob();
+        $this->captureWebhooks();
+
+        $this->service->failBeforeExecution($job, 'Job aborted before execution.', [
+            'claim_refusal' => 'inventory_missing',
+            'inventory_id' => 42,
+            'status' => Job::STATUS_SUCCEEDED,
+        ]);
+
+        $audit = AuditLog::find()
+            ->where(['action' => AuditLog::ACTION_JOB_FINISHED, 'object_type' => 'job', 'object_id' => $job->id])
+            ->one();
+        $this->assertNotNull($audit);
+        $this->assertSame(
+            [
+                'exit_code' => -1,
+                'status' => Job::STATUS_FAILED,
+                'reason' => 'pre_execution_failure',
+                'claim_refusal' => 'inventory_missing',
+                'inventory_id' => 42,
+            ],
+            json_decode((string)$audit->metadata, true)
+        );
+        $this->assertSame(['Job aborted before execution.'], $this->logLinesOf($job));
+    }
+
     public function testFailBeforeExecutionLeavesAFinishedJobUntouched(): void
     {
         $job = $this->makeCanceledJob();

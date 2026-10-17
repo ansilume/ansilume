@@ -8,6 +8,7 @@ use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\services\ProjectService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\RecordingNotificationDispatcher;
 use app\tests\unit\docs\ReadsOperatorDocs;
 use app\tests\unit\docs\WorkflowStepsUpdateDocsContractTest;
@@ -32,6 +33,7 @@ use app\tests\unit\GitRemoteFixture;
 class GitSyncBehaviourDocsContractTest extends DbTestCase
 {
     use ReadsOperatorDocs;
+    use RestoresComponents;
     use RunsTheUpdateSectionQueries;
 
     /** The URL of the docs' examples; test values, not secrets. */
@@ -48,22 +50,17 @@ class GitSyncBehaviourDocsContractTest extends DbTestCase
 
     private GitRemoteFixture $remotes;
 
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
-
     protected function setUp(): void
     {
         parent::setUp();
-        $components = \Yii::$app->getComponents(true);
-        $this->originalDispatcher = $components['notificationDispatcher'] ?? null;
-        \Yii::$app->set('notificationDispatcher', new RecordingNotificationDispatcher());
+        $this->swapComponent('notificationDispatcher', new RecordingNotificationDispatcher());
         $this->remotes = new GitRemoteFixture(sys_get_temp_dir() . '/docs-git-sync-' . uniqid('', true));
         $this->remotes->add(self::URL, "first\n");
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         $this->remotes->remove();
         parent::tearDown();
     }

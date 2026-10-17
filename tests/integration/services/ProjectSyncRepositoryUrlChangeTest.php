@@ -9,6 +9,7 @@ use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\services\ProjectService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\unit\GitRemoteFixture;
 use yii\log\Logger;
 
@@ -25,6 +26,8 @@ use yii\log\Logger;
  */
 class ProjectSyncRepositoryUrlChangeTest extends DbTestCase
 {
+    use RestoresComponents;
+
     /** Test values, not secrets. */
     private const OLD_TOKEN = 'w5d-old-token-7316';
     private const NEW_TOKEN = 'w5d-new-token-9042';
@@ -33,9 +36,6 @@ class ProjectSyncRepositoryUrlChangeTest extends DbTestCase
 
     private GitRemoteFixture $remotes;
 
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
-
     private Logger $logger;
 
     private Logger $previousLogger;
@@ -43,8 +43,7 @@ class ProjectSyncRepositoryUrlChangeTest extends DbTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
-        \Yii::$app->set('notificationDispatcher', new RecordingNotificationDispatcher());
+        $this->swapComponent('notificationDispatcher', new RecordingNotificationDispatcher());
         $this->previousLogger = \Yii::getLogger();
         $this->logger = new Logger();
         $this->logger->flushInterval = PHP_INT_MAX;
@@ -56,8 +55,8 @@ class ProjectSyncRepositoryUrlChangeTest extends DbTestCase
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         \Yii::setLogger($this->previousLogger);
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
         $this->remotes->remove();
         parent::tearDown();
     }

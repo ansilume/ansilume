@@ -7,6 +7,7 @@ namespace app\tests\integration\controllers\api\v1;
 use app\components\WorkflowStepCommand;
 use app\controllers\api\v1\WorkflowStepsController;
 use app\models\ApprovalRule;
+use app\models\Inventory;
 use app\models\JobTemplate;
 use app\models\User;
 use app\models\WorkflowStep;
@@ -147,6 +148,43 @@ class WorkflowStepsControllerPolicyTest extends WebControllerTestCase
             $data['routes']['closed_gate'] ?? null,
             'a gated job step can end with a closed gate'
         );
+    }
+
+    /**
+     * A job template gated only through its inventory (C15) is a gated job
+     * template too: a POST that adds a job step with it, or a PUT that gives
+     * a step it, is for admins (the inventory's text), and the admin's
+     * answer gives the step its closed gate.
+     */
+    public function testOnlyAdminsGiveAJobStepAJobTemplateGatedThroughItsInventory(): void
+    {
+        $workflow = $this->plainWorkflow();
+        $own = $this->s['own'];
+        $gated = $this->createJobTemplate((int)$own->project_id, (int)$own->inventory_id, (int)$own->runner_group_id, (int)$this->s['admin']->id);
+        $inventory = $this->createInventory((int)$this->s['admin']->id);
+        Inventory::updateAll(['approval_rule_id' => (int)$this->ruleOfAdmin()->id], ['id' => $inventory->id]);
+        JobTemplate::updateAll(['inventory_id' => (int)$inventory->id], ['id' => $gated->id]);
+        $deploy = $this->stepIdOf((int)$workflow->id, 'Deploy');
+        $before = $this->stepRows((int)$workflow->id);
+        $this->tokenOf($this->s['member']);
+
+        $added = $this->api('POST', $this->stepsPath((int)$workflow->id), ['name' => 'Release', 'job_template_id' => (int)$gated->id]);
+        $edited = $this->api('PUT', $this->stepPath((int)$workflow->id, $deploy), ['job_template_id' => (int)$gated->id]);
+
+        $this->assertApiError(403, ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED, $added);
+        $this->assertApiError(403, ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED, $edited);
+        $this->assertSame($before, $this->stepRows((int)$workflow->id));
+
+        $this->tokenOf($this->s['admin']);
+        $data = $this->dataOf($this->api('PUT', $this->stepPath((int)$workflow->id, $deploy), ['job_template_id' => (int)$gated->id]));
+
+        $this->assertSame((int)$gated->id, $data['job_template_id']);
+        $this->assertSame(
+            ['kind' => 'end', 'via' => 'on_failure', 'step_id' => null, 'position' => null, 'run_outcome' => 'fails', 'loop' => false],
+            $data['routes']['closed_gate'] ?? null,
+            'a job step gated through its inventory can end with a closed gate'
+        );
+        $this->assertNull($data['cannot_run']);
     }
 
     /**

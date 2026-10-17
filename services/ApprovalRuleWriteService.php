@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\ApprovalRuleUsage;
+use app\components\SurveyDefinition;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
 use app\models\JobTemplate;
@@ -23,17 +24,24 @@ use yii\db\Query;
  * - Audit entries carry the source (web or api) and the approver settings:
  *   all of them on create, each changed field with its value before and
  *   after on update. None of them is a secret.
- * - Delete refuses a rule in use ({@see ApprovalRuleUsage}); there is no
- *   force. It runs in one transaction that locks the rule row, so nothing
- *   can start using the rule between the check and the delete; the RESTRICT
- *   foreign keys refuse anything that does anyway, and the answer is the
- *   same refusal. A save that assigns the rule at the same moment can end
- *   the delete's transaction in a deadlock or a lock wait timeout instead:
- *   the delete then runs once more, sees what that save committed, and
- *   refuses (a second lock conflict is thrown). Soft-deleted job templates
- *   and the steps of soft-deleted workflows cannot run: their reference is
- *   cleared instead of blocking the delete. Resolved requests keep their
- *   history without the rule.
+ * - Delete refuses a rule in use ({@see ApprovalRuleUsage}: inventories,
+ *   job templates, workflow steps, pending requests); there is no force. It
+ *   runs in one transaction that locks the rule row, so nothing can start
+ *   using the rule between the check and the delete; the RESTRICT foreign
+ *   keys of inventories, job templates and workflow steps refuse anything
+ *   that does anyway, and the answer is the same refusal, with the usage
+ *   counted again. A reference that the usage still does not count is
+ *   refused with DELETE_REFUSED_UNLISTED, never as "not in use". A save
+ *   that assigns the rule at the same moment can end the delete's
+ *   transaction in a deadlock or a lock wait timeout instead: the delete
+ *   then runs once more, sees what that save committed, and refuses (a
+ *   second lock conflict is thrown). An inventory save that names the rule
+ *   while the delete removes it makes its attempt once more as well
+ *   (InventoryWriteService) and answers that the rule does not exist.
+ *   Soft-deleted job templates and the steps of soft-deleted workflows
+ *   cannot run: their reference is cleared instead of blocking the delete.
+ *   Inventories have no soft delete, so an inventory with the rule always
+ *   blocks it. Resolved requests keep their history without the rule.
  */
 class ApprovalRuleWriteService extends Component
 {
@@ -42,6 +50,12 @@ class ApprovalRuleWriteService extends Component
 
     /** The refusal of a delete: the usage summary, then what to do. */
     public const DELETE_REFUSED = '%s Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.';
+
+    /**
+     * The refusal of a delete that the database refused although the usage
+     * counts nothing: the quoted rule name.
+     */
+    public const DELETE_REFUSED_UNLISTED = 'Approval rule %s was not deleted: the database still refers to it. Nothing was changed.';
 
     /** Reads an approval rule row and locks it until the transaction ends. */
     private const LOCK_SQL = 'SELECT * FROM {{%approval_rule}} WHERE [[id]] = :id FOR UPDATE';
@@ -126,10 +140,17 @@ class ApprovalRuleWriteService extends Component
     }
 
     /**
-     * The message that refuses the delete of a rule in use.
+     * The message that refuses the delete of a rule in use. A usage that
+     * counts nothing comes from a delete that the foreign keys refused for
+     * a reference the usage does not list: it says so, instead of "not in
+     * use".
      */
     public static function refusal(ApprovalRuleUsage $usage): string
     {
+        if (!$usage->isInUse()) {
+            return sprintf(self::DELETE_REFUSED_UNLISTED, SurveyDefinition::quote($usage->ruleName));
+        }
+
         return sprintf(self::DELETE_REFUSED, $usage->summary());
     }
 

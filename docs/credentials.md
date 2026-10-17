@@ -83,10 +83,11 @@ projects and waiting jobs use it. Deleting it detaches it from all of
 them, and waiting jobs that need it fail before they start. The audit
 log records the forced delete with those counts. Job templates with an
 approval rule lose the credential too, although only admins change what
-they run otherwise: deleting credentials (`credential.delete`) is for
-admins by default, keep it so (see
-[What an approval rule does not stop](updating.md#after-updating-from-290-or-older-approvals-and-workflows)
-in the update notes).
+they run otherwise, and so do job templates on an inventory with an
+approval rule: deleting credentials (`credential.delete`) is for admins by
+default, keep it so (see **What an approval rule does not stop** in
+[the update notes of 2.12.0](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories)
+and of [2.10.0](updating.md#after-updating-from-290-or-older-approvals-and-workflows)).
 
 Over the API, `DELETE /api/v1/credentials/{id}` answers `409` with
 `error.used_by` while the credential is in use. Repeat the request with
@@ -285,7 +286,12 @@ A job template with an approval rule changes only for users with
 the list offers it too, but the assignment leaves it as it is and reports
 it as failed with
 `This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.`;
-the other templates are assigned.
+the other templates are assigned. A job template whose inventory has an
+approval rule, and which has none of its own, is reported with
+`The inventory of this job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.`
+(see
+[updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories),
+**Job templates on a gated inventory are gated too**).
 
 The API offers the same: `GET /api/v1/credentials/{id}/job-templates`
 lists the templates you may change, and `POST` with
@@ -513,10 +519,11 @@ vars. Password answers are handled like credentials:
 
 The content of a static inventory and the extra vars of job templates,
 jobs and schedules are stored as entered, without encryption, and shown to
-everyone who may see them: the content on the page of the inventory, a job
-template's Default Extra Vars on its page, a job's extra vars on its page,
-in its stored command and in `GET /api/v1/jobs`, and a schedule's extra
-vars on its page and in `GET /api/v1/schedules`. By default viewers see
+everyone who may see them: the content on the page of the inventory and in
+`GET /api/v1/inventories/{id}`, a job template's Default Extra Vars on its
+page, a job's extra vars on its page, in its stored command and in
+`GET /api/v1/jobs`, and a schedule's extra vars on its page and in
+`GET /api/v1/schedules`. By default viewers see
 inventories, job templates and jobs, and operators schedules; with teams,
 the members of the teams that have their project do. A password, token or
 key written there is readable by all of them, and only the answers of
@@ -550,6 +557,14 @@ is used, but the secret fields are never rendered. Operator can create
 and update but cannot delete. Deleting a credential detaches it from
 every template and project that uses it, so deletion is admin-gated and
 needs a second confirmation while the credential is in use.
+
+Credentials have no team scope. Whoever may create or change a project
+(`project.create`, `project.update`) can make its sync present any token
+or username and password credential to a server of their choosing, so
+grant `project.create` and `project.update` only to users you would trust
+with every such credential. A later release scopes credentials to teams
+(see **What an approval rule does not stop** in
+[the update notes of 2.12.0](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories)).
 
 The REST API enforces the same permissions: `GET /api/v1/credentials` and
 `GET /api/v1/credentials/{id}` need `credential.view`. Every signed-in user

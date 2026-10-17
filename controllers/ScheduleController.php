@@ -8,6 +8,7 @@ use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\controllers\traits\TeamScopingTrait;
+use app\services\JobTemplateGate;
 use app\services\ScheduleEnablement;
 use app\services\ScheduleRunAs;
 use app\services\ScheduleSecrets;
@@ -60,11 +61,22 @@ class ScheduleController extends BaseController
         return $this->render('index', ['dataProvider' => $dataProvider]);
     }
 
+    /**
+     * The schedule's page. When its job template is gated (its own approval
+     * rule, else its inventory's: JobTemplateGate), the page says that each
+     * run waits for approval; not once the template is gone.
+     */
     public function actionView(int $id): string
     {
         $model = $this->findModel($id);
         $this->requireScheduleView($model);
-        return $this->render('view', ['model' => $model]);
+        /** @var JobTemplate|null $template */
+        $template = $model->jobTemplate;
+
+        return $this->render('view', [
+            'model' => $model,
+            'approvalNote' => $template === null ? null : JobTemplateGate::of($template)->scheduleNote(),
+        ]);
     }
 
     public function actionCreate(): Response|string

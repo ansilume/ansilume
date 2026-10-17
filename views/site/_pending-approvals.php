@@ -5,7 +5,9 @@ declare(strict_types=1);
 /**
  * The dashboard's Pending Approvals: the newest pending requests the user may
  * see, each with what it is for (views/approval/_for.php), which names a
- * workflow only to a user who may view it.
+ * workflow only to a user who may view it. The Rule cell names the inventory
+ * of a request that the inventory of its job required
+ * (RequestContext::ruleText()), as the approval list does.
  *
  * @var yii\web\View $this
  * @var list<app\models\ApprovalRequest> $pendingApprovals the newest pending requests the user may see
@@ -16,6 +18,7 @@ declare(strict_types=1);
 
 use app\controllers\ApprovalController;
 use app\models\ApprovalRequest;
+use app\services\runstate\RequestContext;
 use yii\helpers\Html;
 use yii\helpers\Url;
 
@@ -33,9 +36,13 @@ use yii\helpers\Url;
             </thead>
             <tbody>
             <?php foreach ($pendingApprovals as $ar) : ?>
+                <?php
+                $context = $approvalContexts[(int)$ar->id] ?? null;
+                $ruleName = $ar->approvalRule?->name;
+                ?>
                 <tr data-request-id="<?= (int)$ar->id ?>">
-                    <td><?= Html::encode($ar->approvalRule->name ?? '—') ?></td>
-                    <td data-approval-for><?= $this->render('@app/views/approval/_for', ['context' => $approvalContexts[(int)$ar->id] ?? null, 'viewer' => $viewer]) ?></td>
+                    <td data-approval-rule><?= Html::encode($context !== null ? $context->ruleText($ruleName) : ($ruleName ?? RequestContext::UNKNOWN)) ?></td>
+                    <td data-approval-for><?= $this->render('@app/views/approval/_for', ['context' => $context, 'viewer' => $viewer]) ?></td>
                     <td><?= Html::a('#' . (int)$ar->job_id, Url::to(['/job/view', 'id' => $ar->job_id])) ?></td>
                     <td class="text-nowrap"><?= $ar->requested_at !== null ? Html::encode(date('Y-m-d H:i', (int)$ar->requested_at)) : '—' ?></td>
                     <td class="text-nowrap"><?= $ar->expires_at !== null ? Html::encode(date('Y-m-d H:i', (int)$ar->expires_at)) : '—' ?></td>

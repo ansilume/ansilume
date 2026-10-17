@@ -23,9 +23,10 @@ use yii\db\Query;
  *   it (a role rule counts the users assigned that role directly),
  * - has an active account,
  * - is a superadmin or holds approval.decide,
- * - may see what is to be approved: the job template's project, or for a
- *   workflow approval step the workflow (team scoping, which applies only
- *   while some project is restricted to a team),
+ * - may see what is to be approved: the job template's project (also for
+ *   the approval rule of the template's inventory), or for a workflow
+ *   approval step the workflow (team scoping, which applies only while some
+ *   project is restricted to a team),
  * - and is not the launcher: the user who launched the job, or for a
  *   workflow the user who started the run. Nobody approves their own launch,
  *   superadmins included.
@@ -54,6 +55,16 @@ class ApproverEligibility extends Component
 
     /** Workflow launch refused for a step whose approval rule is gone: step name (quoted). */
     public const REFUSAL_WORKFLOW_RULE_MISSING = 'Step %s: its approval rule no longer exists. An admin can choose another rule.';
+
+    /**
+     * Workflow launch refused for a job step whose job template has an
+     * approval rule of its own and its inventory another one
+     * (JobTemplateGate::rulesDiffer()): a launch waits for one rule only, so
+     * the step's job could never be launched. sprintf(): step name (quoted).
+     */
+    public const REFUSAL_WORKFLOW_RULES_DIFFER = 'Step %s: its job template and its inventory have different approval'
+        . ' rules, and a launch waits for one rule only. An admin can remove the template\'s own rule or give it the'
+        . ' inventory\'s rule.';
 
     /**
      * The users who may decide on the request, in the rule's order.
@@ -162,8 +173,15 @@ class ApproverEligibility extends Component
      * Why $launchedBy may not launch $template: the first step, in step
      * order, whose approval could never be granted. Every approval step
      * counts (an approval step whose rule is gone, too) and every job step
-     * whose job template waits for an approval rule, whether or not a run
-     * would reach it. Null when every approval can be granted.
+     * whose job template waits for an approval rule, its own or its
+     * inventory's (JobTemplateGate), whether or not a run would reach it: a
+     * job step whose template and inventory have different rules, or whose
+     * rule is gone, could never be launched either. Null when every approval
+     * can be granted.
+     *
+     * The steps, their rules, job templates, inventories and the inventories'
+     * rules are read at once, so reading them costs the same for any number
+     * of steps; each gated step then costs its approver check.
      */
     public function workflowLaunchRefusal(WorkflowTemplate $template, int $launchedBy): ?string
     {
@@ -172,7 +190,7 @@ class ApproverEligibility extends Component
         /** @var WorkflowStep[] $steps */
         $steps = WorkflowStep::find()
             ->where(['workflow_template_id' => $workflowTemplateId])
-            ->with(['approvalRule', 'jobTemplate.approvalRule'])
+            ->with(['approvalRule', 'jobTemplate.approvalRule', 'jobTemplate.inventory.approvalRule'])
             ->orderBy(['step_order' => SORT_ASC, 'id' => SORT_ASC])
             ->all();
         foreach ($steps as $step) {
@@ -196,6 +214,9 @@ class ApproverEligibility extends Component
             return null;
         }
         $stepName = SurveyDefinition::quote((string)$step->name);
+        if ($gate['rules_differ']) {
+            return sprintf(self::REFUSAL_WORKFLOW_RULES_DIFFER, $stepName);
+        }
         $rule = $gate['rule'];
         if ($rule === null) {
             return sprintf(self::REFUSAL_WORKFLOW_RULE_MISSING, $stepName);
@@ -217,11 +238,18 @@ class ApproverEligibility extends Component
 
     /**
      * The approval a step waits for: its rule (null when the rule no longer
-     * exists) and who may see its request. Null for a step without one: a
-     * pause step, or a job step whose job template has no rule or no longer
-     * exists (launching such a step fails on its own).
+     * exists), who may see its request, and whether two rules meet. Null for
+     * a step without one: a pause step, or a job step whose job template is
+     * not gated (neither it nor its inventory has a rule) or no longer exists
+     * (launching such a step fails on its own).
      *
-     * @return array{rule: ApprovalRule|null, audience: \Closure(): ApproverAudience}|null
+     * A job step waits for the rule that gates its job template
+     * (JobTemplateGate): the template's own, else its inventory's; its
+     * request is seen by whoever may see the template's project, also for
+     * the rule of its inventory. rules_differ: the template has a rule of its
+     * own and its inventory another one, so its job's launch is refused.
+     *
+     * @return array{rule: ApprovalRule|null, audience: \Closure(): ApproverAudience, rules_differ: bool}|null
      */
     private function gateOf(WorkflowStep $step, int $workflowTemplateId): ?array
     {
@@ -232,20 +260,24 @@ class ApproverEligibility extends Component
             return [
                 'rule' => $rule,
                 'audience' => fn (): ApproverAudience => $this->workflowAudience($workflowTemplateId),
+                'rules_differ' => false,
             ];
         }
         /** @var JobTemplate|null $template */
         $template = $step->step_type === WorkflowStep::TYPE_JOB ? $step->jobTemplate : null;
-        if ($template === null || $template->approval_rule_id === null) {
+        if ($template === null) {
+            return null;
+        }
+        $gate = JobTemplateGate::of($template);
+        if (!$gate->isGated()) {
             return null;
         }
         $projectId = (int)$template->project_id;
-        /** @var ApprovalRule|null $rule */
-        $rule = $template->approvalRule;
 
         return [
-            'rule' => $rule,
+            'rule' => $gate->rule,
             'audience' => static fn (): ApproverAudience => ApproverAudience::ofProjects([$projectId]),
+            'rules_differ' => $gate->rulesDiffer(),
         ];
     }
 

@@ -4,29 +4,37 @@ declare(strict_types=1);
 
 namespace app\tests\integration\api;
 
+use app\controllers\api\v1\InventoriesController;
 use app\models\Inventory;
-use app\tests\integration\DbTestCase;
+use app\models\User;
+use app\tests\integration\controllers\WebControllerTestCase;
 
-class InventoriesApiTest extends DbTestCase
+class InventoriesApiTest extends WebControllerTestCase
 {
+    /**
+     * GET /api/v1/inventories: each item without content and source_path,
+     * with the inventory's approval rule.
+     */
     public function testInventorySerializationShape(): void
     {
-        $user = $this->createUser();
+        $user = $this->apiUser();
         $inv = $this->createInventory($user->id);
 
-        $serialized = [
-            'id' => $inv->id,
-            'name' => $inv->name,
-            'description' => $inv->description,
-            'inventory_type' => $inv->inventory_type,
-            'project_id' => $inv->project_id,
-            'created_at' => $inv->created_at,
-            'updated_at' => $inv->updated_at,
-        ];
+        $serialized = $this->listItemOf((int)$inv->id);
 
+        $this->assertSame([
+            'id' => (int)$inv->id,
+            'name' => $inv->name,
+            'description' => null,
+            'inventory_type' => Inventory::TYPE_STATIC,
+            'project_id' => null,
+            'approval_rule_id' => null,
+            'approval_rule_name' => null,
+            'created_at' => (int)$inv->created_at,
+            'updated_at' => (int)$inv->updated_at,
+        ], $serialized);
         $this->assertArrayNotHasKey('content', $serialized);
         $this->assertArrayNotHasKey('source_path', $serialized);
-        $this->assertSame(Inventory::TYPE_STATIC, $serialized['inventory_type']);
     }
 
     public function testInventoryFindOneReturnsCorrectRecord(): void
@@ -60,14 +68,20 @@ class InventoriesApiTest extends DbTestCase
         $this->assertCount(2, $results);
     }
 
+    /**
+     * The list leaves out content and source_path; GET /{id}, for the
+     * audience of the inventory's page, answers them.
+     */
     public function testInventoryContentNotExposedInApiShape(): void
     {
-        $user = $this->createUser();
+        $user = $this->apiUser();
         $inv = $this->createInventory($user->id);
 
-        // The API controller intentionally excludes content and source_path
-        $this->assertNotNull($inv->content);
-        $this->assertSame("localhost\n", $inv->content);
+        $this->assertArrayNotHasKey('content', $this->listItemOf((int)$inv->id));
+        $detail = (new InventoriesController('api/v1/inventories', \Yii::$app))->actionView((int)$inv->id);
+        $this->assertSame("localhost\n", $detail['data']['content'] ?? null);
+        $this->assertArrayHasKey('source_path', $detail['data']);
+        $this->assertNull($detail['data']['source_path']);
     }
 
     public function testCreateStaticInventoryWithYamlContent(): void
@@ -141,5 +155,44 @@ class InventoriesApiTest extends DbTestCase
 
         $this->assertFalse($inv->validate());
         $this->assertTrue($inv->hasErrors('content'));
+    }
+
+    /**
+     * A signed-in admin, who sees every inventory.
+     */
+    private function apiUser(): User
+    {
+        $user = $this->createUser('api-inventories');
+        $auth = \Yii::$app->authManager;
+        $this->assertNotNull($auth);
+        $role = $auth->getRole('admin');
+        $this->assertNotNull($role);
+        $auth->assign($role, (string)$user->id);
+        $this->loginAs($user);
+
+        return $user;
+    }
+
+    /**
+     * The item of inventory #$id in GET /api/v1/inventories.
+     *
+     * @return array<string, mixed>
+     */
+    private function listItemOf(int $id): array
+    {
+        $ctrl = new InventoriesController('api/v1/inventories', \Yii::$app);
+        $page = 1;
+        do {
+            $this->setQueryParams(['page' => $page]);
+            $answer = $ctrl->actionIndex();
+            foreach ($answer['data'] as $item) {
+                if (is_array($item) && ($item['id'] ?? null) === $id) {
+                    /** @var array<string, mixed> $item */
+                    return $item;
+                }
+            }
+            $page++;
+        } while ($page <= $answer['meta']['pages']);
+        $this->fail("Inventory #{$id} is not listed.");
     }
 }

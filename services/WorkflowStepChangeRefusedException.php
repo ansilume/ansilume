@@ -8,8 +8,8 @@ namespace app\services;
  * A change of a workflow's steps refused, with nothing written, with an
  * HTTP-style status:
  * - 403: gated steps are for admins (ApprovalRuleAssignmentPolicy: approval
- *   steps, and job steps whose job template has an approval rule), or a job
- *   template the user may see but not operate
+ *   steps, and job steps whose job template or its inventory has an
+ *   approval rule), or a job template the user may see but not operate
  *   (WorkflowStepWriteService::JOB_TEMPLATE_FORBIDDEN, details
  *   job_template_ids), or the user may no longer operate the project of
  *   every job step, checked again under the lock

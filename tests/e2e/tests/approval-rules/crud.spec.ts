@@ -2,14 +2,18 @@ import { test, expect, Page } from '@playwright/test';
 import { expectFlash, fillForm, submitForm } from '../../lib/helpers';
 import { PAGE_TITLE } from '../../lib/selectors';
 import { forgePost, idWhere, indexRows } from '../../lib/scoping';
-import { APPROVAL_RULE, GATED_TEMPLATE, flash } from '../../lib/approvals';
+import { APPROVAL_RULE, DELETE_BLOCKED, GATED_TEMPLATE, NOT_IN_USE, flash } from '../../lib/approvals';
+import { HOST_INVENTORY, HOST_RULE } from '../../lib/inventories';
 
 /** The rule this file creates, changes and deletes. */
 const CRUD_RULE = 'e2e-crud-approval-rule';
 
-/** components/ApprovalRuleUsage.php DELETE_BLOCKED */
-const DELETE_BLOCKED = 'In use: remove it from the job templates and workflow steps below, '
-  + 'and let its pending requests be decided or their jobs canceled, before deleting it.';
+/**
+ * The users of the Users select of the rule form who may decide
+ * (data-eligible="1": active, and holding approval.decide or a superadmin,
+ * ApproverCounts): only they count towards the required approvals.
+ */
+const ELIGIBLE_USERS = '#approver-users option[data-eligible="1"]';
 
 /**
  * models/ApprovalRule.php ROLE_HINT, the hint under Role
@@ -116,20 +120,19 @@ test.describe('Approval Rules CRUD', () => {
   test('warns when required approvals exceeds eligible users', async ({ page }) => {
     await page.goto('/approval-rule/create');
 
-    // Select "users" type and pick only 1 user
+    // Select "users" type and pick only 1 user who may decide: one who may
+    // not would get the warning that nobody can approve instead.
     await page.locator('#approver-type').selectOption('users');
-    const firstOption = page.locator('#approver-users option').first();
-    const firstValue = await firstOption.getAttribute('value');
-    if (firstValue) {
-      await page.locator('#approver-users').selectOption([firstValue]);
-    }
+    const firstValue = await page.locator(ELIGIBLE_USERS).first().getAttribute('value');
+    expect(firstValue, 'a user who may decide').toMatch(/^\d+$/);
+    await page.locator('#approver-users').selectOption([firstValue ?? '']);
 
     // Set required approvals to 5 — should trigger warning
     await page.locator('#required-approvals').fill('5');
     await page.locator('#required-approvals').dispatchEvent('input');
     const warning = page.locator('#approver-count-warning');
     await expect(warning).toBeVisible();
-    await expect(warning).toContainText(/exceeds/i);
+    await expect(warning).toHaveText('Warning: Required approvals (5) exceeds eligible approvers (1).');
 
     // Reduce to 1 — warning should disappear
     await page.locator('#required-approvals').fill('1');
@@ -140,10 +143,11 @@ test.describe('Approval Rules CRUD', () => {
   test('the form says the launcher never approves when every approver is needed', async ({ page }) => {
     await page.goto('/approval-rule/create');
     await page.locator('#approver-type').selectOption('users');
-    const values = await page.locator('#approver-users option').evaluateAll(
+    // Users who may decide: only they count as approvers.
+    const values = await page.locator(ELIGIBLE_USERS).evaluateAll(
       (options) => options.slice(0, 2).map((option) => (option as HTMLOptionElement).value),
     );
-    expect(values, 'two users to choose').toHaveLength(2);
+    expect(values, 'two users who may decide to choose').toHaveLength(2);
     const note = page.locator('#approver-launcher-note');
     const required = page.locator('#required-approvals');
 
@@ -197,6 +201,37 @@ test.describe('Approval Rules CRUD', () => {
     await expect(blocked).toBeDisabled();
     await expect(blocked).toHaveAttribute('title', DELETE_BLOCKED);
     await expect(page.locator('#approval-rule-delete-blocked-reason')).toHaveText(DELETE_BLOCKED);
+    // No inventory has this rule.
+    await expect(page.locator('#approval-rule-usage-inventories')).toHaveCount(0);
+  });
+
+  // commands/E2eInventoryGateSeeder.php: e2e-host-gate-rule gates
+  // e2e-gated-inventory, which has no project; no job template has the rule
+  // as its own, so the inventory is what uses it.
+  test('a rule that gates an inventory lists the inventory first under Used by and offers no Delete', async ({ page }) => {
+    await openRule(page, HOST_RULE);
+    const usage = page.locator('#approval-rule-usage');
+    const inventories = page.locator('#approval-rule-usage-inventories');
+    const inventory = inventories.locator('li').filter({ has: page.getByRole('link', { name: HOST_INVENTORY, exact: true }) });
+    await expect(inventory).toHaveCount(1);
+    await expect(inventory.getByRole('link')).toHaveAttribute('href', /\/inventory\/view\?id=\d+$/);
+    // Without a project, nothing follows the name.
+    await expect(inventory).toHaveText(HOST_INVENTORY);
+    // Inventories come first, before what else uses the rule.
+    await expect(usage.locator('h6').first()).toHaveText('Inventories');
+    await expect(page.locator('#approval-rule-usage-templates')).toHaveCount(0);
+    await expect(usage).not.toContainText(NOT_IN_USE);
+
+    await expect(page.locator('#approval-rule-delete-form')).toHaveCount(0);
+    const blocked = page.locator('#approval-rule-delete-blocked');
+    await expect(blocked).toBeDisabled();
+    await expect(blocked).toHaveAttribute('title', DELETE_BLOCKED);
+    await expect(page.locator('#approval-rule-delete-blocked-reason')).toHaveText(DELETE_BLOCKED);
+
+    // The link leads to the inventory, which names the rule.
+    await inventory.getByRole('link').click();
+    await expect(page).toHaveURL(/\/inventory\/view\?id=\d+$/);
+    await expect(page.locator('#inventory-approval-rule')).toContainText(HOST_RULE);
   });
 
   test('a rule with a pending request counts it among its uses', async ({ page }) => {
@@ -229,9 +264,30 @@ test.describe('Approval Rules CRUD', () => {
     expect(idWhere(await indexRows(page, '/approval-rule/index'), 0, APPROVAL_RULE)).toBe(id);
   });
 
+  // A rule an inventory has cannot go either: its job templates would launch
+  // without approval (the foreign key of inventory.approval_rule_id is
+  // RESTRICT as well).
+  test('deleting a rule that gates an inventory is refused, and the flash counts the inventory first', async ({ page }) => {
+    const id = await openRule(page, HOST_RULE);
+    // The page offers no Delete: a real form post with a valid CSRF token.
+    await page.goto('/approval-rule/index');
+    await forgePost(page, `/approval-rule/delete?id=${id}`, {}, /\/approval-rule\/view\?id=\d+/);
+
+    // ApprovalRuleUsage::summary(): the inventories first; pending requests
+    // of jobs on the inventory, when a spec left one waiting.
+    await expect(flash(page, 'danger')).toHaveText(new RegExp(
+      `^\\s*Approval rule "${HOST_RULE}" is in use by \\d+ inventory\\(ies\\)( and \\d+ pending approval request\\(s\\))?`
+      + '\\. Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it\\.\\s*$',
+    ));
+    await expect(page.locator('h2').first()).toHaveText(HOST_RULE);
+    await expect(page.locator('#approval-rule-usage-inventories')).toContainText(HOST_INVENTORY);
+    expect(idWhere(await indexRows(page, '/approval-rule/index'), 0, HOST_RULE)).toBe(id);
+  });
+
   test('an unused rule says nothing uses it, and its Delete deletes it', async ({ page }) => {
     const id = await openRule(page, CRUD_RULE, true);
-    await expect(page.locator('#approval-rule-usage')).toContainText('Not used by any job template, workflow step or pending approval request.');
+    await expect(page.locator('#approval-rule-usage')).toContainText(NOT_IN_USE);
+    await expect(page.locator('#approval-rule-usage-inventories')).toHaveCount(0);
     await expect(page.locator('#approval-rule-delete-blocked')).toHaveCount(0);
 
     page.once('dialog', (dialog) => dialog.accept());

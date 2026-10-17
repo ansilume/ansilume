@@ -11,6 +11,7 @@ use app\models\Project;
 use app\models\User;
 use app\services\ProjectService;
 use app\tests\integration\controllers\WebControllerTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 use yii\base\Module;
 
@@ -26,6 +27,7 @@ use yii\base\Module;
  */
 class ProjectsBranchFormatTest extends WebControllerTestCase
 {
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     private const URL = 'https://git.example.com/org/playbooks.git';
@@ -33,17 +35,12 @@ class ProjectsBranchFormatTest extends WebControllerTestCase
     /** The answer of a refused branch. */
     private const REFUSED = ['error' => ['message' => 'The branch cannot start with "-" or contain whitespace.']];
 
-    /** @var mixed the project service the test replaced */
-    private mixed $originalProjectService = null;
-
     /** @var ProjectService&object{queued: int} */
     private ProjectService $syncs;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $components = \Yii::$app->getComponents(true);
-        $this->originalProjectService = $components['projectService'] ?? null;
         // A saved git project queues a sync: here it is only counted.
         $this->syncs = new class () extends ProjectService {
             public int $queued = 0;
@@ -53,12 +50,12 @@ class ProjectsBranchFormatTest extends WebControllerTestCase
                 $this->queued++;
             }
         };
-        \Yii::$app->set('projectService', $this->syncs);
+        $this->swapComponent('projectService', $this->syncs);
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('projectService', $this->originalProjectService);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

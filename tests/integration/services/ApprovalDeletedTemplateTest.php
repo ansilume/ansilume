@@ -22,6 +22,7 @@ use app\services\JobTemplateDeletionService;
 use app\services\WorkflowExecutionService;
 use app\services\WorkflowStepRouter;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 
 /**
@@ -41,13 +42,12 @@ class ApprovalDeletedTemplateTest extends DbTestCase
     use TeamScopeFixtures;
     use CancellationFixtures;
     use ApprovalVoteFixtures;
+    use RestoresComponents;
 
     private RecordingNotificationDispatcher $notifications;
 
     /** @var list<array{call: string, job: int}> */
     public array $engineCalls = [];
-
-    private mixed $engineBefore = null;
 
     private User $launcher;
 
@@ -57,12 +57,10 @@ class ApprovalDeletedTemplateTest extends DbTestCase
     {
         parent::setUp();
         $this->notifications = $this->recordNotifications();
-        $this->launcher = $this->approverUser('deleted-launcher');
-        $this->approver = $this->approverUser('deleted-approver');
-        $this->engineBefore = \Yii::$app->get('workflowExecutionService');
         $test = $this;
-        // The real engine, which also records what it is told.
-        \Yii::$app->set('workflowExecutionService', new class ($test) extends WorkflowExecutionService {
+        // The real engine, which also records what it is told. Swapped before
+        // any write, so that tearDown() restores it also when a write fails.
+        $this->swapComponent('workflowExecutionService', new class ($test) extends WorkflowExecutionService {
             public function __construct(private readonly ApprovalDeletedTemplateTest $test)
             {
                 parent::__construct();
@@ -80,11 +78,13 @@ class ApprovalDeletedTemplateTest extends DbTestCase
                 parent::onChildJobCompleted($job);
             }
         });
+        $this->launcher = $this->approverUser('deleted-launcher');
+        $this->approver = $this->approverUser('deleted-approver');
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('workflowExecutionService', $this->engineBefore);
+        $this->restoreComponents();
         $this->restoreNotifications();
         parent::tearDown();
     }

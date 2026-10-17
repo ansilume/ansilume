@@ -10,6 +10,7 @@ use app\models\Job;
 use app\models\User;
 use app\services\JobCancellationService;
 use app\services\WorkflowAccessChecker;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\CancellationFixtures;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\Response;
@@ -26,22 +27,23 @@ class JobControllerCancelTest extends WebControllerTestCase
 {
     use TeamScopeFixtures;
     use CancellationFixtures;
+    use RestoresComponents;
 
     private User $operator;
-    private mixed $originalChecker = null;
 
     protected function setUp(): void
     {
         parent::setUp();
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('workflowAccessChecker');
         $this->recordNotifications();
-        $this->originalChecker = \Yii::$app->getComponents(true)['workflowAccessChecker'] ?? null;
         $this->operator = $this->createUserWithRole('cancel-web', 'operator');
         $this->loginAs($this->operator);
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('workflowAccessChecker', $this->originalChecker);
+        $this->restoreComponents();
         $this->restoreNotifications();
         parent::tearDown();
     }

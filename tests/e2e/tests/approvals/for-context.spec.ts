@@ -5,12 +5,16 @@ import {
   HISTORY_RULE,
   HISTORY_TEMPLATE,
   LAUNCHER_REFUSED_RUN,
+  NO_INVENTORY,
   REQUEST_EXPIRES_COLUMN,
   REQUEST_FOR_COLUMN,
   REQUEST_RULE_COLUMN,
   REQUEST_STATUS_COLUMN,
+  REQUIRED_BY,
   decisionForms,
+  requestInventoryCell,
   requestStatus,
+  requiredByCell,
 } from '../../lib/approvals';
 import {
   ALPHA_GATE_RULE,
@@ -86,6 +90,8 @@ test.describe('What approval requests are for', () => {
     const request = await pendingRequestOn(page, ALPHA_GATE_RULE);
     await page.goto(`/approval/view?id=${request.id}`);
     await expect(page.locator('#approval-launched-by')).toHaveText('e2e-admin');
+    // The gated job step's job template has the rule of its own.
+    await expect(requiredByCell(page)).toHaveText(REQUIRED_BY.job_template);
     await expect(page.locator('#approval-decision-note')).toHaveText(LAUNCHER_REFUSED_RUN);
     await expect(decisionForms(page)).toHaveCount(0);
 
@@ -150,6 +156,11 @@ test.describe('What approval requests are for', () => {
 
       await watcher.goto(`/approval/view?id=${request.id}`);
       await expect(watcher.locator('#approval-for')).toHaveText(forWorkflowStep(BETA_APPROVAL_WORKFLOW, BETA_APPROVAL_STEP, runId));
+      // The approval step required it; its job is the step's placeholder,
+      // which runs nothing on no inventory.
+      await expect(requiredByCell(watcher)).toHaveText(REQUIRED_BY.approval_step);
+      await expect(requestInventoryCell(watcher)).toHaveText(NO_INVENTORY);
+      await expect(requestInventoryCell(watcher).locator('a')).toHaveCount(0);
       await expect(decisionForms(watcher)).toHaveCount(0);
       await watcher.locator('#approval-for a[data-for-run]').click();
       await expect(watcher).toHaveURL(new RegExp(`/workflow-job/view\\?id=${runId}$`));

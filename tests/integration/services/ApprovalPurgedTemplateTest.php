@@ -21,6 +21,7 @@ use app\services\StrandedJobSweep;
 use app\services\WorkflowExecutionService;
 use app\services\WorkflowStepRouter;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 
 /**
@@ -40,13 +41,12 @@ class ApprovalPurgedTemplateTest extends DbTestCase
     use TeamScopeFixtures;
     use CancellationFixtures;
     use ApprovalVoteFixtures;
+    use RestoresComponents;
 
     private RecordingNotificationDispatcher $notifications;
 
     /** @var list<array{call: string, job: int}> */
     public array $engineCalls = [];
-
-    private mixed $engineBefore = null;
 
     private User $launcher;
 
@@ -56,12 +56,10 @@ class ApprovalPurgedTemplateTest extends DbTestCase
     {
         parent::setUp();
         $this->notifications = $this->recordNotifications();
-        $this->launcher = $this->approverUser('purged-launcher');
-        $this->approver = $this->approverUser('purged-approver');
-        $this->engineBefore = \Yii::$app->get('workflowExecutionService');
         $test = $this;
-        // The real engine, which also records what it is told.
-        \Yii::$app->set('workflowExecutionService', new class ($test) extends WorkflowExecutionService {
+        // The real engine, which also records what it is told. Swapped before
+        // any write, so that tearDown() restores it also when a write fails.
+        $this->swapComponent('workflowExecutionService', new class ($test) extends WorkflowExecutionService {
             public function __construct(private readonly ApprovalPurgedTemplateTest $test)
             {
                 parent::__construct();
@@ -79,11 +77,13 @@ class ApprovalPurgedTemplateTest extends DbTestCase
                 parent::onChildJobCompleted($job);
             }
         });
+        $this->launcher = $this->approverUser('purged-launcher');
+        $this->approver = $this->approverUser('purged-approver');
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('workflowExecutionService', $this->engineBefore);
+        $this->restoreComponents();
         $this->restoreNotifications();
         parent::tearDown();
     }

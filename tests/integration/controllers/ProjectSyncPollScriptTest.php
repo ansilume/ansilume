@@ -8,6 +8,7 @@ use app\controllers\ProjectController;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\services\ProjectService;
+use app\tests\integration\RestoresComponents;
 use yii\base\Module;
 use yii\helpers\Json;
 
@@ -20,15 +21,12 @@ use yii\helpers\Json;
 class ProjectSyncPollScriptTest extends WebControllerTestCase
 {
     use RendersRealViews;
-
-    /** @var mixed the project service the test replaced */
-    private mixed $originalProjectService = null;
+    use RestoresComponents;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalProjectService = \Yii::$app->getComponents(true)['projectService'] ?? null;
-        \Yii::$app->set('projectService', new class () extends ProjectService {
+        $this->swapComponent('projectService', new class () extends ProjectService {
             public function localPath(Project $project): string
             {
                 return '/tmp/nonexistent-sync-poll-script-project';
@@ -38,7 +36,7 @@ class ProjectSyncPollScriptTest extends WebControllerTestCase
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('projectService', $this->originalProjectService);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

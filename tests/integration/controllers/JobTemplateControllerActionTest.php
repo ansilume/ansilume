@@ -437,7 +437,7 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertSame(120, $model->timeout_minutes);
         $this->assertFalse((bool)$model->become);
         $this->assertArrayHasKey('projects', $ctrl->capturedParams);
-        $this->assertArrayHasKey('inventories', $ctrl->capturedParams);
+        $this->assertArrayHasKey('inventoryOptions', $ctrl->capturedParams);
         $this->assertArrayHasKey('credentials', $ctrl->capturedParams);
         $this->assertArrayHasKey('runnerGroups', $ctrl->capturedParams);
     }

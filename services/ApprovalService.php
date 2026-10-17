@@ -58,11 +58,17 @@ class ApprovalService extends Component
 
     /**
      * Create an approval request for a job that waits for it, and announce
-     * it (audit entry, notification).
+     * it (audit entry, notification). $requiredBy says what required it, as
+     * for openRequest(); by default the job template's own rule.
+     *
+     * @throws \RuntimeException when the request cannot be saved
      */
-    public function createRequest(Job $job, ApprovalRule $rule): ApprovalRequest
-    {
-        $request = $this->openRequest($job, $rule);
+    public function createRequest(
+        Job $job,
+        ApprovalRule $rule,
+        string $requiredBy = ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE
+    ): ApprovalRequest {
+        $request = $this->openRequest($job, $rule, $requiredBy);
         $this->announceRequest($request, $job, $rule);
 
         return $request;
@@ -73,13 +79,22 @@ class ApprovalService extends Component
      * for a caller that creates the job and its request in one transaction
      * and calls announceRequest() after the commit.
      *
-     * @throws \RuntimeException when the request cannot be saved
+     * $requiredBy records what required the request
+     * (ApprovalRequest::REQUIRED_BY_VALUES): the job template's own approval
+     * rule (a launch, JobLaunchService), its inventory's, or a workflow
+     * approval step (the placeholder job of WorkflowStepDispatcher). Before
+     * m000088 the column is missing and nothing is recorded
+     * (ApprovalRequest::recordRequiredBy()).
+     *
+     * @throws \RuntimeException when the request cannot be saved, also when
+     *     $requiredBy is none of ApprovalRequest::REQUIRED_BY_VALUES
      */
-    public function openRequest(Job $job, ApprovalRule $rule): ApprovalRequest
+    public function openRequest(Job $job, ApprovalRule $rule, string $requiredBy): ApprovalRequest
     {
         $request = new ApprovalRequest();
         $request->job_id = $job->id;
         $request->approval_rule_id = $rule->id;
+        $request->recordRequiredBy($requiredBy);
         $request->status = ApprovalRequest::STATUS_PENDING;
         $request->requested_at = time();
 

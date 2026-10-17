@@ -5,18 +5,20 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\models\JobTemplate $model */
 /** @var app\models\Project[] $projects */
-/** @var app\models\Inventory[] $inventories */
 /** @var app\models\Credential[] $credentials */
 /** @var app\models\RunnerGroup[] $runnerGroups */
 /** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings */
 /** @var bool $canAssignRule approval-rule.update: the rule select, else the rule as text */
 /** @var array<int, string> $approvalRuleOptions the rules by ID, for the select */
-/** @var bool $changeLocked a gated template, a user without approval-rule.update: only name and description are enabled */
+/** @var string|null $lockedNotice a gated template, a user without approval-rule.update: GatedJobTemplateLock::notice() */
+/** @var bool $changeLocked $lockedNotice !== null: only name and description are enabled */
+/** @var array<int, string> $inventoryOptions the inventories by ID, for the select (JobTemplateInventoryOptions) */
+/** @var string|null $inventoryHint JobTemplateInventoryOptions::GATED_INVENTORIES_HINT when inventories with a rule were left out */
+/** @var string|null $inventoryRuleHint JobTemplateRuleAssignment::INVENTORY_RULE_HINT for admins, when the template's inventory has a rule */
 
 use app\components\VersionedAssetUrl;
 use app\controllers\JobTemplateController;
 use app\services\ApprovalRuleAssignmentPolicy;
-use app\services\GatedJobTemplateLock;
 use app\services\JobTemplateRuleAssignment;
 use yii\helpers\ArrayHelper;
 use yii\helpers\Html;
@@ -39,7 +41,7 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
 
 <?= $this->render('_warnings', ['warnings' => $warnings]) ?>
 <?php if ($changeLocked) : ?>
-    <div class="alert alert-info" id="job-template-locked-notice"><?= Html::encode(GatedJobTemplateLock::NOTICE) ?></div>
+    <div class="alert alert-info" id="job-template-locked-notice"><?= Html::encode((string)$lockedNotice) ?></div>
 <?php endif; ?>
 
 <?php $form = ActiveForm::begin(['id' => 'jt-form']); ?>
@@ -70,11 +72,12 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     <div class="row g-2">
         <div class="col-md-6">
             <?= $form->field($model, 'inventory_id')->dropDownList(
-                ArrayHelper::map($inventories, 'id', static fn (\app\models\Inventory $inventory): string => $inventory->isProjectBound()
-                    ? $inventory->name . ' (' . $inventory->inventory_type . ', ' . ($inventory->project->name ?? 'no project') . ')'
-                    : $inventory->name),
+                $inventoryOptions,
                 ['prompt' => '— Select inventory —']
             )->hint('File and dynamic inventories must belong to the selected project; static inventories work with any project.') ?>
+            <?php if ($inventoryHint !== null) : ?>
+                <div class="form-text mb-3" id="job-template-gated-inventories-hint"><?= Html::encode($inventoryHint) ?></div>
+            <?php endif; ?>
         </div>
         <div class="col-md-6">
             <?= $form->field($model, 'credential_id')->dropDownList(
@@ -148,6 +151,9 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     <?php if ($canAssignRule) : ?>
         <?= $form->field($model, 'approval_rule_id')->dropDownList($approvalRuleOptions, ['prompt' => '— None —'])
             ->hint(Html::encode(JobTemplateRuleAssignment::FORM_HINT)) ?>
+        <?php if ($inventoryRuleHint !== null) : ?>
+            <div class="form-text mb-3" id="job-template-inventory-rule-hint"><?= Html::encode($inventoryRuleHint) ?></div>
+        <?php endif; ?>
     <?php else : ?>
         <?php $currentRule = $model->approval_rule_id === null ? null : $model->approvalRule; ?>
         <div class="mb-3" id="job-template-approval-rule-readonly">

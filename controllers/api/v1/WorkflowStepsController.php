@@ -58,16 +58,17 @@ use yii\web\NotFoundHttpException;
  *    takes);
  * then the write path's refusals, each in the API's error shape with its
  * details: 403 for gated steps (rule 12: approval steps and job steps whose
- * job template has an approval rule are for admins), 422 or 403 for the job
- * template (job_template_ids), 422 for the model's rules, 404 when the
- * workflow was deleted meanwhile, 403 FORBIDDEN when operator access to
- * every job step's project was lost meanwhile, 403 when the lock re-check
+ * job template or its inventory has an approval rule are for admins), 422 or
+ * 403 for the job template (job_template_ids), 422 for the model's rules, 404
+ * when the workflow was deleted meanwhile, 403 FORBIDDEN when operator access
+ * to every job step's project was lost meanwhile, 403 when the lock re-check
  * of gated steps refuses, 409 while a run is active (workflow_job_ids), 404
  * when the step was removed meanwhile, 403
- * (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED) when the job
- * template the request gives a job step got an approval rule meanwhile, 422
- * for a position the step cannot take, and on DELETE 409 while other steps
- * route to it (step_ids).
+ * (ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED, or
+ * GATED_INVENTORY_JOB_STEP_ADD_REFUSED) when the job template the request
+ * gives a job step, or its inventory, got an approval rule meanwhile, 422 for
+ * a position the step cannot take, and on DELETE 409 while other steps route
+ * to it (step_ids).
  *
  * A write answers {data, change}: data is the step as the workflow lists it
  * (WorkflowStepSerializer), with its position and routes after the change;

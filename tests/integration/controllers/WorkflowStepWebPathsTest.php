@@ -17,6 +17,7 @@ use app\models\WorkflowTemplate;
 use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\WorkflowStepChangeGuard;
 use app\services\WorkflowStepWriteService;
+use app\tests\integration\services\InventoryGatedStepFixtures;
 use app\tests\integration\TeamScopeFixtures;
 use yii\helpers\Inflector;
 use yii\web\ForbiddenHttpException;
@@ -31,7 +32,8 @@ use yii\web\Response;
  *   again under the lock, for a step added in between:
  *   WorkflowStepTeamScopeRaceTest);
  * - an operator gets 403 with the policy's reason on a workflow with an
- *   approval step or a gated job step, and nothing is written;
+ *   approval step or a gated job step, by the rule of its job template or
+ *   of the template's inventory (C15), and nothing is written;
  * - while a run of the workflow is active nothing changes: add, move and
  *   remove answer with a danger flash, the save of the edit page shows the
  *   page again with the refusal.
@@ -40,6 +42,7 @@ use yii\web\Response;
  */
 final class WorkflowStepWebPathsTest extends WebControllerTestCase
 {
+    use InventoryGatedStepFixtures;
     use TeamScopeFixtures;
 
     /** The web step paths: case => action ID. */
@@ -117,7 +120,7 @@ final class WorkflowStepWebPathsTest extends WebControllerTestCase
     {
         $cases = [];
         foreach (array_keys(self::PATHS) as $path) {
-            foreach (['approval step', 'gated job step'] as $gate) {
+            foreach (['approval step', 'gated job step', 'inventory-gated job step'] as $gate) {
                 $cases[$path . ', ' . $gate] = [$path, $gate];
             }
         }
@@ -179,8 +182,9 @@ final class WorkflowStepWebPathsTest extends WebControllerTestCase
 
     /**
      * Security rule 12: only admins change the steps of a workflow with an
-     * approval step or a gated job step; an operator gets 403 with the
-     * reason, and nothing is written.
+     * approval step or a gated job step (gated by its job template's rule or
+     * its inventory's); an operator gets 403 with the reason, and nothing is
+     * written.
      *
      * @dataProvider gatedPathProvider
      */
@@ -194,9 +198,11 @@ final class WorkflowStepWebPathsTest extends WebControllerTestCase
         $this->assertForbidden(
             $path,
             $workflow,
-            $gate === 'approval step'
-                ? ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED
-                : ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED
+            match ($gate) {
+                'approval step' => ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED,
+                'gated job step' => ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+                default => ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+            }
         );
 
         $this->assertSame($before, $this->stepRows($workflow), 'nothing written');
@@ -335,7 +341,8 @@ final class WorkflowStepWebPathsTest extends WebControllerTestCase
 
     /**
      * A workflow the member may operate, locked by $gate: an approval step
-     * first, or a job step whose job template has an approval rule.
+     * first, a job step whose job template has an approval rule, or one
+     * whose job template's inventory (one of its own) has an approval rule.
      *
      * @param array{member: User, admin: User, own: JobTemplate, open: JobTemplate} $s
      */
@@ -353,7 +360,11 @@ final class WorkflowStepWebPathsTest extends WebControllerTestCase
 
             return $workflow;
         }
-        JobTemplate::updateAll(['approval_rule_id' => $rule->id], ['id' => $s['own']->id]);
+        if ($gate === 'inventory-gated job step') {
+            $this->moveToInventory((int)$s['own']->id, (int)$this->gatedInventory($s['admin']->id, (int)$rule->id)->id);
+        } else {
+            JobTemplate::updateAll(['approval_rule_id' => $rule->id], ['id' => $s['own']->id]);
+        }
 
         return $this->createWorkflowWithJobSteps($s['admin']->id, $s['own']->id, $s['open']->id);
     }

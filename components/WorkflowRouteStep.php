@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace app\components;
 
+use app\models\Inventory;
 use app\models\JobTemplate;
 use app\models\WorkflowStep;
+use app\services\JobTemplateGate;
 
 /**
  * One step of a workflow as the route map (app\services\WorkflowRouteMap)
@@ -19,6 +21,11 @@ use app\models\WorkflowStep;
  *
  * The type is kept as stored and compared exactly, as dispatch compares it
  * (WorkflowStepDispatcher): "JOB" is no job step but an unknown type.
+ *
+ * A job step is gated as its launch is (JobTemplateGate): by the approval
+ * rule of its job template, else by the rule of that template's inventory.
+ * Where the two rules differ, or the gating rule no longer exists, its
+ * launch is refused, so the step cannot run.
  */
 final class WorkflowRouteStep
 {
@@ -30,16 +37,27 @@ final class WorkflowRouteStep
 
     /**
      * An approval step without its approval rule, or a job step whose job
-     * template names an approval rule that no longer exists (its launch is
-     * refused).
+     * template, or that template's inventory, names an approval rule that no
+     * longer exists (its launch is refused).
      */
     public const PROBLEM_APPROVAL_RULE_MISSING = 'approval_rule_missing';
 
     /** A type other than job, approval and pause, compared exactly. */
     public const PROBLEM_UNKNOWN_TYPE = 'unknown_type';
 
-    /** The relations of a step model that fromModel() reads. */
-    public const RELATIONS = ['jobTemplate.approvalRule', 'approvalRule'];
+    /**
+     * A job step whose job template has an approval rule of its own and its
+     * inventory another one: a launch waits for one rule only, so it is
+     * refused (JobLaunchService::RULES_DIFFER).
+     */
+    public const PROBLEM_APPROVAL_RULES_DIFFER = 'approval_rules_differ';
+
+    /**
+     * The relations of a step model that fromModel() reads: its job template
+     * with what JobTemplateGate::of() reads of it (JobTemplateGate::RELATIONS),
+     * and its approval rule.
+     */
+    public const RELATIONS = ['jobTemplate.approvalRule', 'jobTemplate.inventory.approvalRule', 'approvalRule'];
 
     /**
      * @param int $id the step's ID; NEW_STEP_ID for a step that is not saved yet
@@ -47,10 +65,14 @@ final class WorkflowRouteStep
      * @param int|null $onSuccess the On Success branch: null, 0 or a step ID
      * @param int|null $onFailure the On Failure branch: null, 0 or a step ID
      * @param int|null $onAlways the Always branch: null, 0 or a step ID
-     * @param string|null $gatedRuleName for a job step whose (not deleted) job template has an
-     *     approval rule: the rule's name, '' when that rule no longer exists; null otherwise
+     * @param string|null $gatedRuleName for a job step whose (not deleted) job template is gated, by
+     *     an approval rule of its own or by its inventory's: the gating rule's name (the template's
+     *     own where the two differ), '' when that rule no longer exists; null otherwise
      * @param string|null $problem why a run that reaches the step fails there: one of the
      *     PROBLEM_* values, or null when it can run
+     * @param string|null $gatedBy for a gated job step, what gates it (JobTemplateGate::source()):
+     *     JobTemplateGate::SOURCE_JOB_TEMPLATE, also where the template's rule and its inventory's
+     *     differ, or SOURCE_INVENTORY; null otherwise
      */
     public function __construct(
         public readonly int $id,
@@ -61,19 +83,21 @@ final class WorkflowRouteStep
         public readonly ?int $onAlways,
         public readonly ?string $gatedRuleName = null,
         public readonly ?string $problem = null,
+        public readonly ?string $gatedBy = null,
     ) {
     }
 
     /**
      * The step $step as stored. It reads the step's job template with that
-     * template's approval rule, and its approval rule (RELATIONS): load them
-     * with with(RELATIONS) when reading many steps, or use fromModels(). A
-     * step that is not saved yet gets NEW_STEP_ID.
+     * template's approval rule, its inventory and that inventory's approval
+     * rule, and the step's approval rule (RELATIONS): load them with
+     * with(RELATIONS) when reading many steps, or use fromModels(). A step
+     * that is not saved yet gets NEW_STEP_ID.
      */
     public static function fromModel(WorkflowStep $step): self
     {
         $type = (string)$step->step_type;
-        [$gatedRuleName, $problem] = self::targetOf($step, $type);
+        [$gatedRuleName, $problem, $gatedBy] = self::targetOf($step, $type);
 
         return new self(
             $step->id === null ? self::NEW_STEP_ID : (int)$step->id,
@@ -84,6 +108,7 @@ final class WorkflowRouteStep
             self::branch($step->on_always_step_id),
             $gatedRuleName,
             $problem,
+            $gatedBy,
         );
     }
 
@@ -120,13 +145,29 @@ final class WorkflowRouteStep
         }
         $template = $model->jobTemplate;
 
-        return $template === null || $template->isRelationPopulated('approvalRule');
+        return $template === null || self::gateLoaded($template);
     }
 
     /**
-     * The gated rule name and the problem of $step, by its exact type.
+     * Whether what JobTemplateGate::of() reads of $template is loaded: its
+     * approval rule, its inventory and that inventory's approval rule.
+     */
+    private static function gateLoaded(JobTemplate $template): bool
+    {
+        if (!$template->isRelationPopulated('approvalRule') || !$template->isRelationPopulated('inventory')) {
+            return false;
+        }
+        /** @var Inventory|null $inventory */
+        $inventory = $template->inventory;
+
+        return $inventory === null || $inventory->isRelationPopulated('approvalRule');
+    }
+
+    /**
+     * The gated rule name, the problem and what gates $step, by its exact
+     * type.
      *
-     * @return array{0: string|null, 1: string|null}
+     * @return array{0: string|null, 1: string|null, 2: string|null}
      */
     private static function targetOf(WorkflowStep $step, string $type): array
     {
@@ -134,30 +175,38 @@ final class WorkflowRouteStep
 
         return match ($type) {
             WorkflowStep::TYPE_JOB => self::jobTargetOf($step->jobTemplate),
-            WorkflowStep::TYPE_APPROVAL => [null, $ruleMissing ? self::PROBLEM_APPROVAL_RULE_MISSING : null],
-            WorkflowStep::TYPE_PAUSE => [null, null],
-            default => [null, self::PROBLEM_UNKNOWN_TYPE],
+            WorkflowStep::TYPE_APPROVAL => [null, $ruleMissing ? self::PROBLEM_APPROVAL_RULE_MISSING : null, null],
+            WorkflowStep::TYPE_PAUSE => [null, null, null],
+            default => [null, self::PROBLEM_UNKNOWN_TYPE, null],
         };
     }
 
     /**
-     * A job step's gated rule name and problem, from its job template (null
-     * when it has none or it was deleted: the relation leaves deleted job
-     * templates out, and such a step runs nothing).
+     * A job step's gated rule name, problem and what gates it, from its job
+     * template (null when it has none or it was deleted: the relation leaves
+     * deleted job templates out, and such a step runs nothing), gated as its
+     * launch is (JobTemplateGate::of()): two different rules are refused
+     * first, then a gating rule that no longer exists.
      *
-     * @return array{0: string|null, 1: string|null}
+     * @return array{0: string|null, 1: string|null, 2: string|null}
      */
     private static function jobTargetOf(?JobTemplate $template): array
     {
         if ($template === null) {
-            return [null, self::PROBLEM_JOB_TEMPLATE_MISSING];
+            return [null, self::PROBLEM_JOB_TEMPLATE_MISSING, null];
         }
-        if ($template->approval_rule_id === null) {
-            return [null, null];
+        $gate = JobTemplateGate::of($template);
+        if (!$gate->isGated()) {
+            return [null, null, null];
         }
-        $rule = $template->approvalRule;
+        $rule = $gate->rule;
+        if ($gate->rulesDiffer()) {
+            return [(string)$rule?->name, self::PROBLEM_APPROVAL_RULES_DIFFER, JobTemplateGate::SOURCE_JOB_TEMPLATE];
+        }
 
-        return $rule === null ? ['', self::PROBLEM_APPROVAL_RULE_MISSING] : [(string)$rule->name, null];
+        return $rule === null
+            ? ['', self::PROBLEM_APPROVAL_RULE_MISSING, $gate->source()]
+            : [(string)$rule->name, null, $gate->source()];
     }
 
     /**

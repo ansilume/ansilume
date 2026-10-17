@@ -7,13 +7,11 @@ declare(strict_types=1);
 /** @var array<string, string> $roles  name => name */
 /** @var array<int, string> $teams     id => name */
 /** @var array<int, string> $users     id => username */
+/** @var array{roles: array<string, int>, teams: array<string, int>, users: list<int>} $approverCounts of each role and team the approvers who may decide, and the users who may (ApproverCounts::forRuleForm()) */
 
 use app\models\ApprovalRule;
-use app\models\User;
-use yii\db\Query;
 use yii\helpers\Html;
 use yii\helpers\Json;
-use yii\rbac\DbManager;
 use yii\widgets\ActiveForm;
 
 $this->title = $model->isNewRecord ? 'New Approval Rule' : 'Edit: ' . $model->name;
@@ -25,6 +23,13 @@ $selectedTeam = isset($config['team_id']) ? (int)$config['team_id'] : null;
 $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
     ? array_map('intval', $config['user_ids'])
     : [];
+
+// Each user's option says whether the user may decide: the script counts only those.
+$eligibleUsers = array_fill_keys($approverCounts['users'], true);
+$userOptions = [];
+foreach (array_keys($users) as $userId) {
+    $userOptions[$userId] = ['data-eligible' => isset($eligibleUsers[$userId]) ? '1' : '0'];
+}
 ?>
 <div class="row justify-content-center">
 <div class="col-lg-8">
@@ -79,6 +84,7 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
             'class' => 'form-select',
             'multiple' => true,
             'size' => min(8, max(4, count($users))),
+            'options' => $userOptions,
         ]) ?>
         <div class="form-text">Hold Ctrl / Cmd to select multiple users.</div>
     </div>
@@ -95,35 +101,6 @@ $selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
     </div>
 
 <?php ActiveForm::end(); ?>
-
-<?php
-// Pre-compute approver counts for JS warning. A role rule's approvers are the
-// users assigned the role directly (ApprovalRule::resolveRoleIds()), of whom
-// only active accounts may decide (ApproverFilter): count the active ones,
-// every role in one query, 0 for a role without them.
-$roleCounts = array_fill_keys(array_map('strval', array_keys($roles)), 0);
-$auth = \Yii::$app->authManager;
-if ($auth instanceof DbManager && $roleCounts !== []) {
-    $holderRows = (new Query())
-        ->select(['role' => 'a.item_name', 'holders' => 'COUNT(DISTINCT [[u.id]])'])
-        ->from(['a' => $auth->assignmentTable])
-        ->innerJoin(['u' => User::tableName()], '[[u.id]] = [[a.user_id]]')
-        ->where(['a.item_name' => array_map('strval', array_keys($roleCounts)), 'u.status' => User::STATUS_ACTIVE])
-        ->groupBy('a.item_name')
-        ->all();
-    foreach ($holderRows as $holderRow) {
-        $roleCounts[(string)$holderRow['role']] = (int)$holderRow['holders'];
-    }
-}
-$teamCounts = [];
-foreach (array_keys($teams) as $tid) {
-    $teamCounts[(string)$tid] = (int)(new \yii\db\Query())
-        ->select('user_id')
-        ->from('{{%team_member}}')
-        ->where(['team_id' => $tid])
-        ->count();
-}
-?>
 
 </div>
 </div>
@@ -144,23 +121,38 @@ foreach (array_keys($teams) as $tid) {
     var warningDiv = document.getElementById('approver-count-warning');
     var launcherNote = document.getElementById('approver-launcher-note');
 
-    var roleCounts = <?= Json::htmlEncode($roleCounts) ?>;
-    var teamCounts = <?= Json::htmlEncode($teamCounts) ?>;
+    // Of the chosen role, team or users, the approvers who may decide: an
+    // active account, and a superadmin or holding approval.decide
+    // (ApproverCounts). Who launches and what the rule gates are unknown
+    // here, so a count is the most that a launch can find.
+    var roleCounts = <?= Json::htmlEncode($approverCounts['roles']) ?>;
+    var teamCounts = <?= Json::htmlEncode($approverCounts['teams']) ?>;
+    var noApprovers = <?= Json::htmlEncode(ApprovalRule::NO_ELIGIBLE_APPROVERS) ?>;
 
     function checkApproverCount() {
         var type = typeSelect.value;
+        var chosen = false;
         var count = 0;
         if (type === 'role') {
+            chosen = roleSelect.value !== '';
             count = roleSelect.value ? (roleCounts[roleSelect.value] || 0) : 0;
         } else if (type === 'team') {
+            chosen = teamSelect.value !== '';
             count = teamSelect.value ? (teamCounts[teamSelect.value] || 0) : 0;
         } else if (type === 'users') {
             for (var i = 0; i < usersSelect.options.length; i++) {
-                if (usersSelect.options[i].selected) count++;
+                if (usersSelect.options[i].selected) {
+                    chosen = true;
+                    if (usersSelect.options[i].getAttribute('data-eligible') === '1') count++;
+                }
             }
         }
         var required = parseInt(requiredInput.value, 10) || 1;
-        if (count > 0 && required > count) {
+        if (chosen && count === 0) {
+            // Nobody chosen may decide: every launch the rule gates would be refused.
+            warningDiv.textContent = noApprovers;
+            warningDiv.style.display = '';
+        } else if (count > 0 && required > count) {
             warningDiv.textContent = 'Warning: Required approvals (' + required + ') exceeds eligible approvers (' + count + ').';
             warningDiv.style.display = '';
         } else {

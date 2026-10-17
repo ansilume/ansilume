@@ -8,7 +8,7 @@ declare(strict_types=1);
 /** @var int $position its position in the run order */
 /** @var app\services\WorkflowStepFormView $form the Edit Step form */
 /** @var app\models\WorkflowStep $formModel the step the form shows: as the user filled it in when the save was refused, else as stored */
-/** @var array<int, string> $jobTemplateOptions job templates the user may operate; without an approval rule unless $mayAssignRules */
+/** @var array<int, string> $jobTemplateOptions job templates the user may operate; without those an approval rule gates (their own or their inventory's) unless $mayAssignRules */
 /** @var array<int, string> $approvalRuleOptions offered only to users who may assign approval rules */
 /** @var bool $mayAssignRules the user may add approval steps and gated job steps (approval-rule.update) */
 /** @var string|null $error why the save was refused ("Step not saved: …"); null otherwise */

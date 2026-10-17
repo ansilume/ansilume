@@ -1,4 +1,5 @@
 import { Locator, Page, expect } from '@playwright/test';
+import { quoted } from './inventories';
 
 /** Helpers for job template pages (views/job-template/view.php). */
 
@@ -79,16 +80,127 @@ export const LOCKED_CREDENTIAL = 'e2e-locked-credential';
 export const LOCKED_PLAYBOOK = 'site.yml';
 
 /**
- * A job template with an approval rule ("gated"): only admins
- * (approval-rule.update) may change what it runs; others may change its name
- * and description (services/GatedJobTemplateLock.php).
+ * GatedJobTemplateLock::CHANGE_REFUSED. A job template with an
+ * approval rule of its own, or on an inventory with one ("gated"): only
+ * admins (approval-rule.update) may change what it runs; others may change
+ * its name and description (services/GatedJobTemplateLock.php). This is the
+ * 403 of a template with a rule of its own; GATED_INVENTORY_CHANGE_REFUSED
+ * that of a template gated through its inventory.
  */
 export const GATED_CHANGE_REFUSED = 'This job template has an approval rule: only admins may change what it runs '
   + '(approval-rule.update). You may change its name and description.';
 
-/** services/GatedJobTemplateLock.php NOTICE: on the template page and its edit form, for users who may not change what it runs. */
+/**
+ * GatedJobTemplateLock::NOTICE: on the page and edit form of a
+ * template with an approval rule of its own (also when its inventory has
+ * one), for users who may not change what it runs.
+ */
 export const GATED_LOCK_NOTICE = 'This job template has an approval rule: only admins may change what it runs '
   + '(approval-rule.update). You may still change its name and description, launch it and manage its trigger token.';
+
+/**
+ * GatedJobTemplateLock::NOTICE_INVENTORY: the notice of a template without a
+ * rule of its own on an inventory with one.
+ */
+export const GATED_INVENTORY_LOCK_NOTICE = 'The inventory of this job template has an approval rule: only admins may change '
+  + 'what it runs (approval-rule.update). You may still change its name and description, launch it and manage '
+  + 'its trigger token.';
+
+/** GatedJobTemplateLock::CHANGE_REFUSED_INVENTORY: the 403 of a change of what a template gated through its inventory runs. */
+export const GATED_INVENTORY_CHANGE_REFUSED = 'The inventory of this job template has an approval rule: only admins may '
+  + 'change what it runs (approval-rule.update). You may change its name and description.';
+
+/**
+ * GatedJobTemplateLock::GATED_INVENTORY_REFUSED: the 403 of a create or update
+ * that gives a job template an inventory with an approval rule, by a user who
+ * may not assign rules and may see the inventory.
+ */
+export const GATED_INVENTORY_REFUSED = 'The selected inventory has an approval rule: only admins may give a job '
+  + 'template an inventory with an approval rule (approval-rule.update).';
+
+/**
+ * JobTemplateInventoryOptions::GATED_INVENTORIES_HINT
+ * (services/JobTemplateInventoryOptions.php): below the inventory select of a
+ * user who may not assign rules, on a form that is not locked, when
+ * inventories with a rule were left out of it.
+ */
+export const GATED_INVENTORIES_HINT = 'Inventories with an approval rule are not listed: only admins may give a '
+  + 'job template such an inventory.';
+
+/**
+ * The label of an inventory with an approval rule in the inventory select of
+ * the template form: `label` (the inventory's name, for a static one) and
+ * JobTemplateInventoryOptions::GATED_OPTION_SUFFIX with the rule's name
+ * (U+00B7 between spaces).
+ */
+export function gatedInventoryOption(label: string, rule: string): string {
+  return `${label} \u00b7 needs approval: ${rule}`;
+}
+
+/**
+ * JobTemplateRuleAssignment::RULES_DIFFER (services/JobTemplateRuleAssignment.php):
+ * the validation error of a template's own rule that differs from the rule of
+ * its inventory (`inventory`, `rule`), under the rule select.
+ */
+export function rulesDiffer(inventory: string, rule: string): string {
+  return `Inventory ${quoted(inventory)} has the approval rule ${quoted(rule)}: a job template on it may have only that rule `
+    + 'as its own, or none.';
+}
+
+/**
+ * JobTemplateRuleAssignment::INVENTORY_RULE_HINT: below the rule select of
+ * admins (#job-template-inventory-rule-hint), when the inventory the form
+ * names has a rule.
+ */
+export function inventoryRuleHint(inventory: string, rule: string): string {
+  return `Its inventory ${quoted(inventory)} has the approval rule ${quoted(rule)}: every launch waits for it. `
+    + 'Leave this rule empty, or choose the same one.';
+}
+
+/**
+ * JobTemplateGate::LAUNCH_NOTE (services/JobTemplateGate.php): the launch
+ * page's note (#launch-approval-note) for a template's own rule.
+ */
+export function LAUNCH_NOTE(rule: string): string {
+  return `The job will wait for approval before it runs: rule "${rule}" (job template).`;
+}
+
+/** JobTemplateGate::LAUNCH_NOTE_INVENTORY: the launch page's note for the rule of the template's inventory. */
+export function LAUNCH_NOTE_INVENTORY(rule: string, inventory: string): string {
+  return `The job will wait for approval before it runs: rule "${rule}" (inventory "${inventory}").`;
+}
+
+/** JobTemplateGate::SCHEDULE_NOTE: the schedule page's Approval row (#schedule-approval) for a template's own rule. */
+export function SCHEDULE_NOTE(rule: string): string {
+  return `Each run waits for approval: rule "${rule}" (job template).`;
+}
+
+/** JobTemplateGate::SCHEDULE_NOTE_INVENTORY: the schedule page's Approval row for the rule of the template's inventory. */
+export function SCHEDULE_NOTE_INVENTORY(rule: string, inventory: string): string {
+  return `Each run waits for approval: rule "${rule}" (inventory "${inventory}").`;
+}
+
+/**
+ * ApproverEligibility::REFUSAL_JOB (services/ApproverEligibility.php): why a
+ * launch of a gated job template could never be approved: `rule` needs
+ * `required` approvals from others than the launcher, but only `eligible` of
+ * its approvers may decide. The launch page shows it before the click
+ * (#launch-refusal), the refused launch in its danger flash (launchFailed()).
+ */
+export function approverRefusal(rule: string, required: number, eligible: number): string {
+  return `Approval rule ${quoted(rule)} needs ${required} approval(s) from users other than the one who launches, `
+    + `but only ${eligible} of its approvers may decide on this job. An admin can add approvers to the rule.`;
+}
+
+/** The launch page's note of what the job will wait for (views/job-template/launch.php). */
+export function launchApprovalNote(page: Page): Locator {
+  return page.locator('#page-content #launch-approval-note');
+}
+
+/** The launch page's warning, on GET only, that this user's launch could never be approved. */
+export function launchRefusal(page: Page): Locator {
+  return page.locator('#page-content #launch-refusal');
+}
 
 /** The notice of a gated job template, on its page and its edit form. */
 export function lockedNotice(page: Page): Locator {
@@ -123,13 +235,15 @@ export const LOCKED_INPUTS = [
 
 /**
  * The open edit form is the one of a gated job template for a user who may
- * not change what it runs: the notice, the name and description open, every
- * other input disabled, the additional credentials and the survey editor's
- * inputs and buttons too, and nothing typed into the extra vars editor
- * changes the extra vars.
+ * not change what it runs: the notice (`notice`: GATED_LOCK_NOTICE for a
+ * template with a rule of its own, GATED_INVENTORY_LOCK_NOTICE for one gated
+ * through its inventory), the name and description open, every other input
+ * disabled, the additional credentials and the survey editor's inputs and
+ * buttons too, and nothing typed into the extra vars editor changes the
+ * extra vars.
  */
-export async function expectLockedForm(page: Page): Promise<void> {
-  await expect(lockedNotice(page)).toHaveText(GATED_LOCK_NOTICE);
+export async function expectLockedForm(page: Page, notice: string = GATED_LOCK_NOTICE): Promise<void> {
+  await expect(lockedNotice(page)).toHaveText(notice);
   await expect(lockedNotice(page)).toHaveClass(/(^|\s)alert-info(\s|$)/);
   for (const selector of OPEN_INPUTS) {
     await expect(page.locator(selector), selector).toBeEnabled();

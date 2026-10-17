@@ -170,6 +170,12 @@ return [
         'inventoryService' => [
             'class' => 'app\services\InventoryService',
         ],
+        'inventoryUsageService' => [
+            'class' => 'app\services\InventoryUsageService',
+        ],
+        'inventoryWriteService' => [
+            'class' => 'app\services\InventoryWriteService',
+        ],
         'artifactService' => [
             'class' => 'app\services\ArtifactService',
             'storagePath' => '@runtime/test-artifacts',

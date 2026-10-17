@@ -4,15 +4,19 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers\api\v1;
 
+use app\components\InventoryUsage;
+use app\controllers\api\v1\InventoriesController;
 use app\controllers\api\v1\ProjectsController;
 use app\controllers\api\v1\RunnerGroupsController;
 use app\controllers\api\v1\WorkflowTemplatesController;
 use app\controllers\RunnerGroupController;
+use app\models\Inventory;
 use app\models\JobTemplate;
 use app\models\Project;
 use app\models\RunnerGroup;
 use app\models\WorkflowJob;
 use app\models\WorkflowTemplate;
+use app\services\InventoryWriteService;
 use app\services\ProjectDeletionService;
 use app\services\WorkflowExecutionService;
 use app\tests\integration\controllers\WebControllerTestCase;
@@ -29,6 +33,10 @@ use yii\db\Exception as DbException;
  * refusals, which the web UI now shares; DELETE /api/v1/projects/{id} did
  * not say that a job template created while the delete runs gets the
  * refusal; and the workflow launch documented no 500 for a database error.
+ *
+ * Regression from 2.12.0, fails on the spec of 2.11.1: DELETE
+ * /api/v1/inventories/{id} answered 500 for an inventory in use, and the
+ * spec documented neither that nor the 409 that answers it now.
  */
 class OpenApiDeletesAndDatabaseErrorsContractTest extends WebControllerTestCase
 {
@@ -87,6 +95,61 @@ class OpenApiDeletesAndDatabaseErrorsContractTest extends WebControllerTestCase
         $description = $this->textOf(['paths', self::RUNNER_GROUP, 'delete', 'description']);
         $this->assertStringContainsString('while runners belong to the group or job templates use it (deleted job templates do not count)', $description);
         $this->assertStringContainsString('The web UI refuses the same deletes with the same messages.', $description);
+    }
+
+    /**
+     * regression (2.12.0): deleting an inventory that a job template uses
+     * failed on the foreign key with a server error, and the spec documented
+     * no such answer. It answers 409 as the spec's InventoryInUse documents
+     * it, the example word for word for the fixture's IDs, with used_by as
+     * InventoryUsage, and the inventory stays.
+     */
+    public function testRegressionAnInventoryInUseIsRefusedAsTheSpecSays(): void
+    {
+        $admin = $this->userWithRole('inventory-contract-admin', 'admin');
+        $adminId = (int)$admin->id;
+        $this->loginAs($admin);
+        $inventory = $this->createInventory($adminId);
+        $inventory->name = 'web-prod';
+        $this->assertTrue($inventory->save(false));
+        $project = $this->createProject($adminId);
+        $project->name = 'web';
+        $this->assertTrue($project->save(false));
+        $template = $this->createJobTemplate((int)$project->id, (int)$inventory->id, (int)$this->createRunnerGroup($adminId)->id, $adminId);
+        $template->name = 'deploy-web';
+        $this->assertTrue($template->save(false));
+
+        $answer = (new InventoriesController('api/v1/inventories', $this->app()))->actionDelete((int)$inventory->id);
+
+        $this->assertSame(409, \Yii::$app->response->statusCode);
+        $this->assertNotNull(Inventory::findOne($inventory->id), 'The inventory stays.');
+        $this->assertSame(
+            self::RESPONSE_REF_PREFIX . 'InventoryInUse',
+            $this->dig($this->spec(), ['paths', '/api/v1/inventories/{id}', 'delete', 'responses', '409', '$ref'], 'DELETE /api/v1/inventories/{id} documents its 409.')
+        );
+        /** @var array{error: array{message: string, used_by: array{job_templates: list<array<string, mixed>>}}} $expected */
+        $expected = $this->exampleAt(['components', 'responses', 'InventoryInUse']);
+        $this->assertIsArray($expected['error']['used_by']['job_templates'][0] ?? null);
+        $expected['error']['used_by']['job_templates'][0]['id'] = (int)$template->id;
+        $expected['error']['used_by']['job_templates'][0]['project_id'] = (int)$project->id;
+        $this->assertSame($expected, $answer, 'The spec\'s example is the answer, for the fixture\'s IDs.');
+        $this->assertIsArray($answer['error']);
+        $this->assertSame(
+            sprintf(InventoryWriteService::DELETE_IN_USE, (new InventoryUsage('web-prod', [], 1, 0))->summary()),
+            $answer['error']['message']
+        );
+        $usedBy = $answer['error']['used_by'];
+        $this->assertIsArray($usedBy);
+        $this->assertMatchesSchema('InventoryUsage', $usedBy);
+        $this->assertSame(array_keys($usedBy), $this->required('InventoryUsage'), 'InventoryUsage documents what used_by holds, in its order.');
+        $this->assertIsArray($usedBy['job_templates'][0]);
+        $items = $this->dig($this->properties('InventoryUsage'), ['job_templates', 'items', 'properties'], 'InventoryUsage.job_templates documents its items.');
+        $this->assertIsArray($items);
+        $this->assertMatchesProperties($items, $usedBy['job_templates'][0], 'InventoryUsage.job_templates[]');
+        $this->assertStringContainsString(
+            'An inventory that job templates use, also when only deleted ones do, is not deleted: 409 with `error.used_by`, and nothing is changed.',
+            $this->textOf(['paths', '/api/v1/inventories/{id}', 'delete', 'description'])
+        );
     }
 
     /**

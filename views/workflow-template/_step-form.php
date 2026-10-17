@@ -5,7 +5,7 @@ declare(strict_types=1);
 /** @var yii\web\View $this */
 /** @var app\services\WorkflowStepFormView $form Add Step or Edit Step */
 /** @var app\models\WorkflowStep $model the step the form shows: new (Add Step), as stored, or as the user filled it in when the save was refused */
-/** @var array<int, string> $jobTemplateOptions job templates the user may operate; without an approval rule unless $mayAssignRules */
+/** @var array<int, string> $jobTemplateOptions job templates the user may operate; without those an approval rule gates (their own or their inventory's) unless $mayAssignRules */
 /** @var array<int, string> $approvalRuleOptions offered only to users who may assign approval rules */
 /** @var bool $mayAssignRules the user may add approval steps and gated job steps (approval-rule.update) */
 /** @var array<int|string, mixed>|string $action where the form posts to */

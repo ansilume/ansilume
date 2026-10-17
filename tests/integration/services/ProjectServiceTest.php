@@ -9,6 +9,7 @@ use app\models\Project;
 use app\services\NotificationDispatcher;
 use app\services\ProjectService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 
 /**
  * ProjectService::sync() for a git project that cannot be synced because it
@@ -17,7 +18,7 @@ use app\tests\integration\DbTestCase;
  */
 class ProjectServiceTest extends DbTestCase
 {
-    private ?object $originalDispatcher = null;
+    use RestoresComponents;
 
     /** @var NotificationDispatcher&object{dispatched: list<array{event: string, payload: array<string, mixed>}>} */
     private NotificationDispatcher $dispatcher;
@@ -25,7 +26,6 @@ class ProjectServiceTest extends DbTestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->get('notificationDispatcher');
         $this->dispatcher = new class () extends NotificationDispatcher {
             /** @var list<array{event: string, payload: array<string, mixed>}> */
             public array $dispatched = [];
@@ -35,12 +35,12 @@ class ProjectServiceTest extends DbTestCase
                 $this->dispatched[] = ['event' => $event, 'payload' => $payload];
             }
         };
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

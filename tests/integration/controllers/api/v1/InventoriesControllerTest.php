@@ -128,6 +128,11 @@ class InventoriesControllerTest extends WebControllerTestCase
         $this->assertSame('moved-inventory', $result['data']['name']);
         $this->assertSame($projectId, Inventory::findOne($inventory)?->project_id);
         $this->assertSame(1, $this->updateAuditCount($inventory));
+        $this->assertSame(
+            ['name' => 'moved-inventory', 'changed_fields' => ['name', 'project_id'], 'source' => 'api'],
+            $this->updateContext($inventory),
+            'the entry names the changed fields, not their values'
+        );
     }
 
     public function testAnInvalidUpdateIs422AndSavesNothing(): void
@@ -299,6 +304,28 @@ class InventoriesControllerTest extends WebControllerTestCase
             'template' => (int)$template->id,
             'credential' => (int)$credential->id,
         ];
+    }
+
+    /**
+     * The context of the inventory.updated entry of inventory #$inventoryId.
+     *
+     * @return array<string, mixed>
+     */
+    private function updateContext(int $inventoryId): array
+    {
+        $entry = AuditLog::find()
+            ->where([
+                'action' => AuditLog::ACTION_INVENTORY_UPDATED,
+                'object_type' => 'inventory',
+                'object_id' => $inventoryId,
+            ])
+            ->one();
+        $this->assertInstanceOf(AuditLog::class, $entry);
+        $context = json_decode((string)$entry->metadata, true);
+        $this->assertIsArray($context);
+        /** @var array<string, mixed> $context */
+
+        return $context;
     }
 
     private function updateAuditCount(int $inventoryId): int

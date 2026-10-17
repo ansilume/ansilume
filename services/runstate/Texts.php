@@ -6,11 +6,12 @@ namespace app\services\runstate;
 
 /**
  * The texts that say what a workflow run waits for, where an approval
- * request comes from and how it was decided: the run page's banner and its
- * facts, the personal line, the decision notes of the steps, the launch
- * flash, the For column of the approval lists, the job page's workflow
- * context, the template page's active runs, and the notes of the run and
- * job pages once their live updates stopped.
+ * request comes from, what required it and how it was decided: the run
+ * page's banner and its facts, the personal line, the decision notes of the
+ * steps, the launch flash, the For and Rule columns of the approval lists,
+ * the rows of the request page, the job page's workflow context, the
+ * template page's active runs, and the notes of the run and job pages once
+ * their live updates stopped.
  *
  * Every text is plain text: whoever renders it escapes it (Html::encode(),
  * textContent). Names are inserted between the quotes as they are. Times
@@ -122,6 +123,19 @@ final class Texts
 
     /** sprintf(): the name of the deleted job template. */
     public const FOR_DELETED_JOB_TEMPLATE = '%s (deleted job template)';
+
+    /**
+     * The Rule cell of a request that the inventory of its job required
+     * (RequestContext::ruleText()); sprintf(): the rule's name, the
+     * inventory's label (JobInventory::label()).
+     */
+    public const RULE_OF_INVENTORY = '%1$s (of inventory %2$s)';
+
+    /** The header of the request page's row with the inventory the job was launched with. */
+    public const INVENTORY_LABEL = 'Inventory';
+
+    /** The header of the request page's row with what required the request (ApprovalRequest::requiredByLabel()). */
+    public const REQUIRED_BY_LABEL = 'Required by';
 
     /**
      * After the name of a workflow template that was deleted, separated by a

@@ -1,4 +1,5 @@
 import { test, expect, Locator, Page } from '@playwright/test';
+import { HOST_AFTER_STEP, HOST_RULE, HOST_STEP, HOST_TEMPLATE, HOST_WORKFLOW } from '../../lib/inventories';
 import { openWorkflowTemplate } from '../../lib/triggers';
 import {
   ALWAYS_WINS_TITLE,
@@ -36,6 +37,7 @@ import {
   SUCCESS_PATH_LOOP_NOTE,
   UNREACHABLE_BADGE,
   UNREACHABLE_TITLE,
+  gatedInventoryTitle,
   gatedTitle,
   routeCell,
   routeLoop,
@@ -192,6 +194,47 @@ test.describe('Routes of workflow steps (admin)', () => {
     await expect(spare.locator('[data-unreachable-badge]')).toHaveAttribute('title', UNREACHABLE_TITLE);
     await expect(page.locator('[data-unreachable-badge]')).toHaveCount(1);
     await expect(routeCell(spare, 'success')).toHaveAttribute('data-route-kind', 'end');
+  });
+
+  // commands/E2eInventoryGateSeeder.php: e2e-host-gate-workflow's job step
+  // runs e2e-host-gated-template, which has no rule of its own; its
+  // inventory, e2e-gated-inventory, has e2e-host-gate-rule. The step waits
+  // for that rule like any gated job step: a refused approval follows only
+  // On Failure, which, left empty, ends the run as failed.
+  test('a job step gated by its job template\'s inventory says so, and a refused approval ends the run', async ({ page }) => {
+    await openWorkflowTemplate(page, HOST_WORKFLOW);
+    await expect(templateStepNames(page)).toHaveText([HOST_STEP, HOST_AFTER_STEP]);
+
+    const step = templateStepRow(page, HOST_STEP);
+    await expectRow(step, {
+      position: '1',
+      type: 'Job',
+      target: HOST_TEMPLATE,
+      success: routeNext(2, HOST_AFTER_STEP),
+      failure: `${routeNext(2, HOST_AFTER_STEP)}${ROUTE_ALSO_AFTER_FAILED_JOB}${PART_SEPARATOR}${ROUTE_END_FAILS}${ROUTE_AFTER_REFUSED_APPROVAL}`,
+      always: ROUTE_UNUSED,
+    });
+    await expect(step.locator('[data-gated-badge]')).toHaveText(GATED_BADGE);
+    await expect(step.locator('[data-gated-badge]')).toHaveAttribute('title', gatedInventoryTitle(HOST_RULE));
+    await expect(step.locator('[data-target-problem]')).toHaveCount(0);
+    await expect(routeCell(step, 'failure')).toHaveAttribute('data-route-kind', 'mixed');
+    expect(await partTitles(routeCell(step, 'failure'))).toEqual([NEXT_TITLE, REFUSED_APPROVAL_TITLE]);
+
+    // The pause step after it is no gated job step.
+    const after = templateStepRow(page, HOST_AFTER_STEP);
+    await expectRow(after, {
+      position: '2',
+      type: 'Pause',
+      target: '—',
+      success: ROUTE_END_SUCCEEDS,
+      failure: ROUTE_UNUSED,
+      always: ROUTE_UNUSED,
+    });
+    await expect(after.locator('[data-gated-badge]')).toHaveCount(0);
+    await expect(page.locator('[data-gated-badge]')).toHaveCount(1);
+    // Admins may change the steps: no lock.
+    await expect(page.locator('#wf-approval-steps-locked-notice')).toHaveCount(0);
+    await expect(step.locator('a[data-action="edit"]')).toHaveCount(1);
   });
 
   test('the success path above the table and the legend below it explain the order', async ({ page }) => {

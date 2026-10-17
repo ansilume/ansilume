@@ -139,6 +139,67 @@ example while the job waited for approval.
 template again and enter the password answers; a re-launch cannot help,
 because it reuses the same answers. Nothing ran on the target hosts.
 
+## Job aborted before execution: the job was not approved
+
+**Symptom:** A job fails right after a runner claimed it, and its log says
+`Job aborted before execution: inventory #3 requires an approval (approval rule #5), and this job was never approved. Launch it again (Re-launch on the job page): the new job waits for approval. The job did not run: no credentials were decrypted or sent to the runner.`,
+or the same with `its job template #7` in place of `inventory #3`.
+
+**Cause:** The job's template, the inventory the job was launched with, or
+the inventory its template uses now has an approval rule, and the job was
+never approved: its approval request was neither approved nor timed out
+with the rule's `approve` action. Since 2.12.0 a runner starts such a job
+only once it is approved. The job was queued before its job template or
+inventory got its rule, put back in the queue after that
+(`JOB_RECLAIM_MODE=requeue`), its job template moved to a gated inventory
+after the launch, or it was queued by hand. The audit log shows
+`job.started`, written when the runner claimed the job, which names the
+runner and the job's credentials as they were launched, and then
+`job.finished` with `claim_refusal: not_approved`, the rule
+(`approval_rule_id`), what required it (`required_by`) and the job's
+request with its status where it has one. No credential was decrypted or
+sent to the runner, and nothing ran on the target hosts. A workflow job
+step with such a job goes on as after a failed job.
+
+**Fix:** Re-launch the job on its page, or launch its job template again:
+the new job waits for approval and runs once it is approved. The queries
+under **Check before the update** and **Check before you give an inventory
+a rule** in
+[updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories)
+list the queued jobs that would meet this.
+
+## Job aborted before execution: the inventory is missing or empty
+
+**Symptom:** A job fails right after a runner claimed it, and its log says
+one of:
+
+- `Job aborted before execution: inventory #3, which the job was launched with, no longer exists, so its hosts are unknown. Launch the job template again. The job did not run: no credentials were decrypted or sent to the runner.`
+- `Job aborted before execution: its launch record names no inventory, so its hosts are unknown. Launch the job template again. The job did not run: no credentials were decrypted or sent to the runner.`
+- `Job aborted before execution: static inventory #3 "web-prod" has no content, so it names no hosts. Add its hosts, then launch the job template again. The job did not run: no credentials were decrypted or sent to the runner.`
+- `Job aborted before execution: file inventory #3 "web-prod" names no source path, so its hosts are unknown. Set its source path, then launch the job template again. The job did not run: no credentials were decrypted or sent to the runner.`
+
+**Cause:** The job has no hosts to run on: the inventory it was launched
+with was deleted, its launch record names none (a job written outside a
+launch), its static inventory has no content or only whitespace, or its
+file inventory has no source path. Up to 2.11.1 the claim gave such a job
+the inventory `localhost`, so it ran against the runner itself, or, for a
+file inventory without a source path, the default inventory of Ansible or
+of the repository's `ansible.cfg`. A dynamic inventory without a source
+path still runs. The job's `job.finished` audit entry records
+`claim_refusal` (`inventory_missing`, `inventory_not_recorded`,
+`inventory_empty` or `inventory_no_source`); nothing was decrypted or sent
+to the runner.
+
+**Fix:** Give the inventory its hosts or its source path, or give the job
+template another inventory, then launch the job template again. A static
+inventory without content no longer runs against the runner itself: give
+it hosts of its own. The inventory form and the API take new or changed
+content of a static inventory only as a YAML mapping:
+`all: {hosts: {localhost: }}` names the host `localhost` that the claim
+gave such a job, and
+`all: {hosts: {localhost: {ansible_connection: local}}}` runs on the runner
+itself as the seeded selftest inventory does.
+
 ## Job log: verbosity lowered
 
 **Symptom:** The job log ends with
@@ -315,11 +376,14 @@ text `2026-10-11T00:00:00.000Z`. Quote such values, write booleans as
 
 ## Launch refused: too few approvers besides the launcher
 
-**Symptom:** A launch of a job template with an approval rule fails with
+**Symptom:** A launch of a job template with an approval rule, its own or
+its inventory's, fails with
 `Approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide on this job. An admin can add approvers to the rule.`
-The launch form shows it after `Launch failed: `, `POST /api/v1/jobs` and
-job triggers answer `422` with it, a scheduled run fails to launch with it,
-and a workflow job step fails with it. A workflow is refused the same way
+The launch form shows it after `Launch failed: `, and the launch page
+already shows it in a warning above the template summary;
+`POST /api/v1/jobs` and job triggers answer `422` with it, a scheduled run
+fails to launch with it, and a workflow job step fails with it. A workflow
+is refused the same way
 before its run exists, for its first approval step or job step, in step
 order, whose approval could never be granted:
 `Step "Release approval": approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide. An admin can add approvers to the rule.`
@@ -328,9 +392,10 @@ order, whose approval could never be granted:
 count: users on the rule's approver list (for a role rule, the users
 assigned that role directly; for a team rule, the members of the team) who
 have an active account, are superadmins or hold `approval.decide`, and may
-see the job template's project (for a workflow approval step, the
-workflow). Fewer of them than the rule's required approvals remain besides
-the user who launches, so the request could never be approved. That user
+see the job template's project (also for the rule of its inventory; for a
+workflow approval step, the workflow). Fewer of them than the rule's
+required approvals remain besides the user who launches, so the request
+could never be approved. That user
 is whoever launches in the web UI or the
 API, the user a schedule runs as (who last changed what or when it runs, or
 enabled it), the user a trigger runs as (who generated its token, or the
@@ -365,6 +430,63 @@ triggers):
 - The third: an admin changed the template's approval rule while the job was
   being launched, so the job would have waited for another rule. Launch it
   again.
+
+Since 2.12.0 a job template whose inventory has an approval rule waits for
+that rule, and a launch is refused with these too:
+
+- `The approval rule of inventory #3, which job template #7 uses, no longer exists. An admin can choose another rule.`:
+  the template has no rule of its own, and the rule of its inventory was
+  gone at the launch. Launch again; if the message stays, an admin chooses
+  a rule, or none, on the inventory.
+- `Inventory #3 of job template #7 no longer exists. Choose another inventory for the template.`:
+  the inventory of the template was gone at the launch. Choose another one
+  on the template.
+- `The inventory of job template #7 changed while the job was being launched. Launch it again.`:
+  the template got another inventory while the job was being launched, or
+  after the schedule-runner loaded it for a scheduled run. Launch it again;
+  the next scheduled run takes the new inventory.
+- `The approval rule of inventory #3, which job template #7 uses, changed while the job was being launched. Launch it again.`:
+  an admin gave the template's inventory a rule, another one or none,
+  while the job was being launched. Launch it again. When this repeats
+  right after the update to 2.12.0, the containers read the database schema
+  from a cache made before the migration added the rule of inventories; it
+  ends when the cached schema expires, within an hour, or at once with
+  `docker compose exec app php yii cache/flush-schema db --interactive=0`,
+  which clears the schema cache only. Do not run
+  `php yii cache/flush cache` instead: the cache shares its Redis database
+  with the sessions and the queue, so that logs every user out and drops
+  queued work.
+
+For a template and an inventory with different rules, see
+[Launch refused: two approval rules meet](#launch-refused-two-approval-rules-meet).
+
+## Launch refused: two approval rules meet
+
+**Symptom:** A launch fails with
+`Job template #7 and its inventory #3 have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule.`,
+shown and answered like the other launch refusals; a workflow launch with
+`Step "Deploy": its job template and its inventory have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule.`,
+and the steps table marks such a job step
+`job template and inventory have different approval rules · runs fail here`.
+Saving a job template is refused with
+`Inventory "web-prod" has the approval rule "deploy-prod": a job template on it may have only that rule as its own, or none.`,
+and saving an inventory with
+`Job templates that use this inventory have another approval rule of their own: "Deploy web". A launch waits for one rule only, so give them this rule or none first.`,
+as an error of the rule field, `422` from the API.
+
+**Cause:** A launch waits for one approval rule, and each job has one
+approval request, so a job template on an inventory with an approval rule
+has no rule of its own, or the same rule. The saves refuse two different
+rules; a launch meets them only after a change made in the database
+directly, and is refused before anything is written.
+
+**Fix:** An admin removes the job template's own rule, so that its
+launches wait for the inventory's, or gives it the inventory's rule. To
+give the inventory the template's rule instead, give the other job
+templates on the inventory that rule, or none, first. The query under
+**One approval rule per launch** in
+[updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories)
+lists the job templates whose own rule differs from their inventory's.
 
 ## Launch refused: the limit or the verbosity
 
@@ -406,8 +528,9 @@ in brackets:
   `launcher, not counted`). Another approver must decide.
 - `You launched this workflow run; another approver must decide.` (`403`):
   the request belongs to an approval step, or to a job step whose job
-  template has an approval rule, of a workflow run that you started, or
-  that the workflow's trigger started as you. The run's page says
+  template, or its inventory, has an approval rule, of a workflow run that
+  you started, or that the workflow's trigger started as you. The run's
+  page says
   `You launched this run, so another approver must decide.` Up to 2.10.1
   the refusal read as for a job.
 - `You are not eligible to decide on this request.` (`403`): you are not on
@@ -480,28 +603,61 @@ sets none.
 **Symptom:** Deleting an approval rule shows, and
 `DELETE /api/v1/approval-rules/{id}` answers `409` with,
 `Approval rule "deploy-prod" is in use by 2 job template(s) and 1 workflow step(s). Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.`
-The rule page shows Delete disabled, and its **Used by** card lists the job
-templates and workflow steps that use the rule (`error.used_by` in the
-API).
+Since 2.12.0 inventories count first, as in
+`Approval rule "deploy-prod" is in use by 1 inventory(ies), 2 job template(s) and 1 workflow step(s). Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.`
+The rule page shows Delete disabled, with
+`In use: remove it from the inventories, job templates and workflow steps below, and let its pending requests be decided or their jobs canceled, before deleting it.`,
+and its **Used by** card lists the inventories, job templates and workflow
+steps that use the rule (`error.used_by` in the API).
 
-**Cause:** A rule is in use while live job templates, steps of live
-workflows, or pending approval requests whose job still waits for approval
-refer to it. Before the update to approvals and workflows, deleting such a
-rule silently ungated its job templates and deleted its requests.
+**Cause:** A rule is in use while inventories, live job templates, steps
+of live workflows, or pending approval requests whose job still waits for
+approval refer to it. Before the update to approvals and workflows,
+deleting such a rule silently ungated its job templates and deleted its
+requests.
 
-**Fix:** Choose another rule, or none, on each job template; edit the
-workflow steps that use it to choose another rule, or remove them (this
-needs `approval-rule.update`, and waits until the workflow's runs have
-finished); and let its pending requests be
-decided, or cancel their jobs. The card lists only what you may see and
-counts the rest: an admin who sees everything finds the others. Then delete
-the rule.
+**Fix:** Choose another rule, or none, on each inventory and job template:
+on an inventory's edit form `— None —` under **Approval**, or
+`"approval_rule_id": null` with `PUT /api/v1/inventories/{id}`, which only
+admins may do; edit the workflow steps that use it to choose another rule,
+or remove them (this needs `approval-rule.update`, and waits until the
+workflow's runs have finished); and let its pending requests be decided,
+or cancel their jobs. The card lists only what you may see and counts the
+rest, such as `+ 2 inventory(ies) in projects you cannot see`: an admin
+who sees everything finds the others. Then delete the rule.
+
+A delete that the database refuses although the card lists nothing that
+uses the rule is refused with
+`Approval rule "deploy-prod" was not deleted: the database still refers to it. Nothing was changed.`
+(`409` from the API); load the rule's page again to see what uses it now.
 
 A delete can also end in a server error, `500` from the API, whose entry in
 the application log mentions `Deadlock found when trying to get lock` or
 `Lock wait timeout exceeded`: another save assigned the rule at the same
 moment, twice in a row. Try again; once that save has committed, the delete
 is refused with the message above.
+
+## Approval rule form: nobody can approve
+
+**Symptom:** The form of an approval rule warns
+`Warning: none of these approvers can approve: none of them is an active user who holds approval.decide or is a superadmin, so every launch this rule gates would be refused.`
+
+**Cause:** None of the users of the chosen role, team or user list may
+decide: they are inactive, or hold neither `approval.decide` nor the
+superadmin flag (viewers do not hold it). A role rule counts the users
+assigned the role directly, a team rule every member of the team. Every
+launch the rule gates, of a job template, of the job templates on an
+inventory, or at a workflow approval step, would be refused (see
+[Launch refused: too few approvers besides the launcher](#launch-refused-too-few-approvers-besides-the-launcher)).
+Up to 2.11.1 the form counted team members and role holders who may not
+decide, and so warned too little. Its counts are the most a launch can
+find: the user who launches never approves, and only approvers who may see
+the job template's project count.
+
+**Fix:** Choose approvers who may decide, or give the users
+`approval.decide`, which operators and admins hold. When fewer of them may
+decide than the rule requires, the form warns
+`Warning: Required approvals (3) exceeds eligible approvers (2).` instead.
 
 ## A workflow run seems stuck
 
@@ -709,7 +865,11 @@ created.
 - `Step "Release approval": its approval rule no longer exists. An admin can choose another rule.`:
   the approval step has no rule (see
   [Workflow step failed without a job](#workflow-step-failed-without-a-job)).
-  An admin edits the step and chooses a rule.
+  An admin edits the step and chooses a rule. For a job step it means
+  that the rule of its job template, or of the template's inventory, is
+  gone: an admin chooses another rule, or none, there.
+- `Step "Deploy": its job template and its inventory have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule.`:
+  see [Launch refused: two approval rules meet](#launch-refused-two-approval-rules-meet).
 
 A refusal by team scoping answers `403` instead, as before.
 
@@ -826,6 +986,15 @@ page (`403`, `404`); the API answers with the status in brackets:
   there (see
   [updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows),
   **Only admins change what a gated job template runs**).
+- `Only admins may add a job step whose job template's inventory has an approval rule: that needs approval-rule.update.`
+  and
+  `This workflow has a job step whose job template's inventory has an approval rule: only admins may change its steps (approval-rule.update).`
+  (`403`): the same, for a job template whose inventory has an approval
+  rule, also one it got after the step was added. Since 2.12.0 the step
+  forms offer users without `approval-rule.update` neither kind of gated
+  job template (see
+  [updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories),
+  **Gated job steps**).
 - `You may not use this job template in a workflow: that needs operator access to its project.`
   (`403`, with the job template in `error.job_template_ids`): you may see
   the job template, but not operate its project; choose one you may
@@ -1299,6 +1468,97 @@ you as well. A change of the rule itself is refused with
 `Only admins may assign or remove an approval rule: that needs approval-rule.update.`
 first; see
 [updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows).
+When the template has no rule of its own but its inventory has one, see
+[Saving a job template is refused: its inventory has an approval rule](#saving-a-job-template-is-refused-its-inventory-has-an-approval-rule).
+
+## Saving a job template is refused: its inventory has an approval rule
+
+**Symptom:** Saving a job template, in its form or with `POST` or
+`PUT /api/v1/job-templates`, is refused with one of these, as an error
+page in the web UI and `403` from the API, and nothing is saved:
+
+- `The inventory of this job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.`:
+  the template's inventory has an approval rule. Its page and its edit
+  form say
+  `The inventory of this job template has an approval rule: only admins may change what it runs (approval-rule.update). You may still change its name and description, launch it and manage its trigger token.`,
+  and the form disables every field but the name and the description.
+- `The selected inventory has an approval rule: only admins may give a job template an inventory with an approval rule (approval-rule.update).`:
+  the template, a new one too, would get an inventory with an approval
+  rule. The form does not offer you such inventories, and says
+  `Inventories with an approval rule are not listed: only admins may give a job template such an inventory.`
+
+**Cause:** Every launch of a job template on an inventory with an approval
+rule waits for the inventory's rule, and you lack `approval-rule.update`. A
+schedule, a trigger or a workflow launches the template's jobs as the user
+it runs as, who never approves them: if you could change what the
+template runs, or give it such an inventory, you could approve alone what
+you chose. Every field but the name and the description counts, the
+inventory too, so moving the template to an inventory without a rule is
+refused as well. A field sent with the value it has is no change.
+
+**Fix:** Ask an admin to make the change. Rename the template or change
+its description yourself, and launch it, clone it or manage its trigger
+token as before; a clone keeps the inventory, and so the lock. An
+inventory you may not see answers `The selected inventory does not exist.`,
+gated or not. When the template has an approval rule of its own besides,
+see
+[Launch refused: two approval rules meet](#launch-refused-two-approval-rules-meet).
+
+## Saving an inventory is refused: it has an approval rule
+
+**Symptom:** Saving an inventory, in its edit form or with
+`PUT /api/v1/inventories/{id}`, is refused with
+`This inventory has an approval rule: only admins may change its hosts (approval-rule.update). You may change its name and description.`
+(an error page in the web UI, `403` from the API), and nothing is saved.
+The inventory's page and its edit form say
+`This inventory has an approval rule: every launch of a job template that uses it waits for approval. Only admins (approval-rule.update) may change its hosts or delete it, give a job template this inventory, or change what the job templates that use it run. You may still change its name and description, and parse it.`,
+and the form shows its type, content, project and source path disabled.
+
+**Cause:** The inventory has an approval rule, and you lack
+`approval-rule.update`. Every launch of a job template that uses it waits
+for the rule, and the schedules, triggers and workflows of these templates
+launch as the users they run as, who never approve the jobs: if you could
+change the hosts, you could approve alone where they run. Its type,
+content, source path and project count. A field sent with the value it has
+is no change, so a client may send back what
+`GET /api/v1/inventories/{id}` returned with a new name. The save checks
+the inventory as it is at that moment, so such a change is refused as well
+when the form was opened before an admin gave the inventory its rule.
+
+**Fix:** Ask an admin to make the change. Change the name or the
+description yourself, and parse the inventory, as before. A change of the
+rule itself is refused with
+`Only admins may assign or remove an approval rule: that needs approval-rule.update.`
+first; see
+[updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories).
+For a file or dynamic inventory, its hosts come from the project's
+repository when a job runs, which the rule does not lock (see
+**What an approval rule does not stop** there).
+
+## Deleting an inventory is refused
+
+**Symptom:** Deleting an inventory shows, as a danger flash on its page,
+and `DELETE /api/v1/inventories/{id}` answers `409` with, such as
+`Inventory "web-prod" is in use by 2 job template(s) and 1 deleted job template(s). Point its job templates at another inventory first. A deleted job template keeps its inventory for the history of its jobs until its project is deleted, so deleting the template does not free it.`,
+with the job templates in `error.used_by`; or it answers `403` with
+`This inventory has an approval rule: only admins may delete it (approval-rule.update).`
+Nothing is deleted.
+
+**Cause:** Live job templates use the inventory, or deleted ones still
+refer to it: a deleted job template keeps its inventory, for the history of
+its jobs, until its project is deleted. Up to 2.11.1 such a delete ended
+in a server error. The `403`: the inventory has an approval rule, and you
+hold `inventory.delete` but not `approval-rule.update`; of the built-in
+roles only admin holds `inventory.delete`.
+
+**Fix:** The inventory's page lists the job templates that use it in its
+card **Job templates**, and counts those in projects you may not see and
+the deleted ones; `GET /api/v1/inventories/{id}` answers the same as
+`used_by`. Give each live one another inventory, then delete the
+inventory. An inventory that only deleted job templates use stays until
+their project is deleted, a known limit (see
+[updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories)).
+Only an admin deletes an inventory with an approval rule.
 
 ## Saving a job template fails: survey rules
 

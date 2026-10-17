@@ -187,6 +187,7 @@ class E2eController extends Controller
         (new E2eExtraVarsEditorSeeder($logger))->seed($userId, $secretParents);
         (new E2eCancelOnlyUserSeeder($logger))->seed();
         (new E2eLdapStatusSeeder($logger))->seed();
+        (new E2eInventoryGateSeeder($logger))->seed($userId);
 
         $runnerGroupId = $this->seedRunnerGroup($userId);
         $this->seedSecondRunnerGroup($userId);

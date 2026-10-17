@@ -9,6 +9,7 @@ use app\controllers\ApprovalRuleController;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
@@ -160,6 +161,36 @@ class ApprovalRuleControllerGuardTest extends WebControllerTestCase
         $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status, 'the request stays decidable');
     }
 
+    /**
+     * An inventory with the rule keeps it: the danger flash counts the
+     * inventory first, and the rule stays.
+     */
+    public function testDeletingARuleAnInventoryUsesIsRefusedWithTheInventoryInTheFlash(): void
+    {
+        $admin = $this->signedIn('admin');
+        $rule = $this->ruleOf($admin);
+        $inventory = $this->createInventory((int)$admin->id);
+        $inventory->setAttribute('approval_rule_id', (int)$rule->id);
+        $inventory->save(false);
+        $template = $this->templateOf($admin);
+        $template->approval_rule_id = (int)$rule->id;
+        $template->save(false);
+        $this->setPost([]);
+
+        $ctrl = $this->makeController();
+        $ctrl->runAction('delete', ['id' => $rule->id]);
+
+        $this->assertSame(['view', 'id' => $rule->id], $ctrl->capturedRedirect);
+        $this->assertNotNull(ApprovalRule::findOne($rule->id));
+        $this->assertSame(
+            'Approval rule ' . json_encode($rule->name) . ' is in use by 1 inventory(ies) and 1 job template(s). '
+            . 'Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.',
+            \Yii::$app->session->getFlash('danger')
+        );
+        $inventory->refresh();
+        $this->assertSame((int)$rule->id, (int)$inventory->getAttribute('approval_rule_id'), 'the inventory stays gated');
+    }
+
     public function testDeletingAnUnusedRuleDeletesItAndAuditsTheWebSource(): void
     {
         $admin = $this->signedIn('admin');
@@ -308,6 +339,64 @@ class ApprovalRuleControllerGuardTest extends WebControllerTestCase
         $this->assertStringNotContainsString('id="approval-rule-edit"', $html);
     }
 
+    /**
+     * The usage card names the inventories the rule gates first, each
+     * linked to its page and followed by its project, before the job
+     * templates; names come out as text.
+     */
+    public function testTheRulePageListsTheInventoriesItGatesFirst(): void
+    {
+        $admin = $this->signedIn('admin');
+        $rule = $this->ruleOf($admin);
+        $project = $this->createProject((int)$admin->id);
+        $project->name = 'hosts <i>project</i>';
+        $project->save(false);
+        $inventory = $this->gatedInventory($admin, $rule, (int)$project->id, 'gated <b>hosts</b>');
+        $template = $this->templateOf($admin);
+        $template->approval_rule_id = (int)$rule->id;
+        $template->save(false);
+
+        $html = $this->viewPage($rule);
+
+        $this->assertSame(1, preg_match(
+            '#<h6 class="mb-2">Inventories</h6>\s*<ul class="list-unstyled mb-3" id="approval-rule-usage-inventories">\s*<li>\s*'
+                . '<a href="/inventory/view\?id=' . $inventory->id . '">' . preg_quote(Html::encode('gated <b>hosts</b>'), '#') . '</a>\s*'
+                . '<span class="text-muted small ms-1">' . preg_quote(Html::encode('hosts <i>project</i>'), '#') . '</span>\s*</li>\s*</ul>#',
+            $html
+        ), 'the inventory, linked, then its project');
+        $inventories = strpos($html, 'id="approval-rule-usage-inventories"');
+        $templates = strpos($html, 'id="approval-rule-usage-templates"');
+        $this->assertNotFalse($inventories);
+        $this->assertNotFalse($templates);
+        $this->assertLessThan($templates, $inventories, 'the inventories come first');
+        $this->assertStringNotContainsString('gated <b>hosts</b>', $html);
+        $this->assertStringNotContainsString(sprintf(ApprovalRuleUsage::HIDDEN_INVENTORIES, 1), $html);
+    }
+
+    /**
+     * An operator of one team sees the inventories without a project and
+     * those of their team's projects; the others are only counted.
+     */
+    public function testTheRulePageCountsTheInventoriesTheViewerMayNotSee(): void
+    {
+        $s = $this->teamScope();
+        $rule = $this->ruleOf($s['admin']);
+        $open = $this->gatedInventory($s['admin'], $rule, null, 'rule-web-open-inventory');
+        $hidden = $this->gatedInventory($s['admin'], $rule, (int)$s['foreign']->project_id, 'rule-web-hidden-inventory');
+        $this->loginAs($s['member']);
+
+        $html = $this->viewPage($rule);
+
+        $this->assertStringContainsString('<a href="/inventory/view?id=' . $open->id . '">rule-web-open-inventory</a>', $html);
+        $this->assertStringNotContainsString('rule-web-hidden-inventory', $html);
+        $this->assertStringNotContainsString('/inventory/view?id=' . $hidden->id . '"', $html);
+        $this->assertStringContainsString(
+            '<li class="text-muted small">' . Html::encode(sprintf(ApprovalRuleUsage::HIDDEN_INVENTORIES, 1)) . '</li>',
+            $html
+        );
+        $this->assertSame('+ 1 inventory(ies) in projects you cannot see', sprintf(ApprovalRuleUsage::HIDDEN_INVENTORIES, 1));
+    }
+
     public function testTheRulePageOfAnUnusedRuleOffersTheDelete(): void
     {
         $superadmin = $this->superadminWithoutRoles();
@@ -316,7 +405,7 @@ class ApprovalRuleControllerGuardTest extends WebControllerTestCase
 
         $html = $this->viewPage($rule);
 
-        $this->assertStringContainsString('Not used by any job template, workflow step or pending approval request.', $html);
+        $this->assertStringContainsString('<p class="text-muted mb-0">' . Html::encode(ApprovalRuleUsage::NOT_IN_USE) . '</p>', $html);
         $this->assertStringContainsString('id="approval-rule-delete-form"', $html);
         $this->assertStringContainsString('return confirm(', $html);
         $this->assertStringNotContainsString('approval-rule-delete-blocked', $html);
@@ -428,6 +517,21 @@ class ApprovalRuleControllerGuardTest extends WebControllerTestCase
             (int)$this->createRunnerGroup($userId)->id,
             $userId
         );
+    }
+
+    /**
+     * A static inventory named $name, of the project #$projectId (null:
+     * none), gated by $rule.
+     */
+    private function gatedInventory(User $creator, ApprovalRule $rule, ?int $projectId, string $name): Inventory
+    {
+        $inventory = $this->createInventory((int)$creator->id);
+        $inventory->name = $name;
+        $inventory->project_id = $projectId;
+        $inventory->setAttribute('approval_rule_id', (int)$rule->id);
+        $inventory->save(false);
+
+        return $inventory;
     }
 
     private function pendingRequest(ApprovalRule $rule, JobTemplate $template, User $launcher): ApprovalRequest

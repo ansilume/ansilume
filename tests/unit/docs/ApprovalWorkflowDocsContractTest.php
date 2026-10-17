@@ -102,18 +102,20 @@ class ApprovalWorkflowDocsContractTest extends TestCase
 
     /**
      * The section follows those of the releases after it (the update that
-     * leaves runner management to admins, the newest, 2.11.0 and the patch
-     * 2.10.1), and the one before it keeps its heading, which the contract
-     * tests of 2.9.0 read.
+     * gives inventories approval rules, the newest, the one that leaves
+     * runner management to admins, 2.11.0 and the patch 2.10.1), and the
+     * one before it keeps its heading, which the contract tests of 2.9.0
+     * read.
      */
     public function testTheSectionFollowsThePatchAndTheOlderOnesStay(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.11.0 follows.');
-        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The patch 2.10.1 follows.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][3] ?? null, 'This section comes next.');
-        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][4] ?? '');
+        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.11.1 follows.');
+        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The section of 2.11.0 follows.');
+        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][3] ?? null, 'The patch 2.10.1 follows.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][4] ?? null, 'This section comes next.');
+        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][5] ?? '');
     }
 
     public function testTheChecklistStartsWithTheChecksBeforeTheUpdate(): void
@@ -169,6 +171,14 @@ class ApprovalWorkflowDocsContractTest extends TestCase
             'template rule missing' => [sprintf(JobLaunchService::RULE_MISSING, 7), $both],
             'template deleted' => [sprintf(JobLaunchService::TEMPLATE_DELETED, 7), ['troubleshooting']],
             'template rule changed' => [sprintf(JobLaunchService::TEMPLATE_CHANGED, 7), $both],
+            // 2.12.0: the refusals of a job template gated through its inventory
+            // (the section of 2.12.0 quotes them, InventoryApprovalDocsContractTest).
+            'inventory rule missing' => [sprintf(JobLaunchService::INVENTORY_RULE_MISSING, 7, 3), ['troubleshooting']],
+            'two rules meet' => [sprintf(JobLaunchService::RULES_DIFFER, 7, 3), ['troubleshooting']],
+            'template inventory changed' => [sprintf(JobLaunchService::TEMPLATE_INVENTORY_CHANGED, 7), ['troubleshooting']],
+            'inventory rule changed' => [sprintf(JobLaunchService::INVENTORY_CHANGED, 7, 3), ['troubleshooting']],
+            'inventory missing' => [sprintf(JobLaunchService::INVENTORY_MISSING, 7, 3), ['troubleshooting']],
+            'workflow: two rules meet' => [sprintf(ApproverEligibility::REFUSAL_WORKFLOW_RULES_DIFFER, SurveyDefinition::quote('Deploy')), ['troubleshooting']],
             'assigning a rule' => [ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED, ['updating']],
             'adding an approval step' => [ApprovalRuleAssignmentPolicy::APPROVAL_STEP_ADD_REFUSED, $both],
             'steps of an approval workflow' => [ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED, $both],
@@ -419,7 +429,10 @@ class ApprovalWorkflowDocsContractTest extends TestCase
 
     /**
      * An approval rule gates a job template; the docs say what it does not
-     * stop, without a recipe.
+     * stop, without a recipe. The section of 2.10.0 keeps its wording; since
+     * 2.12.0 a rule gates inventories too, so README.md and the spec's tag
+     * say that a rule gates job templates and inventories, not hosts or
+     * playbooks (InventoryApprovalDocsContractTest).
      *
      * Regression (review of step 3, security-2): the docs never said that an
      * approval step gates the runs of its own workflow only, so an admin who
@@ -430,9 +443,9 @@ class ApprovalWorkflowDocsContractTest extends TestCase
     public function testTheTwinTemplateLimitIsDescribed(): void
     {
         $this->assertMentions('**What an approval rule does not stop.** An approval rule gates a job template, not a playbook or an inventory.', $this->flat('docs/updating.md', self::UPDATE_SECTION), 'updating.md');
-        $this->assertMentions('A rule gates a job template, not a playbook or an inventory', $this->flat('README.md'), 'README.md');
+        $this->assertMentions('A rule gates job templates and inventories, not hosts or playbooks', $this->flat('README.md'), 'README.md');
         $tag = $this->approvalRulesTag();
-        $this->assertStringContainsString('not a playbook or an inventory', $tag);
+        $this->assertStringContainsString('A rule gates job templates and inventories, not hosts or playbooks', $tag);
 
         $limits = $this->paragraph('**What an approval rule does not stop.**');
         $this->assertMentions(self::STEP_GATES_ITS_RUNS . ':', $limits, 'updating.md, on what a rule does not stop,');

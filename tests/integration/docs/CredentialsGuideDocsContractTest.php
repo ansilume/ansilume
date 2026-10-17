@@ -19,11 +19,13 @@ use Symfony\Component\Yaml\Yaml;
  * the code does: the content of a static inventory and the extra vars of job
  * templates, jobs and schedules are shown on their pages to everyone who may
  * see them (the access rules of their controllers, and the roles that hold
- * those permissions in the test database), the extra vars of jobs and
+ * those permissions in the test database), the content of an inventory also
+ * through GET /api/v1/inventories/{id} (the InventoryDetail schema, since
+ * 2.12.0, which InventoryView extends), and the extra vars of jobs and
  * schedules also through the API (the Job and Schedule schemas of
  * web/openapi.yaml, which the response contract tests compare with the
- * answers), while the inventories and job templates of the API leave them
- * out; and it tells where to keep secrets instead.
+ * answers), while the list of inventories and the job templates of the API
+ * leave them out; and it tells where to keep secrets instead.
  */
 class CredentialsGuideDocsContractTest extends DbTestCase
 {
@@ -36,7 +38,7 @@ class CredentialsGuideDocsContractTest extends DbTestCase
         $section = $this->flat('docs/credentials.md', self::SECTION);
         $expected = [
             'The content of a static inventory and the extra vars of job templates, jobs and schedules are stored as entered, without encryption, and shown to everyone who may see them:',
-            'the content on the page of the inventory, a job template\'s Default Extra Vars on its page, a job\'s extra vars on its page, in its stored command and in `GET /api/v1/jobs`, and a schedule\'s extra vars on its page and in `GET /api/v1/schedules`.',
+            'the content on the page of the inventory and in `GET /api/v1/inventories/{id}`, a job template\'s Default Extra Vars on its page, a job\'s extra vars on its page, in its stored command and in `GET /api/v1/jobs`, and a schedule\'s extra vars on its page and in `GET /api/v1/schedules`.',
             'By default viewers see inventories, job templates and jobs, and operators schedules; with teams, the members of the teams that have their project do.',
             'only the answers of password survey fields show as `$encrypted$`.',
             '- a credential, which no page and no API answer shows: a token credential reaches the playbook as an environment variable',
@@ -83,8 +85,9 @@ class CredentialsGuideDocsContractTest extends DbTestCase
 
     /**
      * The pages write the values the guide names, and the API answers the
-     * extra vars of jobs (also in the stored command) and schedules, not the
-     * content of inventories nor the extra vars of job templates.
+     * extra vars of jobs (also in the stored command) and schedules, and the
+     * content of an inventory in its detail (GET /api/v1/inventories/{id}),
+     * not in the list of inventories, nor the extra vars of job templates.
      */
     public function testThePagesAndTheApiShowWhatTheGuideSays(): void
     {
@@ -106,6 +109,23 @@ class CredentialsGuideDocsContractTest extends DbTestCase
         $this->assertContains('execution_command', $properties('Job'));
         $this->assertContains('extra_vars', $properties('Schedule'));
         $this->assertNotContains('content', $properties('Inventory'));
+        $detail = (array)($spec['components']['schemas']['InventoryDetail']['allOf'] ?? []);
+        $this->assertSame(['$ref' => '#/components/schemas/Inventory'], $detail[0] ?? null, 'The detail is the inventory of the list ...');
+        $this->assertContains('content', array_keys((array)($detail[1]['properties'] ?? [])), '... with its content.');
+        $this->assertSame(
+            ['$ref' => '#/components/responses/InventoryViewResponse'],
+            $spec['paths']['/api/v1/inventories/{id}']['get']['responses']['200'] ?? null,
+            'GET /api/v1/inventories/{id} answers InventoryView ...'
+        );
+        $this->assertSame(
+            '#/components/schemas/InventoryView',
+            $spec['components']['responses']['InventoryViewResponse']['content']['application/json']['schema']['properties']['data']['$ref'] ?? null
+        );
+        $this->assertContains(
+            ['$ref' => '#/components/schemas/InventoryDetail'],
+            (array)($spec['components']['schemas']['InventoryView']['allOf'] ?? []),
+            '... which is the detail, with its content.'
+        );
         $this->assertNotContains('extra_vars', $properties('JobTemplate'));
     }
 

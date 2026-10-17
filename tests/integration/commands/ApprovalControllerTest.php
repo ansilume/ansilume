@@ -10,6 +10,7 @@ use app\models\ApprovalRequest;
 use app\models\Job;
 use app\services\ApprovalService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\CancellationFixtures;
 use app\tests\integration\TeamScopeFixtures;
 use yii\console\ExitCode;
@@ -23,19 +24,19 @@ class ApprovalControllerTest extends DbTestCase
 {
     use TeamScopeFixtures;
     use CancellationFixtures;
-
-    private mixed $originalApprovals = null;
+    use RestoresComponents;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalApprovals = \Yii::$app->getComponents(true)['approvalService'] ?? null;
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('approvalService');
         $this->recordNotifications();
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('approvalService', $this->originalApprovals);
+        $this->restoreComponents();
         $this->restoreNotifications();
         parent::tearDown();
     }

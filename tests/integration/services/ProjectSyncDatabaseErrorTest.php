@@ -8,6 +8,7 @@ use app\models\NotificationTemplate;
 use app\models\Project;
 use app\services\ProjectService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 
 /**
  * A sync that fails stores its error on the project (shown on the project
@@ -22,27 +23,25 @@ use app\tests\integration\DbTestCase;
  */
 class ProjectSyncDatabaseErrorTest extends DbTestCase
 {
+    use RestoresComponents;
+
     private const MARKER = 'project-sync-db-marker-3301';
 
     private RecordingNotificationDispatcher $dispatcher;
-
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
 
     private string $workspace;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
         $this->dispatcher = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
         $this->workspace = sys_get_temp_dir() . '/project-sync-db-error-' . uniqid('', true);
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         if (is_dir($this->workspace)) {
             \app\helpers\FileHelper::safeRmdir($this->workspace);
         }

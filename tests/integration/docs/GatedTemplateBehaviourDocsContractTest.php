@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace app\tests\integration\docs;
 
 use app\models\AuditLog;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\JobTemplateCredential;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use app\services\CredentialWriteService;
+use app\services\GatedInventoryLock;
 use app\services\GatedJobTemplateLock;
 use app\tests\integration\DbTestCase;
 use app\tests\integration\services\CancellationFixtures;
@@ -45,6 +47,7 @@ class GatedTemplateBehaviourDocsContractTest extends DbTestCase
     use UpdateSectionQueries;
     use TeamScopeFixtures;
     use CancellationFixtures;
+    use GatedChangesFixtures;
 
     private const UPDATE_SECTION = '## After updating from 2.9.0 or older: approvals and workflows';
 
@@ -125,7 +128,9 @@ class GatedTemplateBehaviourDocsContractTest extends DbTestCase
     /**
      * Operators hold the rights to change the inventory, the project and the
      * credentials of a gated job template, but not to change the template
-     * itself; the docs say who holds what.
+     * itself; the docs say who holds what. Since 2.12.0 an inventory with an
+     * approval rule is for admins to change (GatedInventoryLock), and the
+     * paragraph of 2.10.0 points forward to the section of 2.12.0.
      */
     public function testOperatorsHoldTheRightsWhoseLimitTheDocsDescribe(): void
     {
@@ -139,6 +144,19 @@ class GatedTemplateBehaviourDocsContractTest extends DbTestCase
         $this->assertContains('approval-rule.update', array_keys($auth->getPermissionsByRole('admin')));
         $this->assertMentions(
             'By default every operator holds them: `inventory.update` and `project.update` for the projects they may operate and their inventories',
+            $this->paragraphs(self::LIMITS),
+            'updating.md'
+        );
+
+        $operatorId = (int)$this->createUserWithRole('docs-gated-inventory-operator', 'operator')->id;
+        $inventory = $this->createInventory($operatorId);
+        $lock = new GatedInventoryLock();
+        $this->assertFalse($lock->appliesTo($operatorId, $inventory), 'Operators change an inventory without a rule.');
+        Inventory::updateAll(['approval_rule_id' => (int)$this->usersRule($operatorId, $operatorId)->id], ['id' => $inventory->id]);
+        $inventory->refresh();
+        $this->assertTrue($lock->appliesTo($operatorId, $inventory), 'Since 2.12.0 an inventory with a rule is for admins.');
+        $this->assertMentions(
+            'Since 2.12.0, an approval rule on the inventory of the template leaves the inventory to admins',
             $this->paragraphs(self::LIMITS),
             'updating.md'
         );
@@ -258,53 +276,22 @@ class GatedTemplateBehaviourDocsContractTest extends DbTestCase
      * first, the changes of the last 30 days to gated job templates and to
      * the project, the inventory and the credentials (primary and
      * additional) they use; not the changes of what only templates without
-     * a rule use, other actions, or older changes.
+     * a rule use, other actions, or older changes. The section of 2.12.0
+     * has its successor, which counts the job templates gated by the rule of
+     * their inventory too (InventoryApprovalQueriesDocsContractTest, with
+     * the same fixtures, GatedChangesFixtures).
      */
     public function testTheFourteenthQueryListsTheChangesToGatedTemplatesAndWhatTheyUse(): void
     {
         $this->assertStringStartsWith('-- Changes of the last 30 days to gated job templates and to the', $this->queries()[self::CHANGES_OF_GATED_TEMPLATES - 1] ?? '');
         $user = (int)$this->createUser('docs-gated-changes')->id;
         $other = (int)$this->createUser('docs-gated-changes-other')->id;
-        $primary = (int)$this->createCredential($user)->id;
-        $additional = (int)$this->createCredential($user)->id;
-        $unrelated = (int)$this->createCredential($user)->id;
         $gated = $this->gatedTemplate($user, (int)$this->usersRule($user, $user)->id);
-        $gated->credential_id = $primary;
-        $this->assertTrue($gated->save(false));
-        \Yii::$app->db->createCommand()->insert('{{%job_template_credential}}', [
-            'job_template_id' => (int)$gated->id,
-            'credential_id' => $additional,
-            'sort_order' => 0,
-        ])->execute();
-        $open = $this->cancelFixtureTemplate($user);
-        $open->credential_id = $unrelated;
-        $this->assertTrue($open->save(false));
+        $changes = $this->gatedChanges($gated, $user, $other);
 
-        $listed = [
-            $this->audit(AuditLog::ACTION_TEMPLATE_UPDATED, 'job_template', (int)$gated->id, $other),
-            $this->audit(AuditLog::ACTION_PROJECT_UPDATED, 'project', (int)$gated->project_id, $other),
-            $this->audit(AuditLog::ACTION_INVENTORY_UPDATED, 'inventory', (int)$gated->inventory_id, $other),
-            $this->audit(AuditLog::ACTION_CREDENTIAL_UPDATED, 'credential', $primary, $other),
-            $this->audit(AuditLog::ACTION_CREDENTIAL_UPDATED, 'credential', $additional, $user),
-        ];
-        $notListed = [
-            $this->audit(AuditLog::ACTION_CREDENTIAL_UPDATED, 'credential', $unrelated, $other),
-            $this->audit(AuditLog::ACTION_TEMPLATE_UPDATED, 'job_template', (int)$open->id, $other),
-            $this->audit(AuditLog::ACTION_INVENTORY_UPDATED, 'inventory', (int)$open->inventory_id, $other),
-            $this->audit(AuditLog::ACTION_PROJECT_SYNCED, 'project', (int)$gated->project_id, $other),
-            $this->audit(AuditLog::ACTION_TEMPLATE_TRIGGER_TOKEN_GENERATED, 'job_template', (int)$gated->id, $other),
-            $this->audit(AuditLog::ACTION_PROJECT_UPDATED, 'project', (int)$gated->project_id, $other, 31 * 86400),
-        ];
+        $rows = $this->rowsByColumn(self::CHANGES_OF_GATED_TEMPLATES, 'id', [...$changes['listed'], ...$changes['not_listed']]);
 
-        $rows = $this->rowsByColumn(self::CHANGES_OF_GATED_TEMPLATES, 'id', [...$listed, ...$notListed]);
-
-        $this->assertSame(array_reverse($listed), array_keys($rows), 'Newest first, and only these.');
-        foreach ($rows as $row) {
-            $this->assertSame((int)$gated->id, (int)$row['job_template_id']);
-        }
-        $this->assertSame($other, (int)$rows[$listed[0]]['user_id']);
-        $this->assertSame(AuditLog::ACTION_CREDENTIAL_UPDATED, $rows[$listed[4]]['action']);
-        $this->assertSame($additional, (int)$rows[$listed[4]]['object_id']);
+        $this->assertListsTheGatedChanges($rows, $gated, $changes, $other);
     }
 
     /**
@@ -390,22 +377,6 @@ class GatedTemplateBehaviourDocsContractTest extends DbTestCase
     private function auditWorkflow(WorkflowTemplate $workflow, string $action, int $userId): void
     {
         $this->audit($action, 'workflow_template', (int)$workflow->id, $userId);
-    }
-
-    /**
-     * An audit entry as AuditService writes it, $age seconds old; its ID.
-     */
-    private function audit(string $action, string $objectType, int $objectId, int $userId, int $age = 0): int
-    {
-        \Yii::$app->db->createCommand()->insert('{{%audit_log}}', [
-            'action' => $action,
-            'object_type' => $objectType,
-            'object_id' => $objectId,
-            'user_id' => $userId,
-            'created_at' => time() - $age,
-        ])->execute();
-
-        return (int)\Yii::$app->db->getLastInsertID();
     }
 
     /**

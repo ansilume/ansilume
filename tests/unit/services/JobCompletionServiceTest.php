@@ -264,6 +264,42 @@ class JobCompletionServiceTest extends TestCase
         );
     }
 
+    /**
+     * A refused claim passes its audit context (JobClaimRefusedException::
+     * auditContext()): job.finished records the three base keys first, then
+     * the context, and a key of the context cannot replace a base key.
+     */
+    public function testFailBeforeExecutionRecordsTheAuditContextAfterTheBaseKeys(): void
+    {
+        $recorded = null;
+        $this->audit->expects($this->once())
+            ->method('log')
+            ->willReturnCallback(static function (string $action, ?string $objectType, ?int $objectId, ?int $userId, array $context) use (&$recorded): void {
+                $recorded = [$action, $objectType, $objectId, $userId, $context];
+            });
+        $service = new RecordingJobCompletionService();
+
+        $service->failBeforeExecution($this->makeJob(), 'Job aborted before execution.', [
+            'claim_refusal' => 'not_approved',
+            'status' => 'succeeded',
+            'approval_rule_id' => 7,
+            'reason' => 'something else',
+            'exit_code' => 0,
+        ]);
+
+        $this->assertSame([AuditService::ACTION_JOB_FINISHED, 'job', 1, null, [
+            'exit_code' => -1,
+            'status' => Job::STATUS_FAILED,
+            'reason' => 'pre_execution_failure',
+            'claim_refusal' => 'not_approved',
+            'approval_rule_id' => 7,
+        ]], $recorded);
+        $this->assertSame(
+            [['outcome' => ['exit_code' => -1, 'status' => Job::STATUS_FAILED], 'explanation' => 'Job aborted before execution.']],
+            $service->transitions
+        );
+    }
+
     // -- A report for a job that had finished already -------------------------------
 
     /**

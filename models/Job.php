@@ -222,6 +222,15 @@ class Job extends ActiveRecord
     public const PAYLOAD_CREDENTIAL_SNAPSHOT = 'credential_snapshot';
 
     /**
+     * runner_payload key holding the name of the inventory the job was
+     * launched with (next to inventory_id), so the job page names it as it
+     * was then, also once the inventory is renamed or deleted. Stored for
+     * the server only: the runner's claim payload has no such key. Jobs
+     * launched before 2.12.0 have none (JobInventory).
+     */
+    public const PAYLOAD_INVENTORY_NAME = 'inventory_name';
+
+    /**
      * The launch-time payload snapshot, or [] when missing or not valid JSON.
      *
      * @return array<string, mixed>

@@ -70,10 +70,26 @@ class ApprovalVoteTest extends DbTestCase
         $approved = $this->notifications->payloadsOf(NotificationTemplate::EVENT_APPROVAL_APPROVED);
         $this->assertCount(1, $approved);
         $this->assertSame(
-            ['id' => (string)$request->id, 'status' => 'approved', 'rule_id' => (string)$request->approval_rule_id, 'rule_name' => (string)$request->approvalRule?->name],
+            [
+                'id' => (string)$request->id,
+                'status' => 'approved',
+                'rule_id' => (string)$request->approval_rule_id,
+                'rule_name' => (string)$request->approvalRule?->name,
+                'required_by' => ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE,
+            ],
             $approved[0]['approval']
         );
-        $this->assertSame(['id' => (string)$job->id, 'status' => 'queued', 'template_id' => (string)$job->job_template_id], $approved[0]['job']);
+        // The job was written without a launch record, so it names no inventory.
+        $this->assertSame(
+            [
+                'id' => (string)$job->id,
+                'status' => 'queued',
+                'template_id' => (string)$job->job_template_id,
+                'inventory_id' => '',
+                'inventory_name' => '',
+            ],
+            $approved[0]['job']
+        );
         $this->assertSame([], $this->notifications->payloadsOf(NotificationTemplate::EVENT_APPROVAL_REJECTED));
     }
 

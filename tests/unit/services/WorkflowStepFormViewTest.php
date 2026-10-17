@@ -89,9 +89,9 @@ class WorkflowStepFormViewTest extends TestCase
                 'EXTRA_VARS_READONLY' => 'Variable mapping (change it through the API):',
                 'HELP_JOB_TITLE' => 'Job step:',
                 'HELP_JOB' => 'success = exit code 0. Failure = any non-zero exit, timeout, or unreachable host. Always '
-                    . 'overrides both. If the job template has an approval rule and the approval is rejected, times out or is '
-                    . 'canceled, the job does not run: then only On Failure is followed (left empty, the run ends as failed), '
-                    . 'and Always is not.',
+                    . 'overrides both. If the job needs approval (an approval rule of its job template or of its inventory) '
+                    . 'and the approval is rejected, times out or is canceled, the job does not run: then only On Failure is '
+                    . 'followed (left empty, the run ends as failed), and Always is not.',
                 'HELP_APPROVAL_TITLE' => 'Approval step:',
                 'HELP_APPROVAL' => 'success = approved; failure = rejected, timed out or canceled. After a failure the run '
                     . 'ends as failed unless On Failure names a step. An approval step has no Always route: it would continue '

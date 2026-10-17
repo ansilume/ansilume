@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\components\ErrorText;
+use app\components\NotificationTestVariables;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\services\NotificationDispatcher;
@@ -141,7 +142,8 @@ class NotificationTemplatesController extends BaseApiController
     }
 
     /**
-     * Send a test notification using sample variables: {sent: true} when
+     * Send a test notification with the sample variables and the event of
+     * the web's Send Test (NotificationTestVariables): {sent: true} when
      * the channel accepted it; 502 with the channel's error (TEST_FAILED)
      * when it did not, which its notification.failed audit entry carries
      * too; 500 for an error outside the delivery.
@@ -151,23 +153,14 @@ class NotificationTemplatesController extends BaseApiController
     public function actionTest(int $id): array
     {
         $model = $this->findModel($id);
-
-        $variables = [
-            'job.id' => '0',
-            'job.status' => 'successful',
-            'job.exit_code' => '0',
-            'job.duration' => '42s',
-            'job.url' => \Yii::$app->params['appBaseUrl'] ?? 'http://localhost',
-            'template.name' => 'Test Template',
-            'project.name' => 'Test Project',
-            'launched_by' => \Yii::$app->user->identity?->username ?? 'api',
-            'timestamp' => date('Y-m-d H:i:s T'),
-        ];
+        $event = NotificationTestVariables::eventOf($model);
+        $launchedBy = \Yii::$app->user->identity?->username ?? NotificationTestVariables::NO_USER;
+        $variables = NotificationTestVariables::of($event, $launchedBy);
 
         try {
             /** @var NotificationDispatcher $dispatcher */
             $dispatcher = \Yii::$app->get('notificationDispatcher');
-            $error = $dispatcher->sendSingle($model, $variables);
+            $error = $dispatcher->sendSingle($model, $variables, $event);
         } catch (\Throwable $e) {
             return $this->error(sprintf(self::TEST_FAILED, ErrorText::of($e)), 500);
         }

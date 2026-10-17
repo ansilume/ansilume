@@ -10,6 +10,7 @@ use app\models\Job;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\RecordingNotificationDispatcher;
 use app\tests\integration\TeamScopeFixtures;
 use yii\console\ExitCode;
@@ -25,20 +26,18 @@ use yii\console\ExitCode;
  */
 class ScheduleControllerTest extends DbTestCase
 {
+    use RestoresComponents;
     use TeamScopeFixtures;
-
-    private mixed $originalDispatcher = null;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
-        \Yii::$app->set('notificationDispatcher', new RecordingNotificationDispatcher());
+        $this->swapComponent('notificationDispatcher', new RecordingNotificationDispatcher());
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

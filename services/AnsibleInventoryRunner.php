@@ -98,7 +98,7 @@ class AnsibleInventoryRunner extends Component
      * @param array<string, string> $env
      * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
      */
-    private function runProcess(array $cmd, ?string $cwd, array $env): array
+    private function runProcess(array $cmd, ?string $cwd, #[\SensitiveParameter] array $env): array
     {
         $process = $this->openProcess($cmd, $pipes, $cwd, $env);
         if ($process === null) {
@@ -120,10 +120,19 @@ class AnsibleInventoryRunner extends Component
     }
 
     /**
+     * The output of ansible-inventory, and the error made of it, hold the
+     * inventory's hosts with their variables (static inventory content
+     * among them), so they are marked, here and in drainPipes() (CLAUDE.md
+     * rule 11).
+     *
      * @return array{stdout: string, stderr: string, exit_code: int|null, error: string|null}
      */
-    private static function result(string $stdout, string $stderr, ?int $exitCode, ?string $error): array
-    {
+    private static function result(
+        #[\SensitiveParameter] string $stdout,
+        #[\SensitiveParameter] string $stderr,
+        ?int $exitCode,
+        #[\SensitiveParameter] ?string $error
+    ): array {
         return ['stdout' => $stdout, 'stderr' => $stderr, 'exit_code' => $exitCode, 'error' => $error];
     }
 
@@ -136,7 +145,7 @@ class AnsibleInventoryRunner extends Component
      * @param array<string, string>|null $env defaults to buildProcessEnv()
      * @return resource|null
      */
-    protected function openProcess(array $cmd, ?array &$pipes, ?string $cwd = null, ?array $env = null)
+    protected function openProcess(array $cmd, ?array &$pipes, ?string $cwd = null, #[\SensitiveParameter] ?array $env = null)
     {
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -238,8 +247,12 @@ class AnsibleInventoryRunner extends Component
      * @param resource[] $readyPipes  Pipes returned by stream_select
      * @param resource   $stdoutPipe  Reference pipe to distinguish stdout from stderr
      */
-    protected function drainPipes(array $readyPipes, $stdoutPipe, string &$stdout, string &$stderr): void
-    {
+    protected function drainPipes(
+        array $readyPipes,
+        $stdoutPipe,
+        #[\SensitiveParameter] string &$stdout,
+        #[\SensitiveParameter] string &$stderr
+    ): void {
         foreach ($readyPipes as $pipe) {
             $chunk = fread($pipe, 65536);
             if ($chunk === false || $chunk === '') {

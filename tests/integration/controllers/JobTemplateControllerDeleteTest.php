@@ -11,6 +11,7 @@ use app\models\JobTemplate;
 use app\models\Schedule;
 use app\models\User;
 use app\services\JobTemplateDeletionService;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
@@ -22,22 +23,23 @@ use yii\web\Response;
  */
 class JobTemplateControllerDeleteTest extends WebControllerTestCase
 {
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     private User $admin;
-    private mixed $originalDispatcher = null;
 
     protected function setUp(): void
     {
         parent::setUp();
+        // Swapped before any write, so that tearDown() restores it also when
+        // a write fails.
+        $this->swapComponent('notificationDispatcher', new \app\tests\integration\services\RecordingNotificationDispatcher());
         $this->admin = $this->createUserWithRole('jt-delete-admin', 'admin');
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
-        \Yii::$app->set('notificationDispatcher', new \app\tests\integration\services\RecordingNotificationDispatcher());
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

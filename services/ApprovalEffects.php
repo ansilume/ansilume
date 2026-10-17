@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\JobInventory;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
@@ -18,7 +19,8 @@ use app\services\notification\JobPayloadBuilder;
  * workflow engine reads the request's final status:
  * - a new request: approval.requested audit entry (attributed to the user
  *   who launched the job, whoever's session started the launch) and
- *   notification;
+ *   notification, both saying what required the request and which
+ *   inventory the job was launched with;
  * - a settlement (ApprovalOutcome): approval.decided for a recorded vote,
  *   approval.timed_out for a timeout, approval.canceled for a request
  *   closed because its job no longer waited (with the reason), and
@@ -44,7 +46,12 @@ final class ApprovalEffects
     /**
      * The launcher asks for the approval: the audit entry names them, also
      * when the launch ran in another user's request (a workflow step started
-     * by an approver's vote) or in no request at all (a schedule).
+     * by an approver's vote) or in no request at all (a schedule). Its
+     * context, in this order: the job, the rule's ID and name, what required
+     * the request (required_by, ApprovalRequest::requiredBy(): null before
+     * m000088), and the inventory the job was launched with (inventory_id,
+     * as its runner payload records it, JobInventory::idOf(): null for the
+     * placeholder of a workflow approval step).
      */
     public function requested(ApprovalRequest $request, Job $job, ApprovalRule $rule): void
     {
@@ -53,7 +60,13 @@ final class ApprovalEffects
             'approval_request',
             (int)$request->id,
             (int)$job->launched_by,
-            ['job_id' => (int)$job->id, 'rule_id' => (int)$rule->id, 'rule_name' => (string)$rule->name]
+            [
+                'job_id' => (int)$job->id,
+                'rule_id' => (int)$rule->id,
+                'rule_name' => (string)$rule->name,
+                'required_by' => $request->requiredBy(),
+                'inventory_id' => JobInventory::idOf($job->decodedRunnerPayload()),
+            ]
         );
         $this->notify(NotificationTemplate::EVENT_APPROVAL_REQUESTED, $request, $job, $rule);
     }
@@ -182,8 +195,17 @@ final class ApprovalEffects
         $audit->log($action, $objectType, $objectId, $userId, $context);
     }
 
+    /**
+     * The approval.requested, .approved or .rejected notification: the
+     * request, with what required it (required_by), and its job, with the
+     * inventory it was launched with (JobInventory::ofJob(): its name at
+     * launch, else its current name), all as strings, '' where there is
+     * none (a placeholder job has no template and no inventory; before
+     * m000088 a request records nothing).
+     */
     private function notify(string $event, ApprovalRequest $request, ?Job $job, ?ApprovalRule $rule): void
     {
+        $inventory = JobInventory::ofJob($job);
         /** @var NotificationDispatcher $dispatcher */
         $dispatcher = \Yii::$app->get('notificationDispatcher');
         $dispatcher->dispatch($event, [
@@ -192,11 +214,14 @@ final class ApprovalEffects
                 'status' => (string)$request->status,
                 'rule_id' => (string)($rule?->id ?? ''),
                 'rule_name' => (string)($rule?->name ?? ''),
+                'required_by' => (string)$request->requiredBy(),
             ],
             'job' => [
                 'id' => (string)($job?->id ?? ''),
                 'status' => (string)($job?->status ?? ''),
                 'template_id' => (string)($job?->job_template_id ?? ''),
+                'inventory_id' => (string)$inventory->id,
+                'inventory_name' => (string)$inventory->name,
             ],
         ]);
     }

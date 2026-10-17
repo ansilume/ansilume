@@ -29,24 +29,25 @@ use yii\helpers\ArrayHelper;
  * that route to an edited step (WorkflowStepRoutedBy) are read from it.
  *
  * Gated steps are for admins (approval-rule.update; ApprovalRuleAssignmentPolicy):
- * approval steps, and job steps whose job template has an approval rule.
- * The step form offers everyone else neither approval rules nor job
- * templates with an approval rule, and says why; on a workflow that has a
- * gated step they get a notice instead of the step controls. While a run of
- * the workflow is active, nobody changes its steps (WorkflowStepChangeGuard):
- * the template page shows no step controls, and the edit page shows the
- * runs and a form that cannot be sent.
+ * approval steps, and job steps whose job template, or its inventory, has an
+ * approval rule. The step form offers everyone else neither approval rules
+ * nor job templates that such a rule gates, and says why; on a workflow that
+ * has a gated step they get a notice instead of the step controls. While a
+ * run of the workflow is active, nobody changes its steps
+ * (WorkflowStepChangeGuard): the template page shows no step controls, and
+ * the edit page shows the runs and a form that cannot be sent.
  */
 final class WorkflowTemplatePage
 {
     /** The hint under the step form's job templates, for users who may not add gated job steps. */
-    public const GATED_TEMPLATES_HINT = 'Job templates with an approval rule are not listed: '
-        . 'only admins may add a job step for them.';
+    public const GATED_TEMPLATES_HINT = 'Job templates with an approval rule, or on an inventory with one, are not '
+        . 'listed: only admins may add a job step for them.';
 
     /**
      * The notice of a workflow whose steps the user may not change says why
-     * (ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED or
-     * GATED_JOB_WORKFLOW_STEPS_REFUSED), then this.
+     * (ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED,
+     * GATED_JOB_WORKFLOW_STEPS_REFUSED or
+     * GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED), then this.
      */
     public const STEPS_LOCKED_NOTE = 'You may still rename the workflow, launch it and manage its trigger token.';
 
@@ -322,7 +323,8 @@ final class WorkflowTemplatePage
     /**
      * The step form's job templates: those the user may operate (a step
      * with any other one would be refused), and, unless they may add gated
-     * job steps, only those without an approval rule.
+     * job steps, only those that no approval rule gates, neither their own
+     * nor their inventory's (ApprovalRuleAssignmentPolicy::gatedJobTemplateIds()).
      *
      * @return array<int, string>
      */

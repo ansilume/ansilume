@@ -95,8 +95,9 @@ class ApprovalsControllerTest extends WebControllerTestCase
         $this->assertSame($request->launcherId(), $result['data']['launched_by']);
         $this->assertSame(
             [
-                'id', 'job_id', 'launched_by', 'approval_rule_id', 'status', 'requested_at', 'resolved_at', 'expires_at', 'approval_count', 'rejection_count',
-                'decisions', 'workflow_job_id', 'workflow_job_step_id', 'workflow_template_id', 'workflow_step_name',
+                'id', 'job_id', 'launched_by', 'approval_rule_id', 'required_by', 'inventory_id', 'inventory_name', 'status', 'requested_at', 'resolved_at',
+                'expires_at', 'approval_count', 'rejection_count', 'decisions', 'workflow_job_id', 'workflow_job_step_id', 'workflow_template_id',
+                'workflow_step_name',
             ],
             array_keys($result['data'])
         );

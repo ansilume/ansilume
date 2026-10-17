@@ -11,6 +11,7 @@ use app\services\ldap\FakeLdapClient;
 use app\services\ldap\LdapConfig;
 use app\services\ldap\LdapService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use yii\console\ExitCode;
 
 /**
@@ -30,22 +31,23 @@ use yii\console\ExitCode;
  */
 class LdapSyncLeavesAnsilumeDeactivationTest extends DbTestCase
 {
+    use RestoresComponents;
+
     /** @var array<string, string> */
     private const ROLE_MAPPING = ['Ops' => 'operator'];
 
     /** @var array<string, mixed>|null */
     private ?array $originalLdapParams = null;
 
-    private mixed $originalLdapService = null;
-
     private FakeLdapClient $directory;
 
     protected function setUp(): void
     {
         parent::setUp();
+        // enableLdap() replaces it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('ldapService');
         $params = \Yii::$app->params['ldap'] ?? null;
         $this->originalLdapParams = is_array($params) ? $params : null;
-        $this->originalLdapService = \Yii::$app->getComponents(true)['ldapService'] ?? null;
         $auth = \Yii::$app->authManager;
         foreach (['operator', 'viewer'] as $name) {
             if ($auth->getRole($name) === null) {
@@ -57,12 +59,12 @@ class LdapSyncLeavesAnsilumeDeactivationTest extends DbTestCase
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         if ($this->originalLdapParams !== null) {
             \Yii::$app->params['ldap'] = $this->originalLdapParams;
         } else {
             unset(\Yii::$app->params['ldap']);
         }
-        \Yii::$app->set('ldapService', $this->originalLdapService);
         parent::tearDown();
     }
 

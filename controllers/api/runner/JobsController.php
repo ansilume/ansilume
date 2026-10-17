@@ -48,8 +48,12 @@ class JobsController extends BaseRunnerApiController
     /**
      * POST /api/runner/v1/jobs/claim
      * Atomically claim the next queued job for this runner's group.
-     * Returns 204 (no body) when there is nothing to run. Jobs whose
-     * credentials cannot be resolved are failed on the server and skipped.
+     * Returns 204 (no body) when there is nothing to run. Jobs that may not
+     * run (not approved, an inventory gone or without hosts, credentials
+     * that cannot be resolved) are failed on the server and skipped; once
+     * such failures have taken JobClaimService::CLAIM_BUDGET_SECONDS, the
+     * claim hands out no further job and answers 204, so that it answers
+     * before the runner stops waiting.
      *
      * @return array<string, mixed>
      */

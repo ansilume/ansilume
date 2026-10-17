@@ -29,19 +29,21 @@ use yii\base\Component;
  *   all, between that check and the lock: checked again here, no change
  *   goes through for a user who may no longer operate the workflow;
  * - 403 when the user may not change these steps: gated steps, approval
- *   steps and job steps whose job template has an approval rule, are for
- *   admins (ApprovalRuleAssignmentPolicy::workflowStepsChangeRefusal(); a
- *   gated job step that a change adds, or that an edit makes, is checked by
- *   the caller first, ApprovalRuleAssignmentPolicy::stepsAddRefusal(), and
+ *   steps and job steps whose job template or its inventory has an approval
+ *   rule, are for admins
+ *   (ApprovalRuleAssignmentPolicy::workflowStepsChangeRefusal(); a gated
+ *   job step that a change adds, or that an edit makes, is checked by the
+ *   caller first, ApprovalRuleAssignmentPolicy::stepsAddRefusal(), and
  *   again under the lock (WorkflowStepWriteService, and the API's
  *   replacement of all steps) by the change itself, below);
  * - 409 while a run of the workflow is active (RUNS_ACTIVE, naming the
  *   runs): a run reads the live steps at every transition, so a change would
  *   route it differently than it started, or strand it;
- * - the change itself, which can refuse too: a job template that got an
- *   approval rule since the caller's check (403, stepsAddRefusal() again),
- *   removing a step that other steps route to (409, STEP_ROUTED_TO), a step
- *   that cannot be saved or a position that cannot be taken (422).
+ * - the change itself, which can refuse too: a job template that got, or
+ *   whose inventory got, an approval rule since the caller's check (403,
+ *   stepsAddRefusal() again), removing a step that other steps route to
+ *   (409, STEP_ROUTED_TO), a step that cannot be saved or a position that
+ *   cannot be taken (422).
  *
  * A new template (an API create) has no row to lock, no steps and no runs:
  * only the rule of gated steps applies.

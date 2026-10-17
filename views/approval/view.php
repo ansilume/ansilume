@@ -9,15 +9,22 @@ declare(strict_types=1);
 /** @var app\services\runstate\RequestContext|null $context what the request is for (ApprovalRequestContexts) */
 /** @var app\services\runstate\Viewer $viewer who looks at the page */
 
+use app\components\JobInventory;
 use app\controllers\ApprovalController;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
+use app\services\runstate\Texts;
 use yii\helpers\Html;
 
 $this->title = 'Approval Request #' . $model->id;
 $rule = $model->approvalRule;
 $launcher = $model->job?->launcher;
 $decisionNote = $decisionNote ?? null;
+$context = $context ?? null;
+// The context names the inventory as the job's runner payload records it; without one, what required the
+// request still comes from the request itself, and no inventory is named.
+$requiredBy = $context !== null ? $context->requiredBy : $model->requiredBy();
+$jobInventory = $context !== null ? $context->inventory : JobInventory::none();
 ?>
 
 <h2><?= Html::encode($this->title) ?></h2>
@@ -31,11 +38,15 @@ $decisionNote = $decisionNote ?? null;
             </tr>
             <tr>
                 <th><?= Html::encode(ApprovalController::FOR_HEADER) ?></th>
-                <td id="approval-for"><?= $this->render('_for', ['context' => $context ?? null, 'viewer' => $viewer]) ?></td>
+                <td id="approval-for"><?= $this->render('_for', ['context' => $context, 'viewer' => $viewer]) ?></td>
             </tr>
             <tr>
                 <th>Job</th>
                 <td><?= Html::a('#' . Html::encode((string)$model->job_id), ['/job/view', 'id' => $model->job_id]) ?></td>
+            </tr>
+            <tr>
+                <th><?= Html::encode(Texts::INVENTORY_LABEL) ?></th>
+                <td id="approval-inventory"><?= $this->render('@app/views/job/_inventory', ['inventory' => $jobInventory]) ?></td>
             </tr>
             <tr>
                 <th>Launched by</th>
@@ -44,6 +55,10 @@ $decisionNote = $decisionNote ?? null;
             <tr>
                 <th>Rule</th>
                 <td id="approval-rule"><?= $rule !== null ? Html::a(Html::encode((string)$rule->name), ['/approval-rule/view', 'id' => $rule->id]) : Html::encode('deleted rule') ?></td>
+            </tr>
+            <tr>
+                <th><?= Html::encode(Texts::REQUIRED_BY_LABEL) ?></th>
+                <td id="approval-required-by"><?= Html::encode(ApprovalRequest::requiredByLabel($requiredBy)) ?></td>
             </tr>
             <tr>
                 <th>Approvals</th>

@@ -3,6 +3,16 @@ import { expectFlash, expectForbidden, submitForm, templateId } from '../../lib/
 import { asAdmin, forgePost, idWhere, indexRows, optionLabels } from '../../lib/scoping';
 import { openWorkflowTemplate } from '../../lib/triggers';
 import { APPROVAL_RULE, DUAL_TEMPLATE, GATED_TEMPLATE, HISTORY_TEMPLATE, SOLO_TEMPLATE, ruleLabel } from '../../lib/approvals';
+import {
+  HOST_AFTER_STEP,
+  HOST_CONFLICT_TEMPLATE,
+  HOST_HIDDEN_TEMPLATE,
+  HOST_RULE,
+  HOST_SOLO_TEMPLATE,
+  HOST_STEP,
+  HOST_TEMPLATE,
+  HOST_WORKFLOW,
+} from '../../lib/inventories';
 import { setApprovalRule } from '../../lib/job-templates';
 import { RUN_AS_TEMPLATE } from '../../lib/schedules';
 import {
@@ -10,6 +20,9 @@ import {
   APPROVAL_WORKFLOW,
   APPROVAL_WORKFLOW_STEPS_REFUSED,
   EMPTY_WORKFLOW,
+  GATED_BADGE,
+  GATED_INVENTORY_JOB_STEP_ADD_REFUSED,
+  GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
   GATED_JOB_AFTER,
   GATED_JOB_STEP,
   GATED_JOB_STEP_ADD_REFUSED,
@@ -33,6 +46,7 @@ import {
   activeRunId,
   addStepFormErrors,
   addStepThroughForm,
+  gatedInventoryTitle,
   positionEnd,
   removeTemplateStep,
   removingSteps,
@@ -57,9 +71,20 @@ const PAUSE_ONLY_WORKFLOW = 'e2e-pause-only-wf';
 /**
  * Job templates in e2e-project, which e2e-operator's team operates, that have
  * an approval rule (commands/E2eApprovalSeeder.php, E2eScheduleRunAsSeeder.php,
- * E2eWorkflowGateSeeder.php).
+ * E2eWorkflowGateSeeder.php), and e2e-conflict-template, whose own rule is
+ * e2e-host-other-rule, in e2e-host-gate-project, which no team restricts
+ * (E2eInventoryGateSeeder.php).
  */
-const GATED_TEMPLATES = [GATED_TEMPLATE, SOLO_TEMPLATE, HISTORY_TEMPLATE, DUAL_TEMPLATE, RUN_AS_TEMPLATE, GATED_JOB_TEMPLATE];
+const GATED_TEMPLATES = [
+  GATED_TEMPLATE, SOLO_TEMPLATE, HISTORY_TEMPLATE, DUAL_TEMPLATE, RUN_AS_TEMPLATE, GATED_JOB_TEMPLATE, HOST_CONFLICT_TEMPLATE,
+];
+
+/**
+ * Job templates without a rule of their own on an inventory with one
+ * (commands/E2eInventoryGateSeeder.php): gated through their inventory. Both
+ * are in e2e-host-gate-project, which every role sees.
+ */
+const INVENTORY_GATED_TEMPLATES = [HOST_TEMPLATE, HOST_SOLO_TEMPLATE];
 
 /** The step names of the open workflow template page, in order. */
 async function stepNames(page: Page): Promise<string[]> {
@@ -134,25 +159,114 @@ test.describe('Workflow Templates RBAC', () => {
     await expect(page.locator(STEPS_LOCKED_NOTICE)).toHaveCount(0);
   });
 
-  // Job steps whose job template has an approval rule ("gated job steps")
-  // are for admins too: a run launches its jobs as whoever started it, so an
-  // operator who added one to another user's workflow could approve its job.
-  test('operator is not offered job templates that have an approval rule for a job step', async ({ page, browser }, testInfo) => {
+  // Job steps whose job template has an approval rule, its own or its
+  // inventory's ("gated job steps"), are for admins too: a run launches its
+  // jobs as whoever started it, so an operator who added one to another
+  // user's workflow could approve its job.
+  test('operator is not offered job templates that have an approval rule, or whose inventory has one, for a job step', async ({ page, browser }, testInfo) => {
     await openWorkflowTemplate(page, OPERATOR_STEPS_WORKFLOW);
     const offered = await optionLabels(page, STEP_TEMPLATE_SELECT);
     expect(offered).toEqual(expect.arrayContaining(['e2e-template', LATE_GATE_TEMPLATE]));
     for (const gated of GATED_TEMPLATES) {
       expect(offered, `${gated} has an approval rule`).not.toContain(gated);
     }
+    for (const gated of INVENTORY_GATED_TEMPLATES) {
+      expect(offered, `the inventory of ${gated} has an approval rule`).not.toContain(gated);
+    }
     await expect(page.locator('#ws-gated-templates-hint')).toHaveText(GATED_TEMPLATES_HINT);
 
-    // An admin (approval-rule.update) is offered them in the same form.
+    // An admin (approval-rule.update) is offered them in the same form, the
+    // template in a project only a team without members has too.
     const offeredToAdmin = await asAdmin(browser, testInfo, async (admin) => {
       await openWorkflowTemplate(admin, OPERATOR_STEPS_WORKFLOW);
       await expect(admin.locator('#ws-gated-templates-hint')).toHaveCount(0);
       return optionLabels(admin, STEP_TEMPLATE_SELECT);
     });
-    expect(offeredToAdmin).toEqual(expect.arrayContaining(['e2e-template', LATE_GATE_TEMPLATE, ...GATED_TEMPLATES]));
+    expect(offeredToAdmin).toEqual(expect.arrayContaining([
+      'e2e-template', LATE_GATE_TEMPLATE, ...GATED_TEMPLATES, ...INVENTORY_GATED_TEMPLATES, HOST_HIDDEN_TEMPLATE,
+    ]));
+  });
+
+  // The rule of the job template's inventory gates a job step as the job
+  // template's own rule does: an operator who added such a step to another
+  // user's workflow could approve its job.
+  test('operator gets 403 on a forged job step whose job template\'s inventory has an approval rule, and nothing is added', async ({ page }) => {
+    // The operator may see the template (its project has no team), so its ID
+    // is no secret: the job list filters by it.
+    const gatedId = await templateId(page, HOST_TEMPLATE);
+    const id = await openWorkflowTemplate(page, STEPS_WORKFLOW);
+    const before = await stepNames(page);
+    expect(before).toEqual([STEPS_BUILD, STEPS_CLEANUP]);
+
+    // A real form post with a valid CSRF token: only the server checks may stop it.
+    await forgePost(page, `/workflow-template/add-step?id=${id}`, {
+      'WorkflowStep[name]': 'e2e-operator-inventory-gated-job',
+      'WorkflowStep[step_type]': 'job',
+      'WorkflowStep[step_order]': '30',
+      'WorkflowStep[job_template_id]': gatedId,
+    }, /\/workflow-template\/add-step/);
+    await expectForbidden(page);
+    await expect(page.locator('body')).toContainText(GATED_INVENTORY_JOB_STEP_ADD_REFUSED);
+
+    await openWorkflowTemplate(page, STEPS_WORKFLOW);
+    expect(await stepNames(page)).toEqual(before);
+    await expect(templateStepRow(page, 'e2e-operator-inventory-gated-job')).toHaveCount(0);
+  });
+
+  test('operator sees the steps of a workflow with a job step whose job template\'s inventory has an approval rule locked', async ({ page }) => {
+    await openWorkflowTemplate(page, HOST_WORKFLOW);
+    await expect(page.locator(STEPS_LOCKED_NOTICE)).toHaveText(stepsLockedNotice(GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED));
+    const gated = templateStepRow(page, HOST_STEP).locator('[data-gated-badge]');
+    await expect(gated).toHaveText(GATED_BADGE);
+    await expect(gated).toHaveAttribute('title', gatedInventoryTitle(HOST_RULE));
+    await expect(page.locator('#add-step-form')).toHaveCount(0);
+    await expect(page.locator('#page-content [data-action]')).toHaveCount(0);
+    await expect(page.locator('#page-content form[action*="/workflow-template/move-step"]')).toHaveCount(0);
+    await expect(page.locator('#page-content form[action*="/workflow-template/remove-step"]')).toHaveCount(0);
+    // Name and description, launching and the trigger token stay open.
+    await expect(page.locator('#page-content').getByRole('link', { name: 'Edit', exact: true })).toBeVisible();
+    await expect(page.locator('#page-content form[action*="/workflow-template/launch"] button')).toBeVisible();
+  });
+
+  test('operator gets 403 on forged step changes of a workflow with a job step whose job template\'s inventory has an approval rule', async ({ page }) => {
+    const id = await openWorkflowTemplate(page, HOST_WORKFLOW);
+    const before = await stepNames(page);
+    expect(before).toEqual([HOST_STEP, HOST_AFTER_STEP]);
+    const pauseStepId = await stepId(page, HOST_AFTER_STEP);
+
+    // Real form posts with a valid CSRF token: only the server checks may refuse them.
+    const changes: [string, Record<string, string>, RegExp][] = [
+      [
+        `/workflow-template/add-step?id=${id}`,
+        { 'WorkflowStep[name]': 'e2e-operator-step', 'WorkflowStep[step_type]': 'pause', 'WorkflowStep[step_order]': '30' },
+        /\/workflow-template\/add-step/,
+      ],
+      [`/workflow-template/remove-step?id=${id}`, { step_id: pauseStepId }, /\/workflow-template\/remove-step/],
+      [`/workflow-template/move-step?id=${id}`, { step_id: pauseStepId, position: 'start' }, /\/workflow-template\/move-step/],
+    ];
+    for (const [action, fields, landsOn] of changes) {
+      await page.goto('/workflow-template/index');
+      await forgePost(page, action, fields, landsOn);
+      await expectForbidden(page);
+      await expect(page.locator('body')).toContainText(GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED);
+    }
+
+    await openWorkflowTemplate(page, HOST_WORKFLOW);
+    expect(await stepNames(page)).toEqual(before);
+  });
+
+  // A viewer may change no steps, so the page names no lock: the badge says
+  // why the job step waits.
+  test('viewer sees the job step a rule of its job template\'s inventory gates, without the lock notice or step actions', async ({ page }) => {
+    await openWorkflowTemplate(page, HOST_WORKFLOW);
+    expect(await stepNames(page)).toEqual([HOST_STEP, HOST_AFTER_STEP]);
+    const gated = templateStepRow(page, HOST_STEP).locator('[data-gated-badge]');
+    await expect(gated).toHaveText(GATED_BADGE);
+    await expect(gated).toHaveAttribute('title', gatedInventoryTitle(HOST_RULE));
+    await expect(templateStepRow(page, HOST_AFTER_STEP).locator('[data-gated-badge]')).toHaveCount(0);
+    await expect(page.locator(STEPS_LOCKED_NOTICE)).toHaveCount(0);
+    await expect(page.locator('#add-step-form')).toHaveCount(0);
+    await expect(page.locator('#page-content [data-action]')).toHaveCount(0);
   });
 
   // Regression: an operator could add a gated job step to another user's workflow and approve its job.

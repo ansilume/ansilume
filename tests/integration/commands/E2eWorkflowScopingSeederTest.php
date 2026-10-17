@@ -6,6 +6,7 @@ namespace app\tests\integration\commands;
 
 use app\commands\E2eTeamScopingSeeder;
 use app\commands\E2eWorkflowScopingSeeder;
+use app\models\ApprovalRequest;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
@@ -159,6 +160,24 @@ class E2eWorkflowScopingSeederTest extends DbTestCase
         $checker = \Yii::$app->get('workflowAccessChecker');
         $this->assertInstanceOf(WorkflowAccessChecker::class, $checker);
         $this->assertTrue($checker->canOperateWorkflowTemplate($this->operatorId, (int)$workflow->id));
+    }
+
+    /**
+     * Regression: the pending request of e2e-beta-approval-wf's approval
+     * step was saved without what required it, so it took the column's
+     * default and the request page said a job template required it.
+     */
+    public function testRegressionTheApprovalStepRequestWasRecordedAsRequiredByAJobTemplate(): void
+    {
+        $this->seed();
+
+        $run = $this->onlyRunOf('e2e-beta-approval-wf');
+        $execution = WorkflowJobStep::findOne(['workflow_job_id' => $run->id]);
+        $this->assertNotNull($execution);
+        $request = ApprovalRequest::findOne(['job_id' => $execution->job_id]);
+        $this->assertNotNull($request, 'the approval step waits for its request');
+        $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
+        $this->assertSame(ApprovalRequest::REQUIRED_BY_APPROVAL_STEP, $request->requiredBy());
     }
 
     public function testSkipsTheFixturesWithoutTheTeamScopingTemplates(): void

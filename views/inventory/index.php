@@ -6,6 +6,8 @@ declare(strict_types=1);
 /** @var yii\data\ActiveDataProvider $dataProvider */
 
 use app\models\Inventory;
+use app\services\GatedInventoryLock;
+use app\services\InventoryRuleAssignment;
 use yii\helpers\Html;
 use yii\widgets\LinkPager;
 
@@ -38,7 +40,17 @@ $this->title = 'Inventories';
                 <tr>
                     <td><?= $model->id ?></td>
                     <td><?= Html::a(Html::encode($model->name), ['view', 'id' => $model->id]) ?></td>
-                    <td><span class="badge text-bg-secondary"><?= Html::encode(strtoupper($model->inventory_type)) ?></span></td>
+                    <td>
+                        <span class="badge text-bg-secondary"><?= Html::encode(strtoupper($model->inventory_type)) ?></span>
+                        <?php // Every launch of a job template on a gated inventory waits for its rule (eager-loaded).?>
+                        <?php if (GatedInventoryLock::isGated($model)) : ?>
+                            <?= Html::tag('span', Html::encode(InventoryRuleAssignment::GATED_BADGE), [
+                                'class' => 'badge text-bg-warning ms-1',
+                                'data-inventory-gated-badge' => true,
+                                'title' => sprintf(InventoryRuleAssignment::GATED_TITLE, (string)$model->approvalRule?->name),
+                            ]) ?>
+                        <?php endif; ?>
+                    </td>
                     <td><?= $model->project ? Html::a(Html::encode($model->project->name), ['/project/view', 'id' => $model->project_id]) : '—' ?></td>
                     <td><?= Html::encode($model->creator->username ?? '—') ?></td>
                     <td class="text-end text-nowrap">

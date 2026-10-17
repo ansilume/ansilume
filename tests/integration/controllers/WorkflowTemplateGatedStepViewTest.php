@@ -99,8 +99,9 @@ class WorkflowTemplateGatedStepViewTest extends WebControllerTestCase
         $help = $this->one($this->xpathOf($html), '//span[@id="ws-routing-help-job"]');
         $this->assertSame(
             'Job step: success = exit code 0. Failure = any non-zero exit, timeout, or unreachable host. Always overrides both. '
-            . 'If the job template has an approval rule and the approval is rejected, times out or is canceled, the job does not run: '
-            . 'then only On Failure is followed (left empty, the run ends as failed), and Always is not.',
+            . 'If the job needs approval (an approval rule of its job template or of its inventory) and the approval is rejected, '
+            . 'times out or is canceled, the job does not run: then only On Failure is followed (left empty, the run ends as failed), '
+            . 'and Always is not.',
             $this->textOf($help)
         );
     }

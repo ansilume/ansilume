@@ -22,20 +22,22 @@ use app\services\WorkflowStepChangeRefusedException;
 use app\services\WorkflowTemplateDeletionService;
 use app\tests\integration\controllers\WebControllerTestCase;
 use app\tests\integration\services\FailingWorkflowCancellation;
+use app\tests\integration\services\InventoryGatedStepFixtures;
 use app\tests\integration\services\WorkflowStepWriteFixtures;
 use yii\web\NotFoundHttpException;
 
 /**
  * POST and PUT /api/v1/workflow-templates with steps, DELETE and launch:
- * gated steps (approval steps, and job steps whose job template has an
- * approval rule) are for admins (403), also when the workflow's steps, or
- * the job template of a new job step, become gated between the
- * controller's check and the lock, steps do not change while a run of the
+ * gated steps (approval steps, and job steps whose job template, or its
+ * inventory, has an approval rule) are for admins (403), also when the
+ * workflow's steps, or the job template of a new job step, become gated
+ * between the controller's check and the lock, steps do not change while a run of the
  * workflow is active (409 with workflow_job_ids), a delete cancels the
  * workflow's runs, and a launch takes extra_vars.
  */
 class WorkflowTemplatesStepGuardTest extends WebControllerTestCase
 {
+    use InventoryGatedStepFixtures;
     use WorkflowStepWriteFixtures;
 
     /** The name of the workflow that the "steps" list of sendStepsList() creates. */
@@ -437,6 +439,10 @@ class WorkflowTemplatesStepGuardTest extends WebControllerTestCase
         return [
             'an approval step added' => ['approval step', ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED],
             'the job template of a job step gated' => ['gated job template', ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED],
+            'the inventory of a job step\'s job template gated' => [
+                'gated inventory',
+                ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+            ],
         ];
     }
 
@@ -445,11 +451,12 @@ class WorkflowTemplatesStepGuardTest extends WebControllerTestCase
      * (WorkflowStepChangeGuard, ApprovalRuleAssignmentPolicy::
      * workflowStepsChangeRefusal()). The race replayed here: between the
      * controller's check of the steps (stepsPolicyError()) and the lock, an
-     * admin adds an approval step, or gives the job template of a job step
-     * an approval rule, which makes the steps admin-only (rule 12). The
-     * member, who may operate the workflow and had no gated step to keep,
-     * gets the policy's 403 ("403 for steps locked meanwhile" in the spec's
-     * answer order), and nothing of the replacement is written.
+     * admin adds an approval step, or gives the job template of a job step,
+     * or that template's inventory (C15), an approval rule, which makes the
+     * steps admin-only (rule 12). The member, who may operate the workflow
+     * and had no gated step to keep, gets the policy's 403 ("403 for steps
+     * locked meanwhile" in the spec's answer order), and nothing of the
+     * replacement is written.
      *
      * @dataProvider lockedMeanwhileProvider
      */
@@ -468,6 +475,10 @@ class WorkflowTemplatesStepGuardTest extends WebControllerTestCase
                 $locks++;
                 if ($lock === 'gated job template') {
                     $this->gate($s['own'], $s);
+                    return;
+                }
+                if ($lock === 'gated inventory') {
+                    $this->giveInventoryRule((int)$s['own']->inventory_id, (int)$this->createApprovalRule($s['admin']->id)->id);
                     return;
                 }
                 $rule = $this->createApprovalRule($s['admin']->id);

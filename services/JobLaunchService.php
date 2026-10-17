@@ -19,17 +19,43 @@ use yii\base\Component;
  *
  * Responsibilities:
  *   1. Validate launch parameters. A template that waits for an approval
- *      rule is launched only when enough eligible approvers besides the
- *      launcher remain (ApproverEligibility), and never when its rule is gone.
- *   2. In one transaction, which locks the template's row: refuse a template
- *      deleted (or whose approval rule changed) since it was loaded, persist
- *      the Job record with status=pending, and set it to queued, or to
- *      pending_approval together with its pending approval request.
+ *      rule, its own or else its inventory's (JobTemplateGate), is launched
+ *      only when enough eligible approvers besides the launcher remain
+ *      among those who may see the template's project (ApproverEligibility),
+ *      never when that rule is gone, and never when the template and its
+ *      inventory have different rules: a launch waits for one rule only.
+ *   2. In one transaction, which locks the template's row and then its
+ *      inventory's: refuse a template deleted since it was loaded, or whose
+ *      approval rule, inventory or inventory's approval rule changed since,
+ *      or whose inventory is gone; persist the Job record with
+ *      status=pending, and set it to queued, or to pending_approval together
+ *      with its pending approval request, which records what required it
+ *      (the job template's own rule or its inventory's).
  *   3. After the commit, best-effort (a failure is logged, EFFECTS_FAILED):
  *      the job.launched audit entry, then the approval.requested
  *      announcement, or the job.launched notification. So an exception out
  *      of launch() means that nothing was written. A runner of the
  *      template's runner group claims a queued job through the runner API.
+ *
+ * Lock order: the launch transaction locks the job_template row FOR UPDATE
+ * as its first statement, then the template's inventory row LOCK IN SHARE
+ * MODE (JobTemplateGate::readInventoryRules(), the next statement), and only
+ * then inserts the job and its approval request. A template save locks the
+ * job_template row first too, then the inventory rows it reads in one
+ * statement in ascending ID order (GatedJobTemplateLock); an inventory save
+ * locks only its own row, first, and never takes a locking read of
+ * job_template (InventoryWriteService); approval_request comes before job
+ * (ApprovalSettlement). So these orders cannot cross, with one exception
+ * that leaves launches alone, as a launch locks no project row (a job
+ * refers to no project): a project delete (ProjectDeletionService) locks
+ * the project row and then, through the foreign key's ON DELETE SET NULL
+ * (fk_inventory_project_id), the rows of the project's inventories, so it
+ * can deadlock with a template save that moves a template into that
+ * project while its inventory belongs to it (GatedJobTemplateLock).
+ *
+ * The runner payload records the inventory the job was launched with, its
+ * ID and its name (Job::PAYLOAD_INVENTORY_NAME, JobInventory); the claim
+ * payload a runner gets does not change.
  *
  * Password answers (extra vars whose key is a password survey field) are
  * stored only sealed, in job.secret_extra_vars; job.extra_vars and the
@@ -48,6 +74,37 @@ class JobLaunchService extends Component
     /** The template's approval rule changed since the caller loaded it; sprintf(): the template ID. */
     public const TEMPLATE_CHANGED = 'The approval rule of job template #%d changed while the job was being launched. '
         . 'Launch it again.';
+
+    /**
+     * The template waits for its inventory's approval rule, which no longer
+     * exists; sprintf(): the template ID, then the inventory ID.
+     */
+    public const INVENTORY_RULE_MISSING = 'The approval rule of inventory #%2$d, which job template #%1$d uses, '
+        . 'no longer exists. An admin can choose another rule.';
+
+    /**
+     * The template and its inventory have different approval rules, and a
+     * launch waits for one rule only; sprintf(): the template ID, then the
+     * inventory ID.
+     */
+    public const RULES_DIFFER = 'Job template #%1$d and its inventory #%2$d have different approval rules, '
+        . 'and a launch waits for one rule only. An admin can remove the template\'s own rule '
+        . 'or give it the inventory\'s rule.';
+
+    /** The template's inventory changed since the caller loaded it; sprintf(): the template ID. */
+    public const TEMPLATE_INVENTORY_CHANGED = 'The inventory of job template #%d changed while the job was being launched. '
+        . 'Launch it again.';
+
+    /**
+     * The approval rule of the template's inventory changed since the caller
+     * loaded it; sprintf(): the template ID, then the inventory ID.
+     */
+    public const INVENTORY_CHANGED = 'The approval rule of inventory #%2$d, which job template #%1$d uses, '
+        . 'changed while the job was being launched. Launch it again.';
+
+    /** The template's inventory no longer exists; sprintf(): the template ID, then the inventory ID. */
+    public const INVENTORY_MISSING = 'Inventory #%2$d of job template #%1$d no longer exists. '
+        . 'Choose another inventory for the template.';
 
     /**
      * Logged when what follows a committed launch failed (the job.launched
@@ -78,9 +135,12 @@ class JobLaunchService extends Component
     /** The reason in LAUNCH_FAILED for a database error while the job was saved (logged with its codes). */
     public const SAVE_FAILED = 'the job could not be saved.';
 
-    /** Reads the template's row and locks it until the launch transaction ends. */
-    private const TEMPLATE_LOCK_SQL = 'SELECT [[id]], [[deleted_at]], [[approval_rule_id]] FROM {{%job_template}}'
-        . ' WHERE [[id]] = :id FOR UPDATE';
+    /**
+     * Reads the template's row and locks it until the launch transaction
+     * ends: the first statement of the transaction (lockTemplate()).
+     */
+    private const TEMPLATE_LOCK_SQL = 'SELECT [[id]], [[deleted_at]], [[approval_rule_id]], [[inventory_id]]'
+        . ' FROM {{%job_template}} WHERE [[id]] = :id FOR UPDATE';
 
     /**
      * Launch a job from a template with optional runtime overrides.
@@ -98,14 +158,14 @@ class JobLaunchService extends Component
     public function launch(JobTemplate $template, int $launchedBy, #[\SensitiveParameter] array $overrides = []): Job
     {
         $context = self::contextFrom($overrides);
-        $rule = $this->approvalGate($template, $launchedBy);
+        $gate = $this->approvalGate($template, $launchedBy);
         $job = $this->buildJobRecord($template, $launchedBy, $overrides);
-        $request = $this->persist($template, $job, $rule);
+        $request = $this->persist($template, $job, $gate);
 
         // Committed: what follows is best-effort, so an exception out of
         // launch() always means that nothing was written.
         try {
-            $this->announce($template, $job, $launchedBy, $context, $request, $rule);
+            $this->announce($template, $job, $launchedBy, $context, $request, $gate->rule);
         } catch (\Throwable $e) {
             \Yii::error(sprintf(self::EFFECTS_FAILED, (int)$job->id, ...DbErrorSummary::of($e)), __CLASS__);
         }
@@ -165,55 +225,57 @@ class JobLaunchService extends Component
     }
 
     /**
-     * The approval rule a launch of $template by user #$launchedBy waits
-     * for, or null when the template has none. Fails closed: a rule that no
-     * longer exists, or too few eligible approvers besides the launcher
-     * (who never approves their own launch), refuse the launch before
-     * anything is written.
+     * The approval gate of a launch of $template by user #$launchedBy, as
+     * the template was loaded (JobTemplateGate): its own approval rule,
+     * else its inventory's; none when neither has one. Fails closed, before
+     * anything is written (JobTemplateGate::refusal()): the template and its
+     * inventory have different rules (RULES_DIFFER), the gating rule no
+     * longer exists (RULE_MISSING, INVENTORY_RULE_MISSING), or too few
+     * eligible approvers besides the launcher (who never approves their own
+     * launch) may see the template's project, also for its inventory's rule
+     * (ApproverEligibility::REFUSAL_JOB).
      *
      * @throws JobLaunchRejectedException
      */
-    private function approvalGate(JobTemplate $template, int $launchedBy): ?ApprovalRule
+    private function approvalGate(JobTemplate $template, int $launchedBy): JobTemplateGate
     {
-        if (self::ruleIdOf($template->approval_rule_id) === null) {
-            return null;
-        }
-        /** @var ApprovalRule|null $rule */
-        $rule = $template->approvalRule;
-        if ($rule === null) {
-            throw new JobLaunchRejectedException(sprintf(self::RULE_MISSING, (int)$template->id));
-        }
+        $gate = JobTemplateGate::of($template);
         /** @var ApproverEligibility $eligibility */
         $eligibility = \Yii::$app->get('approverEligibility');
-        $refusal = $eligibility->jobLaunchRefusal($rule, $template, $launchedBy);
+        $refusal = $gate->refusal($launchedBy, $eligibility);
         if ($refusal !== null) {
             throw new JobLaunchRejectedException($refusal);
         }
 
-        return $rule;
+        return $gate;
     }
 
     /**
-     * Save $job in one transaction that first locks the template's row:
-     * queued, or waiting for approval by $rule together with its pending
-     * request. A template soft-deleted meanwhile (its deletion locks the
-     * same row, and cancels the waiting jobs it finds after its commit) or
-     * whose approval rule changed is refused, so no launch slips past a
-     * deletion or an assignment.
+     * Save $job in one transaction that first locks the template's row,
+     * then its inventory's (lockTemplate()): queued, or waiting for
+     * approval by the gate's rule together with its pending request, which
+     * records what required it (the gate's source). A template soft-deleted
+     * meanwhile (its deletion locks the same row, and cancels the waiting
+     * jobs it finds after its commit), or whose approval rule, inventory or
+     * inventory's approval rule changed, or whose inventory is gone, is
+     * refused, so no launch slips past a deletion or an assignment.
+     * approvalGate() refused a gate whose rule is gone, so the job waits
+     * exactly when the gate has a rule.
      *
      * @return ApprovalRequest|null the job's approval request; null when it is queued
      * @throws JobLaunchRejectedException
      * @throws \RuntimeException
      */
-    private function persist(JobTemplate $template, Job $job, ?ApprovalRule $rule): ?ApprovalRequest
+    private function persist(JobTemplate $template, Job $job, JobTemplateGate $gate): ?ApprovalRequest
     {
         $transaction = \Yii::$app->db->beginTransaction();
         try {
-            $this->lockTemplate($template);
+            $this->lockTemplate($template, $gate);
             if (!$job->save()) {
                 throw new \RuntimeException('Failed to save job record: ' . json_encode($job->errors));
             }
 
+            $rule = $gate->rule;
             if ($rule !== null) {
                 $job->status = Job::STATUS_PENDING_APPROVAL;
             } else {
@@ -224,7 +286,7 @@ class JobLaunchService extends Component
             if (!$job->save()) {
                 throw new \RuntimeException('Failed to update job status: ' . json_encode($job->errors));
             }
-            $request = $rule === null ? null : $this->approvals()->openRequest($job, $rule);
+            $request = $rule === null ? null : $this->approvals()->openRequest($job, $rule, (string)$gate->source());
 
             $transaction->commit();
         } catch (JobLaunchRejectedException $e) {
@@ -248,29 +310,45 @@ class JobLaunchService extends Component
     }
 
     /**
-     * Lock the template's row (FOR UPDATE) for the rest of the launch
-     * transaction, and check it against the template as the caller loaded it.
+     * Lock the template's row (FOR UPDATE, the transaction's first
+     * statement), then its inventory's row (LOCK IN SHARE MODE, the next
+     * statement, JobTemplateGate::readInventoryRules()), for the rest of the
+     * launch transaction, and check both against the gate of the template
+     * as the caller loaded it, in this order: the template was deleted or is
+     * gone (TEMPLATE_DELETED); its own approval rule changed
+     * (TEMPLATE_CHANGED); it uses another inventory now
+     * (TEMPLATE_INVENTORY_CHANGED); its inventory is gone
+     * (INVENTORY_MISSING); its inventory's approval rule changed
+     * (INVENTORY_CHANGED). The inventory's row is read as stored, not
+     * through the cached schema, so a schema cached from before m000088,
+     * which shows no rule, fails closed with INVENTORY_CHANGED.
      *
-     * @throws JobLaunchRejectedException when the template is deleted (or gone), or its approval rule changed
+     * @throws JobLaunchRejectedException
      */
-    private function lockTemplate(JobTemplate $template): void
+    private function lockTemplate(JobTemplate $template, JobTemplateGate $gate): void
     {
-        /** @var array{id: int|string, deleted_at: int|string|null, approval_rule_id: int|string|null}|false $row */
+        $templateId = (int)$template->id;
+        /** @var array{id: int|string, deleted_at: int|string|null, approval_rule_id: int|string|null, inventory_id: int|string}|false $row */
         $row = JobTemplate::getDb()->createCommand(self::TEMPLATE_LOCK_SQL, [':id' => $template->id])->queryOne();
         if ($row === false || $row['deleted_at'] !== null) {
-            throw new JobLaunchRejectedException(sprintf(self::TEMPLATE_DELETED, (int)$template->id));
+            throw new JobLaunchRejectedException(sprintf(self::TEMPLATE_DELETED, $templateId));
         }
-        if (self::ruleIdOf($row['approval_rule_id']) !== self::ruleIdOf($template->approval_rule_id)) {
-            throw new JobLaunchRejectedException(sprintf(self::TEMPLATE_CHANGED, (int)$template->id));
+        // An approval rule ID as JobTemplateGate reads one: any numeric value is an ID.
+        $storedRuleId = is_numeric($row['approval_rule_id']) ? (int)$row['approval_rule_id'] : null;
+        if ($storedRuleId !== $gate->templateRuleId) {
+            throw new JobLaunchRejectedException(sprintf(self::TEMPLATE_CHANGED, $templateId));
         }
-    }
-
-    /**
-     * An approval rule ID as stored or assigned: null for none.
-     */
-    private static function ruleIdOf(mixed $value): ?int
-    {
-        return is_numeric($value) ? (int)$value : null;
+        $inventoryId = $gate->inventoryId;
+        if ((int)$row['inventory_id'] !== $inventoryId) {
+            throw new JobLaunchRejectedException(sprintf(self::TEMPLATE_INVENTORY_CHANGED, $templateId));
+        }
+        $inventoryRules = JobTemplateGate::readInventoryRules([$inventoryId], true);
+        if (!array_key_exists($inventoryId, $inventoryRules)) {
+            throw new JobLaunchRejectedException(sprintf(self::INVENTORY_MISSING, $templateId, $inventoryId));
+        }
+        if ($inventoryRules[$inventoryId] !== $gate->inventoryRuleId) {
+            throw new JobLaunchRejectedException(sprintf(self::INVENTORY_CHANGED, $templateId, $inventoryId));
+        }
     }
 
     private function approvals(): ApprovalService
@@ -413,12 +491,17 @@ class JobLaunchService extends Component
     protected function buildRunnerPayload(\app\models\JobTemplate $template, \app\models\Job $job): string
     {
         $snapshot = $template->credentialSnapshot();
+        /** @var \app\models\Inventory|null $inventory as the launch's gate loaded it; null when its row is gone */
+        $inventory = $template->inventory;
 
         return (string)json_encode([
             'template_id' => $template->id,
             'template_name' => $template->name,
             'project_id' => $template->project_id,
             'inventory_id' => $template->inventory_id,
+            // The inventory's name as launched (JobInventory), for the
+            // server only: the runner's claim payload has no such key.
+            \app\models\Job::PAYLOAD_INVENTORY_NAME => $inventory?->name,
             // Primary credential FK — kept for API/UI back-compat.
             'credential_id' => $template->credential_id,
             // All credentials in precedence order: primary first, then the

@@ -10,6 +10,7 @@ use app\commands\E2eController;
 use app\commands\E2eDeletedTemplateApprovalSeeder;
 use app\commands\E2eExtraVarsEditorSeeder;
 use app\commands\E2eFailingNotificationSeeder;
+use app\commands\E2eInventoryGateSeeder;
 use app\commands\E2eLockedTemplateSeeder;
 use app\commands\E2eRunnerGroupGuardSeeder;
 use app\commands\E2eScheduleRunAsSeeder;
@@ -18,6 +19,7 @@ use app\commands\E2eSurveySecretSeeder;
 use app\commands\E2eTeardownHelper;
 use app\commands\E2eUnusablePasswordNameSeeder;
 use app\models\ApprovalRule;
+use app\models\Inventory;
 use app\models\JobTemplate;
 use app\models\NotificationTemplate;
 use app\models\Project;
@@ -32,6 +34,7 @@ use app\services\ProjectAccessChecker;
 use app\services\ScheduleService;
 use app\tests\integration\DbTestCase;
 use yii\console\ExitCode;
+use yii\helpers\FileHelper;
 
 /**
  * `yii e2e/teardown` exits non-zero and prints every problem when the
@@ -47,7 +50,9 @@ use yii\console\ExitCode;
  * database, and the one file every seed writes when it is missing, the
  * playbook of e2e-project in /tmp: the seeders after them write fixture
  * projects into /tmp and the runtime directory, outside the test's
- * transaction.
+ * transaction. One test runs it on to the team scoping fixtures, with the
+ * artifact directory pointed at a scratch directory for the files of the
+ * artifact job.
  */
 class E2eControllerTest extends DbTestCase
 {
@@ -93,6 +98,14 @@ class E2eControllerTest extends DbTestCase
     private const RUNNER_GROUP_GUARD_LINE = '  Restored ' . E2eRunnerGroupGuardSeeder::TEMPLATE_GROUP . ' (ID ';
 
     private const SEED_STOPPED_AFTER_RUNNER_GROUPS = 'The test stopped the seed after the runner groups in use.';
+
+    /** The line E2eInventoryGateSeeder prints, right after the LDAP status fixtures. */
+    private const INVENTORY_GATE_LINE = '  Restored inventory approval fixtures: ';
+
+    /** The line E2eTeamScopingSeeder prints on a fresh seed, once it created its teams. */
+    private const TEAM_SCOPING_LINE = '  Created team scoping data ';
+
+    private const SEED_STOPPED_AFTER_TEAM_SCOPING = 'The test stopped the seed after the team scoping fixtures.';
 
     /**
      * @return array<string, array{0: string}>
@@ -523,6 +536,104 @@ class E2eControllerTest extends DbTestCase
         $this->assertSame(0, (int)$templateGroup->getRunners()->count());
         $this->assertSame(['e2e-group-runner'], $runnerGroup->getRunners()->select('name')->column());
         $this->assertSame(0, (int)$runnerGroup->getJobTemplates()->count());
+    }
+
+    /**
+     * A fresh seed restores the inventory approval fixtures
+     * (E2eInventoryGateSeeder) right after the LDAP status fixtures, before
+     * e2e-inventory and before E2eTeamScopingSeeder creates e2e-team-alpha and
+     * e2e-team-beta:
+     *
+     * - their inventories are older than e2e-inventory, so they never push it
+     *   off the first page of the inventory list (yaml-editor.spec.ts);
+     * - e2e-host-hidden-template is hidden from e2e-operator and e2e-viewer by
+     *   the seeder's own team, also once they joined the team scoping teams,
+     *   and E2eTeamScopingSeeder still creates its teams (it creates
+     *   e2e-team-beta under a unique name);
+     * - e2e-inventory and e2e-approval-rule gate nothing new: the other specs
+     *   launch e2e-template without an approval.
+     *
+     * The seed writes the files of its artifact job on the way
+     * (E2eArtifactSeeder): the test points @runtime/artifacts at a scratch
+     * directory for them, and stops the seed at the team scoping line, before
+     * the seeders that write fixture projects to disk.
+     */
+    public function testOnAFreshSeedTheInventoryApprovalFixturesComeBeforeE2eInventoryAndTheTeamScopingTeams(): void
+    {
+        $this->assertNull(Team::findOne(['name' => 'e2e-team-beta']), 'a fresh seed');
+        $atGateLine = [];
+        $controller = $this->controller(null, null, static function (string $line) use (&$atGateLine): void {
+            if (str_starts_with($line, self::INVENTORY_GATE_LINE)) {
+                $atGateLine[] = [
+                    'e2e-inventory' => Inventory::find()->where(['name' => 'e2e-inventory'])->exists(),
+                    'e2e-team-beta' => Team::find()->where(['name' => 'e2e-team-beta'])->exists(),
+                ];
+            }
+            if (str_starts_with($line, self::TEAM_SCOPING_LINE)) {
+                throw new \RuntimeException(self::SEED_STOPPED_AFTER_TEAM_SCOPING);
+            }
+        });
+        $artifacts = sys_get_temp_dir() . '/ansilume-e2e-controller-test-' . bin2hex(random_bytes(6));
+        $runtimeAliases = \Yii::$aliases['@runtime'];
+        \Yii::setAlias('@runtime/artifacts', $artifacts);
+        try {
+            try {
+                $controller->runAction('seed');
+                $this->fail('The seed ended without creating the team scoping fixtures.');
+            } catch (\RuntimeException $e) {
+                $this->assertSame(self::SEED_STOPPED_AFTER_TEAM_SCOPING, $e->getMessage());
+            }
+            $this->assertDirectoryExists($artifacts, 'the artifact job wrote its files to the scratch directory');
+        } finally {
+            \Yii::$aliases['@runtime'] = $runtimeAliases;
+            FileHelper::removeDirectory($artifacts);
+        }
+
+        $this->assertSame([['e2e-inventory' => false, 'e2e-team-beta' => false]], $atGateLine, 'restored once, before both');
+        $this->assertNotNull(Team::findOne(['name' => 'e2e-team-alpha']));
+        $this->assertNotNull(Team::findOne(['name' => 'e2e-team-beta']));
+        $shared = Inventory::findOne(['name' => 'e2e-inventory']);
+        $this->assertNotNull($shared);
+        $gateInventories = Inventory::find()->where(['name' => [
+            E2eInventoryGateSeeder::INVENTORY,
+            E2eInventoryGateSeeder::SOLO_INVENTORY,
+            E2eInventoryGateSeeder::CONFLICT_INVENTORY,
+            E2eInventoryGateSeeder::IN_USE_INVENTORY,
+            E2eInventoryGateSeeder::DELETED_ONLY_INVENTORY,
+            E2eInventoryGateSeeder::ASSIGN_INVENTORY,
+        ]])->select('id')->column();
+        $this->assertCount(6, $gateInventories);
+        $this->assertLessThan((int)$shared->id, max(array_map('intval', $gateInventories)), 'older than e2e-inventory');
+
+        $hidden = $this->templateNamed(E2eInventoryGateSeeder::HIDDEN_TEMPLATE);
+        $access = \Yii::$app->get('projectAccessChecker');
+        $this->assertInstanceOf(ProjectAccessChecker::class, $access);
+        foreach (['e2e-operator', 'e2e-viewer'] as $username) {
+            $user = User::findOne(['username' => $username]);
+            $this->assertNotNull($user);
+            $this->assertFalse($access->canView((int)$user->id, (int)$hidden->project_id), "{$username} cannot see it");
+        }
+        $admin = User::findOne(['username' => 'e2e-admin']);
+        $this->assertNotNull($admin);
+        $this->assertTrue($access->canView((int)$admin->id, (int)$hidden->project_id));
+
+        $this->assertNull($shared->getAttribute('approval_rule_id'), 'e2e-inventory stays ungated');
+        $sharedRule = ApprovalRule::findOne(['name' => E2eApprovalSeeder::RULE]);
+        $this->assertNotNull($sharedRule);
+        $this->assertFalse(Inventory::find()->where(['approval_rule_id' => $sharedRule->id])->exists(), 'no inventory has e2e-approval-rule');
+        $this->assertSame((int)$shared->id, (int)$this->templateNamed('e2e-template')->inventory_id);
+        $this->assertFalse(
+            JobTemplate::findWithDeleted()->where(['inventory_id' => $shared->id, 'name' => [
+                E2eInventoryGateSeeder::TEMPLATE,
+                E2eInventoryGateSeeder::HIDDEN_TEMPLATE,
+                E2eInventoryGateSeeder::SOLO_TEMPLATE,
+                E2eInventoryGateSeeder::CONFLICT_TEMPLATE,
+                E2eInventoryGateSeeder::IN_USE_TEMPLATE,
+                E2eInventoryGateSeeder::DELETED_ONLY_TEMPLATE,
+                E2eInventoryGateSeeder::ASSIGN_TEMPLATE,
+            ]])->exists(),
+            'no fixture of it uses e2e-inventory'
+        );
     }
 
     /**

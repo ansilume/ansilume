@@ -6,6 +6,8 @@ declare(strict_types=1);
 /** @var app\models\JobTemplate $template */
 /** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
 /** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings from JobTemplateWarnings */
+/** @var string|null $launchNote the approval the job will wait for (JobTemplateGate::launchNote()) */
+/** @var string|null $launchRefusal before the click (a GET): why this user's launch could never be approved (JobTemplateGate::refusal()) */
 
 use app\components\SurveyField;
 use app\components\VersionedAssetUrl;
@@ -30,6 +32,13 @@ $hasSurvey = !empty($surveyFields);
     <?= $this->render('/inventory/_localhost-warning', ['inventory' => $template->inventory]) ?>
 <?php endif; ?>
 <?= $this->render('_warnings', ['warnings' => $warnings]) ?>
+<?php if ($launchNote !== null) : ?>
+    <div class="alert alert-info" id="launch-approval-note" role="status"><?= Html::encode($launchNote) ?></div>
+<?php endif; ?>
+<?php // The button stays enabled: the launch itself refuses, with the same reason in its flash.?>
+<?php if ($launchRefusal !== null) : ?>
+    <div class="alert alert-warning" id="launch-refusal" role="alert"><?= Html::encode($launchRefusal) ?></div>
+<?php endif; ?>
 
 <div class="card mb-3">
     <div class="card-header">Template Summary</div>

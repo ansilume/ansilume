@@ -7,6 +7,7 @@ namespace app\tests\integration\models;
 use app\models\PasswordResetRequestForm;
 use app\models\User;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 
 /**
  * Exercises PasswordResetRequestForm end-to-end, including the User lookup,
@@ -16,10 +17,7 @@ use app\tests\integration\DbTestCase;
  */
 class PasswordResetRequestFormTest extends DbTestCase
 {
-    /** @var mixed */
-    private $originalMailer;
-    /** @var mixed */
-    private $originalUrlManager;
+    use RestoresComponents;
 
     protected function setUp(): void
     {
@@ -27,9 +25,7 @@ class PasswordResetRequestFormTest extends DbTestCase
 
         // Console UrlManager can't build URLs — install a web UrlManager
         // with a known host + scriptUrl so buildResetUrl() works.
-        $components = \Yii::$app->getComponents(true);
-        $this->originalUrlManager = $components['urlManager'] ?? null;
-        \Yii::$app->set('urlManager', new \yii\web\UrlManager([
+        $this->swapComponent('urlManager', new \yii\web\UrlManager([
             'enablePrettyUrl' => true,
             'showScriptName' => false,
             'scriptUrl' => '/index.php',
@@ -38,10 +34,8 @@ class PasswordResetRequestFormTest extends DbTestCase
         ]));
 
         // Swap the mailer with a test double so send() returns true without
-        // touching SMTP. Snapshot via getComponents() so we can restore the
-        // original configuration in tearDown.
-        $this->originalMailer = $components['mailer'] ?? null;
-        \Yii::$app->set('mailer', new class extends \yii\base\Component implements \yii\mail\MailerInterface {
+        // touching SMTP; tearDown() restores the original configuration.
+        $this->swapComponent('mailer', new class extends \yii\base\Component implements \yii\mail\MailerInterface {
             public int $sendCount = 0;
             public bool $shouldReturn = true;
             /**
@@ -181,8 +175,7 @@ class PasswordResetRequestFormTest extends DbTestCase
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('mailer', $this->originalMailer);
-        \Yii::$app->set('urlManager', $this->originalUrlManager);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

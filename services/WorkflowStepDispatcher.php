@@ -278,7 +278,7 @@ final class WorkflowStepDispatcher
                 $execution->job_id = $job->id;
                 $execution->save(false);
 
-                return ['job' => $job, 'request' => $approvals->openRequest($job, $rule)];
+                return ['job' => $job, 'request' => $approvals->openRequest($job, $rule, ApprovalRequest::REQUIRED_BY_APPROVAL_STEP)];
             });
         } catch (\Throwable $e) {
             \Yii::error(sprintf(self::REQUEST_FAILED_LOG, (int)$run->id, (int)$execution->id, ...DbErrorSummary::of($e)), __CLASS__);

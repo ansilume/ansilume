@@ -164,9 +164,12 @@ class VaultCredentialAssignmentService extends Component
 
     /**
      * Saves $template with $vault for user #$userId, the user whom
-     * GatedJobTemplateLock judges, whoever is signed in: a template with an
-     * approval rule keeps its credentials unless that user holds
-     * approval-rule.update.
+     * GatedJobTemplateLock judges, whoever is signed in: a gated template (an
+     * approval rule of its own, or one of its inventory) keeps its
+     * credentials unless that user holds approval-rule.update. Such a
+     * template is reported as failed, with GatedJobTemplateLock::CHANGE_REFUSED
+     * (its own rule) or CHANGE_REFUSED_INVENTORY (its inventory's rule) as its
+     * error; the other templates are assigned.
      *
      * @param array<string, mixed> $auditContext
      * @return array{job_template_id: int, name: string, status: string, replaced: list<array{id: int, name: string}>, error: string|null}

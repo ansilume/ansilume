@@ -48,7 +48,8 @@ class WorkflowTemplatePageTest extends DbTestCase
     {
         $this->assertSame(
             [
-                'GATED_TEMPLATES_HINT' => 'Job templates with an approval rule are not listed: only admins may add a job step for them.',
+                'GATED_TEMPLATES_HINT' => 'Job templates with an approval rule, or on an inventory with one, are not listed: only admins '
+                    . 'may add a job step for them.',
                 'STEPS_LOCKED_NOTE' => 'You may still rename the workflow, launch it and manage its trigger token.',
                 'TEMPLATES_CRUMB' => 'Workflow Templates',
             ],

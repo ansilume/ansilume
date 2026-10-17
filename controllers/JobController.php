@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\JobInventory;
 use app\components\JobTemplateWarnings;
 use app\models\AuditLog;
 use app\models\Job;
@@ -39,6 +40,16 @@ class JobController extends BaseController
      * JobLaunchService's own failures.
      */
     public const RELAUNCH_FAILED = 'Re-launch failed: %s';
+
+    /** The success flash of a re-launch whose new job is queued; sprintf(): the new job's ID. */
+    public const FLASH_RELAUNCHED = 'Re-launched as Job #%d.';
+
+    /**
+     * The info flash of a re-launch whose new job waits for approval: the
+     * approval rule of its job template, or of the template's inventory,
+     * gates it. sprintf(): the new job's ID.
+     */
+    public const FLASH_RELAUNCHED_WAITING = 'Re-launched as Job #%d, which is waiting for approval.';
 
     /**
      * @return array<int, array<string, mixed>>
@@ -106,6 +117,8 @@ class JobController extends BaseController
             'hostSummaries' => $hostSummaries,
             'artifacts' => $artifacts,
             'jobCredentials' => $this->credentialResolver()->describe($job->decodedRunnerPayload()),
+            // The inventory as launched: its name then, also once it was renamed or deleted.
+            'jobInventory' => JobInventory::ofJob($job),
             // The workflow run and step the job was created for, and the approval it waits or waited for.
             'context' => $contexts->forJob($job, Viewer::current()),
         ]);
@@ -174,11 +187,25 @@ class JobController extends BaseController
             return $this->redirect(['view', 'id' => $id]);
         }
 
-        $this->session()->setFlash('success', "Re-launched as Job #{$job->id}.");
+        $this->flashRelaunched($job);
         // A relaunch skips the launch page: its warnings show afterwards.
         $this->flashTemplateWarnings($original->jobTemplate);
 
         return $this->redirect(['view', 'id' => $job->id]);
+    }
+
+    /**
+     * What became of the re-launch, as a launch from the template page says
+     * it: a job that waits for approval (its template's or its inventory's
+     * rule) is not queued yet.
+     */
+    private function flashRelaunched(Job $job): void
+    {
+        if ($job->status === Job::STATUS_PENDING_APPROVAL) {
+            $this->session()->setFlash('info', sprintf(self::FLASH_RELAUNCHED_WAITING, $job->id));
+        } else {
+            $this->session()->setFlash('success', sprintf(self::FLASH_RELAUNCHED, $job->id));
+        }
     }
 
     private function flashTemplateWarnings(?JobTemplate $template): void

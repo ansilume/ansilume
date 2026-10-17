@@ -18,6 +18,7 @@ use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalService;
 use app\services\ScheduleRunAs;
 use app\services\ScheduleService;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\RecordingNotificationDispatcher;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\Response;
@@ -39,6 +40,7 @@ use yii\web\Response;
  */
 class ScheduleRunAsApprovalTest extends WebControllerTestCase
 {
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     private User $owner;
@@ -47,14 +49,10 @@ class ScheduleRunAsApprovalTest extends WebControllerTestCase
     private JobTemplate $template;
     private Schedule $schedule;
 
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
-
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
-        \Yii::$app->set('notificationDispatcher', new RecordingNotificationDispatcher());
+        $this->swapComponent('notificationDispatcher', new RecordingNotificationDispatcher());
 
         $this->owner = $this->createUserWithRole('run-as-owner', 'operator');
         $this->editor = $this->createUserWithRole('run-as-editor', 'operator');
@@ -88,7 +86,7 @@ class ScheduleRunAsApprovalTest extends WebControllerTestCase
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

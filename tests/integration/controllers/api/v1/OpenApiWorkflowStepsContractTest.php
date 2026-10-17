@@ -344,6 +344,9 @@ class OpenApiWorkflowStepsContractTest extends WebControllerTestCase
             ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED,
             ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
             ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED,
+            // 2.12.0: job steps gated through their job template's inventory.
+            ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+            ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED,
         ];
         foreach (array_merge($policy, [ApprovalRuleAssignmentPolicy::APPROVAL_STEP_ADD_REFUSED, WorkflowStep::JOB_TEMPLATE_NOT_FOUND, WorkflowStepWriteService::JOB_TEMPLATE_FORBIDDEN]) as $quote) {
             $this->assertStringContainsString('`' . $quote . '`', $post);
@@ -401,7 +404,12 @@ class OpenApiWorkflowStepsContractTest extends WebControllerTestCase
             $this->enumOf('WorkflowSuccessPath', 'end')
         );
         $this->assertSame(
-            [WorkflowRouteStep::PROBLEM_JOB_TEMPLATE_MISSING, WorkflowRouteStep::PROBLEM_APPROVAL_RULE_MISSING, WorkflowRouteStep::PROBLEM_UNKNOWN_TYPE],
+            [
+                WorkflowRouteStep::PROBLEM_JOB_TEMPLATE_MISSING,
+                WorkflowRouteStep::PROBLEM_APPROVAL_RULE_MISSING,
+                WorkflowRouteStep::PROBLEM_APPROVAL_RULES_DIFFER,
+                WorkflowRouteStep::PROBLEM_UNKNOWN_TYPE,
+            ],
             $this->enumOf('WorkflowStep', 'cannot_run')
         );
         $route = new WorkflowRoute(WorkflowRoute::KIND_STEP, WorkflowRoute::VIA_NEXT, 43, 3, null, false);
@@ -659,17 +667,21 @@ class OpenApiWorkflowStepsContractTest extends WebControllerTestCase
             WorkflowStepsController::FORBIDDEN,
             ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED,
             ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+            ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+        ];
+        $gatedJobSteps = [
+            ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED,
+            ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED,
         ];
         $this->assertEqualsCanonicalizing(
-            array_merge($locks, [
+            array_merge($locks, $gatedJobSteps, [
                 ApprovalRuleAssignmentPolicy::APPROVAL_STEP_ADD_REFUSED,
-                ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED,
                 WorkflowStepWriteService::JOB_TEMPLATE_FORBIDDEN,
             ]),
             $this->exampleMessages(self::STEPS, 'post', '403')
         );
         $this->assertEqualsCanonicalizing(
-            array_merge($locks, [ApprovalRuleAssignmentPolicy::GATED_JOB_STEP_ADD_REFUSED, WorkflowStepWriteService::JOB_TEMPLATE_FORBIDDEN]),
+            array_merge($locks, $gatedJobSteps, [WorkflowStepWriteService::JOB_TEMPLATE_FORBIDDEN]),
             $this->exampleMessages(self::STEP, 'put', '403')
         );
         foreach ([[self::MOVE, 'post'], [self::STEP, 'delete']] as [$path, $method]) {
@@ -958,6 +970,7 @@ class OpenApiWorkflowStepsContractTest extends WebControllerTestCase
             $template->id = 15;
             $template->approval_rule_id = null;
             $template->populateRelation('approvalRule', null);
+            $template->populateRelation('inventory', null);
         }
         $rule = null;
         if ($type === WorkflowStep::TYPE_APPROVAL) {

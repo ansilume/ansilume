@@ -33,6 +33,14 @@ use yii\web\NotFoundHttpException;
  * step can be visible through its job template's project while the
  * workflow stays hidden.
  *
+ * Each request says what required it and names the inventory its job was
+ * launched with (RequestContext::gateFields()): required_by (job_template,
+ * inventory or approval_step; null only before m000088), and inventory_id
+ * and inventory_name as the job's runner payload records them (its name at
+ * launch, for jobs launched before 2.12.0 its current name; both null for
+ * the placeholder of a workflow approval step, the name null when it is
+ * unknown).
+ *
  * Each request lists its votes in "decisions" (serializeAll()): user_id,
  * username, decision, comment and created_at of every vote the request page
  * lists, in the order cast; null for a caller without approval.view.
@@ -229,6 +237,7 @@ class ApprovalsController extends BaseApiController
             // Who launched the job (for a workflow approval step: started the run); never an approver.
             'launched_by' => $m->launcherId(),
             'approval_rule_id' => $m->approval_rule_id,
+        ] + $context->gateFields() + [
             'status' => $m->status,
             'requested_at' => $m->requested_at,
             'resolved_at' => $m->resolved_at,

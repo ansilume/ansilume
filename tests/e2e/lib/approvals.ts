@@ -52,6 +52,54 @@ export function ruleLabel(name: string, approvals = 1): string {
   return `${name} (${approvals} approval(s))`;
 }
 
+/**
+ * services/runstate/Texts.php RULE_OF_INVENTORY: the Rule cell of the
+ * approval list and of the dashboard for a request that the inventory of its
+ * job required, with the inventory's name at the launch.
+ */
+export function ruleOfInventory(rule: string, inventory: string): string {
+  return `${rule} (of inventory ${inventory})`;
+}
+
+/**
+ * models/ApprovalRequest.php REQUIRED_BY_LABELS: the Required by row of the
+ * request page (#approval-required-by), by what required the request: the
+ * job template's own rule, its inventory's rule, or a workflow approval step.
+ */
+export const REQUIRED_BY = {
+  job_template: 'Job template',
+  inventory: 'Inventory',
+  approval_step: 'Workflow approval step',
+} as const;
+
+/** components/JobInventory.php NONE: the Inventory row of a job without one, such as the placeholder of an approval step. */
+export const NO_INVENTORY = '—';
+
+/** components/ApprovalRuleUsage.php DELETE_BLOCKED: the title of the disabled Delete of a rule in use, and its reason below. */
+export const DELETE_BLOCKED = 'In use: remove it from the inventories, job templates and workflow steps below, '
+  + 'and let its pending requests be decided or their jobs canceled, before deleting it.';
+
+/** components/ApprovalRuleUsage.php NOT_IN_USE: the usage card of a rule that nothing uses. */
+export const NOT_IN_USE = 'Not used by any inventory, job template, workflow step or pending approval request.';
+
+/**
+ * models/ApprovalRule.php NO_ELIGIBLE_APPROVERS: the warning of the rule form
+ * (#approver-count-warning) when none of the chosen approvers may decide, at
+ * any number of required approvals.
+ */
+export const NO_ELIGIBLE_APPROVERS = 'Warning: none of these approvers can approve: none of them is an active user '
+  + 'who holds approval.decide or is a superadmin, so every launch this rule gates would be refused.';
+
+/** controllers/JobController.php FLASH_RELAUNCHED: the success flash of a re-launch whose new job is queued. */
+export function relaunched(jobId: string): string {
+  return `Re-launched as Job #${jobId}.`;
+}
+
+/** controllers/JobController.php FLASH_RELAUNCHED_WAITING: the info flash of a re-launch whose new job waits for approval. */
+export function relaunchedWaiting(jobId: string): string {
+  return `Re-launched as Job #${jobId}, which is waiting for approval.`;
+}
+
 /** services/ApprovalDecisionRefusedException.php LAUNCHER_REFUSED: the launcher of a job of a job template. */
 export const LAUNCHER_REFUSED = 'You launched this job; another approver must decide.';
 
@@ -137,6 +185,57 @@ function requestRow(page: Page, heading: string): Locator {
 /** The status badge of the open approval request page. */
 export function requestStatus(page: Page): Locator {
   return requestRow(page, 'Status').locator('.badge');
+}
+
+/**
+ * The Required by cell of the open approval request page: one of
+ * REQUIRED_BY's labels.
+ */
+export function requiredByCell(page: Page): Locator {
+  return page.locator('#approval-required-by');
+}
+
+/**
+ * The Inventory cell of the open approval request page: the inventory the
+ * job was launched with, linked while it exists (views/job/_inventory.php),
+ * NO_INVENTORY for the placeholder of an approval step.
+ */
+export function requestInventoryCell(page: Page): Locator {
+  return page.locator('#approval-inventory');
+}
+
+/** The Inventory row of the details of the open job page: the same markup as requestInventoryCell(). */
+export function jobInventoryCell(page: Page): Locator {
+  return page.locator('#detail-inventory');
+}
+
+/**
+ * The inventory `cell` links (requestInventoryCell(), jobInventoryCell()):
+ * the link shows `name` and leads to the inventory's page; the ID of that
+ * inventory, which data-inventory-id carries too.
+ */
+export async function linkedInventoryId(cell: Locator, name: string): Promise<string> {
+  const link = cell.locator('a[data-inventory-id]');
+  await expect(link).toHaveText(name);
+  await expect(link).toHaveAttribute('href', /\/inventory\/view\?id=\d+$/);
+  const id = ((await link.getAttribute('href')) ?? '').match(/id=(\d+)$/)?.[1] ?? '';
+  await expect(link).toHaveAttribute('data-inventory-id', id);
+  return id;
+}
+
+/**
+ * Re-launches the finished job of the open job page with its Re-launch
+ * button and accepts the confirm dialog; the ID of the new job, whose page
+ * is open then.
+ */
+export async function relaunchJob(page: Page): Promise<string> {
+  const original = new URL(page.url()).searchParams.get('id') ?? '';
+  page.once('dialog', (dialog) => dialog.accept());
+  await Promise.all([
+    page.waitForURL((url) => url.pathname === '/job/view' && url.searchParams.get('id') !== original),
+    page.locator('form[action*="/job/relaunch"] button[type="submit"]').click(),
+  ]);
+  return new URL(page.url()).searchParams.get('id') ?? '';
 }
 
 /** The Approvals cell of the open approval request page: "<counted approvals> / <required approvals>". */

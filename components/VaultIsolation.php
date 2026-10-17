@@ -80,7 +80,7 @@ final class VaultIsolation
      * Colour codes and OSC 8 hyperlinks (ansible-lint --force-color) are
      * stripped first, and \s+ also matches the line breaks rich inserts.
      */
-    public static function mentionsDecryptionFailure(string $output): bool
+    public static function mentionsDecryptionFailure(#[\SensitiveParameter] string $output): bool
     {
         $plain = (string)preg_replace(
             ['/\e\]8;[^\e\x07]*(?:\e\\\\|\x07)/', '/\e\[[0-9;?]*[ -\/]*[@-~]/'],

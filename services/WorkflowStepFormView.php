@@ -186,9 +186,9 @@ final class WorkflowStepFormView
     public const HELP_JOB_TITLE = 'Job step:';
 
     public const HELP_JOB = 'success = exit code 0. Failure = any non-zero exit, timeout, or unreachable host. Always '
-        . 'overrides both. If the job template has an approval rule and the approval is rejected, times out or is '
-        . 'canceled, the job does not run: then only On Failure is followed (left empty, the run ends as failed), and '
-        . 'Always is not.';
+        . 'overrides both. If the job needs approval (an approval rule of its job template or of its inventory) and the '
+        . 'approval is rejected, times out or is canceled, the job does not run: then only On Failure is followed (left '
+        . 'empty, the run ends as failed), and Always is not.';
 
     public const HELP_APPROVAL_TITLE = 'Approval step:';
 

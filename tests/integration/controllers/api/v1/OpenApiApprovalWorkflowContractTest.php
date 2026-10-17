@@ -66,6 +66,12 @@ use Symfony\Component\Yaml\Yaml;
  * removed step names its step ID ("step ID 7"), no longer a "#7" that read
  * like a run; the user who started a workflow run is refused with
  * LAUNCHER_REFUSED_RUN, which the spec did not quote.
+ *
+ * From 2.12.0 (approval rules on inventories), each fails on the spec of
+ * 2.11.1: the launch refusals of an inventory's rule and of one rule per
+ * launch, the workflow pre-flight's REFUSAL_WORKFLOW_RULES_DIFFER, the
+ * refusals of job steps gated through their job template's inventory, and
+ * the inventories of an approval rule's usage were not quoted.
  */
 class OpenApiApprovalWorkflowContractTest extends TestCase
 {
@@ -187,6 +193,21 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
         $trigger = $this->examples('TriggerLaunchRejected', false);
         $this->assertContains($refusals[0], $trigger, 'TriggerLaunchRejected');
         $this->assertContains($refusals[1], $trigger, 'TriggerLaunchRejected');
+
+        // 2.12.0: the rule of the template's inventory, and one rule per
+        // launch, refuse the API launch and the job trigger alike (job
+        // template #7 on inventory #3).
+        foreach (self::inventoryLaunchRefusals() as $refusal) {
+            $this->assertContains($refusal, $api, 'JobLaunchRejected');
+            $this->assertContains($refusal, $trigger, 'TriggerLaunchRejected');
+        }
+        foreach (['JobLaunchRejected', 'TriggerLaunchRejected'] as $response) {
+            $this->assertStringContainsString('a launch waits for one rule only', $this->textAt([...self::RESPONSES, $response, 'description']), $response);
+        }
+        $this->assertStringContainsString(
+            'A launch waits for one rule only, so a template whose own rule differs from its inventory\'s is refused too',
+            $this->textAt(['paths', '/api/v1/jobs', 'post', 'description'])
+        );
     }
 
     /**
@@ -204,12 +225,20 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
             sprintf(ApproverEligibility::REFUSAL_WORKFLOW_LAUNCH, SurveyDefinition::quote('Release approval'), SurveyDefinition::quote('deploy-prod'), 1, 0),
             sprintf(WorkflowExecutionService::NO_STEPS, 5),
             sprintf(WorkflowExecutionService::WORKFLOW_TEMPLATE_DELETED, 5),
+            // 2.12.0: a job step whose job template and inventory have different rules.
+            sprintf(ApproverEligibility::REFUSAL_WORKFLOW_RULES_DIFFER, SurveyDefinition::quote('Deploy')),
         ];
         $api = array_column($this->examples('WorkflowLaunchRejected'), 'message');
         $trigger = $this->examples('WorkflowTriggerLaunchRejected', false);
         foreach ($refusals as $refusal) {
             $this->assertContains($refusal, $api, 'WorkflowLaunchRejected');
             $this->assertContains($refusal, $trigger, 'WorkflowTriggerLaunchRejected');
+        }
+        // A workflow launch never answers JobLaunchService's refusals: they
+        // fail the job step after the 201 (decision 13 of 2.12.0).
+        foreach (self::inventoryLaunchRefusals() as $refusal) {
+            $this->assertNotContains($refusal, $api, 'WorkflowLaunchRejected');
+            $this->assertNotContains($refusal, $trigger, 'WorkflowTriggerLaunchRejected');
         }
         $this->assertContains(sprintf(ApproverEligibility::REFUSAL_WORKFLOW_RULE_MISSING, SurveyDefinition::quote('Release approval')), $api);
         $this->assertStringContainsString(
@@ -428,6 +457,16 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
         $this->assertStringContainsString('`' . ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED . '`', $put);
         $this->assertStringContainsString('a job template that gets an approval rule locks the workflows that use it from then on', $put);
 
+        // 2.12.0: a job step whose job template's inventory has an approval
+        // rule is a gated job step too, with refusals of its own.
+        $this->assertContains(ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED, $create);
+        $this->assertContains(ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED, $update);
+        $this->assertContains(ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED, $update);
+        $this->assertStringContainsString('`' . ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED . '`', $this->textAt(['paths', '/api/v1/workflow-templates', 'post', 'description']));
+        $this->assertStringContainsString('`' . ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_STEP_ADD_REFUSED . '`', $put);
+        $this->assertStringContainsString('`' . ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED . '`', $put);
+        $this->assertStringContainsString('and so does an inventory that gets one', $put);
+
         $this->assertSame('#/components/responses/WorkflowStepsLocked', $this->at(['paths', '/api/v1/workflow-templates/{id}', 'put', 'responses', '409', '$ref']));
         $locked = $this->at([...self::RESPONSES, 'WorkflowStepsLocked', 'content', 'application/json', 'example', 'error']);
         $this->assertSame(['message' => WorkflowStepChangeGuard::runsActiveMessage([12]), 'workflow_job_ids' => [12]], $locked);
@@ -493,7 +532,8 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
         $this->assertTrue($this->at([...self::SCHEMAS, 'ApprovalRule', 'properties', 'job_template_id', 'deprecated']));
 
         $this->assertSame('#/components/responses/ApprovalRuleInUse', $this->at(['paths', '/api/v1/approval-rules/{id}', 'delete', 'responses', '409', '$ref']));
-        $usage = new ApprovalRuleUsage('deploy-prod', [], 2, [], 1, 0);
+        // 2.12.0: an inventory that the rule gates counts, and comes first.
+        $usage = new ApprovalRuleUsage('deploy-prod', [], 2, [], 1, 0, [], 1);
         $this->assertSame(
             ApprovalRuleWriteService::refusal($usage),
             $this->at([...self::SCHEMAS, 'ApprovalRuleInUseError', 'properties', 'error', 'properties', 'message', 'example'])
@@ -503,6 +543,9 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
             $this->at([...self::SCHEMAS, 'ApprovalRuleUsage', 'required']),
             'ApprovalRuleUsage documents what used_by holds.'
         );
+        $delete = $this->textAt(['paths', '/api/v1/approval-rules/{id}', 'delete', 'description']);
+        $this->assertStringContainsString('A rule is in use while inventories, live job templates, steps of live workflows or pending approval requests', $delete);
+        $this->assertStringContainsString('An inventory\'s rule is removed with `PUT /api/v1/inventories/{id}` and `approval_rule_id: null`, by an admin.', $delete);
 
         // Regression (review of step 3, contract-2): approver_config is
         // always an object, {} for a rule without approvers.
@@ -580,6 +623,24 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
         }
 
         return $messages;
+    }
+
+    /**
+     * The launch refusals of 2.12.0 that the rule of a job template's
+     * inventory, and one rule per launch, give: job template #7 on inventory
+     * #3, as the spec's examples quote them.
+     *
+     * @return list<string>
+     */
+    private static function inventoryLaunchRefusals(): array
+    {
+        return [
+            sprintf(JobLaunchService::RULES_DIFFER, 7, 3),
+            sprintf(JobLaunchService::INVENTORY_RULE_MISSING, 7, 3),
+            sprintf(JobLaunchService::INVENTORY_MISSING, 7, 3),
+            sprintf(JobLaunchService::TEMPLATE_INVENTORY_CHANGED, 7, 3),
+            sprintf(JobLaunchService::INVENTORY_CHANGED, 7, 3),
+        ];
     }
 
     private function withStatus(ApprovalRequest $request, string $status): ApprovalRequest

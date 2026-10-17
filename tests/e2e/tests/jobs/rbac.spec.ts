@@ -1,6 +1,18 @@
 import { test, expect } from '@playwright/test';
 import { postWithPageCsrf } from '../../lib/helpers';
+import {
+  cancelJob,
+  flash,
+  jobInventoryCell,
+  launchTemplate,
+  linkedInventoryId,
+  relaunchJob,
+  relaunchedWaiting,
+  waitingForApproval,
+} from '../../lib/approvals';
+import { HOST_INVENTORY, HOST_TEMPLATE } from '../../lib/inventories';
 import { LOGSTREAM_RUNNING_JOB, seededJobId } from '../../lib/jobs';
+import { cancelJobIfActive } from '../../lib/runs';
 import { asAdmin } from '../../lib/scoping';
 
 test.describe('Jobs RBAC', () => {
@@ -44,5 +56,45 @@ test.describe('Jobs RBAC', () => {
       await admin.goto(`/job/view?id=${id}`);
       await expect(admin.locator('#status-badge')).toHaveText(/running/i);
     });
+  });
+
+  // commands/E2eInventoryGateSeeder.php: e2e-host-gated-template is in a
+  // project without a team, which every role sees, on e2e-gated-inventory,
+  // which has no project either. e2e-admin launches; the job waits for
+  // e2e-operator's approval and is canceled afterwards.
+  test('viewer sees the inventory a job was launched with, and may open it', async ({ page, browser }, testInfo) => {
+    const jobId = await asAdmin(browser, testInfo, (admin) => launchTemplate(admin, HOST_TEMPLATE));
+    try {
+      await page.goto(`/job/view?id=${jobId}`);
+      await expect(page.locator('#status-badge')).toHaveText('Awaiting Approval');
+      const inventoryId = await linkedInventoryId(jobInventoryCell(page), HOST_INVENTORY);
+      await jobInventoryCell(page).locator('a').click();
+      await expect(page).toHaveURL(new RegExp(`/inventory/view\\?id=${inventoryId}$`));
+      await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+    } finally {
+      await asAdmin(browser, testInfo, (admin) => cancelJobIfActive(admin, jobId));
+    }
+  });
+
+  // An operator launches and re-launches what the operator may operate; a
+  // job template whose inventory has an approval rule waits each time, for
+  // e2e-admin, the rule's other approver.
+  test('operator re-launches a job of a template on a gated inventory, and the new job waits for approval', async ({ page }) => {
+    const jobId = await launchTemplate(page, HOST_TEMPLATE);
+    let relaunchedId = '';
+    try {
+      await expect(flash(page, 'info')).toHaveText(waitingForApproval(jobId));
+      await cancelJob(page);
+      await expect(page.locator('#status-badge')).toHaveText('Canceled');
+
+      relaunchedId = await relaunchJob(page);
+      expect(relaunchedId, 'a new job').not.toBe(jobId);
+      await expect(flash(page, 'info')).toHaveText(relaunchedWaiting(relaunchedId));
+      await expect(page.locator('#status-badge')).toHaveText('Awaiting Approval');
+      await linkedInventoryId(jobInventoryCell(page), HOST_INVENTORY);
+    } finally {
+      await cancelJobIfActive(page, relaunchedId);
+      await cancelJobIfActive(page, jobId);
+    }
   });
 });

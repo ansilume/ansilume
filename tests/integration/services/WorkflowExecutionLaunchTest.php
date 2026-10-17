@@ -19,6 +19,7 @@ use app\services\WorkflowExecutionService;
 use app\services\WorkflowLaunchRejectedException;
 use app\services\WorkflowRunVars;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 use yii\base\Event;
 use yii\base\Model;
@@ -32,23 +33,22 @@ use yii\base\ModelEvent;
  */
 class WorkflowExecutionLaunchTest extends DbTestCase
 {
+    use RestoresComponents;
     use TeamScopeFixtures;
     use WorkflowEngineFixtures;
 
     private RecordingNotificationDispatcher $notifications;
-    private mixed $dispatcherBefore = null;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $this->dispatcherBefore = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
         $this->notifications = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->notifications);
+        $this->swapComponent('notificationDispatcher', $this->notifications);
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->dispatcherBefore);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

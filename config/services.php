@@ -94,6 +94,12 @@ return [
         'class' => 'app\services\InventoryService',
         'timeout' => 30,
     ],
+    'inventoryUsageService' => [
+        'class' => 'app\services\InventoryUsageService',
+    ],
+    'inventoryWriteService' => [
+        'class' => 'app\services\InventoryWriteService',
+    ],
     'artifactService' => [
         'class' => 'app\services\ArtifactService',
         'storagePath' => '@runtime/artifacts',

@@ -246,6 +246,75 @@ class E2eTeardownHelperTest extends DbTestCase
         $this->assertContains("1 approval_rule row(s) named like '{$this->prefix}' are left.", $problems);
     }
 
+    /**
+     * regression: approval rules went before the inventories that use them.
+     * Since m000088 an inventory's rule restricts the delete of the rule
+     * (1451), so the rule of an e2e inventory that a spec's template still
+     * used could not go with the rows of its creator, and a rule of an
+     * inventory created in a spec under another name stayed with its
+     * creator.
+     */
+    public function testDeletesApprovalRulesAfterTheInventoriesThatUseThem(): void
+    {
+        $admin = $this->e2eUser('admin', 'admin');
+        $rule = $this->createApprovalRule((int)$admin->id);
+        $rule->name = $this->prefix . 'host-gate-rule';
+        $rule->save(false);
+        $inventory = $this->createInventory((int)$admin->id);
+        $inventory->name = $this->prefix . 'gated-inventory';
+        $inventory->setAttribute('approval_rule_id', (int)$rule->id);
+        $inventory->save(false);
+        // A template a spec created on it under another name: the inventory goes with the rows of its creator.
+        $template = $this->createJobTemplate(
+            (int)$this->createProject((int)$admin->id)->id,
+            (int)$inventory->id,
+            (int)$this->createRunnerGroup((int)$admin->id)->id,
+            (int)$admin->id
+        );
+        $template->name = 'Deploy (created in a spec)';
+        $template->save(false);
+        // Created in specs under other names: they go with the rows of their creator.
+        $unnamedRule = $this->createApprovalRule((int)$admin->id);
+        $unnamedInventory = $this->createInventory((int)$admin->id);
+        $unnamedInventory->setAttribute('approval_rule_id', (int)$unnamedRule->id);
+        $unnamedInventory->save(false);
+
+        $this->assertSame([], $this->runTeardown());
+
+        $this->assertNull(ApprovalRule::findOne($rule->id));
+        $this->assertNull(ApprovalRule::findOne($unnamedRule->id));
+        $this->assertNull(Inventory::findOne($inventory->id));
+        $this->assertNull(Inventory::findOne($unnamedInventory->id));
+        $this->assertNull(JobTemplate::findWithDeleted()->where(['id' => $template->id])->one());
+        $this->assertNull(User::findOne($admin->id));
+    }
+
+    /**
+     * A rule that an inventory of another user still uses cannot go, and
+     * neither can its creator: reported, not hidden.
+     */
+    public function testReportsARuleThatAnInventoryOfAnotherUserStillUses(): void
+    {
+        $owner = $this->createUser('owner');
+        $admin = $this->e2eUser('admin', 'admin');
+        $rule = $this->createApprovalRule((int)$admin->id);
+        $rule->name = $this->prefix . 'approval-rule';
+        $rule->save(false);
+        $inventory = $this->createInventory((int)$owner->id);
+        $inventory->setAttribute('approval_rule_id', (int)$rule->id);
+        $inventory->save(false);
+
+        $problems = $this->runTeardown();
+
+        $this->assertNotNull(ApprovalRule::findOne($rule->id));
+        $this->assertNotNull(Inventory::findOne($inventory->id), 'the inventory of another user stays');
+        $this->assertNotNull(User::findOne($admin->id));
+        $this->assertContainsMatching("/^Failed deleting approval_rule '{$this->prefix}approval-rule': .*1451/", $problems);
+        $this->assertContainsMatching('/^Failed deleting the approval_rule rows of e2e users: .*1451/', $problems);
+        $this->assertContainsMatching("/^User '{$admin->username}' was not deleted: .*1451/", $problems);
+        $this->assertContains("1 approval_rule row(s) named like '{$this->prefix}' are left.", $problems);
+    }
+
     public function testHandsSharedRunnerGroupsOverToAnotherSuperadmin(): void
     {
         $heir = $this->createUser('heir');

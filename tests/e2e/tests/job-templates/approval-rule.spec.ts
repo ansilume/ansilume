@@ -3,11 +3,16 @@ import { templateId } from '../../lib/helpers';
 import { forgePost, optionLabels } from '../../lib/scoping';
 import { APPROVAL_RULE, SOLO_RULE, SOLO_TEMPLATE, flash, ruleLabel } from '../../lib/approvals';
 import {
+  LAUNCH_NOTE,
   LOCKED_INPUTS,
   LOCKED_PLAYBOOK,
   LOCKED_TEMPLATE,
   TEMPLATE_DELETE_CONFIRM,
+  approverRefusal,
   deleteOpenTemplate,
+  launchApprovalNote,
+  launchFailed,
+  launchRefusal,
   lockedNotice,
   runsWhat,
   templateDeleted,
@@ -109,14 +114,22 @@ test.describe('Job Template Approval Rule', () => {
 
   test('a launch is refused when only the launcher is an approver who may decide', async ({ page }) => {
     const id = await templateId(page, SOLO_TEMPLATE);
+    const refusal = approverRefusal(SOLO_RULE, 1, 0);
     await page.goto(`/job-template/launch?id=${id}`);
+    // Before the click the page says so, and what a launch would wait for;
+    // the button stays enabled, and the launch itself refuses with the same reason.
+    await expect(launchRefusal(page)).toHaveText(refusal);
+    await expect(launchRefusal(page)).toHaveAttribute('role', 'alert');
+    await expect(launchRefusal(page)).toHaveClass(/(^|\s)alert-warning(\s|$)/);
+    await expect(launchApprovalNote(page)).toHaveText(LAUNCH_NOTE(SOLO_RULE));
+    await expect(page.locator('#launch-form button[type="submit"]')).toBeEnabled();
     await page.locator('#launch-form button[type="submit"]').click();
 
-    await expect(flash(page, 'danger')).toHaveText(
-      `Launch failed: Approval rule "${SOLO_RULE}" needs 1 approval(s) from users other than the one who launches, `
-      + 'but only 0 of its approvers may decide on this job. An admin can add approvers to the rule.',
-    );
+    await expect(flash(page, 'danger')).toHaveText(launchFailed(refusal));
     await expect(page).toHaveURL(/\/job-template\/launch/);
+    // The warning is for the page before the click: the flash carries the reason now.
+    await expect(launchRefusal(page)).toHaveCount(0);
+    await expect(launchApprovalNote(page)).toHaveText(LAUNCH_NOTE(SOLO_RULE));
     await page.goto(`/job/index?template_id=${id}`);
     await expect(page.locator('#page-content')).toContainText('No jobs match the current filters.');
   });

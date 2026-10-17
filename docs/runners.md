@@ -54,7 +54,12 @@ No other ports or protocols are required. The runner uses:
 
 - **Polling** every 5 seconds to claim queued jobs; the server never hands
   out a job of a deleted job template, or of a workflow run that is no
-  longer running
+  longer running, and it fails, before it runs, a job of a job template or
+  inventory with an approval rule that was not approved, and a job whose
+  inventory is missing or names no hosts; once such failures have taken
+  10 seconds, a claim hands out no further job, and the runner asks again
+  at its next poll (see
+  [updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories))
 - **Heartbeat** every 30 seconds to report liveness
 - **Log streaming** via POST requests during job execution, in whole UTF-8
   characters; bytes that are not UTF-8 arrive as `�` (U+FFFD)

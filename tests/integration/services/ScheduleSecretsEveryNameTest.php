@@ -14,6 +14,7 @@ use app\models\Schedule;
 use app\services\ScheduleSecrets;
 use app\services\ScheduleService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\ScheduleAnswerFixtures;
 use app\tests\integration\TeamScopeFixtures;
 
@@ -33,6 +34,7 @@ use app\tests\integration\TeamScopeFixtures;
  */
 class ScheduleSecretsEveryNameTest extends DbTestCase
 {
+    use RestoresComponents;
     use ScheduleAnswerFixtures;
     use TeamScopeFixtures;
 
@@ -42,23 +44,21 @@ class ScheduleSecretsEveryNameTest extends DbTestCase
 
     private int $userId;
     private RecordingNotificationDispatcher $dispatcher;
-    private mixed $originalDispatcher = null;
     private mixed $originalKey;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->dispatcher = new RecordingNotificationDispatcher();
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
         $this->originalKey = $_ENV['APP_SECRET_KEY'] ?? null;
         $_ENV['APP_SECRET_KEY'] = 'schedule-every-name-test-key-0123456789';
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
-        $this->dispatcher = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
         $this->userId = (int)$this->createUserWithRole('schedule-every-name', 'operator')->id;
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         if ($this->originalKey === null) {
             unset($_ENV['APP_SECRET_KEY']);
         } else {

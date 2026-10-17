@@ -4,10 +4,21 @@ declare(strict_types=1);
 
 /** @var yii\web\View $this */
 /** @var app\models\Inventory $model */
+/** @var bool $canChange inventory.update and operator access to the inventory's project */
+/** @var bool $canDelete inventory.delete and operator access, and the lock of a gated inventory does not apply */
+/** @var bool $changeLocked $canChange, but not the hosts: a gated inventory, no approval-rule.update */
+/** @var bool $canViewRules approval-rule.view: the approval rule as a link, else as text */
+/** @var app\components\InventoryUsage $usage the job templates that use the inventory, as far as the viewer may see them */
 
+use app\services\GatedInventoryLock;
+use app\services\InventoryRuleAssignment;
+use app\services\JobTemplateRuleAssignment;
 use yii\helpers\Html;
+use yii\helpers\Url;
 
 $this->title = $model->name;
+// Read with getAttribute(): a schema cached from before m000088 has no rule column.
+$approvalRule = $model->getAttribute(InventoryRuleAssignment::FIELD) === null ? null : $model->approvalRule;
 ?>
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
@@ -21,17 +32,21 @@ $this->title = $model->name;
 <div class="d-flex justify-content-between align-items-start mb-3">
     <h2><?= Html::encode($model->name) ?></h2>
     <div>
-        <?php if (\Yii::$app->user?->can('inventory.update')) : ?>
+        <?php if ($canChange) : ?>
             <?= Html::a('Edit', ['update', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
         <?php endif; ?>
-        <?php if (\Yii::$app->user?->can('inventory.delete')) : ?>
-            <form method="post" action="<?= \yii\helpers\Url::to(['delete', 'id' => $model->id]) ?>" style="display:inline" onsubmit="return confirm('Delete this inventory?')">
-                <input type="hidden" name="<?= \Yii::$app->request->csrfParam ?>" value="<?= \Yii::$app->request->getCsrfToken() ?>">
+        <?php if ($canDelete) : ?>
+            <form method="post" action="<?= Html::encode(Url::to(['delete', 'id' => $model->id])) ?>" style="display:inline" onsubmit="return confirm('Delete this inventory?')">
+                <input type="hidden" name="<?= Html::encode(\Yii::$app->request->csrfParam) ?>" value="<?= Html::encode(\Yii::$app->request->getCsrfToken()) ?>">
                 <button type="submit" class="btn btn-outline-danger ms-1">Delete</button>
             </form>
         <?php endif; ?>
     </div>
 </div>
+
+<?php if ($changeLocked) : ?>
+    <div class="alert alert-info" id="inventory-locked-notice"><?= Html::encode(GatedInventoryLock::NOTICE) ?></div>
+<?php endif; ?>
 
 <div class="row g-3">
     <div class="col-md-4">
@@ -49,11 +64,25 @@ $this->title = $model->name;
                         <dt class="col-5">Path</dt>
                         <dd class="col-7"><code><?= Html::encode($model->source_path) ?></code></dd>
                     <?php endif; ?>
+                    <dt class="col-5">Approval rule</dt>
+                    <dd class="col-7" id="inventory-approval-rule">
+                        <?php if ($approvalRule === null) : ?>
+                            <span class="text-muted">None</span>
+                        <?php elseif ($canViewRules) : ?>
+                            <?= Html::a(Html::encode(JobTemplateRuleAssignment::label($approvalRule)), ['/approval-rule/view', 'id' => $approvalRule->id]) ?>
+                        <?php else : ?>
+                            <?= Html::encode(JobTemplateRuleAssignment::label($approvalRule)) ?>
+                        <?php endif; ?>
+                    </dd>
                     <dt class="col-5">Created by</dt>
                     <dd class="col-7"><?= Html::encode($model->creator->username ?? '—') ?></dd>
                     <dt class="col-5">Created</dt>
                     <dd class="col-7"><?= date('Y-m-d H:i', $model->created_at) ?></dd>
                 </dl>
+                <?php // A known limit: the rule locks the source path and the project, not the repository's file.?>
+                <?php if ($model->isProjectBound() && GatedInventoryLock::isGated($model)) : ?>
+                    <p class="small text-muted mt-3 mb-0" id="inventory-repository-hosts-note"><?= Html::encode(GatedInventoryLock::REPOSITORY_HOSTS_NOTE) ?></p>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -69,6 +98,8 @@ $this->title = $model->name;
     </div>
     <?php endif; ?>
 </div>
+
+<?= $this->render('_job-templates', ['usage' => $usage]) ?>
 
 <?php
 /** @var \app\services\InventoryService $invService */

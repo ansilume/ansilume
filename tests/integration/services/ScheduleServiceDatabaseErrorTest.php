@@ -12,6 +12,7 @@ use app\models\Schedule;
 use app\services\JobLaunchService;
 use app\services\ScheduleService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use yii\log\Logger;
 
 /**
@@ -24,6 +25,8 @@ use yii\log\Logger;
  */
 class ScheduleServiceDatabaseErrorTest extends DbTestCase
 {
+    use RestoresComponents;
+
     /** In the statements ScheduleFailingCommand quotes in its error message. */
     private const STATEMENT_MARK = 'UPDATE `schedule`';
 
@@ -31,15 +34,11 @@ class ScheduleServiceDatabaseErrorTest extends DbTestCase
     private int $userId;
     private RecordingNotificationDispatcher $dispatcher;
 
-    /** @var mixed the dispatcher definition the test replaced */
-    private mixed $originalDispatcher = null;
-
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
         $this->dispatcher = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
         $this->userId = (int)$this->createUser('schedule-db-error')->id;
         $this->template = $this->createJobTemplate(
             (int)$this->createProject($this->userId)->id,
@@ -51,7 +50,7 @@ class ScheduleServiceDatabaseErrorTest extends DbTestCase
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

@@ -156,25 +156,14 @@ class E2eApprovalSeeder
 
     /**
      * A rule of the listed users that needs $requiredApprovals approvals and
-     * rejects on its timeout (null: never times out), restored by name.
+     * rejects on its timeout (null: never times out), restored by name
+     * (E2eFixtureHelper::approvalRule()).
      *
      * @param list<int> $approverIds
      */
     private function rule(string $name, int $userId, array $approverIds, int $requiredApprovals, ?int $timeoutMinutes): ApprovalRule
     {
-        $rule = ApprovalRule::findOne(['name' => $name]) ?? new ApprovalRule();
-        $rule->name = $name;
-        $rule->description = 'E2E approval rule';
-        $rule->job_template_id = null;
-        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
-        $rule->approver_config = (string)json_encode(['user_ids' => $approverIds]);
-        $rule->required_approvals = $requiredApprovals;
-        $rule->timeout_minutes = $timeoutMinutes;
-        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
-        $rule->created_by = $userId;
-        $rule->save(false);
-
-        return $rule;
+        return E2eFixtureHelper::approvalRule($name, $userId, $approverIds, $requiredApprovals, $timeoutMinutes);
     }
 
     /**

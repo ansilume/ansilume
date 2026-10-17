@@ -14,6 +14,8 @@ use yii\db\ActiveRecord;
  * @property string|null $content
  * @property string|null $source_path
  * @property int|null    $project_id
+ * @property int|null $approval_rule_id the approval rule every launch with this inventory waits for (m000088);
+ *     set in code only, and read with getAttribute(): a schema cached from before m000088 has no such column
  * @property string|null $parsed_hosts  Cached JSON from ansible-inventory
  * @property string|null $parsed_error  Error from last parse attempt
  * @property int|null    $parsed_at     Unix timestamp of last parse
@@ -23,12 +25,21 @@ use yii\db\ActiveRecord;
  *
  * @property User        $creator
  * @property Project|null $project
+ * @property ApprovalRule|null $approvalRule
  */
 class Inventory extends ActiveRecord
 {
     public const TYPE_STATIC = 'static';
     public const TYPE_DYNAMIC = 'dynamic';
     public const TYPE_FILE = 'file';
+
+    /** The error of an approval rule ID that names no rule. */
+    public const APPROVAL_RULE_NOT_FOUND = 'The selected approval rule does not exist.';
+
+    /** The error of a dynamic inventory with an approval rule but without a source path. */
+    public const SOURCE_PATH_REQUIRED_WHEN_GATED = 'A dynamic inventory with an approval rule needs a source path: '
+        . 'without one, jobs use the default inventory of Ansible or of the repository\'s ansible.cfg, '
+        . 'which no rule gates.';
 
     public static function tableName(): string
     {
@@ -42,7 +53,7 @@ class Inventory extends ActiveRecord
 
     public function rules(): array
     {
-        return [
+        return array_merge([
             // The form posts '' for "no project".
             [['project_id'], 'default', 'value' => null],
             [['name', 'inventory_type'], 'required'],
@@ -60,7 +71,9 @@ class Inventory extends ActiveRecord
                 'when' => fn ($m) => $m->inventory_type === self::TYPE_FILE,
                 'whenClient' => "function(attr, val) { return $('#inventory-type').val() === 'file'; }",
             ],
-            [['project_id', 'created_by'], 'integer'],
+            [['project_id'], 'integer'],
+            // Set in code only: a form or a request body must not choose who created the inventory.
+            [['!created_by'], 'integer'],
             // An unknown id would otherwise fail on the foreign key with a server error.
             [
                 ['project_id'],
@@ -70,11 +83,61 @@ class Inventory extends ActiveRecord
                 'targetAttribute' => ['project_id' => 'id'],
                 'message' => 'The selected project does not exist.',
             ],
-            [['content'], 'validateYaml'],
+            // Content a request brings: a static inventory whose stored content is INI, as the seeded selftest
+            // and demo inventories hold, keeps it while its name, description or approval rule change.
+            [['content'], 'validateYaml', 'when' => fn (self $m): bool => $m->isNewRecord
+                || $m->isAttributeChanged('inventory_type', false) || self::contentChanged($m)],
             [['project_id'], 'validateTemplateProjects', 'skipOnEmpty' => false,
                 'when' => fn (self $m): bool => !$m->isNewRecord
                     && ($m->isAttributeChanged('inventory_type', false) || $m->isAttributeChanged('project_id', false)),
             ],
+        ], $this->approvalRuleRules());
+    }
+
+    /**
+     * The rules of the approval rule, once m000088 added its column: code
+     * that runs before the migration (or with a schema cached from before
+     * it) validates and saves inventories as before. Set in code only: the
+     * rule that gates every launch with the inventory is for admins to
+     * choose, so a form or a request body never sets it on its own.
+     *
+     * @return list<array<int|string, mixed>>
+     */
+    private function approvalRuleRules(): array
+    {
+        if (!$this->hasAttribute('approval_rule_id')) {
+            return [];
+        }
+
+        return [
+            [['!approval_rule_id'], 'integer'],
+            // An unknown id would otherwise fail on the foreign key with a server error.
+            [
+                ['approval_rule_id'],
+                'exist',
+                'skipOnError' => true,
+                'targetClass' => ApprovalRule::class,
+                'targetAttribute' => ['approval_rule_id' => 'id'],
+                'message' => self::APPROVAL_RULE_NOT_FOUND,
+            ],
+            // Without a source path a dynamic inventory's jobs would use hosts that no rule gates.
+            [['source_path'], 'required',
+                'when' => fn (self $m): bool => $m->inventory_type === self::TYPE_DYNAMIC
+                    && $m->getAttribute('approval_rule_id') !== null,
+                'whenClient' => "function () { return $('#inventory-type').val() === 'dynamic' && ($('#inventory-approval_rule_id').val() || '') !== ''; }",
+                'message' => self::SOURCE_PATH_REQUIRED_WHEN_GATED,
+            ],
+        ];
+    }
+
+    /**
+     * The approval rule reads as on job templates: "Approval rule must be an
+     * integer."
+     */
+    public function attributeLabels(): array
+    {
+        return [
+            'approval_rule_id' => 'Approval rule',
         ];
     }
 
@@ -147,6 +210,28 @@ class Inventory extends ActiveRecord
         }
     }
 
+    /**
+     * Whether the content differs from the stored content in more than its
+     * line endings: CRLF, CR and LF count as the same, as a browser posts a
+     * textarea's lines with CRLF, so content sent back unchanged differs in
+     * those only.
+     */
+    private static function contentChanged(self $model): bool
+    {
+        $content = $model->content;
+        $stored = $model->getOldAttribute('content');
+        if (!is_string($content) || !is_string($stored)) {
+            return $content !== $stored;
+        }
+
+        return str_replace(["\r\n", "\r"], "\n", $content) !== str_replace(["\r\n", "\r"], "\n", $stored);
+    }
+
+    /**
+     * A static inventory's content must be a YAML mapping. rules() runs it
+     * for new or changed content only (contentChanged()), and when the type
+     * changes.
+     */
     public function validateYaml(string $attribute): void
     {
         if ($this->inventory_type !== self::TYPE_STATIC || empty($this->$attribute)) {
@@ -206,5 +291,13 @@ class Inventory extends ActiveRecord
     public function getProject(): \yii\db\ActiveQuery
     {
         return $this->hasOne(Project::class, ['id' => 'project_id']);
+    }
+
+    /**
+     * The approval rule every launch with this inventory waits for.
+     */
+    public function getApprovalRule(): \yii\db\ActiveQuery
+    {
+        return $this->hasOne(ApprovalRule::class, ['id' => 'approval_rule_id']);
     }
 }

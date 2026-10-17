@@ -34,7 +34,8 @@ use yii\web\Request;
  * The approval and workflow responses of step 3 are checked in
  * OpenApiApprovalWorkflowResponseContractTest; the step endpoints and the
  * route fields of 2.11.0 in OpenApiWorkflowStepsContractTest, the run states
- * in OpenApiWorkflowRunStateContractTest.
+ * in OpenApiWorkflowRunStateContractTest; the inventory answers and the
+ * approval gates of 2.12.0 in OpenApiInventoryApprovalContractTest.
  */
 class OpenApiResponseContractTest extends WebControllerTestCase
 {
@@ -70,6 +71,8 @@ class OpenApiResponseContractTest extends WebControllerTestCase
         $this->assertSame((int)$this->admin->id, $data['created_by']);
         $this->assertTrue($data['has_trigger_token']);
         $this->assertSame((int)$this->operator->id, $data['trigger_user_id'], 'A trigger runs as the user who generated its token.');
+        $this->assertNull($data['approval_gate'], '2.12.0: a template whose launches wait for no approval has none.');
+        $this->assertTrue($this->properties('JobTemplate')['approval_gate']['nullable'] ?? false, 'JobTemplate.approval_gate is null then.');
     }
 
     public function testJobTemplateSchemaMatchesTheResponseToACallerWhoMayOnlyViewIt(): void
@@ -273,6 +276,13 @@ class OpenApiResponseContractTest extends WebControllerTestCase
         $this->assertMatchesSchema('Job', $item);
         $this->assertSame($expected, $item['extra_vars']);
         $this->assertStringNotContainsString(self::CONTRACT_ANSWER, (string)json_encode([$launched, $view, $item]));
+
+        // 2.12.0: every answer names the inventory the job was launched with.
+        $inventory = ['inventory_id' => (int)$template->inventory_id, 'inventory_name' => $template->inventory?->name];
+        $this->assertIsString($inventory['inventory_name']);
+        foreach (['POST' => $detail, 'GET /{id}' => $view, 'GET' => $item] as $operation => $data) {
+            $this->assertSame($inventory, array_intersect_key($data, $inventory), $operation);
+        }
     }
 
     /**

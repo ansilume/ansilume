@@ -14,10 +14,13 @@ use app\models\Project;
 use app\models\RunnerGroup;
 use app\models\User;
 use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\ApproverEligibility;
 use app\services\GatedJobTemplateLock;
 use app\services\JobLaunchInput;
 use app\services\JobLaunchService;
 use app\services\JobTemplateDeletionService;
+use app\services\JobTemplateGate;
+use app\services\JobTemplateInventoryOptions;
 use app\services\JobTemplateRuleAssignment;
 use app\services\LintService;
 use app\services\TriggerTokenService;
@@ -147,6 +150,8 @@ class JobTemplateController extends BaseController
         $model = $this->findModel($id);
         $this->requireChildView($model->project_id);
         $canChange = $this->mayChange($model);
+        // Who may change the template but not what it runs (a gated template) is told so, and why.
+        $lockedNotice = $canChange ? (new GatedJobTemplateLock())->notice((int)$this->currentUserId(), $model) : null;
         return $this->render('view', [
             'model' => $model,
             'attachedCredentials' => $this->credentialService()->describe($model),
@@ -154,12 +159,12 @@ class JobTemplateController extends BaseController
             // Only users who may change the template see its trigger card
             // and whom the trigger runs as.
             'canChange' => $canChange,
-            // Users who may change the template, but not what it runs (a
-            // gated template, no approval-rule.update), are told so.
-            'changeLocked' => $canChange && (new GatedJobTemplateLock())->appliesTo((int)$this->currentUserId(), $model),
-            // Everyone sees the template's approval rule; a link to it only
-            // for users who may open rules.
+            'lockedNotice' => $lockedNotice,
+            'changeLocked' => $lockedNotice !== null,
+            // Everyone sees the template's approval rule and its inventory's;
+            // a link to them only for users who may open rules.
             'canViewRules' => $this->userCan('approval-rule.view'),
+            'inventoryRule' => JobTemplateGate::of($model)->inventoryRule,
         ]);
     }
 
@@ -213,6 +218,7 @@ class JobTemplateController extends BaseController
                 $this->session()->setFlash('success', "Template \"{$model->name}\" created.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
+            $this->refuseLockedSave($model);
             return $this->render('form', $this->formData($model, $credentialIds));
         }
         return $this->render('form', $this->formData($model));
@@ -223,8 +229,8 @@ class JobTemplateController extends BaseController
      * a gated template runs (GatedJobTemplateLock): for everyone else a
      * change of the rule (ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED) or
      * of a gated template's columns other than name and description, or of
-     * its credential list (GatedJobTemplateLock::CHANGE_REFUSED), is a 403,
-     * and nothing is saved.
+     * its credential list, or giving it an inventory with a rule, is a 403
+     * (GatedJobTemplateLock::refusalOf()), and nothing is saved.
      */
     public function actionUpdate(int $id): Response|string
     {
@@ -243,12 +249,23 @@ class JobTemplateController extends BaseController
                 $this->session()->setFlash('success', "Template \"{$model->name}\" updated.");
                 return $this->redirect(['view', 'id' => $model->id]);
             }
-            if (GatedJobTemplateLock::refused($model)) {
-                throw new ForbiddenHttpException(GatedJobTemplateLock::CHANGE_REFUSED);
-            }
+            $this->refuseLockedSave($model);
             return $this->render('form', $this->formData($model, $credentialIds));
         }
         return $this->render('form', $this->formData($model));
+    }
+
+    /**
+     * A save that GatedJobTemplateLock refused is a 403 with its reason
+     * (refusalOf()); nothing was saved.
+     *
+     * @throws ForbiddenHttpException
+     */
+    private function refuseLockedSave(JobTemplate $model): void
+    {
+        if (GatedJobTemplateLock::refused($model)) {
+            throw new ForbiddenHttpException((string)GatedJobTemplateLock::refusalOf($model));
+        }
     }
 
     /**
@@ -431,8 +448,9 @@ class JobTemplateController extends BaseController
     }
 
     /**
-     * GET shows the launch form; POST launches. A job of a template with an
-     * approval rule waits for approval (an info flash says so); a refused
+     * GET shows the launch form; POST launches. A job of a template gated
+     * by its own approval rule or its inventory's waits for approval (the
+     * form's note and an info flash say so, launchApproval()); a refused
      * launch (JobLaunchRejectedException, such as too few eligible
      * approvers or a template deleted meanwhile, or a limit or verbosity
      * the job record would refuse, JobLaunchInput) shows the form again
@@ -468,7 +486,26 @@ class JobTemplateController extends BaseController
             'template' => $template,
             'attachedCredentials' => $this->credentialService()->describe($template),
             'warnings' => JobTemplateWarnings::forTemplate($template),
-        ]);
+        ] + $this->launchApproval($template, !\Yii::$app->request->isPost));
+    }
+
+    /**
+     * The launch page's note on the approval the job waits for and, before
+     * the click (a GET), why this user's launch could never be approved, by
+     * the launch's own check; after a POST the danger flash says why.
+     *
+     * @return array{launchNote: string|null, launchRefusal: string|null}
+     */
+    private function launchApproval(JobTemplate $template, bool $beforeTheClick): array
+    {
+        $gate = JobTemplateGate::of($template);
+        /** @var ApproverEligibility $eligibility */
+        $eligibility = \Yii::$app->get('approverEligibility');
+
+        return [
+            'launchNote' => $gate->launchNote(),
+            'launchRefusal' => $beforeTheClick ? $gate->refusal((int)$this->currentUserId(), $eligibility) : null,
+        ];
     }
 
     public function actionGenerateTriggerToken(int $id): Response
@@ -492,9 +529,6 @@ class JobTemplateController extends BaseController
     }
 
     /**
-     * @return array<string, mixed>
-     */
-    /**
      * @param list<mixed>|null $selectedCredentialIds submitted additional
      *        credentials to re-render; null shows the stored ones
      * @return array<string, mixed>
@@ -510,7 +544,7 @@ class JobTemplateController extends BaseController
             $projectQuery->andWhere($projectFilter);
         }
 
-        $inventoryQuery = Inventory::find()->with('project')->orderBy('name');
+        $inventoryQuery = Inventory::find()->with(['project', 'approvalRule'])->orderBy('name');
         $inventoryFilter = $checker->buildChildResourceFilter($userId, 'inventory.project_id');
         if ($inventoryFilter !== null) {
             $inventoryQuery->andWhere($inventoryFilter);
@@ -518,15 +552,18 @@ class JobTemplateController extends BaseController
         // The rule select only for users who may assign rules; the others see the rule as text.
         $ruleAssignment = new JobTemplateRuleAssignment();
         $canAssignRule = $ruleAssignment->mayAssign((int)$userId);
+        // A gated template, for a user who may not assign rules: the notice, and only name and description are enabled.
+        $lockedNotice = (new GatedJobTemplateLock())->notice((int)$userId, $model);
+        /** @var list<Inventory> $inventories the ones the user may see; those with a rule only for rule assigners */
+        $inventories = $inventoryQuery->all();
 
         return [
             'canAssignRule' => $canAssignRule,
             'approvalRuleOptions' => $canAssignRule ? $ruleAssignment->options() : [],
-            // A gated template, for a user who may not assign rules: only name and description are enabled.
-            'changeLocked' => !$canAssignRule && (new GatedJobTemplateLock())->appliesTo((int)$userId, $model),
+            'lockedNotice' => $lockedNotice,
+            'changeLocked' => $lockedNotice !== null,
             'model' => $model,
             'projects' => $projectQuery->all(),
-            'inventories' => $inventoryQuery->all(),
             'credentials' => Credential::find()->orderBy('name')->all(),
             'selectedCredentialIds' => $selectedCredentialIds !== null
                 ? array_map(static fn (mixed $id): int => is_numeric($id) ? (int)$id : 0, $selectedCredentialIds)
@@ -534,7 +571,7 @@ class JobTemplateController extends BaseController
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
             // From the stored template, not from a rejected submission.
             'warnings' => $model->isNewRecord ? [] : JobTemplateWarnings::forTemplate($this->findModel((int)$model->id)),
-        ];
+        ] + JobTemplateInventoryOptions::formParams($model, $inventories, $canAssignRule, $lockedNotice !== null);
     }
 
     private function findModel(int $id): JobTemplate

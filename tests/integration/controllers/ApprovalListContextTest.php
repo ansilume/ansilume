@@ -7,10 +7,12 @@ namespace app\tests\integration\controllers;
 use app\controllers\ApprovalController;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
 use app\services\ApprovalDecisionRefusedException;
+use app\services\runstate\ApprovalRequestContexts;
 use app\services\runstate\RequestContext;
 use app\services\runstate\Texts;
 use app\services\runstate\Viewer;
@@ -18,6 +20,8 @@ use app\tests\integration\CountsQueries;
 use app\tests\integration\services\runstate\RunStateFixtures;
 use app\tests\integration\TeamScopeFixtures;
 use yii\data\ActiveDataProvider;
+use yii\db\Query;
+use yii\helpers\Html;
 use yii\web\ForbiddenHttpException;
 use yii\web\Response;
 
@@ -28,6 +32,11 @@ use yii\web\Response;
  * scoping), and links only for one with the page's permission. The list
  * filters by status and reads what its requests are for in a number of
  * queries that does not grow with them. Real services throughout.
+ *
+ * Since 2.12.0 the list's Rule cell names the inventory of a request that
+ * the inventory of its job required, and the request page names the
+ * inventory the job was launched with (#approval-inventory) and what
+ * required the request (#approval-required-by).
  */
 class ApprovalListContextTest extends WebControllerTestCase
 {
@@ -35,6 +44,7 @@ class ApprovalListContextTest extends WebControllerTestCase
     use RunStateFixtures;
     use WaitingRunFixtures;
     use CountsQueries;
+    use InventoryRequestFixtures;
 
     /**
      * regression: the approvals list named only "Job #N" for a workflow step:
@@ -346,7 +356,263 @@ class ApprovalListContextTest extends WebControllerTestCase
         }
     }
 
+    // -- What required a request, and the inventory of its job (2.12.0) ---------------
+
+    /**
+     * The Rule cell names the inventory of a request that the inventory of
+     * its job required, by the inventory's name at launch: not that of a
+     * request its job template's own rule required, although that job was
+     * launched with an inventory too, nor that of an approval step's
+     * request. A rule that no longer exists stays a dash. The cell stays
+     * the fourth column.
+     */
+    public function testTheRuleCellNamesTheInventoryOnlyOfARequestThatTheInventoryRequired(): void
+    {
+        $admin = $this->createUserWithRole('rule-cell-admin', 'admin');
+        $launcher = $this->createUserWithRole('rule-cell-launcher', 'operator');
+        $rule = $this->namedRule($admin, 'Change board');
+        $byInventory = $this->inventoryGatedRequest($launcher, $rule, 'web-prod');
+        $byTemplate = $this->templateGatedRequest($launcher, $rule, 'db-prod');
+        $byStep = $this->requiredByApprovalStep($this->approvalWait($admin, 'Rule cell workflow', 'Sign-off', $rule)['request']);
+        $ruleGone = $this->inventoryGatedRequest($launcher, $this->namedRule($admin, 'Gone board'), 'app-prod')['request'];
+        ApprovalRequest::updateAll(['approval_rule_id' => null], ['id' => $ruleGone->id]);
+        $byInventory['inventory']->name = 'web-prod-renamed';
+        $byInventory['inventory']->save(false);
+        $this->loginAs($admin);
+
+        $xpath = $this->xpathOf($this->listPage());
+
+        $this->assertSame('Change board (of inventory web-prod)', $this->ruleCellOf($xpath, $byInventory['request']));
+        $this->assertSame(sprintf(Texts::RULE_OF_INVENTORY, 'Change board', 'web-prod'), $this->ruleCellOf($xpath, $byInventory['request']));
+        $this->assertSame('Change board', $this->ruleCellOf($xpath, $byTemplate['request']), 'the job template required it');
+        $this->assertSame('Change board', $this->ruleCellOf($xpath, $byStep), 'an approval step required it');
+        $this->assertSame(RequestContext::UNKNOWN, $this->ruleCellOf($xpath, $ruleGone), 'its rule no longer exists');
+        $cells = self::cellsOf(self::rowLinkingTo($xpath, '/approval/view?id=' . $byInventory['request']->id));
+        $this->assertSame(
+            ['#' . $byInventory['job']->id, sprintf(Texts::FOR_JOB_TEMPLATE, $byInventory['template']->name), 'Change board (of inventory web-prod)'],
+            array_slice($cells, 1, 3),
+            'Job, For and Rule keep their columns'
+        );
+    }
+
+    /**
+     * The request page names the inventory the job was launched with, right
+     * after the job, and what required the request, right after the rule:
+     * the inventory, the job template or a workflow approval step.
+     */
+    public function testTheRequestPageNamesTheInventoryAndWhatRequiredTheRequest(): void
+    {
+        $admin = $this->createUserWithRole('required-admin', 'admin');
+        $launcher = $this->createUserWithRole('required-launcher', 'operator');
+        $rule = $this->namedRule($admin, 'Change board');
+        $byInventory = $this->inventoryGatedRequest($launcher, $rule, 'web-prod');
+        $byTemplate = $this->templateGatedRequest($launcher, $rule, 'db-prod');
+        $byStep = $this->requiredByApprovalStep($this->approvalWait($admin, 'Required workflow', 'Sign-off', $rule)['request']);
+        $this->loginAs($admin);
+
+        $cases = [
+            'inventory' => [$byInventory['request'], 'Inventory', 'web-prod', ['/inventory/view?id=' . $byInventory['inventory']->id]],
+            'job template' => [$byTemplate['request'], 'Job template', 'db-prod', ['/inventory/view?id=' . $byTemplate['inventory']->id]],
+            'approval step' => [$byStep, 'Workflow approval step', '—', []],
+        ];
+        foreach ($cases as $case => [$request, $requiredBy, $inventory, $links]) {
+            $xpath = $this->xpathOf($this->requestPage($request));
+
+            $this->assertSame(
+                ['Status', 'For', 'Job', 'Inventory', 'Launched by', 'Rule', 'Required by', 'Approvals', 'Rejections', 'Requested', 'Expires', 'Resolved'],
+                $this->requestPageHeaders($xpath),
+                $case
+            );
+            $this->assertSame($requiredBy, self::textOf($this->elementById($xpath, 'approval-required-by')), $case);
+            $inventoryCell = $this->elementById($xpath, 'approval-inventory');
+            $this->assertSame($inventory, self::textOf($inventoryCell), $case);
+            $this->assertSame($links, $this->hrefsIn($inventoryCell), $case);
+        }
+        $this->assertSame(
+            [Texts::INVENTORY_LABEL, Texts::REQUIRED_BY_LABEL],
+            ['Inventory', 'Required by']
+        );
+        $this->assertSame(
+            ['Job template', 'Inventory', 'Workflow approval step'],
+            array_map([ApprovalRequest::class, 'requiredByLabel'], ApprovalRequest::REQUIRED_BY_VALUES)
+        );
+    }
+
+    /**
+     * The inventory as launched: renamed since, it keeps its name at launch;
+     * once deleted, it is named and marked deleted, without a link.
+     */
+    public function testTheRequestPageNamesTheInventoryAsLaunched(): void
+    {
+        $admin = $this->createUserWithRole('launched-admin', 'admin');
+        $launcher = $this->createUserWithRole('launched-launcher', 'operator');
+        $wait = $this->inventoryGatedRequest($launcher, $this->namedRule($admin, 'Change board'), 'web-prod');
+        $wait['inventory']->name = 'web-prod-renamed';
+        $wait['inventory']->save(false);
+        $this->loginAs($admin);
+
+        $renamed = $this->elementById($this->xpathOf($this->requestPage($wait['request'])), 'approval-inventory');
+        $this->assertSame('web-prod', self::textOf($renamed));
+        $link = $renamed?->getElementsByTagName('a')->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $link);
+        $this->assertSame((string)$wait['inventory']->id, $link->getAttribute('data-inventory-id'));
+
+        $this->moveTemplateTo($wait['template'], $this->inventoryNamed((int)$admin->id, 'db-prod'));
+        $this->assertSame(1, Inventory::deleteAll(['id' => $wait['inventory']->id]));
+        $deleted = $this->elementById($this->xpathOf($this->requestPage($wait['request'])), 'approval-inventory');
+
+        $this->assertSame('web-prod (deleted)', self::textOf($deleted));
+        $this->assertSame('web-prod <span class="text-muted">(deleted)</span>', trim(self::innerHtmlOf($deleted)));
+        $this->assertSame([], $this->hrefsIn($deleted));
+    }
+
+    /**
+     * Before m000088 (or with a schema cached from before it) a request has
+     * no required_by: the page says nothing required it, and still names
+     * the inventory. A page rendered without a context takes what required
+     * the request from the request itself, and names no inventory.
+     */
+    public function testWithoutRequiredByOrAContextTheRequestPageStillRenders(): void
+    {
+        $admin = $this->createUserWithRole('legacy-admin', 'admin');
+        $launcher = $this->createUserWithRole('legacy-launcher', 'operator');
+        $wait = $this->inventoryGatedRequest($launcher, $this->namedRule($admin, 'Change board'), 'web-prod');
+        $this->loginAs($admin);
+        $ctrl = $this->makeController();
+        $ctrl->actionView((int)$wait['request']->id);
+        $old = new class () extends ApprovalRequest {
+            public function attributes(): array
+            {
+                return array_values(array_diff(parent::attributes(), ['required_by']));
+            }
+        };
+        $row = (new Query())->from(ApprovalRequest::tableName())->where(['id' => $wait['request']->id])->one();
+        $this->assertIsArray($row);
+        $old::populateRecord($old, $row);
+        /** @var ApprovalRequestContexts $contexts */
+        $contexts = \Yii::$app->get('approvalRequestContexts');
+        $ctrl->capturedParams['model'] = $old;
+        $ctrl->capturedParams['context'] = $contexts->forRequests([$old], Viewer::current())[(int)$old->id] ?? null;
+
+        $before = $this->xpathOf($this->render($ctrl, 'view'));
+
+        $this->assertSame('—', self::textOf($this->elementById($before, 'approval-required-by')));
+        $this->assertSame('web-prod', self::textOf($this->elementById($before, 'approval-inventory')));
+
+        $ctrl->capturedParams['model'] = $wait['request'];
+        unset($ctrl->capturedParams['context']);
+        $withoutContext = $this->xpathOf($this->render($ctrl, 'view'));
+
+        $this->assertSame('Inventory', self::textOf($this->elementById($withoutContext, 'approval-required-by')));
+        $this->assertSame('—', self::textOf($this->elementById($withoutContext, 'approval-inventory')));
+        $this->assertSame(RequestContext::UNKNOWN, self::textOf($this->elementById($withoutContext, 'approval-for')));
+    }
+
+    public function testInventoryAndRuleNamesAreEncodedOnTheListAndTheRequestPage(): void
+    {
+        $evil = '<img src=x onerror=alert(1)> "q" \'a\'';
+        $admin = $this->createUserWithRole('enc-admin', 'admin');
+        $launcher = $this->createUserWithRole('enc-launcher', 'operator');
+        $wait = $this->inventoryGatedRequest($launcher, $this->namedRule($admin, $evil . ' rule'), $evil);
+        $this->loginAs($admin);
+
+        $list = $this->listPage();
+        $page = $this->requestPage($wait['request']);
+
+        foreach (['the list' => $list, 'the request page' => $page] as $case => $html) {
+            $this->assertStringNotContainsString('<img src=x', $html, $case);
+        }
+        $listXpath = $this->xpathOf($list);
+        $this->assertSame(sprintf(Texts::RULE_OF_INVENTORY, $evil . ' rule', $evil), $this->ruleCellOf($listXpath, $wait['request']));
+        $this->assertStringContainsString(
+            '<td data-approval-rule>' . Html::encode(sprintf(Texts::RULE_OF_INVENTORY, $evil . ' rule', $evil)) . '</td>',
+            $list
+        );
+        $this->assertSame($evil, self::textOf($this->elementById($this->xpathOf($page), 'approval-inventory')));
+        $this->assertStringContainsString('data-inventory-id="' . $wait['inventory']->id . '">' . Html::encode($evil) . '</a>', $page);
+    }
+
+    /**
+     * The inventories of the listed requests are read for the whole page at
+     * once: the list costs as many queries with 12 requests whose jobs were
+     * launched with 12 inventories as with 2, for an admin and for a team
+     * member.
+     */
+    public function testTheListReadsTheInventoriesOfItsRequestsInAConstantNumberOfQueries(): void
+    {
+        $s = $this->teamScope();
+        $rule = $this->ruleOf((int)$s['admin']->id, [$s['member'], $s['admin']]);
+        $this->inventoryAndTemplateRequests($s['admin'], $rule, (int)$s['own']->project_id, 1);
+        $before = [];
+        foreach (['admin', 'member'] as $key) {
+            $this->loginAs($s[$key]);
+            $this->listPage();
+            $before[$key] = $this->queriesOf(fn (): string => $this->listPage());
+        }
+
+        $this->inventoryAndTemplateRequests($s['admin'], $rule, (int)$s['own']->project_id, 5);
+
+        foreach (['admin', 'member'] as $key) {
+            $this->loginAs($s[$key]);
+            $html = '';
+            $this->assertSame($before[$key], $this->queriesOf(function () use (&$html): void {
+                $html = $this->listPage();
+            }), $key);
+            $this->assertSame(6, substr_count($html, ' (of inventory cost-'), $key . ': every inventory request names its inventory');
+        }
+    }
+
     // -- Helpers ----------------------------------------------------------------------
+
+    private function namedRule(User $admin, string $name): ApprovalRule
+    {
+        $rule = $this->ruleOf((int)$admin->id, [$admin]);
+        $rule->name = $name;
+        $rule->save(false);
+
+        return $rule;
+    }
+
+    private function ruleCellOf(\DOMXPath $xpath, ApprovalRequest $request): string
+    {
+        return self::textOf($xpath->query(sprintf('//tr[@data-request-id="%d"]/td[@data-approval-rule]', $request->id))->item(0));
+    }
+
+    private function elementById(\DOMXPath $xpath, string $id): ?\DOMElement
+    {
+        $nodes = $xpath->query(sprintf('//*[@id="%s"]', $id));
+        $this->assertNotFalse($nodes);
+        $this->assertSame(1, $nodes->length, '#' . $id);
+        $node = $nodes->item(0);
+
+        return $node instanceof \DOMElement ? $node : null;
+    }
+
+    /**
+     * @return list<string> the row headers of the request page's details table, in order
+     */
+    private function requestPageHeaders(\DOMXPath $xpath): array
+    {
+        $headers = [];
+        foreach ($xpath->query('(//table)[1]//tr/th') ?: [] as $th) {
+            $headers[] = self::textOf($th);
+        }
+
+        return $headers;
+    }
+
+    /**
+     * @return list<string> the targets of the links in $element
+     */
+    private function hrefsIn(?\DOMElement $element): array
+    {
+        $hrefs = [];
+        foreach ($element?->getElementsByTagName('a') ?? [] as $link) {
+            $hrefs[] = $link->getAttribute('href');
+        }
+
+        return $hrefs;
+    }
 
     /**
      * $rounds times: a request of an approval step of a workflow the member

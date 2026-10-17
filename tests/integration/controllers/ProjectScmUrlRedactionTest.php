@@ -12,6 +12,7 @@ use app\models\ProjectSyncLog;
 use app\models\TeamProject;
 use app\models\User;
 use app\services\ProjectService;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 use yii\base\Module;
 
@@ -31,6 +32,7 @@ use yii\base\Module;
 class ProjectScmUrlRedactionTest extends WebControllerTestCase
 {
     use RendersRealViews;
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     /** Test values, not secrets. */
@@ -38,15 +40,11 @@ class ProjectScmUrlRedactionTest extends WebControllerTestCase
     private const URL = 'https://deploy:' . self::TOKEN . '@git.example.com/org/playbooks.git';
     private const SHOWN = 'https://***@git.example.com/org/playbooks.git';
 
-    /** @var mixed the project service the test replaced */
-    private mixed $originalProjectService = null;
-
     protected function setUp(): void
     {
         parent::setUp();
-        $this->originalProjectService = \Yii::$app->getComponents(true)['projectService'] ?? null;
         // An update of a git project queues a sync: here it pushes nothing.
-        \Yii::$app->set('projectService', new class extends ProjectService {
+        $this->swapComponent('projectService', new class extends ProjectService {
             public function queueSync(Project $project): void
             {
             }
@@ -60,7 +58,7 @@ class ProjectScmUrlRedactionTest extends WebControllerTestCase
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('projectService', $this->originalProjectService);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

@@ -26,8 +26,9 @@ use yii\db\BaseActiveRecord;
  * racing the template's deletion (JobLaunchService):
  * - too few eligible approvers besides the launcher, or a rule that no
  *   longer exists, refuse the launch before anything is written;
- * - the launch transaction locks the template's row first and refuses a
- *   template deleted since it was loaded (or whose rule changed);
+ * - the launch transaction locks the template's row first, then its
+ *   inventory's, and refuses a template deleted since it was loaded (or
+ *   whose rule changed);
  * - the job and its pending request are written in that one transaction;
  *   approval.requested is announced after the commit.
  */
@@ -79,7 +80,13 @@ class JobLaunchServiceApprovalTest extends DbTestCase
         $requested = $this->onlyAuditOf(AuditLog::ACTION_APPROVAL_REQUESTED, 'approval_request', (int)$request->id);
         $this->assertLessThan((int)$requested->id, (int)$launched->id, 'job.launched first, then approval.requested');
         $this->assertSame(
-            ['job_id' => (int)$job->id, 'rule_id' => (int)$rule->id, 'rule_name' => (string)$rule->name],
+            [
+                'job_id' => (int)$job->id,
+                'rule_id' => (int)$rule->id,
+                'rule_name' => (string)$rule->name,
+                'required_by' => ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE,
+                'inventory_id' => (int)$template->inventory_id,
+            ],
             $this->contextOf($requested)
         );
         $this->assertCount(1, $this->notifications->payloadsOf(NotificationTemplate::EVENT_APPROVAL_REQUESTED));
@@ -112,12 +119,21 @@ class JobLaunchServiceApprovalTest extends DbTestCase
 
         $trace = implode("\n", $statements);
         $savepoint = $this->statementIndex($statements, '~^SAVEPOINT LEVEL\d+$~');
-        $lock = $this->statementIndex($statements, '~^SELECT `id`, `deleted_at`, `approval_rule_id` FROM `job_template` WHERE `id` = ' . $template->id . ' FOR UPDATE$~');
+        $lock = $this->statementIndex(
+            $statements,
+            '~^SELECT `id`, `deleted_at`, `approval_rule_id`, `inventory_id` FROM `job_template` WHERE `id` = ' . $template->id . ' FOR UPDATE$~'
+        );
+        $inventoryLock = $this->statementIndex(
+            $statements,
+            '~^SELECT \* FROM `inventory` WHERE `id` IN \(' . $template->inventory_id . '\) ORDER BY `id` LOCK IN SHARE MODE$~'
+        );
         $jobInsert = $this->statementIndex($statements, '~^INSERT INTO `job`~');
         $requestInsert = $this->statementIndex($statements, '~^INSERT INTO `approval_request`~');
         $release = $this->statementIndex($statements, '~^RELEASE SAVEPOINT LEVEL\d+$~');
         $audit = $this->statementIndex($statements, '~^INSERT INTO `audit_log`~');
         $this->assertSame($savepoint + 1, $lock, "the template lock opens the transaction:\n" . $trace);
+        $this->assertSame($lock + 1, $inventoryLock, "the inventory's share lock is the next statement:\n" . $trace);
+        $this->assertLessThan($jobInsert, $inventoryLock);
         $this->assertLessThan($requestInsert, $jobInsert);
         $this->assertLessThan($release, $requestInsert, "the request is part of the launch transaction:\n" . $trace);
         $this->assertLessThan($audit, $release, "the audit follows the commit:\n" . $trace);

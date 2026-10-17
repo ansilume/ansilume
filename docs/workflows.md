@@ -19,9 +19,12 @@ what to do when something goes wrong, in
     approve, and fails when the request is rejected, times out or is
     canceled;
   - a **pause step** waits until someone resumes the run.
-- **Gated job step**: a job step whose job template has an approval rule.
-  Its job waits for an approval before it runs; the steps table marks it
-  `needs approval`.
+- **Gated job step**: a job step whose job template has an approval rule,
+  its own or its inventory's. Its job waits for an approval before it
+  runs; the steps table marks it `needs approval`, titled
+  `Its job template has the approval rule "deploy-prod": the job waits for an approval before it runs.`
+  or
+  `Its job template's inventory has the approval rule "deploy-prod": the job waits for an approval before it runs.`
 - **Position**: a step's place in the list, from 1 to the number of steps.
   The list is the order runs take the steps: a run starts with position 1,
   the **start step**, marked `Start`.
@@ -41,8 +44,8 @@ the steps table:
   only to admins (see [Who may do what](#who-may-do-what)).
 - **Job Template** for a job step, **Approval Rule** for an approval step.
   Users without `approval-rule.update` are offered only job templates
-  without an approval rule, and read
-  `Job templates with an approval rule are not listed: only admins may add a job step for them.`
+  without an approval rule, of their own or of their inventory, and read
+  `Job templates with an approval rule, or on an inventory with one, are not listed: only admins may add a job step for them.`
 - **Position**: where the step goes. `At the end (after 5. Rollback)` is the
   default; `At the start (runs will start with this step)` and, for every
   step but the last, `After 3. Deploy` put it elsewhere. A line below the
@@ -120,7 +123,11 @@ reaches it fails there:
 `job template ID 12 no longer exists · runs fail here`,
 `no job template · runs fail here`,
 `approval rule ID 9 no longer exists · runs fail here`,
-`no approval rule · runs fail here` or
+`no approval rule · runs fail here`,
+`job template and inventory have different approval rules · runs fail here`
+(a launch waits for one rule only, see
+[updating.md](updating.md#after-updating-from-2111-or-older-approval-rules-for-inventories))
+or
 `unknown step type · runs fail here`.
 
 Each step stores a step order, which the API lists as `step_order`: an
@@ -413,11 +420,20 @@ role grants, and manage teams, their members and their projects; with
 LDAP, the directory groups of a user give their roles. This is a known
 limit of 2.11.0 (see
 [updating.md](updating.md#after-updating-from-2101-or-older-workflow-steps-and-waiting-runs)).
+Who may see the job follows the project of its job template, also when the
+rule is that of the job template's inventory: the inventory's own project
+does not count.
 
 Approved, an approval step goes on with its On Success branch, and a gated
 job step's job runs. Rejected, timed out or canceled, the gate is closed:
 the run follows only On Failure, and ends as failed when it is empty. A
-rule's timeout is applied by the maintenance run, every minute. Once
+rule's timeout is applied by the maintenance run, every minute. A gated
+job step whose job was queued before its job template or inventory got
+its rule never waited for an approval: a runner fails that job before it
+runs (see
+[troubleshooting.md](troubleshooting.md#job-aborted-before-execution-the-job-was-not-approved)),
+and the run goes on as after a failed job, with On Failure, or with Always
+where the step has one. Once
 decided, the step's row on the run page says how:
 `Approved by alice at 14:05:40.`, `Rejected by bob at 14:05:40.` or
 `Approved by its timeout at 14:05:40, without a decision.`, and the comment
@@ -445,7 +461,11 @@ holds the request: its page reads
   run, such as `Release web › Release approval (Workflow Job #12)`, and an
   Expires column; the filter reads All and each status. A gated job step's
   request names the workflow only for users who may view the workflow;
-  others read `Deploy web (job template)`.
+  others read `Deploy web (job template)`. The Rule column names the
+  inventory of a request that the rule of a job template's inventory
+  required, such as `deploy-prod (of inventory web-prod)`, as does
+  Pending Approvals on the dashboard; the request's page says so under
+  **Required by**.
 - **The job page**: a job that waits for approval says
   `This job waits for Approval Request #18.`; the details name the request
   and the run (`#12, step "Deploy"`). The jobs list names an approval
@@ -481,16 +501,22 @@ role `viewer` as well:
 Changing, launching, resuming and canceling a workflow also need operator
 access to the project of every job step; seeing it, view access (team
 scoping). Approval gates are for admins (`approval-rule.update`): adding an
-approval step, giving a job step a job template with an approval rule, also
-by editing it, and every change of the steps of a workflow that has an
-approval step or a gated job step. Others read
+approval step, giving a job step a job template with an approval rule, of
+its own or of its inventory, also by editing it, and every change of the
+steps of a workflow that has an approval step or a gated job step. Others
+read
 `Only admins may add approval steps: that needs approval-rule.update.`,
 `Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.`,
-`This workflow has an approval step: only admins may change its steps (approval-rule.update).`
-or
+`Only admins may add a job step whose job template's inventory has an approval rule: that needs approval-rule.update.`,
+`This workflow has an approval step: only admins may change its steps (approval-rule.update).`,
 `This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).`
+or
+`This workflow has a job step whose job template's inventory has an approval rule: only admins may change its steps (approval-rule.update).`
 They may still rename such a workflow, launch it and manage its trigger
-token.
+token. A launch is refused before its run exists for the first gated step
+in run order whose approval could never be granted, or whose job template
+and inventory have different approval rules:
+`Step "Deploy": its job template and its inventory have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule.`
 
 ## API
 
@@ -614,7 +640,10 @@ know answers `422`, such as
 `status must be one of: pending, approved, rejected, timed_out, canceled.`
 Every approval request has `workflow_job_id`, `workflow_job_step_id`,
 `workflow_template_id` and `workflow_step_name`: `null` for a request
-outside a workflow, and for callers who may not view its workflow. Every
+outside a workflow, and for callers who may not view its workflow. Since
+2.12.0 it also says what required it, `required_by` (`job_template`,
+`inventory` or `approval_step`), and names the inventory its job was
+launched with, `inventory_id` and `inventory_name`. Every
 approval request also answers `decisions`: every vote on it in the order
 cast, with `user_id`, `username`, `decision`, `comment` (`null` without one)
 and `created_at`. These are the votes behind a step's

@@ -718,6 +718,7 @@ class WorkflowStepChangeSummaryTest extends TestCase
             $template->id = 100 + $id;
             $template->approval_rule_id = null;
             $template->populateRelation('approvalRule', null);
+            $template->populateRelation('inventory', null);
         }
         $rule = null;
         if ($type === WorkflowStep::TYPE_APPROVAL) {

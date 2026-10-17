@@ -38,10 +38,18 @@ const UNKNOWN_TOKEN = '0123456789abcdef'.repeat(4);
 let jobToken = '';
 let workflowToken = '';
 
+/**
+ * The ID of the job a job trigger launched. The answer names the job and its
+ * status (controllers/TriggerController.php): e2e-secret-template has no
+ * approval rule, nor has its inventory, so the job waits for a runner,
+ * queued; a gated one would wait for approval (pending_approval,
+ * approvals/inventory-gate.spec.ts).
+ */
 async function launchedJobId(response: APIResponse): Promise<number> {
   expect(response.status(), await response.text()).toBe(201);
-  const body = (await response.json()) as { job_id?: number };
+  const body = (await response.json()) as { job_id?: number; status?: string };
   expect(body.job_id).toBeGreaterThan(0);
+  expect(body).toEqual({ job_id: body.job_id, status: 'queued' });
   return body.job_id ?? 0;
 }
 

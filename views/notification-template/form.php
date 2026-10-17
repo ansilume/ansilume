@@ -163,7 +163,7 @@ $allEvents = array_keys(NotificationTemplate::eventLabels());
     <?= $form->field($model, 'subject_template')->textInput([
         'maxlength' => 512,
         'class' => 'form-control font-monospace',
-    ])->hint('Variables: {{ event }}, {{ severity }}, {{ job.id }}, {{ job.status }}, {{ job.url }}, {{ template.name }}, {{ project.name }}, {{ launched_by }}, {{ runner.name }}, {{ workflow.id }}, {{ approval.rule_name }}, {{ schedule.name }}, {{ timestamp }}') ?>
+    ])->hint(Html::encode('Variables: {{ event }}, {{ severity }}, {{ job.id }}, {{ job.status }}, {{ job.url }}, {{ job.inventory_name }}, {{ template.name }}, {{ project.name }}, {{ launched_by }}, {{ runner.name }}, {{ workflow.id }}, {{ approval.rule_name }}, {{ approval.required_by }}, {{ schedule.name }}, {{ timestamp }}')) ?>
 
     <?= $form->field($model, 'body_template')->textarea([
         'rows' => 6,

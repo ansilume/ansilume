@@ -3,6 +3,8 @@ import { expectForbidden } from '../../lib/helpers';
 import { asAdmin, idWhere, indexRows } from '../../lib/scoping';
 import { PASSWORD_FIELD, PLACEHOLDER, SECRET_SCHEDULE, SEEDED_SCHEDULE_ANSWER, TEXT_FIELD, expectNotInPage } from '../../lib/survey-secrets';
 import { DELETED_TEMPLATE_SCHEDULE, flash, scheduleEnableRefused, scheduleRow, toggleOpenSchedule } from '../../lib/approvals';
+import { HOST_INVENTORY, HOST_RULE, HOST_SCHEDULE } from '../../lib/inventories';
+import { SCHEDULE_NOTE_INVENTORY } from '../../lib/job-templates';
 
 /**
  * commands/E2eUnusablePasswordNameSeeder.php: SCHEDULE, PASSWORD_FIELD (a
@@ -80,5 +82,14 @@ test.describe('Schedules RBAC', () => {
     await page.goto(`/schedule/view?id=${id}`);
     await expect(page.locator('#page-content dl')).toContainText('Disabled');
     await expect(page.locator('#page-content dl')).not.toContainText('Enabled');
+  });
+
+  // commands/E2eInventoryGateSeeder.php: e2e-admin's disabled schedule of
+  // e2e-host-gated-template, which has no rule of its own and is gated by the
+  // rule of its inventory; its project has no team, so e2e-operator sees it.
+  test('operator sees on the schedule of a template gated through its inventory that each run waits for approval', async ({ page }) => {
+    const { id } = await scheduleRow(page, HOST_SCHEDULE);
+    await page.goto(`/schedule/view?id=${id}`);
+    await expect(page.locator('#schedule-approval')).toHaveText(SCHEDULE_NOTE_INVENTORY(HOST_RULE, HOST_INVENTORY));
   });
 });

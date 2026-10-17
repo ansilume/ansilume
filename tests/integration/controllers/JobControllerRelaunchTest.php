@@ -6,7 +6,10 @@ namespace app\tests\integration\controllers;
 
 use app\components\SurveySecrets;
 use app\controllers\JobController;
+use app\models\ApprovalRequest;
+use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\User;
@@ -15,7 +18,9 @@ use yii\web\ForbiddenHttpException;
 use yii\web\Response;
 
 /**
- * Re-launch of a job from the job page, with its password answers.
+ * Re-launch of a job from the job page, with its password answers, and what
+ * its flash says: queued (JobController::FLASH_RELAUNCHED), or waiting for
+ * approval (FLASH_RELAUNCHED_WAITING).
  *
  * Regression: re-launch copied the original job's merged extra vars, so the
  * plaintext password answers of the original launch were launched again,
@@ -64,7 +69,7 @@ class JobControllerRelaunchTest extends WebControllerTestCase
         $ctrl->actionRelaunch((int)$original->id);
 
         $job = $this->relaunchOf($original);
-        $this->assertSame("Re-launched as Job #{$job->id}.", $this->flash('success'));
+        $this->assertSame(sprintf(JobController::FLASH_RELAUNCHED, $job->id), $this->flash('success'));
         $this->assertSame(['view', 'id' => $job->id], $ctrl->capturedRedirect);
         $this->assertSame(
             [self::SURVEY_TEXT_FIELD => 'prod', self::SURVEY_PASSWORD_FIELD => SurveySecrets::PLACEHOLDER],
@@ -219,6 +224,67 @@ class JobControllerRelaunchTest extends WebControllerTestCase
         $this->assertSame(RelaunchService::ANSWERS_UNDECRYPTABLE, $this->flash('danger'));
         $this->assertSame(['view', 'id' => (int)$original->id], $ctrl->capturedRedirect);
         $this->assertNoRelaunchOf($original);
+    }
+
+    // -- What the flash says -------------------------------------------------------
+
+    /**
+     * A re-launch whose job is queued says so, in the words the flash had
+     * before 2.12.0.
+     */
+    public function testAQueuedRelaunchSaysItWasRelaunched(): void
+    {
+        $original = $this->createJob((int)$this->plainTemplate()->id, (int)$this->user->id, Job::STATUS_SUCCEEDED);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionRelaunch((int)$original->id);
+
+        $job = $this->relaunchOf($original);
+        $this->assertSame(Job::STATUS_QUEUED, $job->status);
+        $this->assertSame(['success' => "Re-launched as Job #{$job->id}."], \Yii::$app->session->getAllFlashes());
+        $this->assertSame(sprintf(JobController::FLASH_RELAUNCHED, $job->id), $this->flash('success'));
+        $this->assertSame(['view', 'id' => $job->id], $ctrl->capturedRedirect);
+    }
+
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function gateProvider(): array
+    {
+        return [
+            'the job template\'s own rule' => ['job_template'],
+            'the rule of the template\'s inventory' => ['inventory'],
+        ];
+    }
+
+    /**
+     * regression: a re-launch whose new job waits for approval flashed the
+     * success "Re-launched as Job #N." of a queued job, although the job
+     * does not run before it is approved. Since 2.12.0 an inventory's rule
+     * makes many re-launches wait; the launch from the template page has
+     * always said "is waiting for approval" (info).
+     *
+     * @dataProvider gateProvider
+     */
+    public function testRegressionARelaunchThatWaitsForApprovalSaidItWasRelaunchedLikeAQueuedJob(string $gatedBy): void
+    {
+        $template = $this->plainTemplate();
+        $original = $this->createJob((int)$template->id, (int)$this->user->id, Job::STATUS_SUCCEEDED);
+        $this->gate($template, $gatedBy);
+
+        $ctrl = $this->makeController();
+        $ctrl->actionRelaunch((int)$original->id);
+
+        $job = $this->relaunchOf($original);
+        $this->assertSame(Job::STATUS_PENDING_APPROVAL, $job->status, 'the new job waits for approval');
+        $flashes = \Yii::$app->session->getAllFlashes();
+        $this->assertArrayNotHasKey('success', $flashes, 'a job that waits for approval was not re-launched like a queued one');
+        $this->assertSame(['info' => "Re-launched as Job #{$job->id}, which is waiting for approval."], $flashes);
+        $this->assertSame(sprintf(JobController::FLASH_RELAUNCHED_WAITING, $job->id), $this->flash('info'));
+        $this->assertSame(['view', 'id' => $job->id], $ctrl->capturedRedirect, 'on to the new job');
+        $request = ApprovalRequest::findOne(['job_id' => $job->id]);
+        $this->assertNotNull($request);
+        $this->assertSame($gatedBy, $request->requiredBy());
     }
 
     // -- What the job page's button requires --------------------------------------
@@ -394,6 +460,30 @@ class JobControllerRelaunchTest extends WebControllerTestCase
             (int)$this->createRunnerGroup($userId)->id,
             $userId
         );
+    }
+
+    /**
+     * Give $template an approval rule ($gatedBy job_template), or its
+     * inventory one (inventory), as an admin's save stores it. Its approver
+     * is an operator, who may decide, so the launch can be approved.
+     */
+    private function gate(JobTemplate $template, string $gatedBy): void
+    {
+        $approver = $this->createUser('relaunch-approver');
+        $this->assignRole((int)$approver->id, 'operator');
+        $rule = $this->createApprovalRule(
+            (int)$this->user->id,
+            ApprovalRule::APPROVER_TYPE_USERS,
+            (string)json_encode(['user_ids' => [(int)$approver->id]])
+        );
+        if ($gatedBy === ApprovalRequest::REQUIRED_BY_INVENTORY) {
+            // approval_rule_id is no mass-assigned attribute of an inventory.
+            $this->assertSame(1, Inventory::updateAll(['approval_rule_id' => (int)$rule->id], ['id' => $template->inventory_id]));
+
+            return;
+        }
+        $template->approval_rule_id = (int)$rule->id;
+        $template->save(false);
     }
 
     /**

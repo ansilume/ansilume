@@ -15,7 +15,9 @@ use app\tests\integration\TeamScopeFixtures;
 
 /**
  * GET /api/v1/jobs: the cost of a page of jobs does not grow with the jobs
- * on it. artifact_count is counted for the whole page in one query.
+ * on it. artifact_count is counted for the whole page in one query, and the
+ * inventories the jobs were launched with (inventory_id, inventory_name)
+ * are read for the whole page in one query.
  */
 final class JobsListQueriesTest extends WebControllerTestCase
 {
@@ -50,6 +52,42 @@ final class JobsListQueriesTest extends WebControllerTestCase
             $counts[$job['id']] = $job['artifact_count'];
         }
         $this->assertSame([(int)$fewJobs[1]->id => 0, (int)$fewJobs[0]->id => 2], $counts, 'newest first, each with its own count');
+    }
+
+    /**
+     * The inventories the jobs were launched with, as their runner payloads
+     * record them, are read for the page in one query
+     * (JobInventory::ofPayloads()): a page of 2 jobs and a page of 12, each
+     * launched with an inventory of its own, cost the same, and each job
+     * names its own inventory, by its name at launch.
+     */
+    public function testTheListReadsTheInventoriesOfItsJobsInOneQuery(): void
+    {
+        $admin = $this->createUserWithRole('jobs-list-admin', 'admin');
+        $template = $this->template((int)$admin->id);
+        $few = $this->createUser('jobs-list-few');
+        $many = $this->createUser('jobs-list-many');
+        $fewJobs = $this->jobsOnInventoriesOfTheirOwn($template, $few, 2);
+        $this->jobsOnInventoriesOfTheirOwn($template, $many, 12);
+        $this->loginAs($admin);
+        $this->list($few);
+
+        $this->assertSame(
+            $this->queriesOf(fn () => $this->list($few)),
+            $this->queriesOf(fn () => $this->list($many)),
+            'a page of 2 jobs and a page of 12'
+        );
+        $this->assertCount(12, $this->list($many)['data']);
+        $listed = [];
+        foreach ($this->list($few)['data'] as $job) {
+            $this->assertIsArray($job);
+            $listed[$job['id']] = [$job['inventory_id'], $job['inventory_name']];
+        }
+        $expected = [];
+        foreach (array_reverse($fewJobs) as [$job, $inventoryId, $name]) {
+            $expected[(int)$job->id] = [$inventoryId, $name];
+        }
+        $this->assertSame($expected, $listed, 'newest first, each with its own inventory');
     }
 
     // -- Helpers --------------------------------------------------------------
@@ -88,6 +126,30 @@ final class JobsListQueriesTest extends WebControllerTestCase
                 $artifact->save(false);
             }
             $jobs[] = $job;
+        }
+
+        return $jobs;
+    }
+
+    /**
+     * $count finished jobs of $template launched by $launcher, oldest first,
+     * each launched with an inventory of its own; their runner payloads
+     * record a name at launch (Job::PAYLOAD_INVENTORY_NAME) other than the
+     * inventory's current one, as after a rename. Each with the inventory's
+     * ID and its name at launch.
+     *
+     * @return list<array{0: Job, 1: int, 2: string}>
+     */
+    private function jobsOnInventoriesOfTheirOwn(JobTemplate $template, User $launcher, int $count): array
+    {
+        $jobs = [];
+        for ($i = 0; $i < $count; $i++) {
+            $inventory = $this->createInventory((int)$launcher->id);
+            $name = 'jobs-list-at-launch-' . $i . '-' . uniqid();
+            $job = $this->createJob((int)$template->id, (int)$launcher->id, Job::STATUS_SUCCEEDED);
+            $job->runner_payload = (string)json_encode(['inventory_id' => (int)$inventory->id, Job::PAYLOAD_INVENTORY_NAME => $name]);
+            $job->save(false);
+            $jobs[] = [$job, (int)$inventory->id, $name];
         }
 
         return $jobs;

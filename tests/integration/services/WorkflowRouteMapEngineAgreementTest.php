@@ -34,6 +34,7 @@ use app\tests\integration\TeamScopeFixtures;
  */
 class WorkflowRouteMapEngineAgreementTest extends DbTestCase
 {
+    use InventoryGatedStepFixtures;
     use TeamScopeFixtures;
     use WorkflowEngineFixtures;
 
@@ -171,7 +172,8 @@ class WorkflowRouteMapEngineAgreementTest extends DbTestCase
 
     /**
      * After a closed gate, an empty On Failure ends the run as failed, for an
-     * approval step and for a gated job step alike.
+     * approval step and for a gated job step alike, gated by its job
+     * template's rule or by its inventory's (C15).
      */
     public function testAClosedGateWithAnEmptyOnFailureEndsTheRunAsTheMapSays(): void
     {
@@ -187,15 +189,28 @@ class WorkflowRouteMapEngineAgreementTest extends DbTestCase
             (int)$this->gatedTemplate((int)$this->user->id, $rule)->id
         );
         $afterGatedStep = $this->jobStep($gatedFlow, 20);
+        $inventoryFlow = $this->createWorkflowTemplate((int)$this->user->id);
+        $inventoryStep = $this->createWorkflowStep(
+            (int)$inventoryFlow->id,
+            10,
+            WorkflowStep::TYPE_JOB,
+            (int)$this->templateOnGatedInventory((int)$this->user->id, (int)$rule->id)->id
+        );
+        $afterInventoryStep = $this->jobStep($inventoryFlow, 20);
+        $flows = [
+            [$approvalFlow, $gate, $afterGate],
+            [$gatedFlow, $gatedStep, $afterGatedStep],
+            [$inventoryFlow, $inventoryStep, $afterInventoryStep],
+        ];
 
-        foreach ([[$approvalFlow, $gate, $afterGate], [$gatedFlow, $gatedStep, $afterGatedStep]] as [$workflow, $step, $after]) {
+        foreach ($flows as [$workflow, $step, $after]) {
             $route = $this->routeOf($workflow, $step, WorkflowRouteMap::OUTCOME_CLOSED_GATE);
             $run = $this->engine()->launch($workflow, (int)$this->user->id);
             $this->decide($this->jobOfStep($run, $step), ApprovalRequest::STATUS_REJECTED);
 
             $run->refresh();
             $this->assertSame([WorkflowRoute::KIND_END, WorkflowRoute::RUN_FAILS], [$route->kind, $route->runOutcome]);
-            $this->assertSame(WorkflowJob::STATUS_FAILED, $run->status, "step {$step->step_type}");
+            $this->assertSame(WorkflowJob::STATUS_FAILED, $run->status, "step {$step->step_type} #{$step->id}");
             $this->assertNull($this->runOf($run, $after), 'the next step never ran');
         }
     }

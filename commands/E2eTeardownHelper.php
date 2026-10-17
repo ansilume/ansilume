@@ -26,8 +26,8 @@ class E2eTeardownHelper
      * the rows they refer to. Teams take their members and project grants
      * along; workflow templates their steps and runs; runner groups their
      * runners (foreign keys with ON DELETE CASCADE). Approval rules go after
-     * the job templates and workflow steps that use them: those references
-     * restrict the delete of a rule.
+     * the job templates, workflow steps and inventories that use them: those
+     * references restrict the delete of a rule.
      *
      * @var array<string, string> table => name column
      */
@@ -38,9 +38,9 @@ class E2eTeardownHelper
         'webhook' => 'name',
         'notification_template' => 'name',
         'job_template' => 'name',
+        'inventory' => 'name',
         'approval_rule' => 'name',
         'credential' => 'name',
-        'inventory' => 'name',
         'project' => 'name',
         'team' => 'name',
         'runner' => 'name',
@@ -60,9 +60,9 @@ class E2eTeardownHelper
         'webhook',
         'notification_template',
         'job_template',
+        'inventory',
         'approval_rule',
         'credential',
-        'inventory',
         'project',
         'team',
         'runner',

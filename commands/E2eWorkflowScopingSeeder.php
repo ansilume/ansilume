@@ -315,6 +315,7 @@ final class E2eWorkflowScopingSeeder
         $request->job_id = (int)$placeholder->id;
         $request->approval_rule_id = (int)$rule->id;
         $request->status = ApprovalRequest::STATUS_PENDING;
+        $request->recordRequiredBy(ApprovalRequest::REQUIRED_BY_APPROVAL_STEP);
         $request->requested_at = time() - 100;
         // Never expires: the request stays pending for every spec of the run.
         $request->expires_at = null;

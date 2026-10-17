@@ -4,11 +4,16 @@ declare(strict_types=1);
 
 namespace app\services\runstate;
 
+use app\components\JobInventory;
+use app\models\ApprovalRequest;
+
 /**
  * What an approval request is for: the workflow, step and run of the job
- * that waits for it, or the job's template. The approval pages and the
- * dashboard show it as "For" (text()), and the API's workflow fields come
- * from origin. Built by ApprovalRequestContexts::forRequests().
+ * that waits for it, or the job's template; what required it, and the
+ * inventory the job was launched with. The approval pages and the dashboard
+ * show it as "For" (text()) and in the Rule cell (ruleText()), and the API's
+ * workflow fields come from origin, its gate fields from gateFields(). Built
+ * by ApprovalRequestContexts::forRequests().
  *
  * The workflow is named only to a viewer who may view it: a user can see the
  * request of a gated job step through its job template's project while the
@@ -22,7 +27,8 @@ final class RequestContext
      * job template names: a job whose template was purged, the placeholder
      * of a step whose execution 2.9.0 and older deleted with the step, or a
      * job that no longer exists. The dash the job pages show for a job
-     * without a template.
+     * without a template. Also ruleText() of a request whose rule no longer
+     * exists.
      */
     public const UNKNOWN = '—';
 
@@ -38,6 +44,11 @@ final class RequestContext
      *     (the job has no template and is no approval step's placeholder)
      * @param bool $workflowRun whether the request belongs to a workflow run the viewer may view: true
      *     exactly when origin is set, so a hidden run is never revealed, not even as a flag
+     * @param string|null $requiredBy what required the request (ApprovalRequest::REQUIRED_BY_VALUES,
+     *     ApprovalRequest::requiredBy()); null before m000088
+     * @param JobInventory $inventory the inventory the request's job was launched with, as its runner
+     *     payload records it; JobInventory::none() for a job without one (the placeholder of an
+     *     approval step) and for a job that no longer exists
      */
     public function __construct(
         public readonly int $requestId,
@@ -46,6 +57,8 @@ final class RequestContext
         public readonly ?string $jobTemplateName,
         public readonly bool $jobTemplateDeleted,
         public readonly bool $workflowRun,
+        public readonly ?string $requiredBy,
+        public readonly JobInventory $inventory,
     ) {
     }
 
@@ -72,6 +85,39 @@ final class RequestContext
             $this->jobTemplateDeleted ? Texts::FOR_DELETED_JOB_TEMPLATE : Texts::FOR_JOB_TEMPLATE,
             $this->jobTemplateName
         );
+    }
+
+    /**
+     * The Rule cell of the approval lists and the dashboard, as plain text
+     * (encode it for HTML): $ruleName, the name of the request's rule; for a
+     * request that the inventory of its job required, and whose job names
+     * that inventory, Texts::RULE_OF_INVENTORY with the inventory's label
+     * (JobInventory::label(): its name at launch, else its current one,
+     * else its ID); UNKNOWN when the rule no longer exists ($ruleName null).
+     */
+    public function ruleText(?string $ruleName): string
+    {
+        if ($ruleName === null) {
+            return self::UNKNOWN;
+        }
+        if ($this->requiredBy !== ApprovalRequest::REQUIRED_BY_INVENTORY || $this->inventory->id === null) {
+            return $ruleName;
+        }
+
+        return sprintf(Texts::RULE_OF_INVENTORY, $ruleName, $this->inventory->label());
+    }
+
+    /**
+     * The gate fields of the API's ApprovalRequest: what required the
+     * request (null before m000088), and the ID and name of the inventory
+     * its job was launched with (JobInventory::apiFields(): both null for a
+     * job without one; the name null when it is unknown).
+     *
+     * @return array{required_by: string|null, inventory_id: int|null, inventory_name: string|null}
+     */
+    public function gateFields(): array
+    {
+        return ['required_by' => $this->requiredBy] + $this->inventory->apiFields();
     }
 
     /**

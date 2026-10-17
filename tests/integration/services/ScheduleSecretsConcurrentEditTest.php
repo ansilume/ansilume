@@ -17,6 +17,7 @@ use app\services\ScheduleSecrets;
 use app\services\ScheduleService;
 use app\services\WorkflowAccessChecker;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\ScheduleAnswerFixtures;
 use app\tests\integration\TeamScopeFixtures;
 use yii\base\Event;
@@ -52,6 +53,7 @@ use yii\log\Logger;
  */
 class ScheduleSecretsConcurrentEditTest extends DbTestCase
 {
+    use RestoresComponents;
     use ScheduleAnswerFixtures;
     use TeamScopeFixtures;
 
@@ -63,8 +65,6 @@ class ScheduleSecretsConcurrentEditTest extends DbTestCase
 
     private ScheduleService $service;
     private RecordingNotificationDispatcher $dispatcher;
-    private mixed $originalDispatcher = null;
-    private mixed $originalChecker = null;
     private mixed $originalKey;
     private int $userId;
     private JobTemplate $template;
@@ -73,14 +73,13 @@ class ScheduleSecretsConcurrentEditTest extends DbTestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // Tests replace the checker; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('workflowAccessChecker');
+        $this->dispatcher = new RecordingNotificationDispatcher();
+        $this->swapComponent('notificationDispatcher', $this->dispatcher);
         $this->originalKey = $_ENV['APP_SECRET_KEY'] ?? null;
         $_ENV['APP_SECRET_KEY'] = 'concurrent-edit-test-key-0123456789';
         $this->service = \Yii::$app->get('scheduleService');
-        $components = \Yii::$app->getComponents(true);
-        $this->originalDispatcher = $components['notificationDispatcher'] ?? null;
-        $this->originalChecker = $components['workflowAccessChecker'] ?? null;
-        $this->dispatcher = new RecordingNotificationDispatcher();
-        \Yii::$app->set('notificationDispatcher', $this->dispatcher);
         $this->userId = (int)$this->createUserWithRole('concurrent-edit', 'operator')->id;
         $this->template = $this->createPasswordSurveyTemplate($this->userId);
         $this->firstJobId = (int)Job::find()->max('id') + 1;
@@ -88,8 +87,7 @@ class ScheduleSecretsConcurrentEditTest extends DbTestCase
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
-        \Yii::$app->set('workflowAccessChecker', $this->originalChecker);
+        $this->restoreComponents();
         if ($this->originalKey === null) {
             unset($_ENV['APP_SECRET_KEY']);
         } else {

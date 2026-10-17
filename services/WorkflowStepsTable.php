@@ -103,11 +103,15 @@ final class WorkflowStepsTable
 
     public const UNREACHABLE_TITLE = 'No branch that a run takes leads to this step, so runs never start it.';
 
-    /** The badge of a job step whose job template has an approval rule. */
+    /** The badge of a job step whose job template, or that template's inventory, has an approval rule. */
     public const GATED_BADGE = 'needs approval';
 
     /** sprintf(): the approval rule's name. */
     public const GATED_TITLE = 'Its job template has the approval rule "%s": the job waits for an approval before it runs.';
+
+    /** The badge's title when the inventory's rule gates the step; sprintf(): the approval rule's name. */
+    public const GATED_INVENTORY_TITLE = 'Its job template\'s inventory has the approval rule "%s": the job waits '
+        . 'for an approval before it runs.';
 
     /** sprintf(): the position, the name ("3. Deploy"). */
     public const STEP_LABEL = '%1$d. %2$s';
@@ -194,6 +198,9 @@ final class WorkflowStepsTable
     public const TARGET_RULE_GONE = 'approval rule ID %d no longer exists · runs fail here';
 
     public const TARGET_RULE_NONE = 'no approval rule · runs fail here';
+
+    /** A job step whose job template and its inventory have different approval rules: its launch is refused. */
+    public const TARGET_RULES_DIFFER = 'job template and inventory have different approval rules · runs fail here';
 
     public const TARGET_UNKNOWN_TYPE = 'unknown step type · runs fail here';
 
@@ -452,9 +459,11 @@ final class WorkflowStepsTable
     }
 
     /**
-     * The title of a gated job step's badge: the rule's name, or, when that
-     * rule no longer exists, the problem its Target cell names; null for any
-     * other step.
+     * The title of a gated job step's badge: the problem its Target cell
+     * names, when its rule no longer exists or its job template and
+     * inventory have different rules; else the rule's name, as the rule of
+     * its inventory (GATED_INVENTORY_TITLE) or of its job template
+     * (GATED_TITLE). Null for any other step.
      *
      * @param Target $target
      */
@@ -463,10 +472,14 @@ final class WorkflowStepsTable
         if ($step->gatedRuleName === null) {
             return null;
         }
+        if ($target['problem'] !== null) {
+            return $target['problem'];
+        }
 
-        return $step->gatedRuleName === ''
-            ? $target['problem']
-            : sprintf(self::GATED_TITLE, $step->gatedRuleName);
+        return sprintf(
+            $step->gatedBy === JobTemplateGate::SOURCE_INVENTORY ? self::GATED_INVENTORY_TITLE : self::GATED_TITLE,
+            $step->gatedRuleName
+        );
     }
 
     /**

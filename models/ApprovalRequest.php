@@ -12,6 +12,8 @@ use yii\db\Query;
  * @property int         $id
  * @property int         $job_id
  * @property int|null    $approval_rule_id  null once its rule was deleted (resolved requests keep their history)
+ * @property string $required_by what required the request (REQUIRED_BY_VALUES, m000088); read with
+ *     requiredBy() and set with recordRequiredBy(): a schema cached from before m000088 has no such column
  * @property string      $status
  * @property int|null    $requested_at
  * @property int|null    $resolved_at
@@ -30,6 +32,35 @@ class ApprovalRequest extends ActiveRecord
     /** Closed without a decision: its job or workflow run was canceled, or its template deleted. */
     public const STATUS_CANCELED = 'canceled';
 
+    /** Required by the job template's own approval rule (the column's default). */
+    public const REQUIRED_BY_JOB_TEMPLATE = 'job_template';
+
+    /** Required by the approval rule of the inventory the job was launched with. */
+    public const REQUIRED_BY_INVENTORY = 'inventory';
+
+    /** Required by a workflow approval step: the request of its placeholder job. */
+    public const REQUIRED_BY_APPROVAL_STEP = 'approval_step';
+
+    /** What can require a request. */
+    public const REQUIRED_BY_VALUES = [
+        self::REQUIRED_BY_JOB_TEMPLATE,
+        self::REQUIRED_BY_INVENTORY,
+        self::REQUIRED_BY_APPROVAL_STEP,
+    ];
+
+    /** How the pages name what required a request. */
+    public const REQUIRED_BY_LABELS = [
+        self::REQUIRED_BY_JOB_TEMPLATE => 'Job template',
+        self::REQUIRED_BY_INVENTORY => 'Inventory',
+        self::REQUIRED_BY_APPROVAL_STEP => 'Workflow approval step',
+    ];
+
+    /** The label of a request whose cause is unknown: code running before m000088. */
+    private const REQUIRED_BY_UNKNOWN = '—';
+
+    /** The column of what required the request, which m000088 adds. */
+    private const REQUIRED_BY_COLUMN = 'required_by';
+
     public static function tableName(): string
     {
         return '{{%approval_request}}';
@@ -37,7 +68,7 @@ class ApprovalRequest extends ActiveRecord
 
     public function rules(): array
     {
-        return [
+        $rules = [
             [['job_id', 'approval_rule_id'], 'required'],
             [['job_id', 'approval_rule_id'], 'integer'],
             [['status'], 'in', 'range' => [
@@ -49,6 +80,61 @@ class ApprovalRequest extends ActiveRecord
             ]],
             [['requested_at', 'resolved_at', 'expires_at'], 'integer'],
         ];
+        // Before m000088 (or with a schema cached from before it) the column
+        // is missing. Only a request that recorded nothing (null) is left to
+        // the column's default, job_template; '' is refused like any other value.
+        if ($this->hasAttribute(self::REQUIRED_BY_COLUMN)) {
+            $rules[] = [
+                [self::REQUIRED_BY_COLUMN],
+                'in',
+                'range' => self::REQUIRED_BY_VALUES,
+                'strict' => true,
+                'isEmpty' => static fn (mixed $value): bool => $value === null,
+            ];
+        }
+
+        return $rules;
+    }
+
+    /**
+     * What required this request (REQUIRED_BY_VALUES, as stored or
+     * recorded); null while the column is missing, before m000088 or with a
+     * schema cached from before it, and for a new request that recorded
+     * nothing.
+     */
+    public function requiredBy(): ?string
+    {
+        if (!$this->hasAttribute(self::REQUIRED_BY_COLUMN)) {
+            return null;
+        }
+        $value = $this->getAttribute(self::REQUIRED_BY_COLUMN);
+
+        return is_string($value) ? $value : null;
+    }
+
+    /**
+     * Records what required this request, when the column exists: without
+     * it (before m000088) the request is saved as before, and the column's
+     * default, job_template, applies once it is added.
+     */
+    public function recordRequiredBy(string $requiredBy): void
+    {
+        if ($this->hasAttribute(self::REQUIRED_BY_COLUMN)) {
+            $this->setAttribute(self::REQUIRED_BY_COLUMN, $requiredBy);
+        }
+    }
+
+    /**
+     * How the pages name what required a request (REQUIRED_BY_LABELS):
+     * '—' when it is unknown (null), and a value they do not know as stored.
+     */
+    public static function requiredByLabel(?string $requiredBy): string
+    {
+        if ($requiredBy === null) {
+            return self::REQUIRED_BY_UNKNOWN;
+        }
+
+        return self::REQUIRED_BY_LABELS[$requiredBy] ?? $requiredBy;
     }
 
     /**

@@ -38,16 +38,16 @@ use yii\web\Response;
  * Steps: add-step, edit-step, move-step and remove-step need
  * workflow-template.update (the access rules) and operator access to every
  * job step's project (requireWorkflowOperate()), checked before anything is
- * written. Then WorkflowStepWriteService changes the step, with the
- * workflow locked: gated steps are for admins (approval-rule.update, a 403
- * otherwise; ApprovalRuleAssignmentPolicy), approval steps and job steps
- * whose job template has an approval rule; a change while a run of the
- * workflow is active, or the removal of a step that other steps route to,
- * is refused. The controller turns what the service did into a success
- * flash and warning flashes (WorkflowStepChangeSummary), a refusal into a
- * 403, a 404 or a danger flash; the edit page shows its refusal in the form
- * instead. A user who lost operator access meanwhile, which the service
- * finds with the workflow locked, gets the text of requireWorkflowOperate()
+ * written. Then WorkflowStepWriteService changes the step, with the workflow
+ * locked: gated steps are for admins (approval-rule.update, a 403 otherwise;
+ * ApprovalRuleAssignmentPolicy), approval steps and job steps whose job
+ * template or its inventory has an approval rule; a change while a run of the
+ * workflow is active, or the removal of a step that other steps route to, is
+ * refused. The controller turns what the service did into a success flash and
+ * warning flashes (WorkflowStepChangeSummary), a refusal into a 403, a 404 or
+ * a danger flash; the edit page shows its refusal in the form instead. A user
+ * who lost operator access meanwhile, which the service finds with the
+ * workflow locked, gets the text of requireWorkflowOperate()
  * (MODIFY_FORBIDDEN), not the API's
  * (WorkflowStepChangeGuard::TEAM_SCOPE_REFUSED). The service audits every
  * change. Deleting the workflow cancels its active runs

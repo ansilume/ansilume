@@ -9,6 +9,7 @@ use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Project;
 use app\services\ProjectService;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\TeamScopeFixtures;
 use yii\base\Module;
 use yii\helpers\Html;
@@ -32,6 +33,7 @@ use yii\web\View;
 class ProjectGitFieldsTest extends WebControllerTestCase
 {
     use RendersRealViews;
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     private const SSH_URL = 'git@git.example.com:org/playbooks.git';
@@ -47,17 +49,12 @@ class ProjectGitFieldsTest extends WebControllerTestCase
     /** The id of the box above the form with the errors of hidden Git fields. */
     private const HIDDEN_ERRORS_ID = 'project-git-field-errors';
 
-    /** @var mixed the project service the test replaced */
-    private mixed $originalProjectService = null;
-
     /** @var ProjectService&object{queued: int} */
     private ProjectService $syncs;
 
     protected function setUp(): void
     {
         parent::setUp();
-        $components = \Yii::$app->getComponents(true);
-        $this->originalProjectService = $components['projectService'] ?? null;
         // A saved git project queues a sync: here it is only counted.
         $this->syncs = new class () extends ProjectService {
             public int $queued = 0;
@@ -67,12 +64,12 @@ class ProjectGitFieldsTest extends WebControllerTestCase
                 $this->queued++;
             }
         };
-        \Yii::$app->set('projectService', $this->syncs);
+        $this->swapComponent('projectService', $this->syncs);
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('projectService', $this->originalProjectService);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

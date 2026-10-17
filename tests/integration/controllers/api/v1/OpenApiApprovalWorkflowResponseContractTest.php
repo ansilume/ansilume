@@ -12,6 +12,7 @@ use app\controllers\api\v1\WorkflowJobsController;
 use app\controllers\api\v1\WorkflowTemplatesController;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\Schedule;
@@ -39,6 +40,11 @@ use yii\web\Request;
  * extra_vars, step_name and step_type, canceled) that the spec did not
  * document, and approval rules had no schema at all. Each test runs the
  * endpoint and compares its answer with the spec.
+ *
+ * From 2.12.0 (approval rules on inventories): approval_gate of job
+ * templates, required_by, inventory_id and inventory_name of approval
+ * requests, and the inventories of an approval rule's usage, each compared
+ * with the answer that returns it.
  */
 class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
 {
@@ -76,6 +82,14 @@ class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
         $this->assertMatchesSchema('JobTemplate', $data);
         $this->assertSame((int)$rule->id, $data['approval_rule_id']);
         $this->assertSame($rule->name, $data['approval_rule_name']);
+        // 2.12.0: approval_gate names the rule its launches wait for, here
+        // its own, as JobTemplateApprovalGate documents it.
+        $this->assertIsArray($data['approval_gate']);
+        $this->assertMatchesSchema('JobTemplateApprovalGate', $data['approval_gate']);
+        $this->assertSame(
+            ['approval_rule_id' => (int)$rule->id, 'approval_rule_name' => $rule->name, 'required_by' => ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE],
+            $data['approval_gate']
+        );
     }
 
     /**
@@ -167,6 +181,13 @@ class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
         );
         $this->assertSame(ApprovalRequest::statuses(), $this->properties('ApprovalRequest')['status']['enum'] ?? null);
         $this->assertSame([], array_diff(array_keys($data), $this->required('ApprovalRequest')), 'Every field is always returned.');
+        // 2.12.0: what required the request, and the inventory its job was
+        // launched with; this job's launch recorded none.
+        $this->assertSame(
+            ['required_by' => ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE, 'inventory_id' => null, 'inventory_name' => null],
+            array_intersect_key($data, array_flip(['required_by', 'inventory_id', 'inventory_name']))
+        );
+        $this->assertSame(ApprovalRequest::REQUIRED_BY_VALUES, $this->enumOf('ApprovalRequest', 'required_by'));
         $this->assertDocumentedData('/api/v1/approvals/{id}', 'get', '200', 'ApprovalRequest');
         $this->assertMatchesSchema('ApprovalRequest', $this->listItem($ctrl->actionIndex(), (int)$request->id));
 
@@ -215,6 +236,9 @@ class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
         $this->assertTrue($template->save(false));
         $workflow = $this->createWorkflowTemplate((int)$this->admin->id);
         $this->createWorkflowStep((int)$workflow->id, 1, WorkflowStep::TYPE_APPROVAL, null, $ruleId);
+        // 2.12.0: an inventory that the rule gates is listed too.
+        $inventory = $this->createInventory((int)$this->admin->id);
+        $this->assertSame(1, Inventory::updateAll(['approval_rule_id' => $ruleId], ['id' => $inventory->id]));
 
         $detail = $this->data($ctrl->actionView($ruleId));
         $this->assertMatchesSchema('ApprovalRuleDetail', $detail);
@@ -223,7 +247,7 @@ class OpenApiApprovalWorkflowResponseContractTest extends WebControllerTestCase
         $this->assertMatchesSchema('ApprovalRuleUsage', $usedBy);
         $this->assertTrue($usedBy['in_use']);
         $usage = $this->properties('ApprovalRuleUsage');
-        foreach (['job_templates' => 1, 'workflow_steps' => 1] as $list => $count) {
+        foreach (['inventories' => 1, 'job_templates' => 1, 'workflow_steps' => 1] as $list => $count) {
             $this->assertIsArray($usedBy[$list]);
             $this->assertCount($count, $usedBy[$list], $list);
             $item = $usedBy[$list][0];

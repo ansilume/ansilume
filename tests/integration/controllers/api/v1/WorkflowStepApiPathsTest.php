@@ -15,14 +15,16 @@ use app\models\WorkflowTemplate;
 use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\WorkflowStepChangeGuard;
 use app\tests\integration\controllers\WebControllerTestCase;
+use app\tests\integration\services\InventoryGatedStepFixtures;
 use app\tests\integration\services\WorkflowStepWriteFixtures;
 
 /**
  * Durable guard of the API's step write paths (security rule 12, contracts
  * C6 and C13): every request that changes the steps of an existing workflow
  * through the API refuses an operator on a workflow with an approval step or
- * a gated job step (403), and everyone while a run of the workflow is active
- * (409), and writes nothing then. The paths are the per-step endpoints and
+ * a gated job step, by the rule of its job template or of the template's
+ * inventory (C15), with 403, and everyone while a run of the workflow is
+ * active (409), and writes nothing then. The paths are the per-step endpoints and
  * the bulk PUT with a "steps" list, each sent through the URL rules of
  * config/web.php. A URL rule that changes steps, or an action of the
  * per-step controller, added later without its case in PATHS fails
@@ -32,6 +34,7 @@ use app\tests\integration\services\WorkflowStepWriteFixtures;
  */
 class WorkflowStepApiPathsTest extends WebControllerTestCase
 {
+    use InventoryGatedStepFixtures;
     use WorkflowStepApiRequests;
     use WorkflowStepWriteFixtures;
 
@@ -93,6 +96,7 @@ class WorkflowStepApiPathsTest extends WebControllerTestCase
         foreach (array_keys(self::PATHS) as $path) {
             $cases["{$path}, an approval step"] = [$path, 'approval'];
             $cases["{$path}, a gated job step"] = [$path, 'gated job'];
+            $cases["{$path}, an inventory-gated job step"] = [$path, 'inventory-gated job'];
         }
 
         return $cases;
@@ -104,11 +108,11 @@ class WorkflowStepApiPathsTest extends WebControllerTestCase
     public function testAnOperatorMayNotChangeTheStepsOfAGatedWorkflow(string $path, string $gate): void
     {
         $workflow = $this->workflow();
-        if ($gate === 'approval') {
-            $this->namedStep((int)$workflow->id, 'Approve', 20, WorkflowStep::TYPE_APPROVAL, null, (int)$this->rule()->id);
-        } else {
-            $this->namedStep((int)$workflow->id, 'Deploy', 20, WorkflowStep::TYPE_JOB, (int)$this->gatedTemplate()->id);
-        }
+        match ($gate) {
+            'approval' => $this->namedStep((int)$workflow->id, 'Approve', 20, WorkflowStep::TYPE_APPROVAL, null, (int)$this->rule()->id),
+            'gated job' => $this->namedStep((int)$workflow->id, 'Deploy', 20, WorkflowStep::TYPE_JOB, (int)$this->gatedTemplate()->id),
+            default => $this->namedStep((int)$workflow->id, 'Deploy', 20, WorkflowStep::TYPE_JOB, (int)$this->inventoryGatedTemplate()->id),
+        };
         $before = $this->stepRows((int)$workflow->id);
         $this->tokenOf($this->s['member']);
 
@@ -116,9 +120,11 @@ class WorkflowStepApiPathsTest extends WebControllerTestCase
 
         $this->assertApiError(
             403,
-            $gate === 'approval'
-                ? ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED
-                : ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+            match ($gate) {
+                'approval' => ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED,
+                'gated job' => ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+                default => ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+            },
             $answer
         );
         $this->assertNothingWritten($workflow, $before);
@@ -272,6 +278,19 @@ class WorkflowStepApiPathsTest extends WebControllerTestCase
         $own = $this->s['own'];
         $template = $this->createJobTemplate((int)$own->project_id, (int)$own->inventory_id, (int)$own->runner_group_id, (int)$this->s['admin']->id);
         JobTemplate::updateAll(['approval_rule_id' => (int)$this->rule()->id], ['id' => $template->id]);
+
+        return $template;
+    }
+
+    /**
+     * A job template in the member's own project on an inventory of its own
+     * whose approval rule gates it (C15); no rule of its own.
+     */
+    private function inventoryGatedTemplate(): JobTemplate
+    {
+        $own = $this->s['own'];
+        $template = $this->createJobTemplate((int)$own->project_id, (int)$own->inventory_id, (int)$own->runner_group_id, (int)$this->s['admin']->id);
+        $this->moveToInventory((int)$template->id, (int)$this->gatedInventory((int)$this->s['admin']->id, (int)$this->rule()->id)->id);
 
         return $template;
     }

@@ -61,7 +61,7 @@ class WorkflowRouteMapTest extends TestCase
             ['succeeds', 'loop', 'missing', 'cannot_run'],
             [WorkflowRouteMap::PATH_SUCCEEDS, WorkflowRouteMap::PATH_LOOP, WorkflowRouteMap::PATH_MISSING, WorkflowRouteMap::PATH_CANNOT_RUN]
         );
-        $this->assertSame(['jobTemplate.approvalRule', 'approvalRule'], WorkflowRouteMap::RELATIONS);
+        $this->assertSame(['jobTemplate.approvalRule', 'jobTemplate.inventory.approvalRule', 'approvalRule'], WorkflowRouteMap::RELATIONS);
         $this->assertSame('Step ID %d is listed twice.', WorkflowRouteMap::STEP_TWICE);
         $this->assertSame('Step ID %d is not part of this workflow.', WorkflowRouteMap::NOT_IN_MAP);
         $this->assertSame('Unknown placement "%s": use start, end, keep or after:<step ID>.', WorkflowRouteMap::PLACEMENT_INVALID);
@@ -82,11 +82,12 @@ class WorkflowRouteMapTest extends TestCase
         );
         $this->assertSame(-1, WorkflowRouteStep::NEW_STEP_ID);
         $this->assertSame(
-            ['job_template_missing', 'approval_rule_missing', 'unknown_type'],
+            ['job_template_missing', 'approval_rule_missing', 'unknown_type', 'approval_rules_differ'],
             [
                 WorkflowRouteStep::PROBLEM_JOB_TEMPLATE_MISSING,
                 WorkflowRouteStep::PROBLEM_APPROVAL_RULE_MISSING,
                 WorkflowRouteStep::PROBLEM_UNKNOWN_TYPE,
+                WorkflowRouteStep::PROBLEM_APPROVAL_RULES_DIFFER,
             ]
         );
     }

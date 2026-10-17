@@ -9,6 +9,7 @@ use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
 use app\models\WorkflowStep;
@@ -506,9 +507,110 @@ class ApprovalRuleWriteServiceTest extends DbTestCase
             . 'Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.',
             ApprovalRuleWriteService::refusal($usage)
         );
+        $this->assertSame(
+            'Approval rule "nightly" is in use by 2 inventory(ies) and 1 job template(s). '
+            . 'Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.',
+            ApprovalRuleWriteService::refusal(new ApprovalRuleUsage('nightly', [], 1, [], 0, 0, [], 2)),
+            'the inventories first'
+        );
+    }
+
+    // -- Delete: inventories ----------------------------------------------------------
+
+    /**
+     * regression: a rule that an inventory uses was reported as not in use.
+     * The usage counted no inventory, so the delete went ahead until the
+     * RESTRICT foreign key of the inventory refused it, and the refusal said
+     * "Approval rule ... is not in use."
+     */
+    public function testRegressionARuleAnInventoryUsesWasReportedNotInUse(): void
+    {
+        $rule = $this->storedRule();
+        $inventory = $this->gatedInventory($rule);
+
+        $result = $this->service->delete($rule, $this->userId, ApprovalRuleWriteService::SOURCE_WEB);
+
+        $this->assertFalse($result['deleted']);
+        $this->assertTrue($result['usage']->isInUse(), 'the inventory is a use');
+        $this->assertSame(
+            'Approval rule ' . json_encode($rule->name) . ' is in use by 1 inventory(ies). '
+            . 'Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.',
+            ApprovalRuleWriteService::refusal($result['usage'])
+        );
+        $this->assertSame([(int)$inventory->id], array_column($result['usage']->toArray()['inventories'], 'id'));
+        $this->assertNotNull(ApprovalRule::findOne($rule->id));
+        $inventory->refresh();
+        $this->assertSame((int)$rule->id, (int)$inventory->getAttribute('approval_rule_id'), 'the inventory stays gated');
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_APPROVAL_RULE_DELETED, 'object_id' => $rule->id])->exists());
+    }
+
+    /**
+     * A reference that the usage does not count (here: a usage service that
+     * counts nothing) is refused by the foreign key, and the refusal says
+     * so, never "not in use".
+     */
+    public function testAReferenceTheUsageDoesNotCountIsRefusedAsUnlisted(): void
+    {
+        $rule = $this->storedRule();
+        $inventory = $this->gatedInventory($rule);
+        $this->neverCountAUse();
+
+        $result = $this->service->delete($rule, $this->userId, ApprovalRuleWriteService::SOURCE_API);
+
+        $this->assertFalse($result['deleted']);
+        $this->assertFalse($result['usage']->isInUse(), 'the usage the swapped service counted');
+        $refusal = ApprovalRuleWriteService::refusal($result['usage']);
+        $this->assertSame(
+            'Approval rule ' . json_encode($rule->name) . ' was not deleted: the database still refers to it. Nothing was changed.',
+            $refusal
+        );
+        $this->assertStringNotContainsString('not in use', $refusal);
+        $this->assertNotNull(ApprovalRule::findOne($rule->id));
+        $inventory->refresh();
+        $this->assertSame((int)$rule->id, (int)$inventory->getAttribute('approval_rule_id'));
+        $this->assertFalse(AuditLog::find()->where(['action' => AuditLog::ACTION_APPROVAL_RULE_DELETED, 'object_id' => $rule->id])->exists());
+    }
+
+    /**
+     * The refusal of a usage that counts nothing quotes the rule's name as
+     * JSON, as the summary does.
+     */
+    public function testTheUnlistedRefusalQuotesTheName(): void
+    {
+        $this->assertSame(
+            'Approval rule "ops \"night\"\nshift" was not deleted: the database still refers to it. Nothing was changed.',
+            ApprovalRuleWriteService::refusal(new ApprovalRuleUsage("ops \"night\"\nshift", [], 0, [], 0, 0))
+        );
+        $this->assertSame(
+            sprintf(ApprovalRuleWriteService::DELETE_REFUSED_UNLISTED, '"spare"'),
+            ApprovalRuleWriteService::refusal(new ApprovalRuleUsage('spare', [], 0, [], 0, 0))
+        );
     }
 
     // -- Helpers ----------------------------------------------------------------
+
+    /**
+     * The usage service counts no use at all, as if the database referred
+     * to the rule from a table it does not know.
+     */
+    private function neverCountAUse(): void
+    {
+        \Yii::$app->set('approvalRuleUsageService', new class extends ApprovalRuleUsageService {
+            public function forRule(ApprovalRule $rule, ?int $viewerId): ApprovalRuleUsage
+            {
+                return new ApprovalRuleUsage((string)$rule->name, [], 0, [], 0, 0);
+            }
+        });
+    }
+
+    private function gatedInventory(ApprovalRule $rule): Inventory
+    {
+        $inventory = $this->createInventory($this->userId);
+        $inventory->setAttribute('approval_rule_id', (int)$rule->id);
+        $inventory->save(false);
+
+        return $inventory;
+    }
 
     /**
      * The usage service misses every use the first time it is asked, as a

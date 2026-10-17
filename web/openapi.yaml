@@ -127,9 +127,65 @@ security:
 tags:
   - name: Projects
   - name: Inventories
+    description: |
+      An inventory names the hosts of a job: a static inventory holds them
+      (`content`), a file or dynamic inventory reads them from its project's
+      repository (`source_path`). Viewing inventories needs
+      `inventory.view`; creating, changing and deleting them need
+      `inventory.create`, `inventory.update` and `inventory.delete`, and
+      operator access to the inventory's project (team scope). The list
+      leaves out `content` and `source_path`; `GET /api/v1/inventories/{id}`
+      answers them to the users who may see the inventory's project.
+
+      An admin (`approval-rule.update`) can give an inventory an approval
+      rule (`approval_rule_id`): every launch of every job template that
+      uses it then waits for the rule's approvers, and its approval request
+      says so (`required_by`: `inventory`). A launch waits for one rule only,
+      so a job template on such an inventory has no rule of its own, or the
+      same rule. Only admins change an inventory with a rule, every field but
+      its `name` and `description`, delete it, give a job template this
+      inventory, or change what the job templates that use it run (403
+      otherwise); everyone who may change the inventory keeps changing its
+      name and description. A runner starts a job whose job template or
+      inventory has a rule only once the job was approved (see Jobs).
+
+      The hosts of a file or dynamic inventory come from its project's
+      repository when a runner claims the job, after the approval: the
+      approval rule locks the source path and the project, not the file.
+      Whoever may change that project (its repository URL or branch) or push
+      to its repository changes these hosts without an admin.
+
+      An inventory that job templates use cannot be deleted, also when only
+      deleted job templates use it (409 with `error.used_by`): a deleted job
+      template keeps its inventory, for the history of its jobs, until its
+      project is deleted. `GET /api/v1/inventories/{id}` says which job
+      templates use it (`used_by`), as the inventory's page does.
   - name: Credentials
   - name: Job Templates
   - name: Jobs
+    description: |
+      A job is one run of a job template, with the inventory, credentials
+      and extra vars it was launched with (`inventory_id` and
+      `inventory_name` name its inventory). A job whose job template has an
+      approval rule, its own or its inventory's, waits for approval
+      (`pending_approval`) and is queued once its approval request is
+      approved.
+
+      A runner starts only jobs that may run. When a runner claims a queued
+      job whose job template, the inventory it was launched with or the
+      template's current inventory has an approval rule, and the job was
+      not approved, by its approvers or by a timeout whose action is
+      `approve`, the job fails before it runs: for example a job queued
+      before the rule was assigned. So does a job whose inventory is
+      gone or names no hosts: a static inventory without content, a file
+      inventory without a source path, or a launch record that names no
+      inventory. Its status becomes `failed` with `exit_code` -1, its log
+      says why, from `Job aborted before execution:` to `The job did not
+      run: no credentials were decrypted or sent to the runner.`, and its
+      `job.finished` audit entry names the reason in `claim_refusal`
+      (`not_approved`, `inventory_missing`, `inventory_not_recorded`,
+      `inventory_empty` or `inventory_no_source`). Launch it again: a job
+      that needs an approval then waits for it.
   - name: Schedules
     description: |
       A schedule launches its job template at the times of its cron
@@ -175,47 +231,67 @@ tags:
   - name: Approval Rules
     description: |
       An approval rule gates every launch of the job templates it is
-      assigned to (`approval_rule_id` of the job template), and the workflow
-      approval steps that use it: the job waits for the rule's approvers.
+      assigned to (`approval_rule_id` of the job template), of every job
+      template on the inventories it is assigned to (`approval_rule_id` of
+      the inventory), and the workflow approval steps that use it: the job
+      waits for the rule's approvers. A launch waits for one rule only: a
+      job template on an inventory with a rule has no rule of its own, or
+      the same rule. A change that would give one launch two different
+      rules is refused (422), and so is the launch of a job template whose
+      rule differs from its inventory's (422).
       Rules are managed by admins: viewing them needs `approval-rule.view`;
       creating, changing and deleting them need `approval-rule.create`,
       `approval-rule.update` and `approval-rule.delete`, which of the
       built-in roles only admin holds. Assigning a rule to a job template or
-      removing it, adding an approval step to a workflow, and changing the
-      steps of a workflow that has one need `approval-rule.update` as well,
-      and so do adding a job step whose job template has a rule (a gated
-      job step) and changing the steps of a workflow that has one. Giving a
-      job step such a job template needs it too. Changing
-      what a job template with a rule runs, any field but its name and
-      description, needs `approval-rule.update` too (403 otherwise). A
-      custom role can be given these permissions.
+      an inventory or removing it, adding an approval step to a workflow,
+      and changing the steps of a workflow that has one need
+      `approval-rule.update` as well, and so do adding a job step whose job
+      template has a rule (a gated job step) and changing the steps of a
+      workflow that has one. Giving a job step such a job template needs it
+      too. A job step whose job template's inventory has a rule is a gated
+      job step as well. Changing what a job template with a rule runs, any
+      field but its name and description, needs `approval-rule.update` too
+      (403 otherwise), also when only its inventory has the rule; and so do
+      changing an inventory with a rule, any field but its name and
+      description, deleting it, and giving a job template such an
+      inventory. A custom role can be given these permissions.
 
-      A rule gates a job template, not a playbook or an inventory: a user
-      who may create job templates in a project can create one without a
-      rule that runs the same playbook on the same inventory. Only admins
-      assign rules, but an approval rule does not stop such a template. An
-      approval step gates the runs of its workflow, not the job templates
-      in it: users who may launch those templates can launch them
-      directly, or from another workflow without the step. To gate a job
-      template wherever it runs, give the template an approval rule. An
-      approval approves a launch: a runner reads the playbook from the
-      project's repository, and the job's inventory, when it claims the
-      job, after the approval. The inventory, the project and the
-      credentials of a job template with a rule keep their own
-      permissions: users who may change them, or push to the repository,
-      change what its next jobs run without becoming their launcher, so
-      they may approve them when they are approvers. An approval at the
-      level of an inventory is planned.
+      A rule gates job templates and inventories, not hosts or playbooks: a
+      user who may create inventories and job templates in a project can
+      create ones without a rule that run the same playbook on the same
+      hosts. Only admins assign rules, but an approval rule does not stop
+      such a template. An approval step gates the runs of its workflow, not
+      the job templates in it: users who may launch those templates can
+      launch them directly, or from another workflow without the step. To
+      gate a job template wherever it runs, give the template, or its
+      inventory, an approval rule. An approval approves a launch: a runner
+      reads the playbook from the project's repository, and the job's
+      inventory, when it claims the job, after the approval; it starts a
+      job of a job template or inventory with a rule only once the job was
+      approved. The inventory, the project and the credentials of a job
+      template with a rule keep their own permissions, the inventory only
+      while it has no rule: users who may change them, or push to the
+      repository, change what its next jobs run without becoming their
+      launcher, so they may approve them when they are approvers. The hosts
+      of a file or dynamic inventory with a rule come from its project's
+      repository too (see Inventories).
 
       Rule names are not unique. A change to a rule that is in use applies
       to its pending requests only at their next vote or timeout. A rule
-      that job templates, approval steps of workflows or pending requests
-      use cannot be deleted (409).
+      that inventories, job templates, approval steps of workflows or
+      pending requests use cannot be deleted (409).
   - name: Approvals
     description: |
-      Approval requests of jobs whose template has an approval rule, and of
-      workflow approval steps. Seeing a request needs view access to the
-      job's project or, for a workflow approval step, to the workflow.
+      Approval requests of jobs whose job template has an approval rule,
+      its own or its inventory's, and of workflow approval steps.
+      `required_by` says what required a request: `job_template` (the job
+      template's own rule, also when its inventory has the same rule),
+      `inventory` (the rule of the inventory the job was launched with,
+      named in `inventory_id` and `inventory_name`) or `approval_step` (a
+      workflow approval step). Seeing a request needs view access to the
+      job's project or, for a workflow approval step, to the workflow; for
+      the rule of an inventory, too, the project of the job's template
+      counts, not the inventory's.
 
       An eligible approver is on the rule's approver list (a role rule
       counts the users assigned that role directly), has an active account,
@@ -473,6 +549,11 @@ paths:
     get:
       tags: [Inventories]
       summary: List inventories
+      description: |
+        Requires `inventory.view`. Lists only the inventories the caller may
+        see (team scope), newest first, 25 per page, each with its approval
+        rule (`approval_rule_id`, `approval_rule_name`) but without `content`
+        and `source_path`: `GET /api/v1/inventories/{id}` answers them.
       parameters:
         - $ref: '#/components/parameters/Page'
       responses:
@@ -485,7 +566,38 @@ paths:
     post:
       tags: [Inventories]
       summary: Create an inventory
-      description: Requires `inventory.create` permission.
+      description: |
+        Requires `inventory.create` and operator access to the project
+        (`project_id`; 403 `Forbidden.` otherwise). The caller becomes
+        `created_by`; a `created_by` in the body is ignored. The answer is
+        the inventory with its `content` and `source_path`. Audited as
+        `inventory.created` with its name, type and project, the fields that
+        have a value in `changed_fields` (never their values),
+        `approval_rule` as `{"from": null, "to": {"id": 3, "name":
+        "deploy-prod"}}` when it starts with a rule, and source `api`.
+
+        An `approval_rule_id` other than null or `""` needs
+        `approval-rule.update` (admins): without it the create answers 403
+        `Only admins may assign or remove an approval rule: that needs
+        approval-rule.update.` and writes nothing. Every launch of every job
+        template that uses an inventory with a rule waits for that rule (see
+        Inventories). A dynamic inventory with a rule needs a `source_path`
+        (422). A field of the body that holds a list or an object answers
+        422 (`project_id must be a single value, not a list or an object.`)
+        before the body reaches the inventory.
+
+        The answers come in this order: 403 `Forbidden.` without
+        `inventory.create`; 422 for a field that holds a list or an object;
+        403 `Forbidden.` without operator access to the project; 403 for an
+        approval rule without `approval-rule.update`; 422 for an inventory
+        that is not valid. A save that collides with a concurrent change (a
+        deadlock or a lock wait timeout) is made once more, and so is a save
+        whose approval rule or project another request deletes at the same
+        moment (the database refuses the reference to the row that is gone):
+        the second attempt answers 422 `The selected approval rule does not
+        exist.` or `The selected project does not exist.`. A second
+        collision or refusal in a row answers 500. Nothing is written in
+        either case.
       requestBody:
         required: true
         content:
@@ -498,18 +610,55 @@ paths:
                   name: zabbix-hq
                   inventory_type: static
                   content: "---\nall:\n  hosts:\n    zabbix-hq:\n      ansible_host: 10.1.42.108\n"
+              gated:
+                summary: A static inventory whose every launch waits for approval rule 3 (admins only)
+                value:
+                  name: web-prod
+                  inventory_type: static
+                  content: "all:\n  hosts:\n    web1.example.com:\n    web2.example.com:\n"
+                  approval_rule_id: 3
       responses:
-        '201': { $ref: '#/components/responses/InventoryResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '201': { $ref: '#/components/responses/InventoryDetailResponse' }
+        '403':
+          description: |
+            Missing `inventory.create` or operator access to the project
+            (`Forbidden.`), or an approval rule without
+            `approval-rule.update`. Nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                forbidden:
+                  summary: Missing inventory.create or operator access to the project
+                  value:
+                    error:
+                      message: Forbidden.
+                approvalRule:
+                  summary: The body gives the inventory an approval rule
+                  value:
+                    error:
+                      message: 'Only admins may assign or remove an approval rule: that needs approval-rule.update.'
+        '422': { $ref: '#/components/responses/InventoryRejected' }
   /api/v1/inventories/{id}:
     parameters:
       - $ref: '#/components/parameters/IdPath'
     get:
       tags: [Inventories]
       summary: Get a single inventory
+      description: |
+        Requires `inventory.view` and view access to the inventory's project
+        (403 otherwise). Answers the inventory with its `content` and
+        `source_path`, to the users who may see the inventory's page, and
+        `used_by`: the job templates that use it, as the Job templates card
+        of its page shows them to the caller. `used_by.job_templates` lists
+        the live job templates the caller may see, each with its own
+        approval rule; `hidden_job_template_count` counts the live ones in
+        projects the caller cannot see, and `deleted_job_template_count` the
+        deleted ones that still refer to the inventory, for the history of
+        their jobs. While `in_use` is true the inventory cannot be deleted.
+        The answers of `POST` and `PUT` leave `used_by` out.
       responses:
-        '200': { $ref: '#/components/responses/InventoryResponse' }
+        '200': { $ref: '#/components/responses/InventoryViewResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/Forbidden' }
     put:
@@ -520,25 +669,163 @@ paths:
         project and, when `project_id` changes, to the new project (403
         otherwise). Changing the type or the project is rejected with 422 when
         job templates of another project would then use a file or dynamic
-        inventory of this project.
+        inventory of this project. Fields the body leaves out keep their
+        value. The answer is the inventory with its `content` and
+        `source_path`.
+
+        Setting, changing or removing `approval_rule_id` needs
+        `approval-rule.update` (admins): another value than the stored one,
+        `null` and `""` included, answers 403 `Only admins may assign or
+        remove an approval rule: that needs approval-rule.update.` for
+        everyone else and writes nothing. Sending the stored value again, or
+        leaving the field out, is allowed; `null` removes the rule. Giving
+        the inventory a rule, or another one, while live job templates on it
+        have another rule of their own answers 422 `Job templates that use
+        this inventory have another approval rule of their own:
+        "deploy-web". A launch waits for one rule only, so give them this
+        rule or none first.`, which names the job templates the caller may
+        see and counts the others (`"deploy-web" and 2 in projects you
+        cannot see`).
+
+        An inventory with an approval rule is changed only by admins
+        (`approval-rule.update`), but for its `name` and `description`: the
+        schedules, triggers and workflows of the job templates that use it
+        launch their jobs as the users they run as, who never approve them,
+        so whoever changed the hosts could approve them alone. For everyone
+        else, an update that changes any other field (`inventory_type`,
+        `content`, `source_path`, `project_id`) answers 403 `This inventory
+        has an approval rule: only admins may change its hosts
+        (approval-rule.update). You may change its name and description.`
+        and writes nothing. A field sent with its stored value is no change:
+        `null` and `""` are the same, and values are compared as their
+        field's type (`"5"` and `5` alike), so the body of `GET` sent back
+        with a new `name` is accepted. A change of `approval_rule_id` is
+        refused with its own message first. The inventory row is locked
+        while the update decides, so a rule assigned or removed at the same
+        moment counts, and fields the body does not change keep what
+        another request saved meanwhile.
+
+        Audited as `inventory.updated` with the name, the changed fields in
+        `changed_fields` (never their values; `[]` when nothing changed),
+        `approval_rule` as `{"from": ..., "to": ...}` when the rule changes,
+        and source `api`. The answers come in this order: 403 `Forbidden.`
+        without `inventory.update`; 404 for an unknown inventory; 403
+        `Forbidden.` without operator access to its project; 422 for a field
+        that holds a list or an object; 403 `Forbidden.` without operator
+        access to the new project; 403 for a change of the approval rule
+        without `approval-rule.update`; 404 for an inventory deleted
+        meanwhile; 403 `Forbidden.` for operator access lost meanwhile; 403
+        for a change of an inventory with an approval rule; 422 for an
+        inventory that is not valid. A save that collides with a concurrent
+        change (a deadlock or a lock wait timeout) is made once more, and so
+        is a save whose approval rule or new project another request deletes
+        at the same moment (the database refuses the reference to the row
+        that is gone): the second attempt answers 422 `The selected approval
+        rule does not exist.` or `The selected project does not exist.`. A
+        second collision or refusal in a row answers 500. Nothing is written
+        in either case.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/InventoryInput' }
+            examples:
+              assignRule:
+                summary: Give the inventory approval rule 3 (admins only)
+                value:
+                  name: web-prod
+                  inventory_type: static
+                  approval_rule_id: 3
+              removeRule:
+                summary: Remove its approval rule (admins only)
+                value:
+                  name: web-prod
+                  inventory_type: static
+                  approval_rule_id: null
       responses:
-        '200': { $ref: '#/components/responses/InventoryResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '200': { $ref: '#/components/responses/InventoryDetailResponse' }
+        '403':
+          description: |
+            Missing `inventory.update` or operator access to the inventory's
+            project or the new one (`Forbidden.`); a change of
+            `approval_rule_id` without `approval-rule.update`; or, on an
+            inventory with an approval rule, a change of any field but
+            `name` and `description` without `approval-rule.update`. Nothing
+            was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                forbidden:
+                  summary: Missing inventory.update or operator access to the project
+                  value:
+                    error:
+                      message: Forbidden.
+                approvalRule:
+                  summary: The update changes the approval rule
+                  value:
+                    error:
+                      message: 'Only admins may assign or remove an approval rule: that needs approval-rule.update.'
+                gatedInventory:
+                  summary: The inventory has an approval rule, and the update changes more than its name and description
+                  value:
+                    error:
+                      message: 'This inventory has an approval rule: only admins may change its hosts (approval-rule.update). You may change its name and description.'
+        '404': { $ref: '#/components/responses/InventoryNotFound' }
+        '422': { $ref: '#/components/responses/InventoryRejected' }
     delete:
       tags: [Inventories]
       summary: Delete an inventory
-      description: Requires `inventory.delete`.
+      description: |
+        Requires `inventory.delete`, which of the built-in roles only admin
+        holds, and operator access to the inventory's project (403
+        `Forbidden.` otherwise). An inventory with an approval rule is
+        deleted only by admins (`approval-rule.update`): a custom role that
+        holds `inventory.delete` without it gets 403 `This inventory has an
+        approval rule: only admins may delete it (approval-rule.update).`
+
+        An inventory that job templates use, also when only deleted ones
+        do, is not deleted: 409 with `error.used_by`, and nothing is
+        changed. Point its job templates at another inventory first: a
+        deleted job template keeps its inventory, for the history of its
+        jobs, until its project is deleted. A job template that starts to
+        use the inventory while the delete runs gets the same 409, with the
+        job templates counted again. Audited as `inventory.deleted` with the
+        name, the type, `approval_rule` as `{"from": ..., "to": null}` when
+        it had one, and source `api`.
+
+        The answers come in this order: 403 `Forbidden.` without
+        `inventory.delete`; 404 for an unknown inventory; 403 `Forbidden.`
+        without operator access to its project; 404 for an inventory deleted
+        meanwhile; 403 `Forbidden.` for operator access lost meanwhile; 403
+        for an inventory with an approval rule without
+        `approval-rule.update`; 409 for an inventory in use. A delete that
+        collides with a concurrent change (a deadlock or a lock wait
+        timeout) is made once more; a second collision answers 500, and
+        nothing is deleted.
       responses:
         '200': { $ref: '#/components/responses/DeletedResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '404': { $ref: '#/components/responses/NotFound' }
+        '403':
+          description: |
+            Missing `inventory.delete` or operator access to the inventory's
+            project (`Forbidden.`), or an inventory with an approval rule
+            without `approval-rule.update`. Nothing was deleted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                forbidden:
+                  summary: Missing inventory.delete or operator access to the project
+                  value:
+                    error:
+                      message: Forbidden.
+                gatedInventory:
+                  summary: The inventory has an approval rule
+                  value:
+                    error:
+                      message: 'This inventory has an approval rule: only admins may delete it (approval-rule.update).'
+        '404': { $ref: '#/components/responses/InventoryNotFound' }
+        '409': { $ref: '#/components/responses/InventoryInUse' }
 
   # ───────────────────────────── Credentials ─────────────────────────────
   /api/v1/credentials:
@@ -667,9 +954,9 @@ paths:
       description: |
         Requires `job-template.update` and `credential.view`. Lists the job
         templates the caller may change, with their current vault passwords.
-        Job templates with an approval rule are listed too; only callers with
-        `approval-rule.update` can assign a vault password to them (see
-        `POST`).
+        Job templates with an approval rule, their own or their inventory's,
+        are listed too; only callers with `approval-rule.update` can assign a
+        vault password to them (see `POST`).
       responses:
         '200': { $ref: '#/components/responses/VaultAssignmentCandidatesResponse' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -692,7 +979,11 @@ paths:
         reported with the status `failed` and the error `This job template
         has an approval rule: only admins may change what it runs
         (approval-rule.update). You may change its name and description.`,
-        and the other templates are assigned.
+        and the other templates are assigned. So is a job template whose
+        inventory has an approval rule, with the error `The inventory of
+        this job template has an approval rule: only admins may change what
+        it runs (approval-rule.update). You may change its name and
+        description.`
 
         Nothing is written when the request is invalid: 422 for a credential
         that is not a vault password or has no usable secret, a malformed or
@@ -746,6 +1037,19 @@ paths:
         existing. The survey and the extra vars are checked by the rules
         described at `survey_fields` and `extra_vars` of `JobTemplateInput`
         (422 with the first problem).
+
+        An inventory with an approval rule (`approval_rule_id` of the
+        inventory) needs `approval-rule.update` as well: every launch of the
+        template would wait for that rule, so without it the create answers
+        403 `The selected inventory has an approval rule: only admins may
+        give a job template an inventory with an approval rule
+        (approval-rule.update).` and writes nothing. An inventory the caller
+        cannot see answers 422 `The selected inventory does not exist.`
+        instead, also one with a rule. A launch waits for one rule only: an
+        `approval_rule_id` other than the rule of the inventory, when the
+        inventory has one, answers 422 `Inventory "web-prod" has the
+        approval rule "deploy-prod": a job template on it may have only that
+        rule as its own, or none.`
       requestBody:
         required: true
         content:
@@ -773,8 +1077,32 @@ paths:
                   required: true
       responses:
         '201': { $ref: '#/components/responses/JobTemplateResponse' }
-        '403': { $ref: '#/components/responses/Forbidden' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '403':
+          description: |
+            Missing `job-template.create` or operator access to the project
+            (`Forbidden.`), an `approval_rule_id` without
+            `approval-rule.update`, or an inventory with an approval rule
+            without `approval-rule.update`. Nothing was written.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              examples:
+                forbidden:
+                  summary: No permission or no operator access
+                  value:
+                    error:
+                      message: 'Forbidden.'
+                approvalRule:
+                  summary: The template gets an approval rule
+                  value:
+                    error:
+                      message: 'Only admins may assign or remove an approval rule: that needs approval-rule.update.'
+                gatedInventory:
+                  summary: The template's inventory has an approval rule
+                  value:
+                    error:
+                      message: 'The selected inventory has an approval rule: only admins may give a job template an inventory with an approval rule (approval-rule.update).'
+        '422': { $ref: '#/components/responses/JobTemplateRejected' }
   /api/v1/job-templates/{id}:
     parameters: [{ $ref: '#/components/parameters/IdPath' }]
     get:
@@ -827,6 +1155,32 @@ paths:
         `approval_rule_id` is refused with its own message first. The
         template row is locked while the update decides, so a rule assigned
         at the same moment counts.
+
+        The same holds for a job template whose inventory has an approval
+        rule: every launch waits for that rule (`approval_gate`), so for
+        everyone but admins an update that changes more than its `name` and
+        `description` answers 403 `The inventory of this job template has an
+        approval rule: only admins may change what it runs
+        (approval-rule.update). You may change its name and description.`
+        and writes nothing. Moving it to another inventory, also one without
+        a rule, is such a change. A template with a rule of its own gets the
+        refusal of its own rule, also when its inventory has one. Giving a
+        template an inventory with an approval rule needs
+        `approval-rule.update` too: 403 `The selected inventory has an
+        approval rule: only admins may give a job template an inventory with
+        an approval rule (approval-rule.update).`; an inventory the caller
+        cannot see answers 422 `The selected inventory does not exist.`
+        instead. The rules of the stored and of the new inventory are read
+        with a lock while the update decides, so a rule assigned to them at
+        the same moment counts.
+
+        A launch waits for one rule only: an update that changes
+        `approval_rule_id` or `inventory_id` so that the template's own rule
+        differs from the rule of its inventory answers 422 `Inventory
+        "web-prod" has the approval rule "deploy-prod": a job template on it
+        may have only that rule as its own, or none.` A template whose own
+        rule already differs from its inventory's can still be renamed; its
+        launches are refused (see `POST /api/v1/jobs`).
       requestBody:
         required: true
         content:
@@ -840,6 +1194,8 @@ paths:
             project (`Forbidden.`); a change of `approval_rule_id` without
             `approval-rule.update`; or, on a job template with an approval
             rule, a change of any field but `name` and `description` without
+            `approval-rule.update`, also when only its inventory has the
+            rule; or a new inventory with an approval rule without
             `approval-rule.update`. Nothing was written.
           content:
             application/json:
@@ -860,8 +1216,18 @@ paths:
                   value:
                     error:
                       message: 'This job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.'
+                inventoryGatedTemplate:
+                  summary: The template's inventory has an approval rule, and the update changes more than its name and description
+                  value:
+                    error:
+                      message: 'The inventory of this job template has an approval rule: only admins may change what it runs (approval-rule.update). You may change its name and description.'
+                gatedInventory:
+                  summary: The update gives the template an inventory with an approval rule
+                  value:
+                    error:
+                      message: 'The selected inventory has an approval rule: only admins may give a job template an inventory with an approval rule (approval-rule.update).'
         '404': { $ref: '#/components/responses/NotFound' }
-        '422': { $ref: '#/components/responses/ValidationError' }
+        '422': { $ref: '#/components/responses/JobTemplateRejected' }
     delete:
       tags: [Job Templates]
       summary: Delete a job template
@@ -981,14 +1347,23 @@ paths:
 
         A template with an approval rule (`approval_rule_id`) creates the
         job with status `pending_approval` and its approval request in one
-        transaction; the job is queued once the request is approved. Also
+        transaction; the job is queued once the request is approved. So
+        does a template whose inventory has an approval rule (see
+        `approval_gate` of `JobTemplate`): the answer's `status` is then
+        `pending_approval`, and `approval_request_id` names the request,
+        whose `required_by` says which rule required it. Also
         refused with 422, before anything is written: a rule that leaves
         fewer eligible approvers besides the caller than it requires (the
         caller never approves their own job, see Approvals), a rule that no
         longer exists, a template that was deleted, or one whose approval
-        rule changed while the job was being launched. Schedules report the
-        same reasons when they fail to launch (`schedule.failed_to_launch`),
-        and a workflow job step fails with them.
+        rule changed while the job was being launched. A launch waits for
+        one rule only, so a template whose own rule differs from its
+        inventory's is refused too, and so is a launch whose inventory no
+        longer exists, or whose template got another inventory, or whose
+        inventory got another rule, while the job was being launched.
+        Schedules report the same reasons when they fail to launch
+        (`schedule.failed_to_launch`), and a workflow job step fails with
+        them.
       requestBody:
         required: true
         content:
@@ -2105,8 +2480,17 @@ paths:
       summary: Send a test notification through this template
       description: |
         Requires `notification-template.update`. Sends one test message
-        through the template's channel. Like every send, it writes a
-        `notification.dispatched` or `notification.failed` audit entry.
+        through the template's channel, with the sample variables of the
+        web UI's Send Test: sample values, as strings, of the variables
+        that notifications carry, among them `event`, `severity`,
+        `app.url`, the job, template, project, runner, workflow, schedule,
+        approval and trigger ones, `approval.required_by`,
+        `job.inventory_id` and `job.inventory_name`; `launched_by` is the
+        caller. The event is the template's first event, else `test`, as
+        in the web UI. Before 2.12.0 it sent nine variables of its own,
+        for the event `test`. Like every send, it writes a
+        `notification.dispatched` or `notification.failed` audit entry,
+        which names the event.
         Answers `{"sent": true}` only when the channel took the message.
         When the channel did not, for example a webhook endpoint that
         answered an error status or could not be reached, the call answers
@@ -2216,9 +2600,10 @@ paths:
         under `changes`, as `{"from": ..., "to": ...}`, and source `api`.
         The response is the rule as stored.
 
-        A rule that is in use changes for its job templates and approval
-        steps at once. Its pending requests are checked against the new
-        settings at their next vote or timeout, not when the rule changes.
+        A rule that is in use changes for its inventories, job templates and
+        approval steps at once. Its pending requests are checked against the
+        new settings at their next vote or timeout, not when the rule
+        changes.
       requestBody:
         required: true
         content:
@@ -2237,12 +2622,16 @@ paths:
       summary: Delete an approval rule
       description: |
         Requires `approval-rule.delete` (403 otherwise). A rule is in use
-        while live job templates, steps of live workflows or pending
-        approval requests whose job still waits for approval refer to it.
-        Deleting a rule in use is refused with 409 and `error.used_by`, and
-        nothing is changed; there is no force option. Remove the rule from
-        the job templates and workflow steps, and let its pending requests
-        be decided or their jobs canceled, first.
+        while inventories, live job templates, steps of live workflows or
+        pending approval requests whose job still waits for approval refer
+        to it. Deleting a rule in use is refused with 409, a message that
+        counts each of them (`1 inventory(ies)`, `2 job template(s)` and so
+        on) and `error.used_by`, and nothing is changed; there is no force
+        option. Remove the rule from the inventories, job templates
+        and workflow steps, and let its pending requests be decided or their
+        jobs canceled, first. An inventory's rule is removed with
+        `PUT /api/v1/inventories/{id}` and `approval_rule_id: null`, by an
+        admin.
 
         Deleting an unused rule clears it from deleted job templates and
         from steps of deleted workflows, which cannot run, and keeps its
@@ -2274,7 +2663,9 @@ paths:
         caller may view. The request of a workflow step names its run, step
         and workflow only to a caller who may view that workflow (see
         `workflow_job_id` of `ApprovalRequest`). Each request lists its
-        votes in `decisions`, read for the whole page at once.
+        votes in `decisions`, read for the whole page at once, says what
+        required it (`required_by`), and names the inventory its job was
+        launched with (`inventory_id`, `inventory_name`).
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/ApprovalStatusFilter'
@@ -2431,13 +2822,18 @@ paths:
         approval rule: steps that include one need `approval-rule.update` as
         well, otherwise the call answers 403 `Only admins may add a job step
         whose job template has an approval rule: that needs
-        approval-rule.update.` A job template the caller cannot see counts
-        as none for this check and answers 422 as not found. Whether a job
-        step's job template is gated is checked again in the transaction
+        approval-rule.update.` A job step whose job template's inventory has
+        an approval rule is a gated job step too: 403 `Only admins may add a
+        job step whose job template's inventory has an approval rule: that
+        needs approval-rule.update.` A job template the caller cannot see
+        counts as none for this check and answers 422 as not found. Whether
+        a job step's job template is gated is checked again in the transaction
         that writes the steps: an approval rule assigned to it meanwhile
         answers the same 403 `Only admins may add a job step whose job
         template has an approval rule: that needs approval-rule.update.`,
-        and nothing is written. The answers come in this order: 422 for a
+        and nothing is written. A rule assigned meanwhile to the inventory
+        of such a job template answers its inventory's 403 the same way.
+        The answers come in this order: 422 for a
         template that is not valid, such as one without a name (`Name
         cannot be blank.`); 422 for steps that cannot be read; 403 for
         approval steps and gated job steps; 422 for unknown approval rules;
@@ -2498,6 +2894,11 @@ paths:
                   value:
                     error:
                       message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                gatedInventoryJobStep:
+                  summary: The steps include a job step whose job template's inventory has an approval rule
+                  value:
+                    error:
+                      message: "Only admins may add a job step whose job template's inventory has an approval rule: that needs approval-rule.update."
                 jobTemplate:
                   summary: A job template the caller may not operate
                   value:
@@ -2554,16 +2955,25 @@ paths:
         (approval-rule.update).`, or for a workflow that has a gated job step
         403 `This workflow has a job step whose job template has an approval
         rule: only admins may change its steps (approval-rule.update).`, also
-        when it holds the same steps. Whether a job step is gated is read
-        from its job template at each call, so a job template that gets an
-        approval rule locks the workflows that use it from then on. The new
-        steps are checked again while the workflow is locked: an approval
-        rule assigned meanwhile to the job template of a new job step
+        when it holds the same steps. A job step whose job template's
+        inventory has an approval rule is a gated job step too: 403 `Only
+        admins may add a job step whose job template's inventory has an
+        approval rule: that needs approval-rule.update.` for a new one, and
+        `This workflow has a job step whose job template's inventory has an
+        approval rule: only admins may change its steps
+        (approval-rule.update).` for a workflow that has one; the job
+        template's own rule is named first. Whether a job step is gated is
+        read from its job template and its inventory at each call, so a job
+        template that gets an approval rule locks the workflows that use it
+        from then on, and so does an inventory that gets one. The new steps
+        are checked again while the workflow is locked: an approval rule
+        assigned meanwhile to the job template of a new job step
         answers the same 403 `Only admins may add a job step whose job
         template has an approval rule: that needs approval-rule.update.`,
-        and nothing is written. A job template the caller cannot see counts
-        as none for this check. Without `steps`, or with `steps: null`, the
-        name and description change as before.
+        and nothing is written. A rule assigned meanwhile to its inventory
+        answers its inventory's 403 the same way. A job template the caller
+        cannot see counts as none for this check. Without `steps`, or with
+        `steps: null`, the name and description change as before.
 
         The steps cannot change while a run of the workflow is active
         (`running`): such an update answers 409 and names the runs in
@@ -2612,6 +3022,11 @@ paths:
                   value:
                     error:
                       message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                gatedInventoryJobStep:
+                  summary: The new steps include a job step whose job template's inventory has an approval rule
+                  value:
+                    error:
+                      message: "Only admins may add a job step whose job template's inventory has an approval rule: that needs approval-rule.update."
                 approvalWorkflow:
                   summary: The workflow has an approval step
                   value:
@@ -2622,6 +3037,11 @@ paths:
                   value:
                     error:
                       message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+                gatedInventoryJobWorkflow:
+                  summary: The workflow has a job step whose job template's inventory has an approval rule
+                  value:
+                    error:
+                      message: "This workflow has a job step whose job template's inventory has an approval rule: only admins may change its steps (approval-rule.update)."
         '409': { $ref: '#/components/responses/WorkflowStepsLocked' }
         '422':
           description: |
@@ -2684,12 +3104,20 @@ paths:
         steps (approval-rule.update).`, or to one that has a gated job step
         403 `This workflow has a job step whose job template has an approval
         rule: only admins may change its steps (approval-rule.update).`
-        Whether a job step's job template is gated is checked again while
-        the workflow is locked: an approval rule assigned to it meanwhile
+        A job step whose job template's inventory has an approval rule is a
+        gated job step too: adding one answers 403 `Only admins may add a
+        job step whose job template's inventory has an approval rule: that
+        needs approval-rule.update.`, and adding any step to a workflow that
+        has one 403 `This workflow has a job step whose job template's
+        inventory has an approval rule: only admins may change its steps
+        (approval-rule.update).`; the job template's own rule is named
+        first. Whether a job step's job template is gated is checked again
+        while the workflow is locked: an approval rule assigned to it meanwhile
         answers the same 403 `Only admins may add a job step whose job
         template has an approval rule: that needs approval-rule.update.`,
-        and nothing is written. The job template of a job step must be one
-        the caller may operate: one
+        and nothing is written. A rule assigned meanwhile to its inventory
+        answers its inventory's 403 the same way. The job template of a job
+        step must be one the caller may operate: one
         that does not exist, is deleted or belongs to a project the caller
         cannot see answers 422 `The selected job template does not exist.`,
         a visible one the caller may not operate 403 `You may not use this
@@ -2780,6 +3208,11 @@ paths:
                   value:
                     error:
                       message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                gatedInventoryJobStep:
+                  summary: The step is a job step whose job template's inventory has an approval rule
+                  value:
+                    error:
+                      message: "Only admins may add a job step whose job template's inventory has an approval rule: that needs approval-rule.update."
                 approvalWorkflow:
                   summary: The workflow has an approval step
                   value:
@@ -2790,6 +3223,11 @@ paths:
                   value:
                     error:
                       message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+                gatedInventoryJobWorkflow:
+                  summary: The workflow has a job step whose job template's inventory has an approval rule
+                  value:
+                    error:
+                      message: "This workflow has a job step whose job template's inventory has an approval rule: only admins may change its steps (approval-rule.update)."
                 jobTemplate:
                   summary: A job template the caller may see but not operate
                   value:
@@ -2929,7 +3367,15 @@ paths:
         step whose job template has an approval rule: that needs
         approval-rule.update.` This is checked again while the workflow is
         locked: an approval rule assigned to that job template meanwhile
-        answers the same 403, and nothing is written. A new job template is
+        answers the same 403, and nothing is written. A job template whose
+        inventory has an approval rule makes a gated job step too: giving a
+        job step one answers 403 `Only admins may add a job step whose job
+        template's inventory has an approval rule: that needs
+        approval-rule.update.`, and a workflow with such a step answers 403
+        `This workflow has a job step whose job template's inventory has an
+        approval rule: only admins may change its steps
+        (approval-rule.update).`; the job template's own rule is named
+        first. A new job template is
         checked as on add (422
         or 403, with `error.job_template_ids`). An approval step that an
         older version saved with an Always branch answers 422 `An approval
@@ -3009,11 +3455,21 @@ paths:
                   value:
                     error:
                       message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+                gatedInventoryJobWorkflow:
+                  summary: The workflow has a job step whose job template's inventory has an approval rule
+                  value:
+                    error:
+                      message: "This workflow has a job step whose job template's inventory has an approval rule: only admins may change its steps (approval-rule.update)."
                 gatedJobStep:
                   summary: The new job template has an approval rule
                   value:
                     error:
                       message: 'Only admins may add a job step whose job template has an approval rule: that needs approval-rule.update.'
+                gatedInventoryJobStep:
+                  summary: The new job template's inventory has an approval rule
+                  value:
+                    error:
+                      message: "Only admins may add a job step whose job template's inventory has an approval rule: that needs approval-rule.update."
                 jobTemplate:
                   summary: A new job template the caller may see but not operate
                   value:
@@ -3301,8 +3757,10 @@ paths:
         65535 bytes, `$encrypted$` sent as a password answer, a template
         without steps, a template deleted meanwhile, and an approval that
         could never be granted: an approval step, or a job step whose job
-        template has an approval rule, whose rule leaves too few eligible
-        approvers besides the caller or no longer exists.
+        template has an approval rule, its own or its inventory's, whose
+        rule leaves too few eligible approvers besides the caller or no
+        longer exists; and a job step whose job template and inventory have
+        different approval rules, as a launch waits for one rule only.
 
         A database error is no refusal: 500, with the error named by its
         class, SQLSTATE and driver error code only (it answered 422 with its
@@ -3720,11 +4178,14 @@ paths:
         a password field of the template's survey are password answers,
         stored only encrypted. A launch the server refuses for a reason the
         caller can fix answers 422 with the reason, for example
-        `$encrypted$` sent as a password answer, a `verbosity` above 5, or
-        an approval rule that leaves too few eligible approvers besides the
-        user the trigger runs as (that user never approves the job). A
-        template with an approval rule creates a job that waits for
-        approval. Any method but POST answers 405.
+        `$encrypted$` sent as a password answer, a `verbosity` above 5, an
+        approval rule that leaves too few eligible approvers besides the
+        user the trigger runs as (that user never approves the job), or a
+        template whose own approval rule differs from its inventory's. A
+        template with an approval rule, its own or its inventory's, creates
+        a job that waits for approval: the answer's `status` is then
+        `pending_approval`, and `queued` for a job that waits for a runner.
+        Any method but POST answers 405.
       security:
         - triggerTokenHeader: []
         - triggerTokenBearer: []
@@ -3836,11 +4297,12 @@ paths:
         422 with the reason, and no run is created: extra vars that are not
         a JSON object, that JSON cannot hold or that take more than 65535
         bytes, `$encrypted$` sent as a password answer, a workflow without
-        steps, a workflow deleted meanwhile, and an approval that could
-        never be granted (an approval step, or a job step whose job template
-        has an approval rule, whose rule leaves too few eligible approvers
-        besides the user the trigger runs as, or no longer exists). Any
-        method but POST answers 405.
+        steps, a workflow deleted meanwhile, an approval that could never be
+        granted (an approval step, or a job step whose job template has an
+        approval rule, its own or its inventory's, whose rule leaves too few
+        eligible approvers besides the user the trigger runs as, or no
+        longer exists), and a job step whose job template and inventory have
+        different approval rules. Any method but POST answers 405.
       security:
         - triggerTokenHeader: []
         - triggerTokenBearer: []
@@ -4240,14 +4702,102 @@ components:
           schema:
             type: string
             description: CSV export (only when `format=csv`)
-    InventoryResponse:
-      description: Inventory
+    InventoryDetailResponse:
+      description: The inventory with its content and source path
       content:
         application/json:
           schema:
             type: object
             properties:
-              data: { $ref: '#/components/schemas/Inventory' }
+              data: { $ref: '#/components/schemas/InventoryDetail' }
+    InventoryViewResponse:
+      description: The inventory with its content and source path, and the job templates that use it
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data: { $ref: '#/components/schemas/InventoryView' }
+    InventoryRejected:
+      description: |
+        The inventory was not saved, and nothing was written: a field of the
+        body that holds a list or an object (`<field> must be a single
+        value, not a list or an object.`), or the first validation error,
+        such as `Name cannot be blank.`, `The selected project does not
+        exist.`, `The selected approval rule does not exist.`, `Approval
+        rule must be an integer.`, a dynamic inventory with an approval rule
+        but without a source path, a change of the type or the project that
+        would leave job templates of another project on a file or dynamic
+        inventory of this one, static content that the inventory brings
+        (new, changed, or of an inventory that becomes static) and that is
+        no YAML mapping (`Invalid YAML: …`, `Inventory must be a YAML
+        mapping (not a scalar).`), and, on an update that gives the
+        inventory an approval rule, live job templates on it with another
+        rule of their own.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            notAValue:
+              summary: A field that holds a list or an object
+              value:
+                error:
+                  message: 'project_id must be a single value, not a list or an object.'
+            approvalRuleNotFound:
+              summary: An approval_rule_id that names no rule
+              value:
+                error:
+                  message: 'The selected approval rule does not exist.'
+            rulesDiffer:
+              summary: An update gives the inventory a rule while a job template on it has another rule of its own
+              value:
+                error:
+                  message: 'Job templates that use this inventory have another approval rule of their own: "deploy-web". A launch waits for one rule only, so give them this rule or none first.'
+            sourcePathRequired:
+              summary: A dynamic inventory with an approval rule but without a source path
+              value:
+                error:
+                  message: "A dynamic inventory with an approval rule needs a source path: without one, jobs use the default inventory of Ansible or of the repository's ansible.cfg, which no rule gates."
+    InventoryNotFound:
+      description: |
+        The inventory does not exist, in the framework's shape
+        (`FrameworkError`), or another request deleted it while the change
+        was checked, as `ErrorResponse`. Nothing was written.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: '#/components/schemas/FrameworkError'
+              - $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            inventory:
+              summary: An unknown inventory
+              value: { name: Not Found, message: 'Inventory #7 not found.', code: 0, status: 404 }
+            deletedMeanwhile:
+              summary: Another request deleted the inventory while the change was checked
+              value:
+                error:
+                  message: 'Inventory #7 not found.'
+    InventoryInUse:
+      description: |
+        The inventory is in use and was not deleted: live job templates use
+        it, or deleted ones still refer to it, for the history of their
+        jobs. `error.used_by` says which: the list holds the live job
+        templates the caller may see, the counts everything. Point the job
+        templates at another inventory first; a deleted job template keeps
+        its inventory until its project is deleted.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/InventoryInUseError' }
+          example:
+            error:
+              message: 'Inventory "web-prod" is in use by 1 job template(s). Point its job templates at another inventory first. A deleted job template keeps its inventory for the history of its jobs until its project is deleted, so deleting the template does not free it.'
+              used_by:
+                in_use: true
+                job_templates:
+                  - { id: 12, name: deploy-web, project_id: 2, project_name: web, approval_rule_id: null, approval_rule_name: null }
+                hidden_job_template_count: 0
+                deleted_job_template_count: 0
     CredentialResponse:
       description: Credential (secrets never included)
       content:
@@ -4346,6 +4896,32 @@ components:
             type: object
             properties:
               data: { $ref: '#/components/schemas/JobTemplate' }
+    JobTemplateRejected:
+      description: |
+        The job template was not saved, and nothing was written: the first
+        validation error. Among them `The selected inventory does not
+        exist.` for an inventory that does not exist or belongs to a project
+        the caller cannot see, also one with an approval rule, and an own
+        approval rule other than the rule of the template's inventory
+        (`Inventory "web-prod" has the approval rule "deploy-prod": a job
+        template on it may have only that rule as its own, or none.`). More
+        than one vault password, a file or dynamic inventory of another
+        project, and the rules of `survey_fields` and `extra_vars` of
+        `JobTemplateInput` answer 422 as well.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          examples:
+            rulesDiffer:
+              summary: An own approval rule other than the rule of the template's inventory
+              value:
+                error:
+                  message: 'Inventory "web-prod" has the approval rule "deploy-prod": a job template on it may have only that rule as its own, or none.'
+            inventoryNotFound:
+              summary: An inventory that does not exist, or that the caller cannot see
+              value:
+                error:
+                  message: 'The selected inventory does not exist.'
     JobResponse:
       description: Job
       content:
@@ -4794,7 +5370,12 @@ components:
     WorkflowLaunchRejected:
       description: |
         The launch was refused for a reason the caller or an admin can fix,
-        and no run was created. `error.message` says why.
+        and no run was created. `error.message` says why. An approval that
+        could never be granted is checked for every approval step and every
+        gated job step (a job step whose job template has an approval rule,
+        its own or its inventory's), and the first such step in the run
+        order answers; a job step whose job template and inventory have
+        different approval rules too, as a launch waits for one rule only.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4819,6 +5400,11 @@ components:
               value:
                 error:
                   message: 'Step "Release approval": its approval rule no longer exists. An admin can choose another rule.'
+            rulesDiffer:
+              summary: A job step whose job template and inventory have different approval rules
+              value:
+                error:
+                  message: "Step \"Deploy\": its job template and its inventory have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule."
             noSteps:
               summary: The workflow has no steps
               value:
@@ -4996,8 +5582,9 @@ components:
       description: |
         Missing `workflow-template.update` or operator access to the project
         of every job step of the workflow (`Forbidden.`), or the steps of a
-        workflow that has an approval step or a gated job step, without
-        `approval-rule.update`. Nothing was written.
+        workflow that has an approval step or a gated job step (a job step
+        whose job template has an approval rule, its own or its
+        inventory's), without `approval-rule.update`. Nothing was written.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -5017,6 +5604,11 @@ components:
               value:
                 error:
                   message: 'This workflow has a job step whose job template has an approval rule: only admins may change its steps (approval-rule.update).'
+            gatedInventoryJobWorkflow:
+              summary: The workflow has a job step whose job template's inventory has an approval rule
+              value:
+                error:
+                  message: "This workflow has a job step whose job template's inventory has an approval rule: only admins may change its steps (approval-rule.update)."
     WorkflowStepRemoveConflict:
       description: |
         The step was not removed: runs of the workflow are active
@@ -5094,12 +5686,16 @@ components:
             properties:
               data: { $ref: '#/components/schemas/WorkflowJobDetail' }
     TriggerJobLaunched:
-      description: Job launched
+      description: |
+        Job launched. `status` says whether it waits for approval
+        (`pending_approval`: its job template has an approval rule, its own
+        or its inventory's) or is queued for a runner (`queued`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/TriggerJobResult' }
           example:
             job_id: 42
+            status: pending_approval
     TriggerLaunchRefused:
       description: |
         The user the trigger runs as may not launch it: disabled, without the
@@ -5141,7 +5737,12 @@ components:
         or the template's approval rule: too few eligible approvers besides
         the user the trigger runs as, a rule that no longer exists, or a
         rule that changed while the job was being launched (an admin fixes
-        the rule, or the call is sent again). A `limit` or a `verbosity`
+        the rule, or the call is sent again). The rule of the template's
+        inventory refuses it the same way, and a launch waits for one rule
+        only: a template whose own rule differs from its inventory's, an
+        inventory that no longer exists, and an inventory, or its rule,
+        that changed while the job was being launched answer 422 too, with
+        the messages of `JobLaunchRejected`. A `limit` or a `verbosity`
         the job record does not take (longer than 255 characters; below 0
         or above 5; a list or an object) is refused with the record's
         messages; releases up to 2.9.0 answered 500 for it, or took a list
@@ -5174,6 +5775,26 @@ components:
               summary: The template's approval rule no longer exists
               value:
                 error: 'The approval rule of job template #7 no longer exists. An admin can choose another rule.'
+            rulesDiffer:
+              summary: The template's own rule differs from the rule of its inventory
+              value:
+                error: "Job template #7 and its inventory #3 have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule."
+            inventoryRuleMissing:
+              summary: The approval rule of the template's inventory no longer exists
+              value:
+                error: 'The approval rule of inventory #3, which job template #7 uses, no longer exists. An admin can choose another rule.'
+            inventoryMissing:
+              summary: The template's inventory no longer exists
+              value:
+                error: 'Inventory #3 of job template #7 no longer exists. Choose another inventory for the template.'
+            inventoryChanged:
+              summary: The template got another inventory meanwhile
+              value:
+                error: 'The inventory of job template #7 changed while the job was being launched. Launch it again.'
+            inventoryRuleChanged:
+              summary: The approval rule of the template's inventory changed meanwhile
+              value:
+                error: 'The approval rule of inventory #3, which job template #7 uses, changed while the job was being launched. Launch it again.'
     WorkflowTriggerLaunchRejected:
       description: |
         The workflow launch was refused for a reason the caller or an admin
@@ -5183,8 +5804,9 @@ components:
         that are too large (`The extra vars are too large: a run stores at
         most 65535 bytes of them as JSON.`), `$encrypted$` sent as a
         password answer of a job step's template, a workflow without steps,
-        a workflow deleted meanwhile, or an approval that could never be
-        granted.
+        a workflow deleted meanwhile, an approval that could never be
+        granted, or a job step whose job template and inventory have
+        different approval rules (see `WorkflowLaunchRejected`).
       content:
         application/json:
           schema: { $ref: '#/components/schemas/TriggerRejectedError' }
@@ -5201,6 +5823,10 @@ components:
               summary: An approval that could never be granted
               value:
                 error: 'Step "Release approval": approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide. An admin can add approvers to the rule.'
+            rulesDiffer:
+              summary: A job step whose job template and inventory have different approval rules
+              value:
+                error: "Step \"Deploy\": its job template and its inventory have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule."
             noSteps:
               summary: The workflow has no steps
               value:
@@ -5257,6 +5883,13 @@ components:
         approvers besides the caller than the rule requires (an admin adds
         approvers to the rule), a rule that no longer exists (an admin
         chooses another), a template deleted meanwhile, or a rule that
+        changed while the job was being launched (launch it again). The
+        rule of the template's inventory refuses it the same way, and a
+        launch waits for one rule only: a template whose own rule differs
+        from its inventory's (an admin removes the template's rule or gives
+        it the inventory's), an inventory rule that no longer exists, an
+        inventory that no longer exists (choose another inventory for the
+        template), and a template whose inventory, or that inventory's rule,
         changed while the job was being launched (launch it again). A
         `limit` or a `verbosity` the job record does not take (longer than
         255 characters; below 0 or above 5; a list or an object) is refused
@@ -5313,6 +5946,31 @@ components:
               value:
                 error:
                   message: 'The approval rule of job template #7 changed while the job was being launched. Launch it again.'
+            rulesDiffer:
+              summary: The template's own rule differs from the rule of its inventory
+              value:
+                error:
+                  message: "Job template #7 and its inventory #3 have different approval rules, and a launch waits for one rule only. An admin can remove the template's own rule or give it the inventory's rule."
+            inventoryRuleMissing:
+              summary: The approval rule of the template's inventory no longer exists
+              value:
+                error:
+                  message: 'The approval rule of inventory #3, which job template #7 uses, no longer exists. An admin can choose another rule.'
+            inventoryMissing:
+              summary: The template's inventory no longer exists
+              value:
+                error:
+                  message: 'Inventory #3 of job template #7 no longer exists. Choose another inventory for the template.'
+            inventoryChanged:
+              summary: The template got another inventory meanwhile
+              value:
+                error:
+                  message: 'The inventory of job template #7 changed while the job was being launched. Launch it again.'
+            inventoryRuleChanged:
+              summary: The approval rule of the template's inventory changed meanwhile
+              value:
+                error:
+                  message: 'The approval rule of inventory #3, which job template #7 uses, changed while the job was being launched. Launch it again.'
     JobTemplateDeletedResponse:
       description: The job template was deleted; what the delete resolved.
       content:
@@ -5551,29 +6209,176 @@ components:
 
     Inventory:
       type: object
+      description: An inventory as the list gives it, without `content` and `source_path` (see `InventoryDetail`).
+      required: [id, name, description, inventory_type, project_id, approval_rule_id, approval_rule_name, created_at, updated_at]
       properties:
         id:             { type: integer }
         name:           { type: string }
         description:    { type: string, nullable: true }
         inventory_type: { type: string, enum: [static, dynamic, file] }
         project_id:     { type: integer, nullable: true }
+        approval_rule_id:
+          type: integer
+          nullable: true
+          description: |
+            The approval rule every launch of every job template on this
+            inventory waits for; null for none. Only admins
+            (`approval-rule.update`) set, change or remove it, and while it
+            is set only they change the inventory, but for its `name` and
+            `description`, delete it, and give a job template this
+            inventory (see `PUT /api/v1/inventories/{id}`). A job template
+            on it may have no rule of its own, or only this one.
+          example: 3
+        approval_rule_name:
+          type: string
+          nullable: true
+          description: The name of that rule; null for none. Rule names are not unique.
+          example: deploy-prod
         created_at:     { type: integer }
         updated_at:     { type: integer }
+    InventoryDetail:
+      description: |
+        An inventory with its hosts, or where its hosts come from: what
+        `GET /api/v1/inventories/{id}` and the answers of `POST` and `PUT`
+        give, to the users who may see the inventory's project. The list
+        leaves `content` and `source_path` out.
+      allOf:
+        - $ref: '#/components/schemas/Inventory'
+        - type: object
+          required: [content, source_path]
+          properties:
+            content:
+              type: string
+              nullable: true
+              description: |
+                The hosts of a static inventory, as YAML text, or as INI text
+                stored before the YAML check (the seeded selftest and demo
+                inventories hold `[local]` and
+                `localhost ansible_connection=local`); null when none were
+                stored.
+            source_path:
+              type: string
+              nullable: true
+              description: |
+                The inventory file, script or plugin configuration of a file
+                or dynamic inventory, a path in the repository of the job
+                template's project, read when a runner claims a job; null
+                when none was stored.
+    InventoryView:
+      description: |
+        What `GET /api/v1/inventories/{id}` answers: the inventory's detail
+        and `used_by`, the job templates that use it, as the Job templates
+        card of the inventory's page shows them to the caller. The answers
+        of `POST` and `PUT` are the detail without `used_by`.
+      allOf:
+        - $ref: '#/components/schemas/InventoryDetail'
+        - type: object
+          required: [used_by]
+          properties:
+            used_by: { $ref: '#/components/schemas/InventoryUsage' }
     InventoryInput:
       type: object
       required: [name, inventory_type]
+      description: |
+        `created_by` is not accepted: the caller who creates the inventory
+        is its creator. A field below that holds a list or an object answers
+        422 (`project_id must be a single value, not a list or an object.`),
+        and nothing is written.
       properties:
         name:           { type: string, maxLength: 128 }
-        description:    { type: string, nullable: true }
+        description:    { type: string, nullable: true, maxLength: 1000 }
         inventory_type: { type: string, enum: [static, dynamic, file] }
-        content:        { type: string, description: Required when inventory_type = static }
-        source_path:    { type: string, description: Required when inventory_type = file }
-        project_id:     { type: integer, nullable: true }
+        content:
+          type: string
+          maxLength: 262144
+          description: |
+            Required when inventory_type = static: the hosts as a YAML
+            mapping, such as an `all` group with its `hosts`. Content the
+            request brings is checked: on a create, when the type changes, and
+            when it differs from the stored content in more than its line
+            endings (CRLF, CR and LF count as the same). Content stored before
+            the check, such as the INI of the seeded selftest and demo
+            inventories, stays as it is while the name, the description or
+            the approval rule change, also when the body sends it back
+            unchanged; to change it, send a YAML mapping.
+        source_path:
+          type: string
+          maxLength: 512
+          description: |
+            Required when inventory_type = file, and for a dynamic inventory
+            with an approval rule (422 `A dynamic inventory with an approval
+            rule needs a source path: without one, jobs use the default
+            inventory of Ansible or of the repository's ansible.cfg, which no
+            rule gates.`).
+        project_id:
+          type: integer
+          nullable: true
+          description: |
+            The project; null or `""` for none (`""` is the same as null, so
+            it is no change of an inventory without a project).
+        approval_rule_id:
+          type: integer
+          nullable: true
+          description: |
+            The approval rule that every launch of every job template on the
+            inventory waits for; null or `""` for none, and text with a whole
+            number such as `"3"` is that number. Only admins
+            (`approval-rule.update`) set, change or remove it: another value
+            than the stored one, `null` and `""` included, answers 403 `Only
+            admins may assign or remove an approval rule: that needs
+            approval-rule.update.` for everyone else, and nothing is
+            written; sending the stored value again, or leaving the field
+            out, is allowed. For admins, an ID that names no rule answers 422
+            `The selected approval rule does not exist.`, and a value that is
+            no whole number 422 `Approval rule must be an integer.` On an
+            update, live job templates on the inventory with another rule of
+            their own answer 422 `Job templates that use this inventory have
+            another approval rule of their own: "deploy-web". A launch waits
+            for one rule only, so give them this rule or none first.`
+          example: 3
     InventoryList:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/Inventory' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+    InventoryUsage:
+      type: object
+      description: |
+        Which job templates use an inventory. An inventory is in use while
+        live job templates use it or deleted ones still refer to it, and
+        cannot be deleted then. The list holds the live job templates the
+        caller may see, each with its own approval rule; the hidden count
+        says how many more live ones there are, and the deleted count how
+        many deleted job templates keep the inventory, for the history of
+        their jobs, until their project is deleted.
+      required: [in_use, job_templates, hidden_job_template_count, deleted_job_template_count]
+      properties:
+        in_use: { type: boolean }
+        job_templates:
+          type: array
+          items:
+            type: object
+            required: [id, name, project_id, project_name, approval_rule_id, approval_rule_name]
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              project_id: { type: integer }
+              project_name: { type: string, nullable: true }
+              approval_rule_id: { type: integer, nullable: true, description: "The job template's own approval rule; null for none." }
+              approval_rule_name: { type: string, nullable: true }
+        hidden_job_template_count: { type: integer }
+        deleted_job_template_count: { type: integer }
+    InventoryInUseError:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [message, used_by]
+          properties:
+            message:
+              type: string
+              example: 'Inventory "web-prod" is in use by 1 job template(s). Point its job templates at another inventory first. A deleted job template keeps its inventory for the history of its jobs until its project is deleted, so deleting the template does not free it.'
+            used_by: { $ref: '#/components/schemas/InventoryUsage' }
 
     Credential:
       type: object
@@ -5794,13 +6599,26 @@ components:
             (`approval-rule.update`) set, change or remove it, and while it
             is set only they change what the template runs: everyone else
             may change only its `name` and `description` (see
-            `PUT /api/v1/job-templates/{id}`).
+            `PUT /api/v1/job-templates/{id}`). This is the template's own
+            rule; the rule of its inventory gates its launches too, see
+            `approval_gate`.
           example: 3
         approval_rule_name:
           type: string
           nullable: true
           description: The name of that rule; null for none. Rule names are not unique.
           example: deploy-prod
+        approval_gate:
+          description: |
+            The approval rule every launch of the template waits for, and
+            what requires it: the template's own rule (`job_template`, also
+            when its inventory has the same rule), else the rule of its
+            inventory (`inventory`). null when its launches wait for no
+            approval. Read-only: rules are assigned with `approval_rule_id`
+            of the template or of its inventory. While it is set, only
+            admins change what the template runs.
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/JobTemplateApprovalGate' }]
         playbook:        { type: string }
         verbosity:       { type: integer }
         forks:           { type: integer }
@@ -5846,6 +6664,31 @@ components:
             recorded who generated it runs as this user.
         created_at:      { type: integer }
         updated_at:      { type: integer }
+    JobTemplateApprovalGate:
+      type: object
+      description: |
+        The approval rule every launch of a job template waits for (see
+        `approval_gate` of `JobTemplate`). A launch waits for one rule only:
+        when the template's own rule and its inventory's differ, this names
+        the template's own rule, and every launch is refused (422) until an
+        admin removes the template's rule or gives it the inventory's.
+      required: [approval_rule_id, approval_rule_name, required_by]
+      properties:
+        approval_rule_id: { type: integer, example: 3 }
+        approval_rule_name:
+          type: string
+          nullable: true
+          description: The rule's name; null only when the rule no longer exists, which refuses every launch until an admin chooses another rule.
+          example: deploy-prod
+        required_by:
+          type: string
+          enum: [job_template, inventory]
+          description: |
+            What requires the approval: `job_template` for the template's
+            own rule (also when its inventory has the same rule),
+            `inventory` for the rule of its inventory. The approval request
+            of each launch records it (`required_by` of `ApprovalRequest`).
+          example: inventory
     JobTemplateWarning:
       type: object
       properties:
@@ -5923,6 +6766,24 @@ components:
         id:              { type: integer }
         job_template_id: { type: integer, nullable: true }
         template_name:   { type: string, nullable: true }
+        inventory_id:
+          type: integer
+          nullable: true
+          description: |
+            The inventory the job was launched with, as its launch recorded
+            it: also after its job template got another inventory, or the
+            inventory was renamed or deleted. null for a job without one,
+            such as the placeholder job of a workflow approval step.
+          example: 3
+        inventory_name:
+          type: string
+          nullable: true
+          description: |
+            That inventory's name when the job was launched; for a job
+            launched before 2.12.0, its name now. null when the job has no
+            inventory, and for a job launched before 2.12.0 whose inventory
+            was deleted since.
+          example: web-prod
         status:
           type: string
           enum: [pending, queued, running, succeeded, failed, canceled, timed_out, pending_approval, rejected]
@@ -6328,7 +7189,13 @@ components:
             than `name` and `description` answers 403 `This job template has
             an approval rule: only admins may change what it runs
             (approval-rule.update). You may change its name and
-            description.`
+            description.` A launch waits for one rule only: when the
+            template's inventory has a rule, this may be null or that rule
+            only (422 `Inventory "web-prod" has the approval rule
+            "deploy-prod": a job template on it may have only that rule as its
+            own, or none.` otherwise), and the template's launches wait for
+            the inventory's rule while this is null (see `approval_gate` of
+            `JobTemplate`).
         survey_fields:
           description: |
             The survey: launch-time inputs whose answers become extra vars,
@@ -6824,7 +7691,7 @@ components:
 
     ApprovalRequest:
       type: object
-      required: [id, job_id, launched_by, approval_rule_id, status, requested_at, resolved_at, expires_at, approval_count, rejection_count, decisions, workflow_job_id, workflow_job_step_id, workflow_template_id, workflow_step_name]
+      required: [id, job_id, launched_by, approval_rule_id, required_by, inventory_id, inventory_name, status, requested_at, resolved_at, expires_at, approval_count, rejection_count, decisions, workflow_job_id, workflow_job_step_id, workflow_template_id, workflow_step_name]
       properties:
         id: { type: integer }
         job_id: { type: integer, description: "The job waiting for the decision; for a workflow approval step, its placeholder job without a job template." }
@@ -6841,6 +7708,33 @@ components:
           type: integer
           nullable: true
           description: The rule the request waits for; null once that rule was deleted (only a rule without pending requests can be).
+        required_by:
+          type: string
+          nullable: true
+          enum: [job_template, inventory, approval_step, null]
+          description: |
+            What required the request: `job_template`, the own approval rule
+            of the job's template (also when its inventory has the same
+            rule); `inventory`, the rule of the inventory the job was
+            launched with (`inventory_id`); `approval_step`, a workflow
+            approval step, whose placeholder job runs nothing. The update to
+            2.12.0 marked the requests of workflow approval steps made
+            before it `approval_step`, those whose step execution still
+            existed; every other earlier request says `job_template`. null
+            only while the update's migration has not run.
+          example: inventory
+        inventory_id:
+          type: integer
+          nullable: true
+          description: |
+            The inventory the request's job was launched with (`inventory_id`
+            of `Job`); null for the placeholder job of an approval step.
+          example: 3
+        inventory_name:
+          type: string
+          nullable: true
+          description: That inventory's name, as `inventory_name` of `Job` gives it.
+          example: web-prod
         status:
           type: string
           enum: [pending, approved, rejected, timed_out, canceled]
@@ -7011,7 +7905,8 @@ components:
           deprecated: true
           description: |
             Unused: a rule never gated a job template through this field.
-            `approval_rule_id` of the job template does that.
+            `approval_rule_id` of the job template, or of its inventory,
+            does that.
         created_by: { type: integer, description: "The user who created the rule; it cannot be changed." }
         created_at: { type: integer }
         updated_at: { type: integer }
@@ -7076,9 +7971,24 @@ components:
         counts is above 0, and cannot be deleted then. The lists hold only
         what the caller may see (team scope); the hidden counts say how many
         more there are.
-      required: [in_use, job_templates, hidden_job_template_count, workflow_steps, hidden_workflow_step_count, pending_request_count]
+      required: [in_use, inventories, hidden_inventory_count, job_templates, hidden_job_template_count, workflow_steps, hidden_workflow_step_count, pending_request_count]
       properties:
         in_use: { type: boolean }
+        inventories:
+          type: array
+          description: |
+            Inventories that the rule gates: every launch of every job
+            template on them waits for it. An inventory without a project
+            is listed to every caller.
+          items:
+            type: object
+            required: [id, name, project_id, project_name]
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              project_id: { type: integer, nullable: true }
+              project_name: { type: string, nullable: true }
+        hidden_inventory_count: { type: integer }
         job_templates:
           type: array
           description: Live job templates that the rule gates.
@@ -7115,7 +8025,7 @@ components:
           properties:
             message:
               type: string
-              example: 'Approval rule "deploy-prod" is in use by 2 job template(s) and 1 workflow step(s). Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.'
+              example: 'Approval rule "deploy-prod" is in use by 1 inventory(ies), 2 job template(s) and 1 workflow step(s). Remove it from them, and let pending requests be decided or their jobs canceled, before deleting it.'
             used_by: { $ref: '#/components/schemas/ApprovalRuleUsage' }
 
     ApprovalSummary:
@@ -7228,13 +8138,17 @@ components:
         cannot_run:
           type: string
           nullable: true
-          enum: [job_template_missing, approval_rule_missing, unknown_type, null]
+          enum: [job_template_missing, approval_rule_missing, approval_rules_differ, unknown_type, null]
           description: |
             Why a run that reaches the step fails there; null when it can
             run. `job_template_missing`: a job step without a job template,
             or whose job template was deleted; `approval_rule_missing`: an
             approval step without its approval rule, or a job step whose job
-            template has an approval rule that no longer exists;
+            template, or its inventory, has an approval rule that no longer
+            exists; `approval_rules_differ`: a job step whose job template
+            and its inventory have different approval rules, as a launch
+            waits for one rule only (its `routes` are those of a gated job
+            step);
             `unknown_type`: a type an older version stored (see
             `step_type`), whose `routes` are all null.
         routes: { $ref: '#/components/schemas/WorkflowStepRoutes' }
@@ -7322,8 +8236,10 @@ components:
             Not while a run of the workflow is active (409), and only for
             admins when an approval step or a gated job step (a job step
             whose job template has an approval rule) is in the list or in the
-            workflow (403). Runs keep the history of replaced steps. To change
-            one step, use the step endpoints (`/api/v1/workflow-templates/{id}/steps`).
+            workflow (403); a job step whose job template's inventory has an
+            approval rule is a gated job step too. Runs keep the history of
+            replaced steps. To change one step, use the step endpoints
+            (`/api/v1/workflow-templates/{id}/steps`).
           items: { $ref: '#/components/schemas/WorkflowStepInput' }
     WorkflowStepInput:
       type: object
@@ -7343,7 +8259,8 @@ components:
             Ignored for other step types. A job template with an approval
             rule makes the step a gated job step, which is for admins as an
             approval step is: it needs `approval-rule.update` (403
-            otherwise).
+            otherwise). So does a job template whose inventory has an
+            approval rule.
         approval_rule_id:
           type: integer
           minimum: 1
@@ -7414,7 +8331,8 @@ components:
             `A job step needs a job template.`
             Ignored for other step types. A job template with an approval
             rule makes the step a gated job step, which is for admins as an
-            approval step is (`approval-rule.update`; 403 otherwise).
+            approval step is (`approval-rule.update`; 403 otherwise), and so
+            does a job template whose inventory has an approval rule.
         approval_rule_id:
           type: integer
           minimum: 1
@@ -7510,8 +8428,9 @@ components:
           description: |
             A job step's job template, read as on add. A new one is checked
             as on add: it must exist for the caller (422) and be one the
-            caller may operate (403), and one with an approval rule needs
-            `approval-rule.update` (403). null, or a value that is no ID,
+            caller may operate (403), and one with an approval rule, its own
+            or its inventory's, needs `approval-rule.update` (403). null, or
+            a value that is no ID,
             answers 422 `A job step needs a job template.` Ignored for other
             step types.
         approval_rule_id:
@@ -7725,8 +8644,10 @@ components:
           description: |
             After its approval was rejected, timed out or canceled: for
             approval steps and gated job steps (job steps whose job template
-            has an approval rule) only, null for every other step. An empty
-            On Failure branch ends the run as failed here.
+            has an approval rule) only, null for every other step; a job step
+            whose job template's inventory has an approval rule is a gated
+            job step too. An empty On Failure branch ends the run as failed
+            here.
           allOf: [{ $ref: '#/components/schemas/WorkflowRouteTarget' }]
     WorkflowRouteTarget:
       type: object
@@ -7962,7 +8883,8 @@ components:
             - the launch was refused for a reason the message names, for
               example `The value of "db_password" is the placeholder
               $encrypted$; send the real value.`, or the approval rule of the
-              job template;
+              job template or of its inventory (the messages of
+              `JobLaunchRejected`);
             - `The job could not be launched; see the application log.`,
               `The approval request could not be created; see the application
               log.`;
@@ -8182,8 +9104,18 @@ components:
             - { type: string }
     TriggerJobResult:
       type: object
+      required: [job_id, status]
       properties:
         job_id: { type: integer }
+        status:
+          type: string
+          enum: [queued, pending_approval]
+          description: |
+            The job's status right after the launch: `pending_approval`
+            when it waits for approval, because its job template has an
+            approval rule, its own or its inventory's (its approval request
+            is listed by `GET /api/v1/approvals`); `queued` when it waits
+            for a runner. Releases before 2.12.0 answered `job_id` only.
     TriggerWorkflowResult:
       type: object
       properties:

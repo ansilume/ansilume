@@ -10,6 +10,7 @@ use app\components\SurveySecrets;
 use app\components\TemplateSurveyValidator;
 use app\models\traits\TriggerTokenTrait;
 use app\services\JobLaunchSecrets;
+use app\services\JobTemplateRuleAssignment;
 use yii\db\ActiveRecord;
 use yii\validators\Validator;
 
@@ -189,6 +190,17 @@ class JobTemplate extends ActiveRecord
                 'when' => fn (self $m): bool => $m->isNewRecord
                     || $m->isAttributeChanged('inventory_id', false)
                     || $m->isAttributeChanged('project_id', false),
+            ],
+            // One rule per launch: the template's own rule is its inventory's
+            // rule, or none (JobTemplateRuleAssignment::RULES_DIFFER). The
+            // save's transaction checks it again, under the inventory's share lock.
+            [
+                ['approval_rule_id'],
+                fn (): bool => JobTemplateRuleAssignment::vetoesDifferentRules($this, false),
+                'skipOnError' => true,
+                'when' => fn (self $m): bool => $m->isNewRecord
+                    || $m->isAttributeChanged('approval_rule_id', false)
+                    || $m->isAttributeChanged('inventory_id', false),
             ],
         ];
     }

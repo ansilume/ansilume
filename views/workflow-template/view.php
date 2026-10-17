@@ -7,7 +7,7 @@ declare(strict_types=1);
 /** @var bool $canOperate operator access to the project of every job step */
 /** @var bool $canChange the user may change the workflow: workflow-template.update and $canOperate */
 /** @var bool $canChangeSteps $canChange, and neither a gated step nor an active run locks the steps */
-/** @var array<int, string> $jobTemplateOptions job templates the user may operate; without an approval rule unless $mayAssignRules */
+/** @var array<int, string> $jobTemplateOptions job templates the user may operate; without those an approval rule gates (their own or their inventory's) unless $mayAssignRules */
 /** @var array<int, string> $approvalRuleOptions offered only to users who may assign approval rules */
 /** @var bool $mayAssignRules the user may add approval steps and gated job steps (approval-rule.update) */
 /** @var string|null $stepsLock why the user may not change the steps (an approval step or a gated job step); null when they may */

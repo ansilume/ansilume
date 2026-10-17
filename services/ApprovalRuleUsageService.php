@@ -7,8 +7,10 @@ namespace app\services;
 use app\components\ApprovalRuleUsage;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
+use app\models\Inventory;
 use app\models\Job;
 use app\models\JobTemplate;
+use app\models\Project;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
 use yii\base\Component;
@@ -18,6 +20,8 @@ use yii\db\Query;
 /**
  * Finds where an approval rule is used:
  *
+ * - inventories that it gates. An inventory has no soft delete: while one
+ *   has the rule, every launch of a job template that uses it waits for it.
  * - live job templates that it gates. Soft-deleted ones cannot run; the
  *   delete of the rule detaches them instead of counting them.
  * - steps of live workflows that carry it, whatever their type: a step of a
@@ -26,8 +30,9 @@ use yii\db\Query;
  *   pending request whose job no longer waits decides nothing.
  *
  * Totals count everything; the lists only hold what the viewer may see, so
- * the usage of a rule never reveals job templates or workflows of other
- * teams.
+ * the usage of a rule never reveals inventories, job templates or workflows
+ * of other teams. An inventory without a project is visible to every
+ * signed-in viewer. Everything is read without locks.
  */
 class ApprovalRuleUsageService extends Component
 {
@@ -41,7 +46,44 @@ class ApprovalRuleUsageService extends Component
             (int)$this->templateQuery($id)->count(),
             $this->visibleSteps($id, $viewerId),
             (int)$this->stepQuery($id)->count(),
-            $this->pendingRequestCount($id)
+            $this->pendingRequestCount($id),
+            $this->visibleInventories($id, $viewerId),
+            (int)$this->inventoryQuery($id)->count()
+        );
+    }
+
+    /**
+     * Inventories gated by the rule. The condition names the column, so it
+     * holds whatever the cached table schema says.
+     */
+    private function inventoryQuery(int $ruleId): ActiveQuery
+    {
+        return Inventory::find()->andWhere(['inventory.approval_rule_id' => $ruleId]);
+    }
+
+    /**
+     * The inventories gated by the rule that the viewer may see, by name,
+     * then ID: those without a project, and those of projects the viewer
+     * may see. The filter is applied only when it is not null, as
+     * VisibleJobTemplates does.
+     *
+     * @return list<array{id: int, name: string, project_id: int|null, project_name: string|null}>
+     */
+    private function visibleInventories(int $ruleId, ?int $viewerId): array
+    {
+        $query = $this->inventoryQuery($ruleId)
+            ->with('project')
+            ->orderBy(['inventory.name' => SORT_ASC, 'inventory.id' => SORT_ASC]);
+        $filter = $this->projects()->buildChildResourceFilter($viewerId, 'inventory.project_id');
+        if ($filter !== null) {
+            $query->andWhere($filter);
+        }
+        /** @var list<Inventory> $inventories */
+        $inventories = $query->all();
+
+        return array_map(
+            static fn (Inventory $i): array => self::entry($i, $i->project_id === null ? null : (int)$i->project_id),
+            $inventories
         );
     }
 
@@ -58,22 +100,31 @@ class ApprovalRuleUsageService extends Component
      */
     private function visibleTemplates(int $ruleId, ?int $viewerId): array
     {
-        $query = $this->templateQuery($ruleId)
-            ->with('project')
-            ->orderBy(['job_template.name' => SORT_ASC, 'job_template.id' => SORT_ASC]);
-        $filter = $this->projects()->buildChildResourceFilter($viewerId, 'job_template.project_id');
-        if ($filter !== null) {
-            $query->andWhere($filter);
-        }
-        /** @var list<JobTemplate> $templates */
-        $templates = $query->all();
+        $templates = VisibleJobTemplates::all($this->templateQuery($ruleId), $viewerId, ['project']);
 
-        return array_map(static fn (JobTemplate $t): array => [
-            'id' => (int)$t->id,
-            'name' => (string)$t->name,
-            'project_id' => (int)$t->project_id,
-            'project_name' => $t->project->name ?? null,
-        ], $templates);
+        return array_map(static fn (JobTemplate $t): array => self::entry($t, (int)$t->project_id), $templates);
+    }
+
+    /**
+     * One entry of the inventory and job template lists: the ID, the name
+     * and the project. A job template always has a project; an inventory
+     * may have none.
+     *
+     * @template TProject of int|null
+     * @param TProject $projectId
+     * @return array{id: int, name: string, project_id: TProject, project_name: string|null}
+     */
+    private static function entry(Inventory|JobTemplate $row, ?int $projectId): array
+    {
+        /** @var Project|null $project */
+        $project = $row->project;
+
+        return [
+            'id' => (int)$row->id,
+            'name' => (string)$row->name,
+            'project_id' => $projectId,
+            'project_name' => $project?->name,
+        ];
     }
 
     /**

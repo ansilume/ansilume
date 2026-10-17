@@ -9,25 +9,25 @@ use app\models\AuditLog;
 use app\models\NotificationTemplate;
 use app\services\NotificationDispatcher;
 use app\services\notification\ChannelInterface;
+use app\tests\integration\RestoresComponents;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 class NotificationTemplateControllerActionTest extends WebControllerTestCase
 {
-    /** @var object|null the dispatcher the test replaced */
-    private ?object $originalDispatcher = null;
+    use RendersRealViews;
+    use RestoresComponents;
 
     protected function setUp(): void
     {
         parent::setUp();
-
-        $this->originalDispatcher = \Yii::$app->get('notificationDispatcher');
+        // Tests replace it; tearDown() puts back only what setUp() kept.
+        $this->keepComponent('notificationDispatcher');
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
-        $this->originalDispatcher = null;
+        $this->restoreComponents();
         parent::tearDown();
     }
 
@@ -57,6 +57,10 @@ class NotificationTemplateControllerActionTest extends WebControllerTestCase
         $this->assertArrayHasKey('workflow.template_name', $dispatcher->lastVariables);
         $this->assertArrayHasKey('schedule.name', $dispatcher->lastVariables);
         $this->assertArrayHasKey('approval.rule_name', $dispatcher->lastVariables);
+        // What an approval of a job that its inventory's rule gates carries (ApprovalEffects).
+        $this->assertSame('inventory', $dispatcher->lastVariables['approval.required_by'] ?? null);
+        $this->assertSame('0', $dispatcher->lastVariables['job.inventory_id'] ?? null);
+        $this->assertSame('Production hosts', $dispatcher->lastVariables['job.inventory_name'] ?? null);
         $this->assertArrayHasKey('event', $dispatcher->lastVariables);
         $this->assertArrayHasKey('severity', $dispatcher->lastVariables);
         $this->assertArrayHasKey('timestamp', $dispatcher->lastVariables);
@@ -215,6 +219,33 @@ class NotificationTemplateControllerActionTest extends WebControllerTestCase
             ['danger' => "Test notification failed: Unknown channel 'carrier-pigeon'"],
             \Yii::$app->session->getAllFlashes()
         );
+    }
+
+    /**
+     * The form's list of variables names those of an approval that the
+     * inventory's rule required: approval.required_by and
+     * job.inventory_name.
+     */
+    public function testTheFormNamesTheVariablesOfWhatRequiredAnApproval(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $nt = $this->makeTemplate($user->id);
+        $ctrl = new class ('notification-template', \Yii::$app) extends NotificationTemplateController {
+            public function render($view, $params = []): string
+            {
+                return $this->renderPartial($view, $params);
+            }
+        };
+
+        $html = $this->withRealViews($ctrl, '/notification-template/update?id=' . $nt->id, static fn (): string => (string)$ctrl->actionUpdate((int)$nt->id));
+
+        $document = new \DOMDocument();
+        $this->assertTrue($document->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NOERROR | LIBXML_NOWARNING));
+        $hint = (new \DOMXPath($document))->query('//div[contains(@class, "field-notificationtemplate-subject_template")]//*[contains(@class, "hint-block")]')?->item(0);
+        $this->assertInstanceOf(\DOMElement::class, $hint, 'the subject field has its hint');
+        $this->assertStringContainsString('{{ job.url }}, {{ job.inventory_name }}, {{ template.name }}', $hint->textContent);
+        $this->assertStringContainsString('{{ approval.rule_name }}, {{ approval.required_by }}, {{ schedule.name }}', $hint->textContent);
     }
 
     public function testTestThrowsNotFoundForMissingTemplate(): void

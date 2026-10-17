@@ -6,6 +6,7 @@ namespace app\tests\integration\controllers;
 
 use app\components\VersionedAssetUrl;
 use app\models\ApprovalRule;
+use app\models\Inventory;
 use app\models\JobTemplate;
 use app\models\User;
 use app\models\WorkflowStep;
@@ -126,6 +127,58 @@ class WorkflowTemplateStepsTableViewTest extends WebControllerTestCase
             [WorkflowStepsTable::NEXT_TITLE, WorkflowStepsTable::REFUSED_APPROVAL_TITLE],
             array_map(static fn (\DOMElement $part): string => $part->getAttribute('title'), $parts)
         );
+    }
+
+    /**
+     * regression (2.11.1): a job step whose job template had no rule of its
+     * own, but whose inventory had one, showed no "needs approval" badge,
+     * and its On Failure said only that the run goes on after a failure,
+     * though its job waits for the inventory's rule and a refused approval
+     * fails the job without running it and ends the run. Now it is a gated
+     * job step (C15): the badge names the inventory's rule
+     * (GATED_INVENTORY_TITLE), and On Failure has both parts.
+     */
+    public function testRegressionAJobStepGatedByItsInventoryHadNoBadgeAndIgnoredARefusedApproval(): void
+    {
+        $rule = $this->createApprovalRule($this->admin->id, ApprovalRule::APPROVER_TYPE_USERS, (string)json_encode(['user_ids' => [$this->admin->id]]));
+        Inventory::updateAll(['approval_rule_id' => $rule->id], ['id' => $this->template->inventory_id]);
+        $workflow = $this->workflowOf(['Deploy', 'Verify']);
+        $deploy = $this->stepNamed($workflow, 'Deploy');
+
+        $xpath = $this->xpathOf($this->stepsHtml($workflow, false));
+
+        $badges = $this->all($xpath, './td[3]/span[@data-gated-badge]', $this->rowOf($xpath, $deploy));
+        $this->assertCount(1, $badges, 'the step needs approval');
+        $this->assertSame(
+            ['mixed', '→ 2. Verify (next), also after a failed job; end · run fails after a refused approval'],
+            $this->cell($xpath, $deploy, 'failure')
+        );
+        $this->assertSame(WorkflowStepsTable::GATED_BADGE, $this->textOf($badges[0]));
+        $this->assertSame(sprintf(WorkflowStepsTable::GATED_INVENTORY_TITLE, $rule->name), $badges[0]->getAttribute('title'));
+        $this->assertSame((string)$this->template->name, $this->textOf($this->one($xpath, './td[@data-target-cell]/a', $this->rowOf($xpath, $deploy))));
+    }
+
+    /**
+     * A job step whose job template has a rule of its own and whose
+     * inventory has another cannot run: its launch is refused, so the
+     * Target cell and the badge say so, and the success path ends there.
+     */
+    public function testAJobStepWhoseTemplateAndInventoryHaveDifferentRulesSaysRunsFailThere(): void
+    {
+        $own = $this->createApprovalRule($this->admin->id, ApprovalRule::APPROVER_TYPE_USERS, (string)json_encode(['user_ids' => [$this->admin->id]]));
+        $other = $this->createApprovalRule($this->admin->id, ApprovalRule::APPROVER_TYPE_USERS, (string)json_encode(['user_ids' => [$this->admin->id]]));
+        JobTemplate::updateAll(['approval_rule_id' => $own->id], ['id' => $this->template->id]);
+        Inventory::updateAll(['approval_rule_id' => $other->id], ['id' => $this->template->inventory_id]);
+        $workflow = $this->workflowOf(['Deploy', 'Verify']);
+        $deploy = $this->stepNamed($workflow, 'Deploy');
+
+        $xpath = $this->xpathOf($this->stepsHtml($workflow, false));
+
+        $row = $this->rowOf($xpath, $deploy);
+        $this->assertSame(WorkflowStepsTable::TARGET_RULES_DIFFER, $this->textOf($this->one($xpath, './td[@data-target-cell]/span[@data-target-problem]', $row)));
+        $this->assertSame(WorkflowStepsTable::TARGET_RULES_DIFFER, $this->one($xpath, './td[3]/span[@data-gated-badge]', $row)->getAttribute('title'));
+        $this->assertSame(['unused', '—'], $this->cell($xpath, $deploy, 'failure'));
+        $this->assertSame('1. Deploy cannot run · run fails', $this->successPathOf($xpath));
     }
 
     public function testAJobStepWhoseTemplateWasDeletedSaysRunsFailThere(): void

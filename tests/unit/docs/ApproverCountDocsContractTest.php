@@ -13,8 +13,12 @@ use PHPUnit\Framework\TestCase;
  * views/approval-rule/form.php does: its warning, as the script writes it,
  * and the note ApprovalRule::LAUNCHER_NOTE compare the required approvals
  * with the count of a role rule's approvers, which takes only the active
- * users assigned the role directly, in one query.
- * ApprovalRuleFormRoleCountTest renders the form and checks the counts.
+ * users assigned the role directly. Since 2.12.0 the controller counts them
+ * (ApproverCounts: the direct assignments of every role in one query, and of
+ * those users the ones ApproverFilter lets decide: an active account, and a
+ * superadmin or holding approval.decide), and the form writes the counts
+ * into its script. ApprovalRuleFormRoleCountTest renders the form and checks
+ * the counts.
  *
  * Regression (wave 5f of 2.11.0): the count took inactive users too, so a
  * rule that needed more approvals than the role has active users could get
@@ -44,17 +48,24 @@ class ApproverCountDocsContractTest extends TestCase
         $this->assertStringContainsString("launcherNote.style.display = count > 0 && required >= count ? '' : 'none';", $form, 'The note shows from as many required approvals as the count.');
         $this->assertStringContainsString('<?= Html::encode(ApprovalRule::LAUNCHER_NOTE) ?>', $form, 'The note is ApprovalRule::LAUNCHER_NOTE.');
         $this->assertStringContainsString("count = roleSelect.value ? (roleCounts[roleSelect.value] || 0) : 0;", $form, 'A role rule takes the count of its role.');
+        $this->assertStringContainsString("var roleCounts = <?= Json::htmlEncode(\$approverCounts['roles']) ?>;", $form, 'The counts come from the controller.');
+        $counts = $this->source('services/ApproverCounts.php');
         foreach (
             [
-                "->from(['a' => \$auth->assignmentTable])",
-                "->innerJoin(['u' => User::tableName()], '[[u.id]] = [[a.user_id]]')",
-                "'u.status' => User::STATUS_ACTIVE",
-                "COUNT(DISTINCT [[u.id]])",
+                '->from($this->auth->assignmentTable)',
+                "->where(['item_name' => array_map('strval', array_keys(\$holders))])",
+                '$filter->mayDecide(',
             ] as $part
         ) {
-            $this->assertStringContainsString($part, $form, 'The count takes the active users assigned the role directly, in one query.');
+            $this->assertStringContainsString($part, $counts, 'The count takes the users assigned the role directly who may decide, all roles in one query.');
         }
+        $this->assertStringContainsString(
+            "->where(['id' => \$userIds, 'status' => User::STATUS_ACTIVE])",
+            $this->source('services/ApproverFilter.php'),
+            'Of them only active accounts may decide.'
+        );
         $this->assertStringNotContainsString('getUserIdsByRole', $form, 'The count of 2.10.1, which took every assignment.');
+        $this->assertStringNotContainsString('->getUserIdsByRole(', $counts, 'ApproverCounts reads the assignments of all roles at once.');
     }
 
     /**
@@ -71,6 +82,14 @@ class ApproverCountDocsContractTest extends TestCase
 
     private function form(): string
     {
-        return (string)file_get_contents(dirname(__DIR__, 3) . '/views/approval-rule/form.php');
+        return $this->source('views/approval-rule/form.php');
+    }
+
+    /**
+     * The file $path of the repository, as it is.
+     */
+    private function source(string $path): string
+    {
+        return (string)file_get_contents(dirname(__DIR__, 3) . '/' . $path);
     }
 }

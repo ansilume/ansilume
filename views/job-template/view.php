@@ -7,12 +7,13 @@ declare(strict_types=1);
 /** @var list<array{id: int, name: string, credential_type: string, role: string}> $attachedCredentials  in precedence order */
 /** @var list<array{code: string, message: string, credential_ids: list<int>}> $warnings from JobTemplateWarnings */
 /** @var bool $canChange job-template.update and operator access to the template's project */
-/** @var bool $changeLocked $canChange, but not what the template runs: a gated template, no approval-rule.update */
-/** @var bool $canViewRules approval-rule.view: the approval rule as a link, else as text */
+/** @var string|null $lockedNotice $canChange, but not what the template runs: GatedJobTemplateLock::notice() (own rule or inventory's) */
+/** @var bool $changeLocked $lockedNotice !== null */
+/** @var bool $canViewRules approval-rule.view: the approval rules as links, else as text */
+/** @var app\models\ApprovalRule|null $inventoryRule the rule of the template's inventory (JobTemplateGate), shown when it has one */
 
 use app\components\LintVerdict;
 use app\helpers\TimeHelper;
-use app\services\GatedJobTemplateLock;
 use app\services\JobTemplateRuleAssignment;
 use yii\helpers\Html;
 
@@ -54,7 +55,7 @@ $this->title = $model->name;
 <?php endif; ?>
 <?= $this->render('_warnings', ['warnings' => $warnings]) ?>
 <?php if ($changeLocked) : ?>
-    <div class="alert alert-info" id="job-template-locked-notice"><?= Html::encode(GatedJobTemplateLock::NOTICE) ?></div>
+    <div class="alert alert-info" id="job-template-locked-notice"><?= Html::encode((string)$lockedNotice) ?></div>
 <?php endif; ?>
 
 <div class="row g-3">
@@ -82,6 +83,17 @@ $this->title = $model->name;
                             <?= Html::encode(JobTemplateRuleAssignment::label($approvalRule)) ?>
                         <?php endif; ?>
                     </dd>
+                    <?php // The rule of its inventory gates its launches when the template has none of its own.?>
+                    <?php if ($inventoryRule !== null) : ?>
+                        <dt class="col-5"><?= Html::encode("Inventory's approval rule") ?></dt>
+                        <dd class="col-7" id="job-template-inventory-rule">
+                            <?php if ($canViewRules) : ?>
+                                <?= Html::a(Html::encode(JobTemplateRuleAssignment::label($inventoryRule)), ['/approval-rule/view', 'id' => $inventoryRule->id]) ?>
+                            <?php else : ?>
+                                <?= Html::encode(JobTemplateRuleAssignment::label($inventoryRule)) ?>
+                            <?php endif; ?>
+                        </dd>
+                    <?php endif; ?>
                     <dt class="col-5">Forks</dt>
                     <dd class="col-7"><?= $model->forks // xss-ok: integer?></dd>
                     <dt class="col-5">Verbosity</dt>

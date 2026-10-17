@@ -524,7 +524,7 @@ class ApprovalServiceTest extends DbTestCase
         $rule->save(false);
         $audits = (int)\app\models\AuditLog::find()->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_REQUESTED])->count();
 
-        $request = $this->service()->openRequest($job, $rule);
+        $request = $this->service()->openRequest($job, $rule, ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE);
 
         $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
         $this->assertSame($job->id, $request->job_id);
@@ -538,8 +538,15 @@ class ApprovalServiceTest extends DbTestCase
             ->where(['action' => \app\models\AuditLog::ACTION_APPROVAL_REQUESTED, 'object_id' => $request->id])
             ->one();
         $this->assertNotNull($entry);
+        // The job was written without a launch record, so it names no inventory.
         $this->assertSame(
-            ['job_id' => (int)$job->id, 'rule_id' => (int)$rule->id, 'rule_name' => (string)$rule->name],
+            [
+                'job_id' => (int)$job->id,
+                'rule_id' => (int)$rule->id,
+                'rule_name' => (string)$rule->name,
+                'required_by' => ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE,
+                'inventory_id' => null,
+            ],
             json_decode((string)$entry->metadata, true)
         );
     }
@@ -552,6 +559,6 @@ class ApprovalServiceTest extends DbTestCase
 
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessage('Failed to create approval request: {"job_id":["Job Id cannot be blank."]}');
-        $this->service()->openRequest($job, $rule);
+        $this->service()->openRequest($job, $rule, ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE);
     }
 }

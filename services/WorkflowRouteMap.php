@@ -23,9 +23,10 @@ use app\models\WorkflowTemplate;
  * it, and position 1 is the start step.
  *
  * What a step can end with (outcomes()), by its exact type:
- * - a job step: success or failure, and a closed gate when its job template
- *   has an approval rule (a gated job step: the job never ran because its
- *   approval was rejected, timed out or canceled);
+ * - a job step: success or failure, and a closed gate when its job template,
+ *   or that template's inventory, has an approval rule (a gated job step:
+ *   the job never ran because its approval was rejected, timed out or
+ *   canceled);
  * - an approval step: success (approved) or a closed gate;
  * - a pause step: success (resumed);
  * - any other type: nothing, as dispatch fails such a step.
@@ -137,8 +138,9 @@ final class WorkflowRouteMap
 
     /**
      * The map of the step models $models, given in run order. Their job
-     * templates (with their approval rules) and approval rules are loaded in
-     * one batch for the models that do not have them loaded yet.
+     * templates (with their approval rules, their inventories and the
+     * inventories' approval rules) and approval rules are loaded in one batch
+     * for the models that do not have them loaded yet.
      *
      * @param list<WorkflowStep> $models
      * @throws \InvalidArgumentException when a step ID is listed twice
@@ -149,7 +151,7 @@ final class WorkflowRouteMap
     }
 
     /**
-     * The map of $template's steps as stored: about four queries, however
+     * The map of $template's steps as stored: about six queries, however
      * many steps it has (stepsOf()).
      */
     public static function forTemplate(WorkflowTemplate $template): self
@@ -159,9 +161,10 @@ final class WorkflowRouteMap
 
     /**
      * $template's steps in run order, with what the map reads loaded (each
-     * step's job template with its approval rule, and its approval rule): a
-     * page that shows the steps builds the map from them with fromModels()
-     * without another query, and links their targets.
+     * step's job template with its approval rule, its inventory and that
+     * inventory's approval rule, and the step's approval rule): a page that
+     * shows the steps builds the map from them with fromModels() without
+     * another query, and links their targets.
      *
      * @return list<WorkflowStep>
      */

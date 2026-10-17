@@ -12,18 +12,21 @@ use app\models\WorkflowTemplate;
 use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\WorkflowStepChangeGuard;
 use app\services\WorkflowStepWriteService;
+use app\tests\integration\services\InventoryGatedStepFixtures;
 use app\tests\integration\services\WorkflowStepWriteFixtures;
 
 /**
  * Durable guard of the step write path (rule 12, contract C5/C6): every
  * write method of WorkflowStepWriteService refuses an operator on a workflow
- * with an approval step or a gated job step (403), and everyone while a run
- * of the workflow is active (409), and writes nothing then. A write method
- * added later without its case here fails testEveryWriteMethodHasACase(), so
- * no path of the service can skip the guard unnoticed.
+ * with an approval step or a gated job step, by its job template's rule or
+ * by its inventory's (C15), with 403, and everyone while a run of the
+ * workflow is active (409), and writes nothing then. A write method added
+ * later without its case here fails testEveryWriteMethodHasACase(), so no
+ * path of the service can skip the guard unnoticed.
  */
 class WorkflowStepWritePathsTest extends DbTestCase
 {
+    use InventoryGatedStepFixtures;
     use WorkflowStepWriteFixtures;
 
     /** The service's write methods, each with a case in write(). */
@@ -62,6 +65,7 @@ class WorkflowStepWritePathsTest extends DbTestCase
         foreach (self::PATHS as $path) {
             $cases["{$path}, an approval step"] = [$path, 'approval'];
             $cases["{$path}, a gated job step"] = [$path, 'gated job'];
+            $cases["{$path}, an inventory-gated job step"] = [$path, 'inventory-gated job'];
         }
 
         return $cases;
@@ -73,21 +77,23 @@ class WorkflowStepWritePathsTest extends DbTestCase
     public function testAnOperatorMayNotChangeTheStepsOfAGatedWorkflow(string $path, string $gate): void
     {
         $workflow = $this->workflow();
-        if ($gate === 'approval') {
-            $this->namedStep((int)$workflow->id, 'Approve', 20, WorkflowStep::TYPE_APPROVAL, null, (int)$this->createApprovalRule((int)$this->admin->id)->id);
-        } else {
-            $gated = $this->jobTemplate((int)$this->admin->id, (int)$this->createApprovalRule((int)$this->admin->id)->id);
-            $this->namedStep((int)$workflow->id, 'Deploy', 20, WorkflowStep::TYPE_JOB, (int)$gated->id);
-        }
+        $ruleId = (int)$this->createApprovalRule((int)$this->admin->id)->id;
+        match ($gate) {
+            'approval' => $this->namedStep((int)$workflow->id, 'Approve', 20, WorkflowStep::TYPE_APPROVAL, null, $ruleId),
+            'gated job' => $this->namedStep((int)$workflow->id, 'Deploy', 20, WorkflowStep::TYPE_JOB, (int)$this->jobTemplate((int)$this->admin->id, $ruleId)->id),
+            default => $this->namedStep((int)$workflow->id, 'Deploy', 20, WorkflowStep::TYPE_JOB, (int)$this->templateOnGatedInventory((int)$this->admin->id, $ruleId)->id),
+        };
         $before = $this->stepRows((int)$workflow->id);
 
         $refusal = $this->refusalOf(fn () => $this->write($path, $workflow, (int)$this->operator->id));
 
         $this->assertSame(403, $refusal->status);
         $this->assertSame(
-            $gate === 'approval'
-                ? ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED
-                : ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+            match ($gate) {
+                'approval' => ApprovalRuleAssignmentPolicy::APPROVAL_WORKFLOW_STEPS_REFUSED,
+                'gated job' => ApprovalRuleAssignmentPolicy::GATED_JOB_WORKFLOW_STEPS_REFUSED,
+                default => ApprovalRuleAssignmentPolicy::GATED_INVENTORY_JOB_WORKFLOW_STEPS_REFUSED,
+            },
             $refusal->getMessage()
         );
         $this->assertSame($before, $this->stepRows((int)$workflow->id));

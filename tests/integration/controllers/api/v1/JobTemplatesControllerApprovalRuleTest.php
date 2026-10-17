@@ -15,6 +15,7 @@ use app\models\User;
 use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\JobTemplateDeletionService;
 use app\tests\integration\controllers\WebControllerTestCase;
+use app\tests\integration\RestoresComponents;
 use app\tests\integration\services\RecordingNotificationDispatcher;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\NotFoundHttpException;
@@ -26,29 +27,30 @@ use yii\web\NotFoundHttpException;
  */
 class JobTemplatesControllerApprovalRuleTest extends WebControllerTestCase
 {
+    use RestoresComponents;
     use TeamScopeFixtures;
 
     private JobTemplatesController $ctrl;
     private User $admin;
     private ApprovalRule $rule;
     private ApprovalRule $otherRule;
-    private mixed $originalDispatcher = null;
 
     protected function setUp(): void
     {
         parent::setUp();
+        // Swapped before any write, so that tearDown() restores it also when
+        // a write fails.
+        $this->swapComponent('notificationDispatcher', new RecordingNotificationDispatcher());
         $this->assertNotNull(\Yii::$app);
         $this->ctrl = new JobTemplatesController('api/v1/job-templates', \Yii::$app);
         $this->admin = $this->createUserWithRole('api-rule-admin', 'admin');
         $this->rule = $this->createApprovalRule((int)$this->admin->id);
         $this->otherRule = $this->createApprovalRule((int)$this->admin->id);
-        $this->originalDispatcher = \Yii::$app->getComponents(true)['notificationDispatcher'] ?? null;
-        \Yii::$app->set('notificationDispatcher', new RecordingNotificationDispatcher());
     }
 
     protected function tearDown(): void
     {
-        \Yii::$app->set('notificationDispatcher', $this->originalDispatcher);
+        $this->restoreComponents();
         parent::tearDown();
     }
 

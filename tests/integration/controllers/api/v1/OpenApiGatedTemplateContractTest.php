@@ -9,6 +9,7 @@ use app\controllers\api\v1\CredentialAssignmentsController;
 use app\controllers\api\v1\JobTemplatesController;
 use app\controllers\api\v1\NotificationTemplatesController;
 use app\models\Credential;
+use app\models\Inventory;
 use app\models\NotificationTemplate;
 use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\CredentialWriteService;
@@ -30,6 +31,11 @@ use yii\web\Request;
  * change to a gated job template (decision 5), and the test of a
  * notification template documented only {sent: true}, which it answered
  * whatever the channel did (C8).
+ *
+ * From 2.12.0: a job template gated through its inventory is reported by
+ * the vault assignment with GatedJobTemplateLock::CHANGE_REFUSED_INVENTORY,
+ * as the spec says, and the body of GET sent back, approval_gate included,
+ * stays a rename.
  */
 class OpenApiGatedTemplateContractTest extends WebControllerTestCase
 {
@@ -80,6 +86,8 @@ class OpenApiGatedTemplateContractTest extends WebControllerTestCase
         $this->assertSame(200, \Yii::$app->response->statusCode, 'The GET body sent back with a new name is a rename.');
         $this->assertSame('gated-contract-renamed', $renamed['name']);
         $this->assertMatchesSchema('JobTemplate', $renamed);
+        $this->assertIsArray($renamed['approval_gate'], '2.12.0: the GET body sent back holds approval_gate, which is read-only.');
+        $this->assertSame([$template->approval_rule_id, 'job_template'], [$renamed['approval_gate']['approval_rule_id'], $renamed['approval_gate']['required_by']]);
 
         $this->loginAs($admin);
         $this->body(['playbook' => 'other.yml']);
@@ -111,8 +119,13 @@ class OpenApiGatedTemplateContractTest extends WebControllerTestCase
         $admin = $this->userWithRole('gated-vault-admin', 'admin');
         $operator = $this->userWithRole('gated-vault-operator', 'operator');
         $gated = $this->jobTemplateOwnedBy($admin);
-        $gated->approval_rule_id = (int)$this->usersRule((int)$admin->id, (int)$admin->id, (int)$operator->id)->id;
+        $rule = $this->usersRule((int)$admin->id, (int)$admin->id, (int)$operator->id);
+        $gated->approval_rule_id = (int)$rule->id;
         $this->assertTrue($gated->save(false));
+        // 2.12.0: a template gated through its inventory is reported with
+        // the refusal of the inventory's rule.
+        $inventoryGated = $this->jobTemplateOwnedBy($admin);
+        $this->assertSame(1, Inventory::updateAll(['approval_rule_id' => (int)$rule->id], ['id' => $inventoryGated->inventory_id]));
         $open = $this->jobTemplateOwnedBy($admin);
         $vault = new Credential();
         $vault->name = 'gated-vault-' . uniqid('', true);
@@ -123,21 +136,35 @@ class OpenApiGatedTemplateContractTest extends WebControllerTestCase
         $this->assertTrue($writer->create($vault, ['vault_password' => 'gated-vault-secret']));
 
         $this->loginAs($operator);
-        $this->body(['job_template_ids' => [(int)$gated->id, (int)$open->id]]);
+        $this->body(['job_template_ids' => [(int)$gated->id, (int)$inventoryGated->id, (int)$open->id]]);
         $result = $this->data((new CredentialAssignmentsController('api/v1/credential-assignments', $this->app()))->actionCreate((int)$vault->id));
 
         $this->assertSame(200, \Yii::$app->response->statusCode);
         $statuses = array_column($this->listOf($result['results'] ?? null), 'status', 'job_template_id');
         $errors = array_column($this->listOf($result['results'] ?? null), 'error', 'job_template_id');
-        $this->assertSame([(int)$gated->id => VaultAssignmentResult::FAILED, (int)$open->id => VaultAssignmentResult::ASSIGNED], $statuses);
+        $this->assertSame(
+            [
+                (int)$gated->id => VaultAssignmentResult::FAILED,
+                (int)$inventoryGated->id => VaultAssignmentResult::FAILED,
+                (int)$open->id => VaultAssignmentResult::ASSIGNED,
+            ],
+            $statuses
+        );
         $this->assertSame(GatedJobTemplateLock::CHANGE_REFUSED, $errors[(int)$gated->id]);
-        $gated->refresh();
-        $this->assertNull($gated->credential_id, 'The gated template is left as it was.');
-        $this->assertSame([], $gated->jobTemplateCredentials);
+        $this->assertSame(GatedJobTemplateLock::CHANGE_REFUSED_INVENTORY, $errors[(int)$inventoryGated->id]);
+        foreach ([$gated, $inventoryGated] as $refused) {
+            $refused->refresh();
+            $this->assertNull($refused->credential_id, 'The gated template is left as it was.');
+            $this->assertSame([], $refused->jobTemplateCredentials);
+        }
 
         $post = $this->textOf(['paths', '/api/v1/credentials/{id}/job-templates', 'post', 'description']);
         $this->assertStringContainsString(
             'reported with the status `failed` and the error `' . GatedJobTemplateLock::CHANGE_REFUSED . '`, and the other templates are assigned',
+            $post
+        );
+        $this->assertStringContainsString(
+            'So is a job template whose inventory has an approval rule, with the error `' . GatedJobTemplateLock::CHANGE_REFUSED_INVENTORY . '`',
             $post
         );
     }

@@ -78,14 +78,16 @@ class RunnerManagementDocsContractTest extends TestCase
     }
 
     /**
-     * The section is the newest, first of the update notes, and its anchor
-     * and that of runners.md's section are the ones GitHub gives their
-     * headings, which the docs link to.
+     * The section follows the newest one, of the update that gives
+     * inventories approval rules (2.12.0), and its anchor and that of
+     * runners.md's section are the ones GitHub gives their headings, which
+     * the docs link to.
      */
-    public function testTheSectionIsTheNewest(): void
+    public function testTheSectionFollowsTheNewest(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][1] ?? null, 'This section follows.');
         foreach ([self::UPDATE_SECTION => self::SECTION_ANCHOR, self::RUNNERS_SECTION => self::RUNNERS_ANCHOR] as $heading => $anchor) {
             $this->assertSame(
                 $anchor,

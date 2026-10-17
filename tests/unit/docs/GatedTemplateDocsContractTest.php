@@ -7,6 +7,7 @@ namespace app\tests\unit\docs;
 use app\models\AuditLog;
 use app\services\ApprovalRuleAssignmentPolicy;
 use app\services\GatedJobTemplateLock;
+use app\services\JobTemplateGate;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Yaml\Yaml;
 
@@ -16,7 +17,11 @@ use Symfony\Component\Yaml\Yaml;
  * such a template runs, every field but its name and description; an
  * assigned rule leaves alone what was set before; and the inventory, the
  * project and the credentials of a gated template keep their own
- * permissions, a limit until approvals at the level of an inventory.
+ * permissions, a limit of 2.10.0. Since 2.12.0 an inventory with an
+ * approval rule is for admins to change, and a job template on it is gated
+ * too; the project and the credentials keep their own permissions until
+ * project and credential locks (InventoryApprovalDocsContractTest). The
+ * section of 2.10.0 points forward to the section of 2.12.0.
  *
  * Regressions from wave 8 of step 3 (decision 5, "only admins change"), each
  * test fails on the docs as they were before it: no doc named the lock, its
@@ -31,8 +36,9 @@ use Symfony\Component\Yaml\Yaml;
  * before it: the docs said that everyone the lock stops still deletes the
  * template, which needs job-template.delete; no doc said that a forced
  * delete of a credential detaches it from gated templates; and CLAUDE.md's
- * roadmap did not list the inventory-level approvals that the docs call
- * planned.
+ * roadmap did not list the inventory-level approvals that the docs called
+ * planned. 2.12.0 completed them: the roadmap lists them as done and names
+ * project and credential locks next.
  */
 class GatedTemplateDocsContractTest extends TestCase
 {
@@ -141,16 +147,19 @@ class GatedTemplateDocsContractTest extends TestCase
     /**
      * Regression (decision 5): the inventory, the project and the
      * credentials of a gated job template keep their own permissions;
-     * whoever changes them changes what its jobs run and may approve them,
-     * until approvals at the level of an inventory. The docs state the limit
-     * and the mitigation, and give an audit query.
+     * whoever changes them changes what its jobs run and may approve them.
+     * The docs state the limit and the mitigation, and give an audit query.
+     * Since 2.12.0 the paragraph points to the section of 2.12.0, where an
+     * approval rule on the inventory leaves the inventory to admins; the
+     * project and the credentials keep their own permissions.
      */
     public function testTheLimitOfTheInventoryProjectAndCredentialsIsDescribed(): void
     {
         $limits = $this->paragraphs(self::LIMITS);
         $this->assertMentions('but not what it refers to: its inventory, its project and its credentials keep their own permissions', $limits, 'updating.md');
         $this->assertMentions(
-            'Such a change does not make them the launcher of these jobs, so they may approve them when they are on the rule\'s approver list. This stays so until approvals at the level of an inventory come.',
+            'Such a change does not make them the launcher of these jobs, so they may approve them when they are on the rule\'s approver list. Since 2.12.0, an approval rule on the inventory of the template leaves the inventory to admins (see [After updating from 2.11.1 or older](#'
+                . InventoryApprovalDocsContractTest::SECTION_ANCHOR . ')); the project and the credentials keep their own permissions. So choose the approvers',
             $limits,
             'updating.md'
         );
@@ -200,8 +209,10 @@ class GatedTemplateDocsContractTest extends TestCase
             $this->specText(['paths', '/api/v1/credentials/{id}', 'delete', 'description'])
         );
 
+        // Since 2.12.0 the inventory of a template with a rule keeps its own
+        // permissions only while it has no rule of its own.
         $this->assertMentions(
-            'and whoever may change the inventory, project or credentials of a template with a rule changes what its jobs run',
+            'and whoever may change the project or credentials of a template with a rule, or its inventory while the inventory has no rule, changes what its jobs run',
             $this->flat('README.md'),
             'README.md'
         );
@@ -214,26 +225,44 @@ class GatedTemplateDocsContractTest extends TestCase
      * Regression (decision 5, and the wave-7 check's note on rule 12):
      * CLAUDE.md names the lock in the current state, the domain language
      * and security rule 12, and says how far "the launcher is the user who
-     * chose what runs" holds.
+     * chose what runs" holds. Since 2.12.0 a gated job template is one with a
+     * rule of its own or on a gated inventory (JobTemplateGate), and the
+     * limit holds until project and credential locks.
      */
     public function testClaudeMdNamesTheLockAndItsLimit(): void
     {
         $claude = $this->flat('CLAUDE.md');
         $this->assertTrue(class_exists(GatedJobTemplateLock::class), 'The class CLAUDE.md names exists.');
+        $this->assertTrue(class_exists(JobTemplateGate::class), 'The class CLAUDE.md names exists.');
         $this->assertMentions('admins manage and assign rules, change what a gated job template runs, and change the steps of workflows', $claude, 'The current state of CLAUDE.md');
         $this->assertMentions(
-            '**Gated Job Template**: a job template with an approval rule; only admins (`approval-rule.update`) change what it runs, every field but its name and description (`GatedJobTemplateLock`)',
+            '**Gated Job Template**: a job template whose launches wait for an approval rule: its own, or its inventory\'s (`JobTemplateGate`); a job template on a gated inventory has no rule of its own or the same rule; only admins (`approval-rule.update`) change what it runs, every field but its name and description (`GatedJobTemplateLock`)',
             $claude,
             'The domain language of CLAUDE.md'
         );
-        $this->assertMentions('change what a gated job template (a job template with a rule) runs, every field but its name and description', $claude, 'Rule 12 of CLAUDE.md');
-        $this->assertMentions('The launcher is the user who chose what runs as far as Ansilume controls it', $claude, 'Rule 12 of CLAUDE.md');
-        $this->assertMentions('a documented limit until inventory-level approvals', $claude, 'Rule 12 of CLAUDE.md');
-        $this->assertStringNotContainsString('and the launcher is the user who chose what runs (a schedule runs as', $claude, 'Rule 12 no longer claims it without a limit.');
-        // Regression (wave 9 of step 3): rule 12 and the docs call
-        // inventory-level approvals planned, but the roadmap did not list them.
         $this->assertMentions(
-            '3. **Inventory-level approvals** — approval rules at the level of an inventory, so that an ungated twin of a gated job template, and changes to the inventory, project or credentials it uses, no longer get past an approval',
+            'change what a gated job template (a job template with a rule of its own or on a gated inventory, `JobTemplateGate`) runs, every field but its name and description',
+            $claude,
+            'Rule 12 of CLAUDE.md'
+        );
+        $this->assertMentions('The launcher is the user who chose what runs as far as Ansilume controls it', $claude, 'Rule 12 of CLAUDE.md');
+        $this->assertMentions(
+            'documented limits until project and credential locks (`docs/updating.md`, "What an approval rule does not stop" of 2.12.0) that new code must not widen',
+            $claude,
+            'Rule 12 of CLAUDE.md'
+        );
+        $this->assertStringNotContainsString('and the launcher is the user who chose what runs (a schedule runs as', $claude, 'Rule 12 no longer claims it without a limit.');
+        $this->assertStringNotContainsString('until inventory-level approvals', $claude, 'Rule 12 no longer calls inventory-level approvals to come.');
+        // Regression (wave 9 of step 3): rule 12 and the docs called
+        // inventory-level approvals planned, but the roadmap did not list
+        // them. 2.12.0 completed them, and the roadmap names what comes next.
+        $this->assertMentions(
+            '8. ~~**Inventory-level approvals**~~ — approval rules on inventories (`approval_rule_id`): a rule on an inventory gates every launch of every job template that uses it',
+            $this->flat('CLAUDE.md', '### Completed'),
+            'The roadmap of CLAUDE.md'
+        );
+        $this->assertMentions(
+            '3. **Project and credential locks** — project settings (repository URL, branch, SCM credential, local path, vault source) and the credentials of gated work changed only by admins, and credentials scoped to teams',
             $this->flat('CLAUDE.md', '### Next'),
             'The roadmap of CLAUDE.md'
         );
