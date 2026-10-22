@@ -1,8 +1,12 @@
 services:
   app:
+    # pull: every build fetches the current base image (php:8.2-fpm), so a
+    # base rebuilt with security fixes reaches the next `up --build`; without
+    # it Docker keeps building on the copy it already has.
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-1000}
         GROUP_ID: ${GID:-1000}
@@ -30,7 +34,7 @@ services:
       - ansilume
 
   nginx:
-    image: nginx:1.25-alpine
+    image: nginx:1.30-alpine-slim
     container_name: ansilume_nginx
     restart: unless-stopped
     ports:
@@ -156,6 +160,7 @@ services:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-1000}
         GROUP_ID: ${GID:-1000}
@@ -187,6 +192,7 @@ services:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-1000}
         GROUP_ID: ${GID:-1000}
@@ -221,6 +227,7 @@ services:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-1000}
         GROUP_ID: ${GID:-1000}
@@ -254,6 +261,7 @@ services:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-1000}
         GROUP_ID: ${GID:-1000}
@@ -287,6 +295,7 @@ services:
     build:
       context: .
       dockerfile: docker/playwright/Dockerfile
+      pull: true
     container_name: ansilume_playwright
     profiles: [e2e]
     working_dir: /e2e

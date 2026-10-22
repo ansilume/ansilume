@@ -261,8 +261,9 @@ class GatedTemplateDocsContractTest extends TestCase
             $this->flat('CLAUDE.md', '### Completed'),
             'The roadmap of CLAUDE.md'
         );
-        $this->assertMentions(
-            '3. **Project and credential locks** — project settings (repository URL, branch, SCM credential, local path, vault source) and the credentials of gated work changed only by admins, and credentials scoped to teams',
+        // Without its number: other items come before it (PHP 8.5, 2026-10-22).
+        $this->assertMatchesRegularExpression(
+            '/\d+\. \*\*Project and credential locks\*\* — project settings \(repository URL, branch, SCM credential, local path, vault source\) and the credentials of gated work changed only by admins, and credentials scoped to teams/',
             $this->flat('CLAUDE.md', '### Next'),
             'The roadmap of CLAUDE.md'
         );

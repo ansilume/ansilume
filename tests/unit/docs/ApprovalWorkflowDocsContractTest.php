@@ -101,21 +101,22 @@ class ApprovalWorkflowDocsContractTest extends TestCase
     private const GATED_JOB_FAILURE_2101 = '→ next step; end workflow (failed) after a refused approval';
 
     /**
-     * The section follows those of the releases after it (the update that
-     * gives inventories approval rules, the newest, the one that leaves
-     * runner management to admins, 2.11.0 and the patch 2.10.1), and the
-     * one before it keeps its heading, which the contract tests of 2.9.0
-     * read.
+     * The section follows those of the releases after it (the newest, of
+     * the update after 2.12.1, the update that gives inventories approval
+     * rules, the one that leaves runner management to admins, 2.11.0 and the
+     * patch 2.10.1), and the one before it keeps its heading, which the
+     * contract tests of 2.9.0 read.
      */
     public function testTheSectionFollowsThePatchAndTheOlderOnesStay(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.11.1 follows.');
-        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The section of 2.11.0 follows.');
-        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][3] ?? null, 'The patch 2.10.1 follows.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][4] ?? null, 'This section comes next.');
-        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][5] ?? '');
+        $this->assertSame(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.12.0 follows.');
+        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The section of 2.11.1 follows.');
+        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][3] ?? null, 'The section of 2.11.0 follows.');
+        $this->assertSame(WorkflowStepOrderDocsContractTest::UPDATE_SECTION, $headings[0][4] ?? null, 'The patch 2.10.1 follows.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][5] ?? null, 'This section comes next.');
+        $this->assertStringStartsWith('## After updating from 2.8.1 or older: encrypted password answers', $headings[0][6] ?? '');
     }
 
     public function testTheChecklistStartsWithTheChecksBeforeTheUpdate(): void

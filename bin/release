@@ -6,6 +6,11 @@
 #   ./bin/release patch    0.1.0 → 0.1.1
 #   ./bin/release minor    0.1.0 → 0.2.0
 #   ./bin/release major    0.1.0 → 1.0.0
+#
+#   ./bin/release patch --notes "Images rebuilt with PHP 8.2.35 (CVE-...)."
+#
+# --notes puts a text (Markdown) into the annotated tag, below its subject;
+# the GitHub release of the tag starts with it (bin/release-notes).
 # =============================================================================
 
 set -euo pipefail
@@ -18,10 +23,22 @@ bump_openapi_version() {
     grep -q "^  version: \"${version}\"\$" "$spec"
 }
 
+usage() {
+    echo "Usage: $0 <patch|minor|major> [--notes <text>]" >&2
+    exit 1
+}
+
 BUMP="${1:-}"
 if [[ "$BUMP" != "patch" && "$BUMP" != "minor" && "$BUMP" != "major" ]]; then
-    echo "Usage: $0 <patch|minor|major>" >&2
-    exit 1
+    usage
+fi
+
+NOTES=""
+if [[ $# -gt 1 ]]; then
+    if [[ $# -ne 3 || "$2" != "--notes" || -z "$3" ]]; then
+        usage
+    fi
+    NOTES="$3"
 fi
 
 # Ensure working tree is clean.
@@ -47,7 +64,13 @@ bump_openapi_version web/openapi.yaml "${NEW}"
 
 git add VERSION web/openapi.yaml
 git commit -m "chore: release ${TAG}"
-git tag -a "${TAG}" -m "Release ${TAG}"
+if [[ -n "$NOTES" ]]; then
+    # whitespace, not git's default strip: strip drops every line that
+    # starts with #, the Markdown headings of the notes too.
+    git tag -a --cleanup=whitespace "${TAG}" -m "Release ${TAG}" -m "${NOTES}"
+else
+    git tag -a "${TAG}" -m "Release ${TAG}"
+fi
 git push origin main
 git push origin "${TAG}"
 

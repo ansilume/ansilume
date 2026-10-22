@@ -13,6 +13,18 @@
     quiet: true
   tags: [validate]
 
+- name: Validate the version and the image tag are strings
+  ansible.builtin.assert:
+    that:
+      - ansilume_version is string
+      - ansilume_image_tag is string
+    fail_msg: >-
+      Quote ansilume_version and ansilume_image_tag, for example
+      ansilume_version: "2.10": unquoted, YAML reads 2.10 as the number 2.1,
+      and the role would deploy 2.1.
+    quiet: true
+  tags: [validate]
+
 - name: Validate the runner network is separate
   ansible.builtin.assert:
     that:
@@ -31,6 +43,29 @@
       Set it (for example from Ansible Vault) to enable AUTH.
   when: ansilume_redis_local and ansilume_redis_password | length == 0
   tags: [validate]
+
+# The stack starts from the rendered docker-compose.yaml and, when the
+# operator put one into the install directory, an override (labels for a TLS
+# proxy, for example): the first of the names Compose looks for, as Compose
+# picks it. Compose reads no other file once the role names its files.
+- name: Look for a compose override
+  ansible.builtin.stat:
+    path: "{{ ansilume_install_dir }}/{{ item }}"
+  loop:
+    - compose.override.yml
+    - compose.override.yaml
+    - docker-compose.override.yml
+    - docker-compose.override.yaml
+  become: true
+  register: ansilume_compose_overrides
+  tags: [always]
+
+- name: Name the compose files of the stack
+  ansible.builtin.set_fact:
+    ansilume_compose_files: >-
+      {{ ['docker-compose.yaml']
+      + (ansilume_compose_overrides.results | selectattr('stat.exists') | map(attribute='item') | list)[:1] }}
+  tags: [always]
 
 - name: Verify Docker is installed
   ansible.builtin.include_tasks: preflight.yaml

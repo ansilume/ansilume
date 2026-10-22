@@ -6,13 +6,32 @@ them apart is what keeps both of them reliable.
 | System | What it runs | Role |
 |--------|--------------|------|
 | GitHub Actions, `.github/workflows/ci.yaml` | The five suites `bin/tests-lint.sh`, `bin/tests-style.sh`, `bin/tests-phpstan.sh`, `bin/tests-phpunit.sh` and `bin/tests-e2e.sh`, against the docker compose stack with MariaDB, Redis and runners | **The test gate.** Every suite must be green before a release. |
-| GitHub Actions, `.github/workflows/release.yml` | Image builds for `v*` tags, multi-arch manifests, the arm64 smoke test of the prebuilt compose file | Release images |
+| GitHub Actions, `.github/workflows/release.yml` | Image builds for `v*` tags, multi-arch manifests, the arm64 smoke test of the prebuilt compose file and the vulnerability scan of the images, then `latest` and the floating tags, then the GitHub release of the tag (`github-release.yml`, see [releasing.md](releasing.md#container-images)) | Release images and GitHub releases |
 | Scrutinizer | Static analysis of PHP and JavaScript (`php-scrutinizer-run`, `js-scrutinizer-run`, plus PHPMD and PHPCPD from `tools`) and PSR-12 with the project's own phpcs | Code quality signal and the README badges |
 
 **Scrutinizer runs no tests.** It starts no database, no Redis and no other
 service, and it runs neither PHPUnit nor migrations. Every test already runs in
 GitHub Actions against the real stack, so nothing is lost. The
 [history](#why-scrutinizer-runs-no-tests) below explains why this rule exists.
+
+## Pinned actions
+
+Every action a workflow uses is pinned to the commit of its release, with
+the release in a comment, so that what runs cannot change under the same
+name (`tests/unit/config/WorkflowActionPinTest.php`):
+
+```yaml
+uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+```
+
+Dependabot (`.github/dependabot.yml`) opens one pull request a month with new
+pins for all of them; CI runs on it. Read the release notes of the actions
+it updates, and merge it when CI is green. To pin an action by hand, take
+the commit its release tag names:
+
+```bash
+gh api repos/actions/checkout/commits/v6.1.0 --jq .sha
+```
 
 ## Rules for `.scrutinizer.yml`
 

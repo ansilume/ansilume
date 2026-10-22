@@ -16,6 +16,8 @@ use Symfony\Component\Yaml\Yaml;
  */
 class ComposeIsolationTest extends TestCase
 {
+    use RendersDeployRole;
+
     /**
      * @return array<string, array{0: string}>
      */
@@ -54,51 +56,6 @@ class ComposeIsolationTest extends TestCase
     public static function deployModeProvider(): array
     {
         return ['build' => [false], 'prebuilt' => [true]];
-    }
-
-    /**
-     * Renders the deploy role's compose template with the role defaults, the
-     * way Ansible would, and returns the parsed result.
-     *
-     * @return array<string, mixed>
-     */
-    private function renderDeployTemplate(bool $prebuilt): array
-    {
-        if ($this->python(['-c', 'import jinja2, yaml'])['rc'] !== 0) {
-            $this->markTestSkipped('python3 with jinja2 and PyYAML is needed to render the deploy template.');
-        }
-        $script = <<<'PY'
-            import json, sys, yaml, jinja2
-            role = sys.argv[1]
-            variables = yaml.safe_load(open(role + '/defaults/main.yaml')) or {}
-            variables.update({'ansible_managed': 'Ansible managed', 'ansilume_use_prebuilt_images': sys.argv[2] == '1'})
-            template = jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(open(role + '/templates/docker-compose.yaml').read())
-            json.dump(yaml.safe_load(template.render(**variables)), sys.stdout)
-            PY;
-        $result = $this->python(['-c', $script, dirname(__DIR__, 3) . '/deploy/roles/ansilume', $prebuilt ? '1' : '0']);
-        $this->assertSame(0, $result['rc'], $result['err']);
-        $compose = json_decode($result['out'], true);
-        $this->assertIsArray($compose);
-
-        return $compose;
-    }
-
-    /**
-     * @param list<string> $args
-     * @return array{rc: int, out: string, err: string}
-     */
-    private function python(array $args): array
-    {
-        $process = proc_open(['python3', ...$args], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        if (!is_resource($process)) {
-            return ['rc' => 127, 'out' => '', 'err' => 'python3 not available'];
-        }
-        $out = (string)stream_get_contents($pipes[1]);
-        $err = (string)stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-
-        return ['rc' => proc_close($process), 'out' => $out, 'err' => $err];
     }
 
     /**
@@ -228,13 +185,45 @@ class ComposeIsolationTest extends TestCase
     /**
      * The runner image copies its build context; the deploy role renders
      * docker-compose.yaml with secrets as fallback defaults next to .env.
+     * A system user whose home is the install directory
+     * (ansilume_create_user) keeps the keys and credentials for a private
+     * repository there, and a playbook with become reads the runner image.
      */
     public function testRunnerImageBuildContextExcludesSecrets(): void
     {
         $ignored = array_map('trim', (array)file(dirname(__DIR__, 3) . '/.dockerignore'));
 
-        $this->assertContains('.env', $ignored);
-        $this->assertContains('docker-compose.yaml', $ignored);
+        foreach (['.env*', 'docker-compose.yaml', 'docker-compose.override.yml', 'docker-compose.override.yaml', 'compose.override.yml', 'compose.override.yaml', 'release.tar.gz', '.ssh', '.netrc', '.git-credentials', '.gnupg', '.docker', '.ansible', '.config', '.bash_history', '**/*.sql', '**/*.sql.gz', '**/*.bak', '**/*.backup'] as $secret) {
+            $this->assertContains($secret, $ignored);
+        }
+        // Regression found in review: "Before you update" makes .env.backup
+        // and backup.sql in the install directory, and the runner image of
+        // the deploy role's build mode copied both in.
+        foreach (['.env', '.env.backup', '.env.prod.example', 'backup.sql', 'dumps/ansilume.sql.gz'] as $file) {
+            $this->assertTrue(self::ignored($file, $ignored), "{$file} stays out of the build context");
+        }
+        $this->assertFalse(self::ignored('composer.json', $ignored));
+    }
+
+    /**
+     * Whether a .dockerignore line excludes $path: Docker matches each
+     * pattern against the whole path, "**" for any number of directories.
+     *
+     * @param list<string> $patterns
+     */
+    private static function ignored(string $path, array $patterns): bool
+    {
+        foreach ($patterns as $pattern) {
+            if ($pattern === '' || str_starts_with($pattern, '#') || str_starts_with($pattern, '!')) {
+                continue;
+            }
+            $regex = '#^' . strtr(preg_quote($pattern, '#'), ['\\*\\*/' => '(?:.*/)?', '\\*' => '[^/]*']) . '(?:/.*)?$#';
+            if (preg_match($regex, $path) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

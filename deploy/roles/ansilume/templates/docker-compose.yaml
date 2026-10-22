@@ -3,11 +3,15 @@
 services:
   app:
 {% if ansilume_use_prebuilt_images %}
-    image: {{ ansilume_app_image }}:{{ ansilume_version }}
+    image: {{ ansilume_app_image }}:{{ ansilume_image_tag }}
 {% else %}
+    # pull: every build fetches the current base image (php:8.2-fpm), so a
+    # base rebuilt with security fixes reaches the next deploy; without it
+    # Docker keeps building on the copy it already has.
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-{{ ansilume_uid }}}
         GROUP_ID: ${GID:-{{ ansilume_gid }}}
@@ -28,7 +32,9 @@ services:
       - APP_ENV=${APP_ENV:-{{ ansilume_app_env }}}
     env_file:
       - .env
+{% if ansilume_db_local or ansilume_redis_local %}
     depends_on:
+{% endif %}
 {% if ansilume_db_local %}
       db:
         condition: service_healthy
@@ -48,7 +54,7 @@ services:
 
   nginx:
 {% if ansilume_use_prebuilt_images %}
-    image: {{ ansilume_nginx_prebuilt_image }}:{{ ansilume_version }}
+    image: {{ ansilume_nginx_prebuilt_image }}:{{ ansilume_image_tag }}
 {% else %}
     image: {{ ansilume_nginx_image }}
 {% endif %}
@@ -126,11 +132,12 @@ services:
 
   schedule-runner:
 {% if ansilume_use_prebuilt_images %}
-    image: {{ ansilume_app_image }}:{{ ansilume_version }}
+    image: {{ ansilume_app_image }}:{{ ansilume_image_tag }}
 {% else %}
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-{{ ansilume_uid }}}
         GROUP_ID: ${GID:-{{ ansilume_gid }}}
@@ -147,7 +154,9 @@ services:
 {% endif %}
     env_file:
       - .env
+{% if ansilume_db_local or ansilume_redis_local %}
     depends_on:
+{% endif %}
 {% if ansilume_db_local %}
       db:
         condition: service_healthy
@@ -168,11 +177,12 @@ services:
 
   queue-worker:
 {% if ansilume_use_prebuilt_images %}
-    image: {{ ansilume_app_image }}:{{ ansilume_version }}
+    image: {{ ansilume_app_image }}:{{ ansilume_image_tag }}
 {% else %}
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+      pull: true
       args:
         USER_ID: ${UID:-{{ ansilume_uid }}}
         GROUP_ID: ${GID:-{{ ansilume_gid }}}
@@ -190,7 +200,9 @@ services:
 {% endif %}
     env_file:
       - .env
+{% if ansilume_db_local or ansilume_redis_local %}
     depends_on:
+{% endif %}
 {% if ansilume_db_local %}
       db:
         condition: service_healthy
@@ -214,11 +226,12 @@ services:
   # directory: playbooks must neither read .env nor change the code that
   # php-fpm executes. The runner clones projects itself.
 {% if ansilume_use_prebuilt_images %}
-    image: {{ ansilume_runner_image }}:{{ ansilume_version }}
+    image: {{ ansilume_runner_image }}:{{ ansilume_image_tag }}
 {% else %}
     build:
       context: .
       dockerfile: docker/runner/Dockerfile
+      pull: true
 {% endif %}
     container_name: {{ ansilume_compose_project }}_runner_{{ i }}
     restart: {{ ansilume_restart_policy }}

@@ -436,6 +436,8 @@ When the user says "PUSH IT", follow this exact sequence:
    - **MAJOR** — breaking-change release. Action: `./bin/release major`, then `git push --follow-tags`.
 
    Use `header: "Release type"` and a clear question like "Wie soll ich pushen?" / "How should I push this?". Do NOT ask via plain text — the picker is the source of truth so the answer is unambiguous and consistent across every PUSH IT cycle.
+
+   For a security release, or one whose operators must act, pass notes: `./bin/release patch --notes "<why, and what operators must do>"`. The GitHub release of the tag starts with them (`docs/releasing.md`); without notes it says only which commits changed.
 5. **After the push, check the pushed commit** once GitHub Actions and Scrutinizer have finished, with the commands in `docs/ci.md`, and report both results. A red build in either is fixed before new work starts.
 
 Never push without all green test suites. Never skip asking about the release type.
@@ -625,9 +627,10 @@ composer install               # Install PHP dependencies
 
 ### Next
 
-1. **HA / scaling** — multi-worker, runner failover, queue reliability
-2. **Advanced features** — artifact management
-3. **Project and credential locks** — project settings (repository URL, branch, SCM credential, local path, vault source) and the credentials of gated work changed only by admins, and credentials scoped to teams (plan step 11), so that whoever changes them no longer approves the jobs they affect and a project's sync no longer presents a credential its user may not use; until then documented limits (security rule 12, `docs/updating.md` "What an approval rule does not stop" of 2.12.0)
+1. **PHP 8.5, before 2026-12-31** — PHP 8.2 gets security fixes only until then; 8.5 until 2029-12-31. The assessment of 2026-10-22 found no blocking package (Yii2 2.0.55 supports 8.5) and these changes, one minor release: `fputcsv()` with `$escape` (8.4), yii2-redis 2.1.2 (its `SocketException` breaks on 8.4), `proc_open()` warns instead of failing quietly since 8.3 (8 call sites), no `curl_close()` and no `setAccessible()` in tests (8.5), PHPMD 3, a current composer image instead of `composer:2.6`, the Scrutinizer PHP version, then the `FROM` lines and the composer floor
+2. **HA / scaling** — multi-worker, runner failover, queue reliability
+3. **Advanced features** — artifact management
+4. **Project and credential locks** — project settings (repository URL, branch, SCM credential, local path, vault source) and the credentials of gated work changed only by admins, and credentials scoped to teams (plan step 11), so that whoever changes them no longer approves the jobs they affect and a project's sync no longer presents a credential its user may not use; until then documented limits (security rule 12, `docs/updating.md` "What an approval rule does not stop" of 2.12.0)
 
 ### Completed (Advanced Features)
 

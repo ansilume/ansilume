@@ -1,0 +1,129 @@
+name: GitHub Release
+
+# Creates the GitHub release of a pushed version tag: its text
+# (bin/release-notes: the notes of the tag and of the versions since the
+# previous GitHub release that got none, the commits since that release, the
+# image digests) and its source archive with a signed build provenance
+# (actions/attest).
+#
+# release.yml calls it once the images of the tag are pushed, passed the
+# smoke test and the scan, and its promote job ran, so it always runs for
+# the tag itself, and the provenance names the tag. To retry a failed
+# release, re-run the failed job of that release.yml run. Releases are
+# immutable once published (a repository setting): a published release
+# takes no assets, so a retry only completes a draft that an interrupted
+# run left behind. Only the highest version tag becomes the latest release.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Create or publish the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write        # create the release and upload its assets
+      id-token: write        # Sigstore certificate that signs the provenance
+      attestations: write    # store the provenance with the repository
+    # bash -eo pipefail: a failed command in a pipe fails the step.
+    defaults:
+      run:
+        shell: bash
+    # The tag reaches the scripts only as $TAG, never as an expression in a
+    # script, and the first step refuses anything but a version tag.
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check the tag
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" != tag || ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::${TAG} is no version tag such as v2.12.1; it gets no GitHub release"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      # The checkout can hold the tag as a plain ref to its commit; the notes
+      # are in the annotated tag object. The release is made of the commit
+      # the images were built from, so a tag moved since the push fails it.
+      - name: Fetch the annotated tags
+        run: |
+          git fetch --force --tags origin
+          if [ "$(git rev-parse "refs/tags/${TAG}^{commit}")" != "${GITHUB_SHA}" ]; then
+            echo "::error::${TAG} no longer names ${GITHUB_SHA}, the commit this run built the images from"
+            exit 1
+          fi
+
+      - name: Find the image digests
+        run: |
+          for image in ansilume ansilume-nginx ansilume-runner; do
+            ref="ghcr.io/ansilume/${image}:${TAG#v}"
+            digest=$(docker buildx imagetools inspect "${ref}" --format '{{.Manifest.Digest}}')
+            revisions=$(docker buildx imagetools inspect "${ref}" --format '{{range .Image}}{{index .Config.Labels "org.opencontainers.image.revision"}} {{end}}')
+            read -r -a platforms <<< "${revisions}"
+            if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ || ${#platforms[@]} -eq 0 ]]; then
+              echo "::error::${ref} has no digest or no platform image (digest '${digest}', revisions '${revisions}')"
+              exit 1
+            fi
+            for revision in "${platforms[@]}"; do
+              if [ "${revision}" != "${GITHUB_SHA}" ]; then
+                echo "::error::${ref} has a platform image built from ${revision}, not from ${GITHUB_SHA}"
+                exit 1
+              fi
+            done
+            echo "${ref} ${digest}" >> "${RUNNER_TEMP}/images.txt"
+          done
+
+      # The text starts from the previous release: the highest version below
+      # this one with a published GitHub release. A version in between got
+      # none, as its release run failed; its notes and changes are this
+      # release's too.
+      - name: Write the release notes
+        run: |
+          released=$(gh release list --exclude-drafts --limit 1000 --json tagName --jq '.[].tagName')
+          previous=$(printf '%s\n%s\n' "${released}" "${TAG}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V -u | grep -x -F -B 1 "${TAG}" | grep -v -x -F "${TAG}" || true)
+          bin/release-notes "${TAG}" "${RUNNER_TEMP}/images.txt" "${previous}" > "${RUNNER_TEMP}/notes.md"
+
+      - name: Build the source archive
+        run: git archive --format=tar.gz --prefix="ansilume-${TAG#v}/" -o "ansilume-${TAG#v}.tar.gz" "${TAG}"
+
+      - name: Attest the source archive
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ansilume-*.tar.gz
+
+      # gh release create with assets creates a draft, uploads the assets and
+      # then publishes it. A published release is immutable; only a draft
+      # left by an interrupted run still takes the assets.
+      - name: Create or publish the release
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          archive="ansilume-${TAG#v}.tar.gz"
+          cp "${BUNDLE}" "${archive}.sigstore.json"
+          highest=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          latest=false
+          if [ "${highest}" = "${TAG}" ]; then
+            latest=true
+          fi
+          if ! draft=$(gh release view "${TAG}" --json isDraft --jq .isDraft); then
+            gh release create "${TAG}" --verify-tag --title "Ansilume ${TAG#v}" \
+              --notes-file "${RUNNER_TEMP}/notes.md" --latest="${latest}" \
+              "${archive}" "${archive}.sigstore.json"
+          elif [ "${draft}" = true ]; then
+            gh release upload "${TAG}" "${archive}" "${archive}.sigstore.json" --clobber
+            gh release edit "${TAG}" --draft=false --latest="${latest}"
+          else
+            echo "::error::${TAG} already has a published release; published releases are immutable and take no assets"
+            exit 1
+          fi

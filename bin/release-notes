@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# =============================================================================
+# bin/release-notes — print the text of the GitHub release of a version tag
+#
+# Usage:
+#   bin/release-notes <tag> [<images file> [<previous release>]]
+#
+# Prints Markdown: the notes of the annotated tag (bin/release --notes), the
+# commits since the previous release, the images with their digests (one
+# "<image>:<tag> <digest>" per line of <images file>, "" for none), where to
+# read about updating, and how to verify the signed source archive.
+#
+# The previous release is <previous release>, the last version with a GitHub
+# release, or else the previous version tag. A version in between got no
+# release of its own, as its images failed the checks of its release run:
+# its notes and its changes are part of this text.
+# .github/workflows/github-release.yml writes every release text with it.
+# =============================================================================
+
+set -euo pipefail
+
+usage() {
+    echo "Usage: $0 <tag> [<images file> [<previous release>]]" >&2
+    exit 1
+}
+
+TAG="${1:-}"
+IMAGES="${2:-}"
+SINCE="${3:-}"
+if [[ -z "$TAG" || $# -gt 3 ]]; then
+    usage
+fi
+for tag in "$TAG" "$SINCE"; do
+    if [[ -n "$tag" ]] && ! git rev-parse --quiet --verify "refs/tags/${tag}" >/dev/null; then
+        echo "${tag} is no tag in this repository." >&2
+        exit 1
+    fi
+done
+if [[ -n "$IMAGES" && ! -f "$IMAGES" ]]; then
+    echo "${IMAGES} is no file." >&2
+    exit 1
+fi
+
+REPOSITORY="${GITHUB_REPOSITORY:-ansilume/ansilume}"
+REPOSITORY_URL="${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}"
+VERSION="${TAG#v}"
+
+# The notes of a version: the body of its annotated tag. A lightweight tag
+# has none: the message of its commit is no release text.
+notes_of() {
+    if [[ "$(git cat-file -t "refs/tags/$1")" == "tag" ]]; then
+        git for-each-ref --format='%(contents:body)' "refs/tags/$1"
+    fi
+}
+
+NOTES=$(notes_of "$TAG")
+if [[ -n "$NOTES" ]]; then
+    printf '%s\n\n' "$NOTES"
+fi
+
+# The previous release: the one given, or else the highest version tag
+# (vX.Y.Z, no release candidate or other tag) that the release is built on.
+PREVIOUS="$SINCE"
+if [[ -z "$PREVIOUS" ]]; then
+    PREVIOUS=$(git tag --merged "${TAG}^" --list 'v*' 2>/dev/null | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+fi
+if [[ -n "$PREVIOUS" ]]; then
+    # The version bumps of the release and of the versions in between.
+    declare -A BUMPS=(["$(git rev-parse "refs/tags/${TAG}^{commit}")"]="chore: release ${TAG}")
+    # The versions the release is built on that the previous release is
+    # not: their version bumps are no change of this release. Those above the
+    # previous release got no release of its own; a lower one, such as a fix
+    # of an older line merged forward, has its own.
+    while IFS= read -r version; do
+        if [[ -z "$version" ]] || git merge-base --is-ancestor "refs/tags/${version}" "refs/tags/${PREVIOUS}"; then
+            continue
+        fi
+        BUMPS["$(git rev-parse "refs/tags/${version}^{commit}")"]="chore: release ${version}"
+        if [[ "$(printf '%s\n%s\n' "$version" "$PREVIOUS" | sort -V | tail -n 1)" == "$PREVIOUS" ]]; then
+            continue
+        fi
+        printf '## %s\n\n%s got no release of its own: its changes are part of this one.\n\n' "$version" "$version"
+        SKIPPED_NOTES=$(notes_of "$version")
+        if [[ -n "$SKIPPED_NOTES" ]]; then
+            printf '%s\n\n' "$SKIPPED_NOTES"
+        fi
+    done < <(git tag --merged "${TAG}^" --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V || true)
+    # Every commit since then but those version bumps.
+    CHANGES=$(git log --reverse --no-merges --format='%H %s' "${PREVIOUS}..${TAG}" | while IFS= read -r line; do
+        if [[ "${BUMPS[${line%% *}]:-}" == "${line#* }" ]]; then
+            continue
+        fi
+        printf -- '- %s\n' "${line#* }"
+    done)
+    printf '## Changes since %s\n\n%s\n\n' "$PREVIOUS" "${CHANGES:-Nothing but the version number.}"
+fi
+
+if [[ -n "$IMAGES" ]]; then
+    printf '## Images\n\n'
+    # || [[ -n ]]: also the last line when the file does not end with a newline.
+    while read -r image digest || [[ -n "${image:-}" ]]; do
+        if [[ -n "$image" ]]; then
+            printf -- '- `%s` (`%s`)\n' "$image" "$digest"
+        fi
+    done < "$IMAGES"
+    printf '\n'
+fi
+
+printf '## Updating\n\n'
+printf 'How to update, and what changes after an update: [docs/updating.md](%s/blob/%s/docs/updating.md)\n\n' "$REPOSITORY_URL" "$TAG"
+printf '## Verifying\n\n'
+printf '`ansilume-%s.tar.gz` is the source of this release. Check that the release workflow built it from the tag, and that it belongs to this release:\n\n' "$VERSION"
+printf '    gh attestation verify ansilume-%s.tar.gz --repo %s --source-ref refs/tags/%s --signer-workflow %s/.github/workflows/github-release.yml\n' "$VERSION" "$REPOSITORY" "$TAG" "$REPOSITORY"
+printf '    gh release verify-asset %s ansilume-%s.tar.gz --repo %s\n' "$TAG" "$VERSION" "$REPOSITORY"

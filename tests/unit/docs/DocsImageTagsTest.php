@@ -10,10 +10,10 @@ use Symfony\Component\Yaml\Yaml;
 /**
  * Guard: every container image the docs name is one that
  * .github/workflows/release.yml publishes, with a tag that it publishes.
- * The release tags its images with docker/metadata-action:
- * type=semver,pattern={{version}} (2.10.1), {{major}}.{{minor}} (2.10),
- * {{major}} (2) and type=raw,value=latest, without the leading v of the
- * git tag (v2.10.1).
+ * Its merge job tags the images with the version, without the leading v of
+ * the git tag (2.10.1 for v2.10.1; docker/metadata-action,
+ * type=semver,pattern={{version}}); its promote job adds {{major}}.{{minor}}
+ * (2.10), {{major}} (2) and latest (ReleaseWorkflowTest).
  *
  * The docs are docs/*.md, README.md and CLAUDE.md. An image is named as
  * ghcr.io/ansilume/<name>[:<tag>]; a tag is also named on its own, in
@@ -40,7 +40,10 @@ class DocsImageTagsTest extends TestCase
      */
     private const BARE_TAG = '/`:((?:latest|v?\d+\.\d+)[^`\s]*)`/';
 
-    /** What each pattern of the semver tags of metadata-action gives. */
+    /** A tag set as ANSILUME_IMAGE_TAG, which docker-compose.prebuilt.yml tags its images with. */
+    private const PINNED_TAG = '/\bANSILUME_IMAGE_TAG=["\']?([^\s`"\']+)/';
+
+    /** What each pattern of the semver tags of metadata-action gives, as a regular expression. */
     private const SEMVER_PATTERNS = [
         '{{version}}' => '\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?',
         '{{major}}.{{minor}}' => '\d+\.\d+',
@@ -98,6 +101,7 @@ class DocsImageTagsTest extends TestCase
             $this->assertFalse(self::matchesAny($other, $tags), $other);
         }
         $this->assertSame(['v2.1.0', 'latest', '2.10.1'], self::tagsIn('change `:v2.1.0` to `:latest` or `ghcr.io/ansilume/ansilume:2.10.1`, on `:8088`'));
+        $this->assertSame(['v2.10.1', '2.12.2'], self::tagsIn("set `ANSILUME_IMAGE_TAG=v2.10.1` in `.env`\n# ANSILUME_IMAGE_TAG=\"2.12.2\""));
     }
 
     /**
@@ -107,22 +111,15 @@ class DocsImageTagsTest extends TestCase
      */
     private function releaseTagPatterns(): array
     {
-        $patterns = [];
-        foreach (preg_split('/\R/', trim((string)($this->metadataStep()['with']['tags'] ?? ''))) ?: [] as $line) {
-            $options = [];
-            foreach (explode(',', trim($line)) as $option) {
-                [$key, $value] = array_pad(explode('=', $option, 2), 2, '');
-                $options[$key] = $value;
-            }
-            $patterns[] = match ($options['type'] ?? '') {
-                'semver' => self::SEMVER_PATTERNS[$options['pattern'] ?? ''] ?? $this->fail("release.yml has the semver pattern {$line}, which this test does not know."),
-                'raw' => preg_quote($options['value'] ?? '', '/'),
-                default => $this->fail("release.yml tags with {$line}, which this test does not know."),
-            };
-        }
-        $this->assertCount(4, $patterns, 'release.yml gives four tags.');
+        $this->assertSame('type=semver,pattern={{version}}', trim((string)($this->metadataStep()['with']['tags'] ?? '')), 'The merge job tags the version.');
+        $this->assertArrayHasKey('promote', $this->release()['jobs'] ?? [], 'The promote job adds the floating tags and latest.');
 
-        return $patterns;
+        return [
+            self::SEMVER_PATTERNS['{{version}}'],
+            self::SEMVER_PATTERNS['{{major}}.{{minor}}'],
+            self::SEMVER_PATTERNS['{{major}}'],
+            'latest',
+        ];
     }
 
     /**
@@ -173,7 +170,8 @@ class DocsImageTagsTest extends TestCase
     }
 
     /**
-     * The docs: docs/*.md, README.md and CLAUDE.md.
+     * The docs: docs/*.md, README.md, CLAUDE.md and .env.prod.example, which
+     * documents ANSILUME_IMAGE_TAG.
      *
      * @return list<string>
      */
@@ -182,7 +180,7 @@ class DocsImageTagsTest extends TestCase
         $docs = array_map(static fn (string $path): string => 'docs/' . basename($path), glob($this->root() . '/docs/*.md') ?: []);
         $this->assertNotEmpty($docs);
 
-        return array_merge($docs, ['README.md', 'CLAUDE.md']);
+        return array_merge($docs, ['README.md', 'CLAUDE.md', '.env.prod.example']);
     }
 
     /**
@@ -196,8 +194,9 @@ class DocsImageTagsTest extends TestCase
     }
 
     /**
-     * The tags of the images $text names after ghcr.io/ansilume/ and the
-     * tags it names on their own, in backticks, in this order.
+     * The tags of the images $text names after ghcr.io/ansilume/, the tags it
+     * names on their own, in backticks, and those it sets as
+     * ANSILUME_IMAGE_TAG, in this order.
      *
      * @return list<string>
      */
@@ -205,8 +204,9 @@ class DocsImageTagsTest extends TestCase
     {
         preg_match_all(self::BARE_TAG, $text, $bare);
         preg_match_all(self::IMAGE, $text, $images);
+        preg_match_all(self::PINNED_TAG, $text, $pinned);
 
-        return array_values(array_merge($bare[1], array_filter($images[2], static fn (string $tag): bool => $tag !== '')));
+        return array_values(array_merge($bare[1], array_filter($images[2], static fn (string $tag): bool => $tag !== ''), $pinned[1]));
     }
 
     /**

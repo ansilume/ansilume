@@ -15,7 +15,8 @@ ansilume_install_dir: /opt/ansilume
 # a pre-built release tarball via ansilume_release_archive).
 ansilume_repo_url: "https://github.com/ansilume/ansilume.git"
 
-# Git branch or tag to deploy.
+# Git branch or tag to deploy. Quote a version: unquoted, YAML reads 2.10
+# as the number 2.1.
 ansilume_version: main
 
 # Path to a local release tarball (.tar.gz) to upload instead of git clone.
@@ -98,8 +99,9 @@ ansilume_redis_image: "redis:7.2-alpine"
 # Port the nginx container exposes on the host.
 ansilume_nginx_port: 8080
 
-# Nginx image and version.
-ansilume_nginx_image: "nginx:1.25-alpine"
+# Nginx image and version (build mode; the prebuilt nginx image is built on
+# the same one, docker/nginx/Dockerfile.prod).
+ansilume_nginx_image: "nginx:1.30-alpine-slim"
 
 # Server name for the nginx vhost. Use "_" for any.
 ansilume_nginx_server_name: "_"
@@ -173,7 +175,16 @@ ansilume_audit_syslog_facility: LOG_LOCAL0
 # to true to pull these instead of building from source.
 ansilume_use_prebuilt_images: false
 
-# Image references (tag defaults to ansilume_version when using prebuilt).
+# Tag of the prebuilt images. They are tagged without the "v" of the git tag
+# (2.12.2 for v2.12.2), so it is ansilume_version without it when that names
+# a release (v2.12.2, 2.12.2, v2.12, v2), and latest otherwise, such as for
+# main or a commit. Quote both values: unquoted, YAML reads 2.10 as 2.1.
+ansilume_image_tag: >-
+  {{ ansilume_version | regex_replace('^v', '')
+  if ansilume_version | regex_search('^v?[0-9]{1,4}([.][0-9]+){0,2}(-[0-9A-Za-z.]+)?$')
+  else 'latest' }}
+
+# Image references, tagged with ansilume_image_tag.
 ansilume_app_image: "ghcr.io/ansilume/ansilume"
 ansilume_nginx_prebuilt_image: "ghcr.io/ansilume/ansilume-nginx"
 ansilume_runner_image: "ghcr.io/ansilume/ansilume-runner"

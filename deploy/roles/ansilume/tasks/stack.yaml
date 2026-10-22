@@ -2,9 +2,16 @@
 - name: Build and start the ansilume stack
   community.docker.docker_compose_v2:
     project_src: "{{ ansilume_install_dir }}"
+    # The rendered file and the operator's override (tasks/main.yaml): in a
+    # git checkout, Compose would otherwise pick the repository's
+    # docker-compose.yml, the development stack.
+    files: "{{ ansilume_compose_files | default(['docker-compose.yaml']) }}"
     project_name: "{{ ansilume_compose_project }}"
     state: present
     pull: always
     build: always
+    # Containers of the project that the file does not have, such as those
+    # the development stack left behind (mailhog, swagger).
+    remove_orphans: true
   become: true
   become_user: "{{ ansilume_system_user }}"

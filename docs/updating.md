@@ -2,6 +2,13 @@
 
 This guide covers how to update an existing Ansilume installation to the latest version.
 
+Every release has a GitHub release that says what it changes, security
+releases included: watch the repository with **Watch → Custom → Releases** to
+be notified. Releases up to 2.12.0 have none; their changes are in the
+sections below. A version without a GitHub release since then failed the
+checks of its release (the smoke test or the vulnerability scan): do not
+install it, and do not pin it.
+
 ## Before you update
 
 1. **Back up your `.env` file** — it contains your secrets and configuration.
@@ -11,6 +18,10 @@ This guide covers how to update an existing Ansilume installation to the latest 
 cp .env .env.backup
 docker compose exec db mysqldump -uansilume -p"$DB_PASSWORD" ansilume > backup.sql
 ```
+
+In a source installation, or one deployed with the role, keep these copies
+outside the install directory, for example in `/root`: the images are built
+from that directory.
 
 Database migrations run automatically when the app container starts. You do not need to run them manually.
 
@@ -83,10 +94,24 @@ cd /path/to/ansilume
 # 1. Pull latest changes
 git pull --ff-only
 
-# 2. Rebuild the images and recreate every container, so that the app runs
+# 2. Pull the images of nginx, MariaDB and Redis
+docker compose pull --ignore-buildable
+
+# 3. Rebuild the images and recreate every container, so that the app runs
 #    the migrations and every service loads the new code and configuration
 docker compose up -d --build --force-recreate
 ```
+
+Every build pulls its base image (`pull: true` in `docker-compose.yml`), so
+a base image rebuilt with security fixes, such as `php:8.2-fpm` with PHP
+8.2.35 for 2.12.1, arrives with the update. Up to 2.12.1 it did not, see
+[After updating from 2.12.1 or older](#after-updating-from-2121-or-older-base-images-the-deploy-role-nginx-130).
+The builds need Docker Hub (`php:8.2-fpm`, `composer:2.6`), which limits
+anonymous pulls: `docker login` lifts the limit. When a build fails after
+`git pull`, the running containers already serve the new code without its
+migrations: fix the cause and run step 3 again, or go back to the previous
+version until a build gets through (`git checkout v2.12.1`, and
+`git checkout main` again before the next update).
 
 If `git pull` fails with merge conflicts, you have local modifications. Either stash them (`git stash`) or reset to upstream (`git reset --hard origin/main`).
 
@@ -127,6 +152,157 @@ Run the diagnostics script if anything looks wrong:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 ```
+
+---
+
+## After updating from 2.12.1 or older: base images, the deploy role, nginx 1.30
+
+**Source installations pull their base images.** `docker compose up -d
+--build` built on the `php:8.2-fpm` that Docker already had: after 2.12.1,
+whose images brought PHP 8.2.35 (CVE-2026-109618, CVE-2026-109619), a
+source installation kept PHP 8.2.34. Every build in `docker-compose.yml`
+pulls its base image now, and the commands under
+[Manual update — source (git)](#manual-update--source-git) pull the images
+of nginx, MariaDB and Redis too. Check after the update:
+
+```bash
+docker compose exec app php -v    # PHP 8.2.35 or later
+```
+
+**The deploy role starts the stack it renders.** From a git checkout, its
+default, and from a release archive, the role started the repository's
+`docker-compose.yml`, the development stack, instead of the
+`docker-compose.yaml` it renders: Compose prefers `docker-compose.yml`.
+Since the role exists, that stack:
+
+- published MariaDB (3306), Redis without a password (6379, which holds
+  the sessions and the queue), Adminer, which logs in to the database by
+  itself (8081), mailhog (8025) and swagger-ui (8088) on every address of
+  the host up to 2.4.6, and on 127.0.0.1 from 2.5.0 on. Since 2.2.8 Adminer
+  and the database start only with `COMPOSE_PROFILES=internal-db`, which the
+  role never set, so containers created before kept running with their old
+  ports through every update;
+- mounted the install directory read-write into the bundled runners: a
+  playbook could read `.env` (`APP_SECRET_KEY`, the passwords of the
+  database, Redis, SMTP and LDAP, the runner bootstrap secret) and change
+  anything in the directory, the code php-fpm runs, `vendor/`, `web/assets/`
+  and `.git/` included, whose hooks and configuration run on the host when
+  git runs there;
+- built the images from source with `ansilume_use_prebuilt_images` too, and
+  without a checkout the role pulled tags that do not exist (`v2.12.1`,
+  `main`; the images are tagged `2.12.1`);
+- never came up on a new installation with the local database since 2.2.8,
+  as nothing started the database. From git a new installation never got
+  that far: the role created `docker/` in the install directory first, and
+  git clones only into an empty directory.
+
+Now the role starts the stack from its own files, `docker-compose.yaml` and
+your override, such as `docker-compose.override.yml`, when the install
+directory has one (`files`). It removes the containers of the project those files do not
+have, Adminer, mailhog and swagger-ui among them (`remove_orphans`), and
+writes `COMPOSE_FILE` and `COMPOSE_PROJECT_NAME` into `.env`, so
+`docker compose` run by hand in the install directory uses the same files.
+It creates `docker/` after the clone, so a new installation from git comes
+up. The database stays: both stacks keep it in the volume `db_data` of the
+same project. Also:
+
+- The bundled runners get volumes of their own and register again, with
+  `ansilume_runner_bootstrap_secret`, under their names in the group
+  `default`, which gives them new tokens. A bundled runner an admin had
+  moved to another group comes back as a new runner in `default`.
+- Manual projects whose files are in the install directory: in prebuilt mode
+  the bundled runners no longer have them, in build mode they have the copy
+  the role builds into the runner image. Move such projects to git.
+- In prebuilt mode the server keeps the project checkouts in the volume
+  `runtime_projects`, which starts empty: sync every project once.
+
+What to do, when you deploy with the role from a git checkout or a release
+archive:
+
+1. Before the update, look at what the old stack publishes:
+
+   ```bash
+   docker ps --format '{{.Names}}  {{.Ports}}'
+   ```
+
+   If `ansilume_db`, `ansilume_redis` or `ansilume_adminer` show `0.0.0.0`
+   or `[::]`, or you ran 2.4.6 or older with those ports reachable, others
+   could read and change the database and the sessions, and so make
+   themselves admins: review the users, superadmins, roles, API tokens and
+   runners, and follow step 2.
+2. If others could reach those ports (step 1), or anyone but an admin could
+   launch jobs on the bundled runners, or push to the repository of a
+   project whose playbooks ran there, do not run git or the role in the old
+   install directory: git hooks or git configuration planted there run on
+   the host as the system user, a member of the docker group, the role's own
+   clone included. Move the directory aside, and the role clones a fresh
+   one:
+
+   ```bash
+   mv /opt/ansilume /opt/ansilume.old
+   ```
+
+   Copy nothing back from it. To see whether someone ran code, look through
+   it without running git in it. Compare it with a fresh clone of the
+   version it ran (from a release archive: a fresh extract of it); only the
+   files the role writes may differ (`.env`, `docker-compose.yaml`, the
+   configuration under `docker/`):
+
+   ```bash
+   git clone --depth 1 --branch <version> https://github.com/ansilume/ansilume.git /root/ansilume-ref
+   diff -rq -x .git -x vendor -x runtime /root/ansilume-ref /opt/ansilume.old
+   ```
+
+   Read `.git/config` and `.git/hooks/`, and those of every checkout under
+   `runtime/projects/`; look for `.php` files under `runtime/` and
+   `web/assets/`; and when the system user's home is the install directory
+   (`ansilume_create_user`), read its `.ssh/authorized_keys`, `.bashrc`,
+   `.profile` and `.gitconfig`. `vendor/` compares only with a
+   `composer install` of the same `composer.lock`. Anything you did not put
+   there means someone ran code on the host or in php-fpm: treat the host
+   as compromised, and have every user change their password, as a changed
+   login may have collected them. Then rotate as in step 3.
+3. To rotate, change the values in your inventory or vault, not in `.env`,
+   which the role writes on every run; step 4 applies them:
+   - `ansilume_db_password` and `ansilume_db_root_password`: change them in
+     MariaDB first (`ALTER USER`), as the container sets them only when it
+     creates the database; the root password for every root account
+     (`SELECT user, host FROM mysql.user WHERE user = 'root'`, such as
+     `root@'%'` and `root@'localhost'`);
+   - `ansilume_redis_password`, `ansilume_cookie_validation_key` (signs
+     everyone out), `ansilume_runner_bootstrap_secret` (and the external
+     runners' copies), and the SMTP and LDAP passwords at their servers;
+   - `ansilume_app_secret_key` encrypts the stored credentials, the
+     password answers of surveys and the TOTP secrets of two-factor
+     authentication, and nothing re-encrypts them (see
+     [After updating from 2.4.4 or older](#after-updating-from-244-or-older-clean-up-log-files-and-rotate-secrets)).
+     Have every user with two-factor authentication turn it off before
+     step 4 and set it up again after; for a user who cannot, clear it in
+     the database:
+     `UPDATE user SET totp_enabled = 0, totp_secret = NULL, recovery_codes = NULL WHERE username = '…'`.
+     After step 4, rotate the stored credentials at their targets (SSH
+     keys, vault passwords, tokens) and enter them again, and enter the
+     password answers of schedules again.
+4. Run the updated role. It needs the `community.docker` collection 3.7.0
+   or later, and a quoted `ansilume_version` (`"2.10"`, not `2.10`, which
+   YAML reads as 2.1). With `ansilume_use_prebuilt_images`, name a release
+   in `ansilume_version` (`v2.12.2`), or keep `main` for `latest`: the role
+   pulls the images tagged without the `v` (`ansilume_image_tag`).
+5. After the run, under **Runners**: the bundled runners got new tokens when
+   they registered again during the update. Move a bundled runner an admin
+   had moved before back into its group, and delete its old entry, which
+   keeps its old token. After step 1 or 2, also delete every runner you do
+   not know, as the bootstrap secret could be read. With
+   `ansilume_use_prebuilt_images`, sync every project once.
+
+**A tag for the prebuilt images.** `docker-compose.prebuilt.yml` runs the
+Ansilume images with the tag `ANSILUME_IMAGE_TAG`, `latest` when it is not
+set. Set it in `.env` to stay on a version, see [Rollback](#rollback).
+`bin/quickstart --update` warns while it is set.
+
+**nginx 1.30.** The nginx image and the development stack run
+`nginx:1.30-alpine-slim` instead of `nginx:1.25-alpine`, which got no fixes
+after 2024. The configuration is the same.
 
 ---
 
@@ -5745,7 +5921,10 @@ outbound access for playbooks and git.
   network (for example a Gitea container), attach that container to the
   `runners` network or reach it through a host name instead.
 - The Ansible deploy role now runs its runners from the standalone runner
-  image in build mode too, without mounting the install directory. Until now
+  image in build mode too, without mounting the install directory (for
+  deployments from a git checkout or a release archive only since the
+  update after 2.12.1, see
+  [After updating from 2.12.1 or older](#after-updating-from-2121-or-older-base-images-the-deploy-role-nginx-130)). Until now
   they mounted it read-write, so playbooks could read `.env` and change the
   application code. The runners clone git projects themselves; a manual
   project whose path only exists on the server no longer runs on them. In
@@ -5873,7 +6052,7 @@ redacts secrets before printing.
 If an update causes problems:
 
 1. **Restore your `.env` backup** if it was modified.
-2. **Pin a specific version** by editing the image tags in `docker-compose.yml` (e.g., change `:latest` to `:2.10.1`; the image tags have no leading `v`, unlike the git tags such as `v2.10.1`). A git checkout runs `git checkout v2.10.1` instead.
+2. **Pin a specific version**: set `ANSILUME_IMAGE_TAG=2.10.1` in `.env` when your `docker-compose.yml` tags the images with `${ANSILUME_IMAGE_TAG:-latest}`, or edit the image tags in `docker-compose.yml` (e.g., change `:latest` to `:2.10.1`; the image tags have no leading `v`, unlike the git tags such as `v2.10.1`). A git checkout runs `git checkout v2.10.1` instead. Remove the pin again to receive updates: while it is set, every update stays on that version.
 3. **Restart** with `docker compose up -d`.
 4. **Restore your database** if a migration caused issues:
 

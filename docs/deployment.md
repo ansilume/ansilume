@@ -7,7 +7,7 @@ Ansilume ships with an Ansible role in `deploy/` that automates production insta
 - Target server: Debian 12+, Ubuntu 22.04+, AlmaLinux 8/9, or RHEL 8/9
 - **Docker and Docker Compose plugin** must be installed on the target server (the role verifies this but does not install Docker)
 - Ansible 2.14+ on the control machine
-- `community.docker` collection (`ansible-galaxy collection install community.docker`)
+- `community.docker` collection 3.7.0 or later (`ansible-galaxy collection install community.docker`)
 - SSH access to the target server with `become` (sudo) privileges
 
 ## Quick start
@@ -19,8 +19,10 @@ cd deploy
 cp inventory/production.yaml inventory/myenv.yaml
 # Edit inventory/myenv.yaml — add your server(s)
 
-# 2. Set secrets (use ansible-vault for production!)
-ansible-vault create group_vars/vault.yaml
+# 2. Set secrets (use ansible-vault for production!). group_vars/all/ applies
+#    to every host; a group_vars/vault.yaml would apply to a group "vault" only.
+mkdir -p group_vars/all
+ansible-vault create group_vars/all/vault.yaml
 # Add:
 #   vault_cookie_validation_key: <openssl rand -hex 32>
 #   vault_app_secret_key: <openssl rand -hex 32>
@@ -50,7 +52,18 @@ ansible-playbook site.yaml -i inventory/myenv.yaml --ask-vault-pass
 3. **Creates** a system user and deployment directory (`/opt/ansilume`)
 4. **Clones** the repository (or extracts a release archive)
 5. **Templates** all configuration files (`.env`, `docker-compose.yaml`, nginx, PHP, MariaDB)
-6. **Starts** the full container stack via Docker Compose
+6. **Starts** the full container stack via Docker Compose, from the
+   `docker-compose.yaml` it renders, never from the repository's
+   `docker-compose.yml`, which is the development stack; containers of the
+   project that file does not have are removed. An override you put into
+   the install directory (labels for a TLS proxy, say) is part of the stack
+   too: the first of `compose.override.yml`, `compose.override.yaml`,
+   `docker-compose.override.yml` and `docker-compose.override.yaml`, as
+   Compose picks it. `.env` names the files
+   and the project (`COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`), so
+   `docker compose` run by hand in the install directory uses them too.
+   Every build pulls its base image, so a base rebuilt with security fixes
+   reaches the next deploy.
 7. **Waits** for the health endpoint to return HTTP 200
 
 The role is fully idempotent — running it again only applies changes.
@@ -124,8 +137,10 @@ All variables are documented in `deploy/roles/ansilume/defaults/main.yaml`. Key 
 |----------|---------|-------------|
 | `ansilume_install_dir` | `/opt/ansilume` | Installation directory on the target |
 | `ansilume_repo_url` | GitHub URL | Git repository to clone |
-| `ansilume_version` | `main` | Branch or tag to deploy |
+| `ansilume_version` | `main` | Branch or tag to deploy; quote a version (`"2.10"`): unquoted, YAML reads 2.10 as 2.1 |
 | `ansilume_release_archive` | `""` | Local tarball path (skips git clone) |
+| `ansilume_use_prebuilt_images` | `false` | Pull the images from ghcr.io instead of building them |
+| `ansilume_image_tag` | `ansilume_version` without its `v`, or `latest` | Tag of the prebuilt images: `2.12.2` for `v2.12.2`, `latest` for a branch such as `main` |
 
 ### Secrets (must override)
 

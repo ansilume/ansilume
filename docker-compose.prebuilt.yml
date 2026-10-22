@@ -14,7 +14,7 @@
 
 services:
   app:
-    image: ghcr.io/ansilume/ansilume:latest
+    image: ghcr.io/ansilume/ansilume:${ANSILUME_IMAGE_TAG:-latest}
     container_name: ansilume_app
     restart: unless-stopped
     env_file: .env
@@ -37,7 +37,7 @@ services:
       - ansilume
 
   nginx:
-    image: ghcr.io/ansilume/ansilume-nginx:latest
+    image: ghcr.io/ansilume/ansilume-nginx:${ANSILUME_IMAGE_TAG:-latest}
     container_name: ansilume_nginx
     restart: unless-stopped
     ports:
@@ -58,7 +58,7 @@ services:
       - runners
 
   queue-worker:
-    image: ghcr.io/ansilume/ansilume:latest
+    image: ghcr.io/ansilume/ansilume:${ANSILUME_IMAGE_TAG:-latest}
     container_name: ansilume_queue_worker
     restart: unless-stopped
     command: ["php", "yii", "worker/start"]
@@ -81,7 +81,7 @@ services:
       - ansilume
 
   schedule-runner:
-    image: ghcr.io/ansilume/ansilume:latest
+    image: ghcr.io/ansilume/ansilume:${ANSILUME_IMAGE_TAG:-latest}
     container_name: ansilume_schedule_runner
     restart: unless-stopped
     command: ["/bin/sh", "-c",
@@ -104,7 +104,7 @@ services:
       - ansilume
 
   runner-1:
-    image: ghcr.io/ansilume/ansilume-runner:latest
+    image: ghcr.io/ansilume/ansilume-runner:${ANSILUME_IMAGE_TAG:-latest}
     container_name: ansilume_runner_1
     restart: unless-stopped
     environment:

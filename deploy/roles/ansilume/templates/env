@@ -1,6 +1,12 @@
 # {{ ansible_managed }}
 # Ansilume production environment — do not edit manually.
 
+# Compose: the file and project the role deploys, for docker compose run by
+# hand in this directory too. In a git checkout, Compose would otherwise pick
+# the repository's docker-compose.yml, the development stack.
+COMPOSE_FILE={{ ansilume_compose_files | default(['docker-compose.yaml']) | map('regex_replace', '^', ansilume_install_dir ~ '/') | join(':') }}
+COMPOSE_PROJECT_NAME={{ ansilume_compose_project }}
+
 # Application
 APP_ENV={{ ansilume_app_env }}
 YII_ENV={{ ansilume_yii_env }}

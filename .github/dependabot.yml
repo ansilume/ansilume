@@ -1,0 +1,14 @@
+# Dependabot proposes updates of the actions the workflows use. They are
+# pinned to the commit of their release, with the release in a comment
+# (tests/unit/config/WorkflowActionPinTest.php), and Dependabot updates both:
+# one pull request a month for all of them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns:
+          - "*"

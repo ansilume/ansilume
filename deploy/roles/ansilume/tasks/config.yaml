@@ -1,4 +1,19 @@
 ---
+# Only after the source step: git clones into an empty directory only.
+- name: Create Docker configuration subdirectories
+  ansible.builtin.file:
+    path: "{{ ansilume_install_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ ansilume_system_user }}"
+    group: "{{ ansilume_system_group }}"
+    mode: "0750"
+  loop:
+    - docker
+    - docker/nginx
+    - docker/mysql
+    - docker/php
+  become: true
+
 - name: Template .env file
   ansible.builtin.template:
     src: env

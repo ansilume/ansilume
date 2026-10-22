@@ -2,12 +2,35 @@
 .git
 .gitignore
 
-# Development
-.env
-.env.example
+# Development, and every .env and its copies (.env.backup, .env.prod.example)
+.env*
 docker-compose.yml
 # Rendered by the Ansible deploy role, with secrets as fallback defaults.
 docker-compose.yaml
+compose.override.yml
+compose.override.yaml
+docker-compose.override.yml
+docker-compose.override.yaml
+# Database dumps and other backups, such as those "Before you update" in
+# docs/updating.md makes in the install directory
+**/*.sql
+**/*.sql.gz
+**/*.bak
+**/*.backup
+# The deploy role's release archive, and what a system user whose home is the
+# install directory keeps there (ansilume_create_user): keys and credentials
+# for a private repository must not reach the runner image.
+release.tar.gz
+.ssh
+.netrc
+.git-credentials
+.gnupg
+.docker
+.ansible
+.cache
+.config
+.local
+.bash_history
 docker/adminer
 docker/mysql
 

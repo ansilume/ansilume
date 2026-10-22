@@ -62,8 +62,10 @@ elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
     # Seed E2E test data
     SEED_OUT=$(dc php yii e2e/seed 2>&1 || true)
     if echo "$SEED_OUT" | grep -q "complete\|already exists"; then
-        # Build and run Playwright container
-        E2E_OUT=$(docker compose --profile e2e run --build --rm playwright 2>&1 || true)
+        # Build the Playwright image only (the specs are baked in) and run it
+        # against the running stack: `run --build` would rebuild the images of
+        # the stack too, each pulling its base image (build.pull).
+        E2E_OUT=$({ docker compose --profile e2e build playwright && docker compose --profile e2e run --rm playwright; } 2>&1 || true)
         # The summary's last "N passed" / "N failed" / "N skipped" lines.
         E2E_PASSED=$(echo "$E2E_OUT" | grep -oP '\d+(?= passed)' | tail -1 || true)
         E2E_FAILED=$(echo "$E2E_OUT" | grep -oP '\d+(?= failed)' | tail -1 || true)

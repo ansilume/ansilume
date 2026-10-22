@@ -16,3 +16,5 @@
 __pycache__/
 *.pyc
 .phpmd.result-cache.php
+# Local Compose overrides, such as nginx on loopback for a dev stack (.env.example)
+/docker-compose.override.yml

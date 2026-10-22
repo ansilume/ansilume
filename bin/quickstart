@@ -187,9 +187,29 @@ fi
 
 # ── Header ───────────────────────────────────────────────────────────────────
 
-# Fetch latest version tag (silent, falls back to "latest" if offline/error)
-ANSILUME_VERSION=$(curl -fsSL https://api.github.com/repos/ansilume/ansilume/releases/latest 2>/dev/null \
-    | grep -m1 '"tag_name"' | sed 's/.*"tag_name":[^"]*"\([^"]*\)".*/\1/' || true)
+# The tag of the latest GitHub release, such as v2.12.1: the release the
+# :latest images belong to. Prints nothing when GitHub cannot be reached or
+# names no release.
+latest_release_tag() {
+    curl -fsSL https://api.github.com/repos/ansilume/ansilume/releases/latest 2>/dev/null \
+        | grep -m1 '"tag_name"' | sed 's/.*"tag_name":[^"]*"\([^"]*\)".*/\1/' || true
+}
+
+# The tag ANSILUME_IMAGE_TAG pins the images to, read as Compose reads it:
+# from the environment, or else the last line of .env, without quotes or
+# whitespace. Prints nothing when the images follow latest.
+pinned_image_tag() {
+    local tag="${ANSILUME_IMAGE_TAG:-}"
+    if [ -z "$tag" ] && [ -f .env ]; then
+        tag=$(grep '^ANSILUME_IMAGE_TAG=' .env | tail -1 | cut -d= -f2- | tr -d "[:space:]\"'" || true)
+    fi
+    if [ "$tag" != "latest" ]; then
+        printf '%s' "$tag"
+    fi
+}
+
+# Falls back to "latest", and the compose file then comes from main.
+ANSILUME_VERSION=$(latest_release_tag)
 ANSILUME_VERSION="${ANSILUME_VERSION:-latest}"
 
 BANNER_TEXT="Ansilume Quickstart Setup ${ANSILUME_VERSION}"
@@ -655,6 +675,12 @@ if [ "$INSTALL_MODE" = "update" ]; then
     # ── .env merge: add new variables ──
     merge_env
 
+    # A pin (Rollback in docs/updating.md) keeps the images where they are.
+    PINNED_TAG=$(pinned_image_tag)
+    if [ -n "$PINNED_TAG" ]; then
+        warn "ANSILUME_IMAGE_TAG=${PINNED_TAG} keeps the images on ${PINNED_TAG}: remove it from .env to update to the latest release."
+    fi
+
     # ── Pull and restart ──
     if [ "$COMPOSE_FILE" != "docker-compose.yml" ]; then
         COMPOSE_ARGS="-f ${COMPOSE_FILE}"
@@ -663,12 +689,16 @@ if [ "$INSTALL_MODE" = "update" ]; then
     fi
 
     info "Pulling latest images and restarting..."
+    PULL_OK=1
     if [ "$VERBOSE" -ge 2 ]; then
         $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
             info "  $line"
-        done || true
+        done || PULL_OK=0
     else
-        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null >/dev/null 2>&1 || true
+        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null >/dev/null 2>&1 || PULL_OK=0
+    fi
+    if [ "$PULL_OK" = "0" ]; then
+        warn "Pulling the images failed, so the containers keep the images they have. Run the update with -vv to see why."
     fi
     ensure_redis_password
     if [ "$VERBOSE" -ge 2 ]; then
@@ -699,13 +729,20 @@ if [ "$INSTALL_MODE" = "update" ]; then
     UPDATE_OK=1
     verify_install || UPDATE_OK=0
 
+    # The version that runs, not the one the update meant to install.
+    RUNNING_VERSION=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app cat /var/www/VERSION < /dev/null 2>/dev/null | tr -d '[:space:]' || true)
+
     printf "\n"
-    if [ "$UPDATE_OK" = "1" ]; then
-        ok "Update complete. Ansilume is running the latest version at ${APP_URL}"
+    if [ "$UPDATE_OK" = "1" ] && [ "$PULL_OK" = "1" ]; then
+        ok "Update complete. Ansilume ${RUNNING_VERSION:+${RUNNING_VERSION} }is running at ${APP_URL}"
         printf "\n"
         exit 0
     fi
-    warn "Update finished but verification checks failed (see above)."
+    if [ "$PULL_OK" = "0" ]; then
+        warn "Update incomplete: the images could not be pulled (see above). Ansilume ${RUNNING_VERSION:+${RUNNING_VERSION} }is running at ${APP_URL}"
+    else
+        warn "Update finished but verification checks failed (see above)."
+    fi
     printf "\n"
     exit 1
 fi

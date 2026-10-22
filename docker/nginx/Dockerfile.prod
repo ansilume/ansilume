@@ -7,7 +7,9 @@
 # Used by: ghcr.io/ansilume/ansilume-nginx
 # =============================================================================
 
-FROM nginx:1.25-alpine
+# The same image as docker-compose.yml and the deploy role
+# (tests/unit/docker/NginxBaseImageTest.php).
+FROM nginx:1.30-alpine-slim
 
 # Remove default config
 RUN rm /etc/nginx/conf.d/default.conf

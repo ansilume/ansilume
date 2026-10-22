@@ -28,17 +28,3 @@
     group: "{{ ansilume_system_group }}"
     mode: "0750"
   become: true
-
-- name: Create Docker configuration subdirectories
-  ansible.builtin.file:
-    path: "{{ ansilume_install_dir }}/{{ item }}"
-    state: directory
-    owner: "{{ ansilume_system_user }}"
-    group: "{{ ansilume_system_group }}"
-    mode: "0750"
-  loop:
-    - docker
-    - docker/nginx
-    - docker/mysql
-    - docker/php
-  become: true
