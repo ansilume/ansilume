@@ -61,7 +61,7 @@ if [[ $FAST -eq 1 ]] || [[ $SKIP_E2E -eq 1 ]]; then
 elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
     # Seed E2E test data
     SEED_OUT=$(dc php yii e2e/seed 2>&1 || true)
-    if echo "$SEED_OUT" | grep -q "complete\|already exists"; then
+    if grep -q "complete\|already exists" <<< "$SEED_OUT"; then
         # Build the Playwright image only (the specs are baked in) and run it
         # against the running stack: `run --build` would rebuild the images of
         # the stack too, each pulling its base image (build.pull).

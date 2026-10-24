@@ -481,7 +481,7 @@ verify_install() {
     local health_raw
     health_raw=$(curl -s -m 10 -w '\n%{http_code}' "${base}/health" || true)
     code=${health_raw##*$'\n'}
-    if [ "$code" = "200" ] && printf '%s' "${health_raw%$'\n'*}" | grep -q '"status":"ok"'; then
+    if [ "$code" = "200" ] && grep -q '"status":"ok"' <<< "${health_raw%$'\n'*}"; then
         ok "Health endpoint: OK"
     else
         fail "Health endpoint: HTTP $(http_code_label "$code") (${base}/health)"
@@ -512,7 +512,7 @@ verify_install() {
     # One published asset must be served — catches a missing or empty web
     # assets volume (nginx would 404 on /assets/<hash>/...).
     local asset
-    asset=$(printf '%s' "$login_html" | grep -oE '/assets/[a-zA-Z0-9]+/[a-zA-Z0-9._-]+' | head -1 || true)
+    asset=$(grep -oE '/assets/[a-zA-Z0-9]+/[a-zA-Z0-9._-]+' <<< "$login_html" | head -1 || true)
     if [ -n "$asset" ]; then
         code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base}${asset}" || true)
         if [ "$code" = "200" ]; then

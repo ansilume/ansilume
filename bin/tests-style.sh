@@ -48,7 +48,7 @@ if dc php vendor/bin/php-cs-fixer --version >/dev/null 2>&1; then
         ok "PHP-CS-Fixer passed (0 fixable issues)"
     else
         fail "PHP-CS-Fixer: $CSFIXER_COUNT file(s) need fixing — run: php vendor/bin/php-cs-fixer fix"
-        echo "$CSFIXER_OUT" | grep '^\s*[0-9]\+)' | head -20 | sed 's/^/     /'
+        grep -m 20 '^\s*[0-9]\+)' <<< "$CSFIXER_OUT" | sed 's/^/     /'
     fi
 else
     skip "php-cs-fixer not available"
@@ -73,7 +73,7 @@ if dc php vendor/bin/phpmd --version >/dev/null 2>&1; then
     else
         PHPMD_COUNT=$(echo "$PHPMD_OUT" | grep -c . || echo "0")
         fail "PHPMD: ${PHPMD_COUNT} violation(s) found"
-        echo "$PHPMD_OUT" | head -20 | sed 's/^/     /'
+        head -20 <<< "$PHPMD_OUT" | sed 's/^/     /'
     fi
 else
     skip "phpmd not available"
@@ -103,7 +103,7 @@ if dc php vendor/bin/phpcpd --version >/dev/null 2>&1; then
     else
         CLONE_COUNT=$(echo "$PHPCPD_OUT" | grep -oP 'Found \K\d+(?= (code )?clones)' || echo "?")
         fail "PHPCPD: ${CLONE_COUNT} clone(s) found (exit $PHPCPD_RC)"
-        echo "$PHPCPD_OUT" | head -20 | sed 's/^/     /'
+        head -20 <<< "$PHPCPD_OUT" | sed 's/^/     /'
     fi
 else
     skip "phpcpd not available"

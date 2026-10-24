@@ -332,7 +332,7 @@ for container in $(docker compose ps -q 2>/dev/null); do
     if [ "$health" = "unhealthy" ]; then
         last_output=$(docker inspect --format '{{range .State.Health.Log}}{{.Output}}{{end}}' "$container" 2>/dev/null | tail -1 || true)
         if [ -n "$last_output" ]; then
-            info "    Last healthcheck output: $(echo "$last_output" | head -3 | redact)"
+            info "    Last healthcheck output: $(head -3 <<< "$last_output" | redact)"
         fi
     fi
 done
@@ -367,9 +367,9 @@ if [ -n "$app_container" ]; then
 
     # App → DB
     db_err=$(docker exec "$app_container" php -r "try { new PDO('mysql:host=${db_host}', 'x', 'x'); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | head -1)
-    if echo "$db_err" | grep -qi "ok\|access denied"; then
+    if grep -qi "ok\|access denied" <<< "$db_err"; then
         ok "app → db (${db_host}): reachable"
-    elif echo "$db_err" | grep -qi "refused\|timed out\|no such host\|getaddrinfo"; then
+    elif grep -qi "refused\|timed out\|no such host\|getaddrinfo" <<< "$db_err"; then
         fail "app → db (${db_host}): connection failed — ${db_err}"
     else
         warn "app → db (${db_host}): uncertain — ${db_err}"
@@ -449,9 +449,9 @@ if [ -n "$app_container" ]; then
     # schema as "Migration check failed".
     migration_rc=0
     migration_output=$(docker exec "$app_container" php /var/www/yii migrate/history 10 2>&1) || migration_rc=$?
-    if [ "$migration_rc" -ne 0 ] || echo "$migration_output" | grep -qE '^(Exception|Error|PHP Fatal error|PHP Warning)'; then
+    if [ "$migration_rc" -ne 0 ] || grep -qE '^(Exception|Error|PHP Fatal error|PHP Warning)' <<< "$migration_output"; then
         fail "Migration check failed"
-        echo "$migration_output" | redact | head -10 | while read -r line; do
+        head -10 <<< "$migration_output" | redact | while read -r line; do
             info "  ${line}"
         done
     else
@@ -686,7 +686,7 @@ fi
 if [ -n "$nginx_container" ]; then
     login_status=$(docker exec "$nginx_container" sh -c \
         "wget -qSO /dev/null http://127.0.0.1/login 2>&1 | head -1" 2>/dev/null || true)
-    if echo "$login_status" | grep -q "200"; then
+    if grep -q "200" <<< "$login_status"; then
         ok "Login page: accessible (HTTP 200)"
     elif [ -n "$login_status" ]; then
         warn "Login page: unexpected response — ${login_status}"
@@ -732,7 +732,7 @@ else
 
     # One published asset — catches a missing web assets volume (nginx 404s
     # on /assets/<hash>/... when the volume is absent or empty).
-    asset_url=$(printf '%s' "$login_html" | grep -oE '/assets/[a-zA-Z0-9]+/[a-zA-Z0-9._-]+' | head -1 || true)
+    asset_url=$(grep -oE '/assets/[a-zA-Z0-9]+/[a-zA-Z0-9._-]+' <<< "$login_html" | head -1 || true)
     if [ -n "$asset_url" ]; then
         asset_code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "${base_url}${asset_url}" || true)
         if [ "$asset_code" = "200" ]; then
@@ -749,7 +749,7 @@ else
     # status code and the body so the two cannot disagree.
     health_raw=$(curl -s -m 10 -w '\n%{http_code}' "${base_url}/health" || true)
     health_code=${health_raw##*$'\n'}
-    if [ "$health_code" = "200" ] && printf '%s' "${health_raw%$'\n'*}" | grep -q '"status":"ok"'; then
+    if [ "$health_code" = "200" ] && grep -q '"status":"ok"' <<< "${health_raw%$'\n'*}"; then
         ok "GET /health → HTTP 200, status ok"
     else
         fail "GET /health → HTTP $(http_code_label "$health_code")"

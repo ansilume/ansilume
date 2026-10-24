@@ -97,7 +97,7 @@ if command -v shellcheck >/dev/null 2>&1; then
         sc_output=$(shellcheck -S warning "$script" 2>&1)
         if [[ $? -ne 0 ]]; then
             fail "ShellCheck warnings: $script"
-            echo "$sc_output" | head -20 | sed 's/^/     /'
+            head -20 <<< "$sc_output" | sed 's/^/     /'
             SC_ERRORS=$((SC_ERRORS+1))
         fi
     done
@@ -154,7 +154,7 @@ check_pattern() {
         "$@" . 2>/dev/null || true)
     if [[ -n "$matches" ]]; then
         fail "$label"
-        echo "$matches" | head -20 | sed 's/^/     /'
+        head -20 <<< "$matches" | sed 's/^/     /'
     else
         ok "$label"
     fi
@@ -183,7 +183,7 @@ if [[ -z "$AT_SUPPRESS" ]]; then
     ok "No inline error suppression (@) outside allowed exceptions"
 else
     fail "Inline error suppression (@) found — use proper error handling"
-    echo "$AT_SUPPRESS" | head -20 | sed 's/^/     /'
+    head -20 <<< "$AT_SUPPRESS" | sed 's/^/     /'
 fi
 
 # =============================================================================
@@ -202,7 +202,7 @@ if [[ -z "$UNESCAPED" ]]; then
     ok "No obvious unescaped variable output in views"
 else
     echo -e "  ${YELLOW}⚠${NC}  Unescaped output candidates (review manually — may be false positives):"
-    echo "$UNESCAPED" | head -20 | sed 's/^/     /'
+    head -20 <<< "$UNESCAPED" | sed 's/^/     /'
 fi
 
 # The browser decodes an attribute before JavaScript runs, so neither
@@ -212,7 +212,7 @@ if [[ -z "$UNSAFE_CONFIRM" ]]; then
     ok "No values interpolated into confirm('...') dialogs"
 else
     fail "Values interpolated into confirm('...') — use ConfirmHelper::attribute()"
-    echo "$UNSAFE_CONFIRM" | head -20 | sed 's/^/     /'
+    head -20 <<< "$UNSAFE_CONFIRM" | sed 's/^/     /'
 fi
 
 # =============================================================================
@@ -343,9 +343,9 @@ else
 fi
 
 AUDIT=$(dc composer audit --no-dev 2>&1 || true)
-if echo "$AUDIT" | grep -qiP "CVE-|GHSA-|Found \d+ vulnerab"; then
+if grep -qiP "CVE-|GHSA-|Found \d+ vulnerab" <<< "$AUDIT"; then
     fail "composer audit found security advisories"
-    echo "$AUDIT" | head -20 | sed 's/^/     /'
+    head -20 <<< "$AUDIT" | sed 's/^/     /'
 else
     ok "No known security vulnerabilities in dependencies"
 fi
@@ -380,7 +380,7 @@ if [[ -z "$TODOS" ]]; then
     ok "No TODO/FIXME/HACK markers in source"
 else
     echo -e "  ${YELLOW}⚠${NC}  TODO/FIXME markers found (not a failure, review later):"
-    echo "$TODOS" | head -10 | sed 's/^/     /'
+    head -10 <<< "$TODOS" | sed 's/^/     /'
 fi
 
 # =============================================================================

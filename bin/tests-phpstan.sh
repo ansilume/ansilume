@@ -22,7 +22,7 @@ elif dc php vendor/bin/phpstan --version >/dev/null 2>&1; then
         --memory-limit=1G \
         --configuration=phpstan.neon \
         2>&1 || true)
-    if echo "$PHPSTAN_OUT" | grep -q "\[OK\]"; then
+    if grep -q "\[OK\]" <<< "$PHPSTAN_OUT"; then
         ok "PHPStan level max passed"
     else
         fail "PHPStan found errors"

@@ -24,7 +24,7 @@ elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
         MIGRATE_OUT=$(docker compose exec -T app bash -c \
             "DB_NAME=${SCRATCH_DB} php yii migrate --interactive=0 2>&1" || true)
 
-        if echo "$MIGRATE_OUT" | grep -q "Migrated up successfully\|No new migrations found"; then
+        if grep -q "Migrated up successfully\|No new migrations found" <<< "$MIGRATE_OUT"; then
             MIGRATION_COUNT=$(echo "$MIGRATE_OUT" | grep -cP '^\*\*\* applied' || true)
             ok "All migrations applied cleanly on a fresh schema (${MIGRATION_COUNT} migrations)"
         else
@@ -75,7 +75,7 @@ PHPEOF
         if [[ "$SETUP_OUT" == "ok" ]]; then
             MIGRATE_OUT=$(DB_NAME=${SCRATCH_DB} php yii migrate --interactive=0 2>&1 || true)
 
-            if echo "$MIGRATE_OUT" | grep -q "Migrated up successfully\|No new migrations found"; then
+            if grep -q "Migrated up successfully\|No new migrations found" <<< "$MIGRATE_OUT"; then
                 MIGRATION_COUNT=$(echo "$MIGRATE_OUT" | grep -cP '^\*\*\* applied' || true)
                 ok "All migrations applied cleanly on a fresh schema (${MIGRATION_COUNT} migrations)"
             else
@@ -100,7 +100,7 @@ fi
 section "Test database migrations"
 
 TEST_MIGRATE_OUT=$(dc sh -c 'DB_NAME=ansilume_test php yii migrate --interactive=0 2>&1' || true)
-if echo "$TEST_MIGRATE_OUT" | grep -qP "applied|No new migrations"; then
+if grep -qP "applied|No new migrations" <<< "$TEST_MIGRATE_OUT"; then
     ok "Test database migrations up to date"
 else
     fail "Test database migration failed"
@@ -116,7 +116,7 @@ section "PHPUnit — unit tests"
 # (256M): the coverage run below outgrew it with 2.11.0's tests. See
 # tests/unit/bin/PhpunitMemoryLimitTest.php.
 UNIT_OUT=$(dc php -d memory_limit=1G vendor/bin/phpunit --testsuite=Unit --colors=never 2>&1 || true)
-if echo "$UNIT_OUT" | grep -qP "^OK|Tests: .* Failures: 0"; then
+if grep -qP "^OK|Tests: .* Failures: 0" <<< "$UNIT_OUT"; then
     SUMMARY=$(echo "$UNIT_OUT" | grep -P "^OK|Tests:")
     ok "Unit tests passed ($SUMMARY)"
 else
@@ -143,12 +143,12 @@ else
         2>&1 || true)
 
     # ── Integration pass/fail ────────────────────────────────────────────────
-    if echo "$COMBINED_OUT" | grep -qP "^OK|Tests: .* Failures: 0"; then
+    if grep -qP "^OK|Tests: .* Failures: 0" <<< "$COMBINED_OUT"; then
         INT_SUMMARY=$(echo "$COMBINED_OUT" | grep -P "^OK|Tests:")
         ok "Integration tests passed ($INT_SUMMARY)"
-    elif echo "$COMBINED_OUT" | grep -q "No tests executed"; then
+    elif grep -q "No tests executed" <<< "$COMBINED_OUT"; then
         skip "Integration tests (no tests executed)"
-    elif echo "$COMBINED_OUT" | grep -qi "Access denied\|Connection refused\|SQLSTATE\[HY000\] \[1044\]"; then
+    elif grep -qi "Access denied\|Connection refused\|SQLSTATE\[HY000\] \[1044\]" <<< "$COMBINED_OUT"; then
         skip "Integration tests (test database not available — run: php yii setup/test-db)"
     else
         fail "Integration tests failed"
@@ -157,17 +157,17 @@ else
         # table — which is exactly why an integration regression sat undiagnosed
         # on red CI for weeks. Drop the coverage report first, then tail the
         # real test output (FAILURES!/ERRORS! block + summary).
-        echo "$COMBINED_OUT" | awk '/Code Coverage Report/{exit} {print}' | tail -40 | sed 's/^/     /'
+        awk '/Code Coverage Report/{exit} {print}' <<< "$COMBINED_OUT" | tail -40 | sed 's/^/     /'
     fi
 
     # ── Coverage (from the same run) ─────────────────────────────────────────
-    if echo "$COMBINED_OUT" | grep -q "Summary:"; then
+    if grep -q "Summary:" <<< "$COMBINED_OUT"; then
         SUMMARY_BLOCK=$(echo "$COMBINED_OUT" | grep -A3 'Summary:')
         CLASS_COV=$(echo "$SUMMARY_BLOCK"  | grep -oP 'Classes:\s+\K[\d.]+%')
-        METHOD_COV=$(echo "$COMBINED_OUT"  | grep -oP 'Methods:\s+\K[\d.]+%' | head -1)
-        LINE_COV=$(echo "$COMBINED_OUT"    | grep -oP 'Lines:\s+\K[\d.]+%'   | head -1)
+        METHOD_COV=$(grep -m1 -oP 'Methods:\s+\K[\d.]+%' <<< "$COMBINED_OUT")
+        LINE_COV=$(grep -m1 -oP 'Lines:\s+\K[\d.]+%' <<< "$COMBINED_OUT")
         ok "Coverage — Lines: ${LINE_COV}  Methods: ${METHOD_COV}  Classes: ${CLASS_COV}"
-    elif echo "$COMBINED_OUT" | grep -qi "No code coverage driver"; then
+    elif grep -qi "No code coverage driver" <<< "$COMBINED_OUT"; then
         skip "Code coverage (no coverage driver — install pcov or xdebug)"
     else
         skip "Code coverage (could not parse output)"

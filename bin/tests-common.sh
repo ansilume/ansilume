@@ -4,6 +4,11 @@
 # Not meant to be executed directly.
 # =============================================================================
 
+# The scripts run with pipefail: a captured output reaches grep -q, head and
+# awk with exit as a here-string (grep -q … <<< "$OUT"), never through
+# echo "$OUT" |, which fails once such a command has stopped reading
+# (tests/unit/bin/PipefailCapturedOutputTest.php).
+
 # Navigate to repo root
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
