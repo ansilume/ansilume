@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\models;
 
+use app\components\CronExpressionRules;
 use app\models\JobTemplate;
 use app\models\Schedule;
 use app\models\User;
@@ -114,6 +115,160 @@ class ScheduleTest extends DbTestCase
         $s->computeNextRunAt();
         $this->assertNotNull($s->next_run_at);
         $this->assertGreaterThanOrEqual(time(), $s->next_run_at);
+    }
+
+    /**
+     * Regression: the rule took every expression the cron library accepts,
+     * so "5-1 * * * *" was saved, and the schedule never ran. The rule names
+     * the range now (CronExpressionRulesTest has every kind).
+     */
+    public function testRegressionACronExpressionWhoseRangeRunsBackwardsIsRefused(): void
+    {
+        $s = new Schedule();
+        $s->cron_expression = '5-1 * * * *';
+        $s->timezone = 'UTC';
+
+        $this->assertFalse($s->validate(['cron_expression']));
+        $this->assertSame([sprintf(CronExpressionRules::RANGE_BACKWARDS, '5-1', 'minute', '0-1,5-59')], $s->getErrors('cron_expression'));
+    }
+
+    /**
+     * Regression: an expression no date matches, such as the 31st of
+     * February, was saved, and the schedule never ran.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function neverRunsProvider(): array
+    {
+        return [
+            'the 31st of February' => ['0 0 31 2 *'],
+            'the 31st of the months with 30 days' => ['0 0 31 4,6,9,11 *'],
+            'the 30th of February with no weekday' => ['0 0 30 2 ?'],
+        ];
+    }
+
+    /**
+     * @dataProvider neverRunsProvider
+     */
+    public function testRegressionACronExpressionNoDateMatchesIsRefused(string $cron): void
+    {
+        $s = new Schedule();
+        $s->cron_expression = $cron;
+        $s->timezone = 'Europe/Berlin';
+
+        $this->assertFalse($s->validate(['cron_expression']));
+        $this->assertSame([CronExpressionRules::NEVER_RUNS], $s->getErrors('cron_expression'));
+        $s->computeNextRunAt();
+        $this->assertNull($s->next_run_at);
+    }
+
+    public function testACronExpressionThatRunsOnlyInLeapYearsIsAccepted(): void
+    {
+        $s = new Schedule();
+        $s->cron_expression = '0 0 29 2 *';
+        $s->timezone = 'UTC';
+
+        $this->assertTrue($s->validate(['cron_expression']));
+        $s->computeNextRunAt();
+        $this->assertSame('02-29', date('m-d', (int)$s->next_run_at));
+    }
+
+    /**
+     * The runs are looked for in UTC while the timezone is empty or
+     * invalid: the timezone rule reports that, not the cron rule.
+     *
+     * @return array<string, array{0: mixed}>
+     */
+    public static function timezoneWithoutRunsProvider(): array
+    {
+        return ['empty' => [''], 'unknown' => ['Mars/Olympus'], 'with a NUL byte' => ["UTC\0x"], 'a list' => [['UTC']]];
+    }
+
+    /**
+     * @dataProvider timezoneWithoutRunsProvider
+     */
+    public function testTheCronRuleLooksForRunsInUtcWhileTheTimezoneIsInvalid(mixed $timezone): void
+    {
+        $s = new Schedule();
+        $s->cron_expression = '0 2 * * *';
+        $s->timezone = $timezone;
+
+        $this->assertTrue($s->validate(['cron_expression']));
+    }
+
+    /**
+     * Noon, which the clocks of Europe/Berlin never skip or repeat: a test of
+     * 2:00 would fail on the day before they go forward, when the next run
+     * is the skipped 2:00, at 3:00 (CronRunsTest).
+     */
+    public function testNextRunOfIsTheNextTimeTheExpressionHoldsInTheTimezone(): void
+    {
+        $before = time();
+        $run = Schedule::nextRunOf('0 12 * * *', 'Europe/Berlin');
+
+        $this->assertNotNull($run);
+        $this->assertGreaterThan($before, $run);
+        $this->assertLessThanOrEqual($before + 25 * 3600, $run);
+        $this->assertSame('12:00', (new \DateTimeImmutable('@' . $run))->setTimezone(new \DateTimeZone('Europe/Berlin'))->format('H:i'));
+    }
+
+    /**
+     * Review finding: the next run was looked for from the next whole minute
+     * of UTC, which in a timezone whose offset has seconds (+01:00:30) lies
+     * after the run of the current minute, so every other run of a schedule
+     * there was lost. It is looked for from the second after now.
+     */
+    public function testNextRunOfLooksFromTheSecondAfterNow(): void
+    {
+        $now = (new \DateTimeImmutable('2026-11-02 11:00:05', new \DateTimeZone('UTC')))->getTimestamp();
+        $firstTwo = (new \DateTimeImmutable('2026-10-25 00:00', new \DateTimeZone('UTC')))->getTimestamp();
+
+        $this->assertSame($now + 25, Schedule::nextRunOf('* * * * *', '+01:00:30', $now), 'the run of this minute, at second 30');
+        $this->assertSame($now + 55, Schedule::nextRunOf('* * * * *', 'UTC', $now), 'the next whole minute, as before');
+        $this->assertSame($firstTwo + 86400 + 3600, Schedule::nextRunOf('0 2 * * *', 'Europe/Berlin', $firstTwo), 'after the first 2:00, not the second');
+    }
+
+    /**
+     * Regression: on the night the clocks went back, the next run of a
+     * schedule at 3:00 in Europe/Berlin was the second 2:00, an hour early,
+     * and the one after the first 2:00 of a schedule at 2:00 the second 2:00.
+     * Runs come from CronRuns now (CronRunsTest).
+     */
+    public function testFirstRunFromRunsATimeThatComesTwiceOnce(): void
+    {
+        $firstTwo = (new \DateTimeImmutable('2026-10-25 00:00', new \DateTimeZone('UTC')))->getTimestamp();
+
+        $this->assertSame($firstTwo + 7200, Schedule::firstRunFrom('0 3 * * *', 'Europe/Berlin', $firstTwo - 1800));
+        $this->assertSame($firstTwo, Schedule::firstRunFrom('0 2 * * *', 'Europe/Berlin', $firstTwo));
+        $this->assertSame($firstTwo + 86400 + 3600, Schedule::firstRunFrom('0 2 * * *', 'Europe/Berlin', $firstTwo + 60));
+    }
+
+    public function testFirstRunFromAnExpressionTheLibraryCannotReadIsNull(): void
+    {
+        $this->assertNull(Schedule::firstRunFrom('not a cron', 'UTC', time()));
+    }
+
+    /**
+     * The library throws a RuntimeException for no run in its tries, and a
+     * TypeError when a day of the month and a day of the week are both set
+     * and neither finds one: here without the error handler that turns the
+     * library's warning before it into an ErrorException.
+     */
+    public function testNextRunOfAnExpressionWithoutRunsIsNull(): void
+    {
+        $this->assertNull(Schedule::nextRunOf('0 0 31 2 *', 'UTC'));
+        set_error_handler(static fn (): bool => true);
+        try {
+            $this->assertNull(Schedule::nextRunOf('0 0 30 2 ?', 'UTC'));
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    public function testNextRunOfAnInvalidTimezoneIsNull(): void
+    {
+        $this->assertNull(Schedule::nextRunOf('0 2 * * *', 'Mars/Olympus'));
+        $this->assertNull(Schedule::nextRunOf('0 2 * * *', "UTC\0x"));
     }
 
     public function testComputeNextRunAtInvalidCron(): void
@@ -325,7 +480,8 @@ class ScheduleTest extends DbTestCase
         return [
             'every 15 minutes' => ['*/15 * * * *'],
             'a minute range with a step' => ['1-30/5 * * * *'],
-            'a list of steps' => ['*/5,*/7 * * * *'],
+            // Not */5,*/7: the scheduler went from minute 5 to 10 and skipped 7 (CronExpressionRules::LIST_ORDER).
+            'a list of steps' => ['0-29/5,30-59/10 * * * *'],
             'a weekday range without a step' => ['0 2 * * 1-5'],
         ];
     }

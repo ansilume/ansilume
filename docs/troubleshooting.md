@@ -1414,6 +1414,119 @@ decrypted because `APP_SECRET_KEY` changed. A `PUT` to the API that changes
 
 **Fix:** Replace the placeholder with the real answer, or remove the key.
 
+## Saving a schedule is refused: the cron expression
+
+**Symptom:** Saving a schedule fails with an error on its cron expression
+(in the API: `422` on `cron_expression`), such as:
+
+- `Invalid cron expression: the range 22-2 of the hour field runs backwards. Write the smaller value first; ranges do not wrap around, so split one that would, as in 0-2,22-23.`
+- `Invalid cron expression: the range 50-10/5 of the minute field runs backwards. Write the smaller value first; ranges do not wrap around, so split one that would, as in 0-10/5,50-59/5.`
+- `Invalid cron expression: the range 50-5 of the minute field runs backwards. Write the smaller value first; ranges do not wrap around, so split one that would.`
+- `Invalid cron expression: the scheduler would skip some values of the list 18,6 of the hour field. Write its values in ascending order, as in 6,18.`
+- `Invalid cron expression: the scheduler would skip some values of the list 10-50,5 of the minute field. Write its values in ascending order, as in 05,10-50.`
+- `Invalid cron expression: the scheduler would skip some values of the list */2,*/3 of the minute field, and Ansilume finds no list of these values in an order it walks that fits beside the other fields into the 64 characters a cron expression may have. …`
+- `Invalid cron expression: the list *,5 of the minute field holds *, …`
+- `Invalid cron expression: the range SUN-SAT of the day-of-week field starts with Sunday as 7. Write Sunday as 0 at the start of a range, as in 0-SAT.`
+- `Invalid cron expression: the range 7-7 of the day-of-week field is Sunday alone, …`
+- `Invalid cron expression: the range SAT-SUN of the day-of-week field ends with SUN, so the scheduler never runs it on a Sunday. Write Sunday as 7 at the end of a range, as in SAT-7.`
+- `Invalid cron expression: the range 5-0 of the day-of-week field ends with Sunday as 0, a smaller value than its start. Write Sunday as 7 at the end of a range, as in 5-7.`
+- `Invalid cron expression: 0-7/2 of the day-of-week field steps from 0 to 7, so the scheduler never runs it on a Sunday. Write it as 0-6/2.`
+- `Invalid cron expression: the step /90 of the minute field is too large. Use a step smaller than 59, or list the values.`
+- `Invalid cron expression: MON-FRI/2 of the day-of-week field has a step after names. Write the range with numbers, as in 1-5/2.`
+- `Invalid cron expression: 31W of the day-of-month field needs a day from 1 to 28, which every month has.`
+- `Invalid cron expression: the scheduler finds no date that matches it, so the schedule would never run. …`
+- `Invalid cron expression. Use standard 5-field format: min hour dom mon dow`
+
+**Cause:** The cron library Ansilume uses accepts some expressions that it
+then never runs, or runs at other times than they say:
+
+- a range that runs backwards never matches;
+- the library looks for the next minute or hour by walking a list in its
+  own order: it sorts the minutes as text and takes the hours as written,
+  so `0 18,6 * * *` ran at 18:00 only and `5-10,45 * * * *` at minute 45
+  only, and it walks a minute list with `*` from it as minute 0, so
+  `*,5 * * * *` ran at minutes 0 and 5 only;
+- it reads Sunday as 7 only where the text holds the digit 7, and turns a
+  start of 7 into 0 and an end of 0 into 7: `SAT-SUN` ran on Saturdays
+  only, `7-7` and `0-0` on every day, `SUN-SAT` never, and `0-7/2` never
+  on a Sunday. `5-0` it ran from Friday to Sunday, as cronie does, but
+  Vixie cron refuses it as a range that runs backwards;
+- it runs many steps as large as the field's largest value or larger at
+  other times than cron: `*/90` ran at minute 30, `*/59` at minute 59
+  only;
+- a step after names counts from 0 (`MON-FRI/2` ran on Sundays), and `W`
+  after a day a month lacks took a day of the next month.
+
+An expression that no date matches, such as the 30th of February, has no
+run at all. Older versions saved such schedules, which then never ran, or
+skipped runs (see
+[updating.md](updating.md#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files)).
+When both the day of the month and the day of the week are restricted, the
+schedule runs on days that match either, also when one of them starts with
+`*` (such as `*/2`), where cron itself runs on days that match both. How
+the runs fall on the nights the clocks change:
+[below](#a-schedule-ran-twice-or-an-hour-early-on-the-night-the-clocks-went-back).
+
+**Fix:** Write the part the message names as it suggests: the smaller value
+of a range first, and a range that would wrap around split, each part with
+the range's step (`0-2,22-23` instead of `22-2`, `0-10/5,50-59/5` instead
+of `50-10/5`; where the message gives no split, as when the parts would be
+out of order in their list, the next save says how to order it); the
+values of a minute or hour list in ascending order, in a minute list with a
+range or a step with minutes of two digits where the message writes them
+so (`05,10-50`: the scheduler sorts `5,10-50` as text, `10-50` first); for
+a list Ansilume finds no way to write beside the other fields, shorter
+other fields (`*` instead of `1,2,3,4,5,6,7,8,9,10,11,12`) or two schedules
+whose values have none in common, so that no run is launched twice; `*`
+alone instead of a minute list with `*`;
+Sunday as 0 at the start of a range (`0-SAT`), as 7 at its end (`SAT-7`,
+`5-7`), and alone as 0 or 7; the days of the week stepped from 0 to 6
+(`0-6/2`); a step smaller than 59 for minutes, 23 for hours, 31 for days of
+the month, 12 for months and 7 for days of the week, or the values listed
+(`0,30`); a range with a step in numbers (`1-5/2`); `W` with a day from 1
+to 28, or `L` for the last day of the month; and a day of the month that
+the months of the expression have. A schedule saved with such an
+expression before the update keeps it until it is saved again, and runs as
+before: `php yii schedule/check` lists them (in the app container:
+`docker compose exec app php yii schedule/check`), the schedules list marks
+each with **Change needed** (the reason in its tooltip), the schedule's page
+and its edit form say why, and the API gives the reason as
+`cron_expression_problem`. Every save of such a schedule, a rename too,
+shows the reason as the error of the cron expression until the expression
+is changed; enabling and disabling it still work.
+
+## A schedule ran twice, or an hour early, on the night the clocks went back
+
+**Symptom:** With 2.12.2 or older, on the night the clocks went back (in
+Central Europe the last Sunday of October, in the USA the first Sunday of
+November), a schedule at the hour that comes twice ran twice: `0 2 * * *`
+in `Europe/Berlin` at 2:00 CEST and again at 2:00 CET. One at the hour
+after it ran an hour early as well: `0 3 * * *` at 2:00 CET and at 3:00 CET,
+in `America/New_York` `0 2 * * *` at 1:00 EST and at 2:00 EST. In
+`Africa/Casablanca`, `Antarctica/Troll` and `Australia/Lord_Howe`, whose
+clocks change otherwise, a schedule also skipped its run on the night of a
+change, ran at another time, showed no next run, or, every 15 minutes on
+Lord Howe Island, ran every minute for a quarter of an hour.
+
+**Cause:** Ansilume asked its cron library for the next run in the
+schedule's timezone. The library reads the hour that comes twice as the
+hour after it too, and miscounts around the clock changes of those three
+timezones.
+
+**Fix:** Update. Ansilume asks the library only which wall-clock times an
+expression holds, in UTC. A time that comes twice runs once, the first
+time, as cron runs it, unless the minute or the hour field starts with `*`
+(such as `*/15 * * * *` or `0 * * * *`): such a schedule runs at each time
+that comes, the repeated ones too, but only at the times it holds
+(`*/15 3 * * *` no longer runs from 2:00 to 2:45 CET). A time the clocks
+skip, 2:00 to 2:59 in Central Europe when they go forward, runs when it
+would have come by the clock before the change, 2:00 at 3:00 CEST and 2:30
+at 3:30 CEST, as before; cron runs it right after the change. The update
+computes anew the next run of every schedule that is not
+yet due, so one that 2.12.2 computed for the coming night moves to its time
+(see
+[updating.md](updating.md#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files)).
+
 ## Re-launch is refused
 
 **Symptom:** **Re-launch** on a job page shows one of these messages and
@@ -1824,6 +1937,43 @@ project is not checked: no sync reads it.
 **Fix:** Give the project the branch it should check out and save it:
 saving a git project queues a sync.
 
+## Project page: the web server cannot read paths
+
+**Symptom:** The project page says
+`The web server cannot read these paths in the project directory, so the playbooks and the repository structure below may be incomplete: …`
+with the paths, or
+`The web server cannot read the project directory, so its playbooks and repository structure are not shown. …`,
+or, for a manual project,
+`The web server cannot find the project directory /srv/ansible/project, or may not enter a directory above it. …`.
+The repository structure marks those paths `(not readable)`.
+
+**Cause:** The page lists the project directory and reads the start of its
+YAML files as the web server's user (`www-data` in the images): a directory
+it may not list, a file it may not read, or a directory it may list but not
+enter, whose entries it then cannot examine; the list names the directory
+it may enter but not list as `the project directory itself`. A manual
+project's directory is any directory on the server, so it can belong to
+another user, or lie below a directory the web server may not enter, such
+as `/root`. Before the update such a path made the page answer with a
+server error. Symlinks are shown, marked 🔗, and the page never follows
+one into a directory: a repository with a link to a directory outside the
+project, such as `etc -> /etc`, made the page list that directory, and
+failed on the parts of it the web server may not read. A symlinked
+playbook is listed under Detected Playbooks only when it leads to a file
+inside the project. While the project syncs, the page names nothing: the
+sync replaces files as the page reads them; a file that is removed while
+the page reads it, as by a `git pull` in a manual project's directory, is
+left out and not named, and one that git writes anew meanwhile is read once
+it is back.
+
+**Fix:** Give the web server's user permission to read the files and to
+read and enter the directories, for example
+`chmod -R a+rX /srv/ansible/project` or `chown -R www-data /srv/ansible/project`
+on the server (in the app container for the Docker installations), and
+permission to enter every directory above the project directory
+(`chmod a+x` on each), then reload the page. A file that should stay
+private can stay so; the page then keeps naming it.
+
 ## Deleting a project is refused
 
 **Symptom:** Deleting a project shows
@@ -2166,6 +2316,41 @@ Runners that start during this window see the same 502 from nginx. They log
 `Server is not ready for runner registration yet ... retrying in 5s` and keep
 trying for about a minute before giving up and letting the container restart
 policy retry — no action is needed as long as the app container comes up.
+
+## Artifact download answers 404
+
+**Symptom:** **Download** of an artifact answers 404 with
+`Artifact file no longer exists on disk.` or
+`Artifact file could not be read.`; the **Preview** of a text artifact
+says `Failed to load preview.`, that of an image stays empty and that of a
+PDF shows the 404 page, and **Download All (zip)** answers 404 with
+`No artifacts to download.`, or its archive lacks some files. The API
+answers the same (`GET /api/v1/jobs/{id}/artifacts/...`). The app log has
+`Download All of job #42 leaves out artifacts 7, 9: their files are gone or cannot be read.`
+or
+`ArtifactService: the file of artifact #7 of job #42 cannot be read: …`.
+
+**Cause:** The job's artifact records outlived their files, as after a lost
+`runtime/artifacts` volume, a cleanup by hand or a restored database
+(`Artifact file no longer exists on disk.`), or the web server's user may
+not read the files or enter their job directory or a directory above it,
+such as `runtime/artifacts`, as after a restore by root
+(`Artifact file could not be read.`, and the log names the directory). With the prebuilt images, and the deploy role
+with `ansilume_use_prebuilt_images`, `runtime/artifacts` is on no volume:
+the artifacts older versions collected in the queue-worker stayed in that
+container, and recreating a container removes the files. Before the update
+a file that could not be read, or a job with none left, made these
+downloads answer with a server error, and so did the preview of a text
+artifact that is not UTF-8, which the preview now shows with `?` for what
+it cannot read.
+
+**Fix:** Restore the files from a backup and give the web server's user
+(`www-data` in the images) permission to read them and to enter their
+directories, for example
+`chown -R www-data /var/www/runtime/artifacts` in the app container.
+Artifacts whose files are gone for good stay listed until the artifact
+retention removes them (`ARTIFACT_RETENTION_DAYS`,
+`ARTIFACT_MAX_JOBS_WITH_ARTIFACTS`, see [artifacts.md](artifacts.md)).
 
 ## A page or an API call fails with a server error
 

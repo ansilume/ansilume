@@ -56,7 +56,7 @@ class SchedulesApiTest extends WebControllerTestCase
         $serialized = $result['data'];
         $this->assertIsArray($serialized);
         $this->assertSame(
-            ['id', 'name', 'job_template_id', 'cron_expression', 'timezone', 'extra_vars', 'enabled', 'last_run_at', 'next_run_at', 'created_by', 'created_at', 'updated_at'],
+            ['id', 'name', 'job_template_id', 'cron_expression', 'cron_expression_problem', 'timezone', 'extra_vars', 'enabled', 'last_run_at', 'next_run_at', 'created_by', 'created_at', 'updated_at'],
             array_keys($serialized)
         );
         $this->assertTrue($serialized['enabled']);

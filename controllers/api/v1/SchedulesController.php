@@ -280,7 +280,11 @@ class SchedulesController extends BaseApiController
      * created_by is the user the schedule launches its jobs as: its creator,
      * or the user who last changed what or when it runs, or enabled it.
      *
-     * @return array{id: int, name: string, job_template_id: int, cron_expression: string, timezone: string, extra_vars: string|null, enabled: bool, last_run_at: int|null, next_run_at: int|null, created_by: int, created_at: int, updated_at: int}
+     * cron_expression_problem is why a save refuses the stored cron
+     * expression, which an older version saved, or null
+     * (Schedule::cronExpressionProblem()).
+     *
+     * @return array{id: int, name: string, job_template_id: int, cron_expression: string, cron_expression_problem: string|null, timezone: string, extra_vars: string|null, enabled: bool, last_run_at: int|null, next_run_at: int|null, created_by: int, created_at: int, updated_at: int}
      */
     private function serialize(Schedule $s): array
     {
@@ -289,6 +293,7 @@ class SchedulesController extends BaseApiController
             'name' => $s->name,
             'job_template_id' => $s->job_template_id,
             'cron_expression' => $s->cron_expression,
+            'cron_expression_problem' => $s->cronExpressionProblem(),
             'timezone' => $s->timezone,
             'extra_vars' => self::extraVarsOf($s),
             'enabled' => (bool)$s->enabled,

@@ -138,7 +138,8 @@ class LintService extends Component
         try {
             $env = $this->buildProcessEnv($cwd, $vault->overrides());
             return $this->runProcess($cmd, $cwd, $env);
-        } catch (\RuntimeException $e) {
+        } catch (\RuntimeException | \ErrorException $e) {
+            // ErrorException: a warning, as of a cache directory that cannot be created.
             return [sprintf(self::NOT_RUN, $e->getMessage()), -1];
         } finally {
             $vault->cleanup();
@@ -212,11 +213,19 @@ class LintService extends Component
      * container run, before worker processes dropped to www-data), fall
      * back to a per-CWD temp dir. Otherwise ansible-lint fails with
      * "[Errno 13] Permission denied" when it tries to mkdir $cache/tmp/...
+     *
+     * A .ansible that is a symlink is never used, as the checkout's content
+     * decides where it leads: one that led nowhere made mkdir() warn, and
+     * Run Lint answered 500; one that led out of the checkout made
+     * ansible-lint write its cache there.
      */
     protected function ensureCacheDir(string $cwd): string
     {
         $cacheDir = $cwd . '/.ansible';
 
+        if (is_link($cacheDir)) {
+            return $this->fallbackCacheDir($cwd);
+        }
         if (is_dir($cacheDir) && is_writable($cacheDir)) {
             return $cacheDir;
         }
@@ -239,8 +248,15 @@ class LintService extends Component
             return $cacheDir;
         }
 
-        // Fallback: per-CWD temp dir. Deterministic (hashed) so repeat runs
-        // hit the same cache instead of leaking new dirs under /tmp.
+        return $this->fallbackCacheDir($cwd);
+    }
+
+    /**
+     * Per-CWD temp dir. Deterministic (hashed) so repeat runs hit the same
+     * cache instead of leaking new dirs under /tmp.
+     */
+    private function fallbackCacheDir(string $cwd): string
+    {
         $fallback = sys_get_temp_dir() . '/ansilume-ansible-' . substr(hash('sha256', $cwd), 0, 16);
         if (!is_dir($fallback)) {
             mkdir($fallback, 0o755, true);

@@ -8,8 +8,10 @@ declare(strict_types=1);
 
 use app\components\SurveySecrets;
 use app\components\VersionedAssetUrl;
+use app\models\Schedule;
 use app\services\ScheduleRunAs;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\widgets\ActiveForm;
 
 $isNew = $model->isNewRecord;
@@ -20,6 +22,12 @@ if (!$isNew && (int)$model->created_by !== (int)\Yii::$app->user->id) {
     $runsAs = sprintf(ScheduleRunAs::FORM_RUNS_AS_OTHER, $model->creator->username ?? 'user #' . (int)$model->created_by)
         . ScheduleRunAs::FORM_NOTE;
 }
+// Why a save refuses the stored cron expression, before a save: a rejected
+// submission shows the reason as the error of the cron expression instead.
+$cronProblem = $isNew || $model->hasErrors() ? null : $model->cronExpressionProblem();
+// The expression whose description gets no check mark: the stored one a save
+// refuses, or the one a rejected submission was refused for.
+$refusedCron = $cronProblem !== null || $model->hasErrors('cron_expression') ? (string)$model->cron_expression : null;
 ?>
 <nav aria-label="breadcrumb">
     <ol class="breadcrumb">
@@ -35,6 +43,13 @@ if (!$isNew && (int)$model->created_by !== (int)\Yii::$app->user->id) {
     <?= Html::a('Cancel', $isNew ? ['index'] : ['view', 'id' => $model->id], ['class' => 'btn btn-outline-secondary']) ?>
 </div>
 
+<?php if ($cronProblem !== null) : ?>
+    <div class="alert alert-warning" id="schedule-form-cron-problem" data-testid="schedule-form-cron-problem">
+        <div><?= Html::encode(Schedule::CRON_REFUSED_NOTE) ?></div>
+        <div class="mt-1"><?= Html::encode($cronProblem) ?></div>
+    </div>
+<?php endif; ?>
+
 <?php $form = ActiveForm::begin(['id' => 'schedule-form']); ?>
 
 <div class="row g-3">
@@ -49,7 +64,7 @@ if (!$isNew && (int)$model->created_by !== (int)\Yii::$app->user->id) {
     </div>
     <div class="col-md-6">
         <?= $form->field($model, 'cron_expression')
-            ->textInput(['maxlength' => 64, 'placeholder' => '0 2 * * *', 'id' => 'cron-input'])
+            ->textInput(['maxlength' => 64, 'placeholder' => '0 2 * * *', 'id' => 'cron-input', 'data-refused' => $refusedCron])
             ->hint('Standard 5-field cron: min hour dom mon dow. Example: <code>0 2 * * *</code> = daily at 02:00.') ?>
         <div id="cron-preview" class="form-text mt-1" style="min-height:1.25em"></div>
     </div>
@@ -89,15 +104,31 @@ if (!$isNew && (int)$model->created_by !== (int)\Yii::$app->user->id) {
     var input   = document.getElementById('cron-input');
     var preview = document.getElementById('cron-preview');
     if (!input || !preview) return;
+    var refused = input.getAttribute('data-refused');
+    var asWritten = <?= Json::htmlEncode(Schedule::CRON_AS_WRITTEN) ?>;
+
+    function show(className, text) {
+        var span = document.createElement('span');
+        span.className = className;
+        span.textContent = text;
+        preview.replaceChildren(span);
+    }
 
     function update() {
         var val = input.value.trim();
-        if (!val) { preview.textContent = ''; return; }
+        if (!val) { preview.replaceChildren(); return; }
+        var text;
         try {
-            var text = cronstrue.toString(val, { use24HourTimeFormat: true });
-            preview.innerHTML = '<span class="text-success">&#10003; ' + text + '</span>';
+            text = cronstrue.toString(val, { use24HourTimeFormat: true });
         } catch (e) {
-            preview.innerHTML = '<span class="text-danger">Invalid expression</span>';
+            show('text-danger', 'Invalid expression');
+            return;
+        }
+        // A save refuses this expression: the scheduler does not run it as the description reads.
+        if (refused !== null && val === refused.trim()) {
+            show('text-warning-emphasis', '\u26A0 ' + asWritten + ' ' + text);
+        } else {
+            show('text-success', '\u2713 ' + text);
         }
     }
 

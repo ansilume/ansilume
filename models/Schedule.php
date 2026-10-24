@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\CronExpressionRules;
+use app\components\CronRuns;
 use app\components\SurveySecrets;
 use app\models\traits\SealedSecretExtraVarsTrait;
 use app\services\JobLaunchSecrets;
@@ -37,6 +39,24 @@ class Schedule extends ActiveRecord
 
     /** Longest cron expression and timezone the string rules accept. */
     public const CRON_FIELD_MAX_LENGTH = 64;
+
+    /**
+     * The schedule's page and edit form, above why a save refuses its cron
+     * expression (cronExpressionProblem()).
+     */
+    public const CRON_REFUSED_NOTE = 'An older version saved this cron expression, which a save now refuses. '
+        . 'The schedule runs as before until its expression is changed as this says:';
+
+    /** The schedules list, next to a cron expression a save refuses; its title says why. */
+    public const CRON_REFUSED_BADGE = 'Change needed';
+
+    /**
+     * Before the description of a cron expression a save refuses, on the
+     * schedule's page and under the cron expression of its form, in place
+     * of the check mark: the scheduler does not run it as the description
+     * reads.
+     */
+    public const CRON_AS_WRITTEN = 'As written:';
 
     /**
      * A negative step, such as the "/-5" of a minute field "0-30/-5". The
@@ -77,12 +97,45 @@ class Schedule extends ActiveRecord
         ];
     }
 
+    /**
+     * The cron library must accept the expression, it must meet
+     * CronExpressionRules, and it must have a run in the schedule's timezone,
+     * or UTC while that is invalid (nextRunOf()): otherwise the schedule
+     * would never run, or run at other times than it says.
+     */
     public function validateCronExpression(string $attribute): void
     {
         $value = $this->$attribute;
         if (!is_string($value) || !self::isParsableCron($value) || !self::constructs($value)) {
-            $this->addError($attribute, 'Invalid cron expression. Use standard 5-field format: min hour dom mon dow');
+            $this->addError($attribute, CronExpressionRules::INVALID);
+            return;
         }
+        $problem = CronExpressionRules::problem($value);
+        if ($problem === null && self::nextRunOf($value, $this->timezoneOfRuns()) === null) {
+            $problem = CronExpressionRules::NEVER_RUNS;
+        }
+        if ($problem !== null) {
+            $this->addError($attribute, $problem);
+        }
+    }
+
+    /**
+     * The timezone the runs are computed in: the schedule's, or UTC while it
+     * is empty or invalid, which the timezone rule reports.
+     */
+    private function timezoneOfRuns(): string
+    {
+        $timezone = $this->timezone;
+        if (!self::isComputable($timezone)) {
+            return 'UTC';
+        }
+        try {
+            new \DateTimeZone($timezone);
+        } catch (\Exception | \ValueError $e) {
+            return 'UTC';
+        }
+
+        return $timezone;
     }
 
     /**
@@ -153,14 +206,54 @@ class Schedule extends ActiveRecord
             $this->next_run_at = null;
             return;
         }
+        $this->next_run_at = self::nextRunOf($expression, $timezone);
+    }
+
+    /**
+     * The next run of a cron expression after $now, the current time when
+     * null, in a timezone, as a Unix timestamp, or null when there is none:
+     * the first run from the second after $now (firstRunFrom()). In a
+     * timezone whose offset has seconds (+01:00:30) the runs fall between
+     * two minutes of UTC, so a search from the next whole minute would pass
+     * the one of the current minute.
+     */
+    public static function nextRunOf(string $expression, string $timezone, ?int $now = null): ?int
+    {
+        return self::firstRunFrom($expression, $timezone, ($now ?? time()) + 1);
+    }
+
+    /**
+     * The first run of a cron expression at or after $from, a Unix
+     * timestamp, in a timezone, as CronRuns computes it also on the nights
+     * the clocks change; null when there is none. The cron
+     * library throws a RuntimeException when it finds no run in 1000 tries,
+     * as for the 30th of February, and a TypeError when a day of the month
+     * and a day of the week are both set and neither finds one, as for
+     * "0 0 30 2 ?"; DateTimeZone an Exception for an unknown timezone and a
+     * ValueError for one with a NUL byte.
+     */
+    public static function firstRunFrom(string $expression, string $timezone, int $from): ?int
+    {
         try {
-            $cron = new CronExpression($expression);
-            $next = $cron->getNextRunDate('now', 0, false, $timezone);
-            $this->next_run_at = $next->getTimestamp();
-        } catch (\Exception | \ValueError $e) {
-            // ValueError: DateTimeZone refuses a timezone with a NUL byte.
-            $this->next_run_at = null;
+            return CronRuns::first(new CronExpression($expression), $from, $timezone);
+        } catch (\Exception | \TypeError | \ValueError $e) {
+            return null;
         }
+    }
+
+    /**
+     * Why a save refuses the stored cron expression, as the error of the
+     * cron rules says, or null when a save accepts it. Versions up to 2.12.2
+     * saved expressions that the rules refuse, and such a schedule runs as
+     * before until its expression is changed: its page, its edit form, the
+     * schedules list, the API and schedule/check say so. The schedule's own
+     * errors stay as they are.
+     */
+    public function cronExpressionProblem(): ?string
+    {
+        $check = clone $this;
+
+        return $check->validate(['cron_expression']) ? null : (string)$check->getFirstError('cron_expression');
     }
 
     /**

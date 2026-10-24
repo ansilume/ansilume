@@ -227,12 +227,13 @@ class JobController extends BaseController
             throw new NotFoundHttpException("Artifact not found.");
         }
 
-        if (!file_exists($artifact->storage_path)) {
-            throw new NotFoundHttpException("Artifact file no longer exists on disk.");
-        }
-
         /** @var ArtifactService $svc */
         $svc = \Yii::$app->get('artifactService');
+        $file = $svc->openFile($artifact);
+        if (is_string($file)) {
+            throw new NotFoundHttpException($file);
+        }
+
         $request = \Yii::$app->request;
         assert($request instanceof \yii\web\Request);
         $inlineRequested = $request->getQueryParam('inline') === '1';
@@ -257,8 +258,8 @@ class JobController extends BaseController
             $webResponse->headers->set('X-Frame-Options', 'SAMEORIGIN');
         }
 
-        return $webResponse->sendFile(
-            $artifact->storage_path,
+        return $webResponse->sendStreamAsFile(
+            $file,
             $artifact->display_name,
             ['mimeType' => $artifact->mime_type, 'inline' => $inline]
         );
@@ -285,7 +286,7 @@ class JobController extends BaseController
 
         $content = $svc->getArtifactContent($artifact);
         if ($content === null) {
-            throw new NotFoundHttpException("Artifact file could not be read.");
+            throw new NotFoundHttpException(ArtifactService::FILE_UNREADABLE);
         }
 
         return $this->asJson([
@@ -303,7 +304,7 @@ class JobController extends BaseController
         $svc = \Yii::$app->get('artifactService');
         $zipPath = $svc->createZipArchive($job);
         if ($zipPath === null) {
-            throw new NotFoundHttpException("No artifacts to download.");
+            throw new NotFoundHttpException(ArtifactService::NOTHING_TO_DOWNLOAD);
         }
 
         register_shutdown_function(static function () use ($zipPath): void {

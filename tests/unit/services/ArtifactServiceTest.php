@@ -6,8 +6,12 @@ namespace app\tests\unit\services;
 
 use app\models\Job;
 use app\models\JobArtifact;
+use app\services\ArtifactArchive;
+use app\services\ArtifactFile;
 use app\services\ArtifactService;
+use app\tests\unit\RunsUnprivileged;
 use PHPUnit\Framework\TestCase;
+use yii\log\Logger;
 
 /**
  * Tests for ArtifactService collection, limits, and MIME detection.
@@ -17,7 +21,12 @@ use PHPUnit\Framework\TestCase;
  */
 class ArtifactServiceTest extends TestCase
 {
+    use RunsUnprivileged;
+
     private string $tempDir;
+
+    /** @var list<string> archives a test got from createZipArchive() */
+    private array $archives = [];
 
     protected function setUp(): void
     {
@@ -27,6 +36,11 @@ class ArtifactServiceTest extends TestCase
 
     protected function tearDown(): void
     {
+        foreach ($this->archives as $archive) {
+            if (is_file($archive)) {
+                unlink($archive);
+            }
+        }
         $this->removeDir($this->tempDir);
     }
 
@@ -599,6 +613,581 @@ class ArtifactServiceTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
+    // Tests: artifact files that are gone or cannot be read
+    // -------------------------------------------------------------------------
+
+    /**
+     * Regression: "Download All" of a job whose artifact files were gone
+     * answered 500 instead of 404: libzip removed the archive without
+     * entries when it closed it, and unlink() of the temporary file warned.
+     */
+    public function testRegressionCreateZipArchiveOfAJobWhoseFilesAreGoneIsNull(): void
+    {
+        $service = $this->zipService([
+            $this->artifact(7, 'a.txt', $this->tempDir . '/gone-a.txt'),
+            $this->artifact(9, 'b.txt', $this->tempDir . '/gone-b.txt'),
+        ]);
+
+        [$archive, $logged] = $this->logged(static fn (): ?string => $service->createZipArchive(new Job()));
+
+        $this->assertNull($archive);
+        $this->assertSame([], $service->archivePaths, 'no temporary file was created');
+        $this->assertSame([sprintf(ArtifactArchive::LEFT_OUT, 0, '7, 9')], $logged);
+    }
+
+    public function testCreateZipArchiveLeavesOutAFileThatIsGone(): void
+    {
+        $kept = $this->tempDir . '/kept.txt';
+        file_put_contents($kept, 'kept');
+        $service = $this->zipService([
+            $this->artifact(7, 'kept.txt', $kept),
+            $this->artifact(9, 'gone.txt', $this->tempDir . '/gone.txt'),
+        ]);
+
+        [$archive, $logged] = $this->logged(static fn (): ?string => $service->createZipArchive(new Job()));
+
+        $this->assertSame(['kept.txt' => 'kept'], $this->entries($archive));
+        $this->assertSame([sprintf(ArtifactArchive::LEFT_OUT, 0, '9')], $logged);
+    }
+
+    /**
+     * Regression: libzip opened the files only when it closed the archive,
+     * and one the web server may not read failed the whole archive with a
+     * warning: "Download All" answered 500. Such a file is left out now.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionCreateZipArchiveLeavesOutAFileItCannotRead(): void
+    {
+        chmod($this->tempDir, 0755);
+        $readable = $this->tempDir . '/readable.txt';
+        $locked = $this->tempDir . '/locked.txt';
+        file_put_contents($readable, 'readable');
+        file_put_contents($locked, 'locked');
+        chmod($locked, 0o000);
+        $service = $this->zipService([
+            $this->artifact(7, 'locked.txt', $locked),
+            $this->artifact(9, 'readable.txt', $readable),
+        ]);
+
+        [$archive, $logged] = $this->logged(static fn (): ?string => self::unprivileged(
+            static fn (): ?string => $service->createZipArchive(new Job())
+        ));
+
+        $this->assertSame(['readable.txt' => 'readable'], $this->entries($archive));
+        $this->assertSame([sprintf(ArtifactArchive::LEFT_OUT, 0, '7')], $logged);
+    }
+
+    /**
+     * @requires extension posix
+     */
+    public function testCreateZipArchiveOfFilesItCannotReadIsNullAndLeavesNothingBehind(): void
+    {
+        chmod($this->tempDir, 0755);
+        $locked = $this->tempDir . '/locked.txt';
+        file_put_contents($locked, 'locked');
+        chmod($locked, 0o000);
+        $service = $this->zipService([$this->artifact(7, 'locked.txt', $locked)]);
+
+        $archive = self::unprivileged(static fn (): ?string => $service->createZipArchive(new Job()));
+
+        $this->assertNull($archive);
+        $this->assertCount(1, $service->archivePaths);
+        $this->assertFileDoesNotExist($service->archivePaths[0]);
+    }
+
+    /**
+     * Regression (race): a file the artifact cleanup removed between the
+     * check and the moment libzip closed the archive failed the archive with
+     * a warning, and left the temporary file behind. Each file is opened as
+     * it is added now, and stays in the archive.
+     */
+    public function testRegressionAFileRemovedAfterItWasAddedStaysInTheArchive(): void
+    {
+        $first = $this->tempDir . '/first.txt';
+        $second = $this->tempDir . '/second.txt';
+        file_put_contents($first, 'first');
+        file_put_contents($second, 'second');
+        $removesFirst = $this->artifact(9, 'second.txt', $second);
+        $removesFirst->onDisplayName = static function () use ($first): void {
+            if (is_file($first)) {
+                unlink($first);
+            }
+        };
+        $service = $this->zipService([$this->artifact(7, 'first.txt', $first), $removesFirst]);
+
+        $archive = $service->createZipArchive(new Job());
+
+        $this->assertFileDoesNotExist($first);
+        $this->assertSame(['first.txt' => 'first', 'second.txt' => 'second'], $this->entries($archive));
+    }
+
+    public function testCreateZipArchiveWithoutATemporaryFileIsNull(): void
+    {
+        $kept = $this->tempDir . '/kept.txt';
+        file_put_contents($kept, 'kept');
+        $service = $this->zipService([$this->artifact(7, 'kept.txt', $kept)], static fn (): string|false => false);
+
+        $this->assertNull($service->createZipArchive(new Job()));
+    }
+
+    /**
+     * A zip file that cannot be opened is a server error, not "No artifacts
+     * to download.".
+     */
+    public function testCreateZipArchiveThatCannotBeOpenedThrows(): void
+    {
+        $kept = $this->tempDir . '/kept.txt';
+        file_put_contents($kept, 'kept');
+        $directory = $this->tempDir;
+        $service = $this->zipService([$this->artifact(7, 'kept.txt', $kept)], static fn (): string => $directory);
+
+        $this->expectException(\RuntimeException::class);
+        // Whichever code libzip gives a directory (1.11: ZIP_ER_OPNOTSUPP).
+        $message = preg_quote(sprintf(ArtifactArchive::NOT_WRITTEN, sprintf(ArtifactArchive::OPEN_FAILED, 99)), '~');
+        $this->expectExceptionMessageMatches('~^' . str_replace('99', '[0-9]+', $message) . '$~');
+        $service->createZipArchive(new Job());
+    }
+
+    /**
+     * When libzip cannot write the archive, here as its directory is gone
+     * when it closes it, the caller gets libzip's warning, and nothing stays
+     * behind.
+     */
+    public function testCreateZipArchiveThatCannotBeWrittenThrowsAndLeavesNothingBehind(): void
+    {
+        $service = $this->vanishingArchiveService();
+
+        try {
+            $service->createZipArchive(new Job());
+            $this->fail('An archive that cannot be written must not be served.');
+        } catch (\RuntimeException $e) {
+            $this->assertSame(
+                sprintf(ArtifactArchive::NOT_WRITTEN, 'ZipArchive::close(): Failure to create temporary file: No such file or directory'),
+                $e->getMessage()
+            );
+        }
+        $this->assertFileDoesNotExist($service->archivePaths[0]);
+    }
+
+    /**
+     * When libzip cannot write the archive while its temporary file is still
+     * there, here as no file descriptor is left, the file is removed: it was
+     * left behind, as no download sent it.
+     *
+     * @requires extension posix
+     */
+    public function testCreateZipArchiveThatCannotBeWrittenRemovesItsTemporaryFile(): void
+    {
+        $first = $this->tempDir . '/first.txt';
+        $second = $this->tempDir . '/second.txt';
+        file_put_contents($first, 'first');
+        file_put_contents($second, 'second');
+        $limits = posix_getrlimit();
+        $this->assertIsArray($limits);
+        $soft = $limits['soft openfiles'] === 'unlimited' ? POSIX_RLIMIT_INFINITY : (int)$limits['soft openfiles'];
+        $hard = $limits['hard openfiles'] === 'unlimited' ? POSIX_RLIMIT_INFINITY : (int)$limits['hard openfiles'];
+        $exhausts = $this->artifact(9, 'second.txt', $second);
+        // Only the descriptors 0 to 2 may be opened from here on, and they are open.
+        $exhausts->onDisplayName = static fn (): bool => posix_setrlimit(POSIX_RLIMIT_NOFILE, 3, $hard);
+        $service = $this->zipService([$this->artifact(7, 'first.txt', $first), $exhausts]);
+        // Loaded now: no class file can be opened until the limit is back.
+        $this->assertTrue(class_exists(\app\helpers\FileHelper::class));
+
+        $thrown = null;
+        try {
+            $service->createZipArchive(new Job());
+        } catch (\RuntimeException $e) {
+            $thrown = $e;
+        } finally {
+            posix_setrlimit(POSIX_RLIMIT_NOFILE, $soft, $hard);
+        }
+
+        $this->assertInstanceOf(\RuntimeException::class, $thrown, 'An archive that cannot be written must not be served.');
+        $this->assertStringStartsWith(sprintf(ArtifactArchive::NOT_WRITTEN, 'ZipArchive::close(): Failure to create temporary file: '), $thrown->getMessage());
+        $this->assertCount(1, $service->archivePaths);
+        $this->assertFileDoesNotExist($service->archivePaths[0]);
+    }
+
+    /**
+     * Regression (race): a file the artifact cleanup removed after
+     * create() checked it, and before ZipArchive added it, made addFile()
+     * warn, which failed the download, and the archive wrote itself back
+     * when it was freed. Such a file is left out now.
+     */
+    public function testRegressionAFileRemovedBeforeItWasAddedIsLeftOut(): void
+    {
+        $kept = $this->tempDir . '/kept.txt';
+        $removed = $this->tempDir . '/removed.txt';
+        file_put_contents($kept, 'kept');
+        file_put_contents($removed, 'removed');
+        $removedMeanwhile = $this->artifact(9, 'removed.txt', $removed);
+        $removedMeanwhile->onDisplayName = static function () use ($removed): void {
+            if (is_file($removed)) {
+                unlink($removed);
+            }
+        };
+        $service = $this->zipService([$this->artifact(7, 'kept.txt', $kept), $removedMeanwhile]);
+
+        [$archive, $logged] = $this->logged(static fn (): ?string => $service->createZipArchive(new Job()));
+
+        $this->assertSame(['kept.txt' => 'kept'], $this->entries($archive));
+        $this->assertSame([sprintf(ArtifactArchive::LEFT_OUT, 0, '9')], $logged);
+        $this->assertSame([basename((string)$archive)], array_values(array_filter(
+            scandir(dirname((string)$archive)) ?: [],
+            static fn (string $name): bool => str_starts_with($name, 'ansilume_artifacts_') && in_array(sys_get_temp_dir() . '/' . $name, $service->archivePaths, true)
+        )), 'no other archive was written');
+    }
+
+    public function testOpenFileOfAReadableFileOpensIt(): void
+    {
+        $path = $this->tempDir . '/report.txt';
+        file_put_contents($path, 'x');
+
+        $this->assertNull(self::problemOf($this->artifact(7, 'report.txt', $path)));
+    }
+
+    public function testOpenFileOfAFileThatIsGoneOrNoFile(): void
+    {
+        $this->assertSame(ArtifactService::FILE_GONE, self::problemOf($this->artifact(7, 'a.txt', $this->tempDir . '/gone.txt')));
+        $this->assertSame(ArtifactService::FILE_GONE, self::problemOf($this->artifact(7, 'a.txt', $this->tempDir)));
+        $this->assertSame(ArtifactService::FILE_GONE, self::problemOf($this->artifact(7, 'a.txt', $this->tempDir . '/gone/a.txt')));
+        $this->assertSame(ArtifactService::FILE_GONE, self::problemOf($this->artifact(7, 'a.txt', '/')));
+    }
+
+    /**
+     * Review finding: a storage path with a NUL byte, as only a hand-edited
+     * record holds one, made open() throw a ValueError, a server error. Such
+     * a file is gone.
+     */
+    public function testAFileWhosePathHoldsANulByteIsGone(): void
+    {
+        $this->assertSame(ArtifactService::FILE_GONE, self::problemOf($this->artifact(7, 'a.txt', $this->tempDir . "/job_1/ok\0.txt")));
+    }
+
+    /**
+     * Review finding: a file that the artifact cleanup removed between the
+     * check that it is a file and fopen() was logged as one that cannot be
+     * read. It is gone (VanishingFileWrapper removes it as it is opened).
+     */
+    public function testAFileRemovedBetweenItsCheckAndItsOpeningIsGone(): void
+    {
+        $artifact = $this->artifact(7, 'report.txt', VanishingFileWrapper::PROTOCOL . '://artifacts/job_42/report.txt');
+
+        [$problem, $logged] = $this->logged(static fn (): ?string => VanishingFileWrapper::with(
+            static fn (): ?string => self::problemOf($artifact)
+        ));
+
+        $this->assertSame(ArtifactService::FILE_GONE, $problem);
+        $this->assertSame([], $logged);
+    }
+
+    /**
+     * Regression: a download of an artifact whose file the web server may
+     * not read answered 500, as fopen() warned in sendFile(). The file is
+     * opened once, without the warning, and the reason logged.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionFileProblemOfAFileTheWebServerCannotRead(): void
+    {
+        chmod($this->tempDir, 0755);
+        $path = $this->tempDir . '/locked.txt';
+        file_put_contents($path, 'x');
+        chmod($path, 0o000);
+        $artifact = $this->artifact(7, 'locked.txt', $path);
+        $artifact->job_id = 42;
+
+        [$problem, $logged] = $this->logged(static fn (): ?string => self::unprivileged(
+            static fn (): ?string => self::problemOf($artifact)
+        ));
+
+        $this->assertSame(ArtifactService::FILE_UNREADABLE, $problem);
+        $this->assertSame(
+            [sprintf(ArtifactService::UNREADABLE_LOGGED, 7, 42, "fopen({$path}): Failed to open stream: Permission denied")],
+            $logged
+        );
+    }
+
+    /**
+     * Review finding: a file in a job directory the web server may not
+     * enter, as a restore by root leaves one, was reported as gone and not
+     * logged. It cannot be read, and the log says why.
+     *
+     * @requires extension posix
+     */
+    public function testAFileInADirectoryTheWebServerMayNotEnterCannotBeRead(): void
+    {
+        chmod($this->tempDir, 0755);
+        mkdir($this->tempDir . '/job_42', 0o700);
+        $path = $this->tempDir . '/job_42/report.txt';
+        file_put_contents($path, 'x');
+        $artifact = $this->artifact(7, 'report.txt', $path);
+        $artifact->job_id = 42;
+
+        [$problem, $logged] = $this->logged(static fn (): ?string => self::unprivileged(
+            static fn (): ?string => self::problemOf($artifact)
+        ));
+
+        $this->assertSame(ArtifactService::FILE_UNREADABLE, $problem);
+        $this->assertSame(
+            [sprintf(ArtifactService::UNREADABLE_LOGGED, 7, 42, sprintf(ArtifactFile::DIRECTORY_CLOSED, $this->tempDir . '/job_42'))],
+            $logged
+        );
+    }
+
+    /**
+     * Review finding: with a directory above the job directory closed, as
+     * runtime/artifacts after a restore by root, the file was reported as
+     * gone and nothing was logged. It cannot be read, and the log names the
+     * directory; below it, the web server cannot tell a file that is gone
+     * from one that is there either.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function belowAClosedDirectoryProvider(): array
+    {
+        return ['a file that is there' => ['report.txt'], 'a file that is gone' => ['gone.txt']];
+    }
+
+    /**
+     * @dataProvider belowAClosedDirectoryProvider
+     * @requires extension posix
+     */
+    public function testAFileBelowADirectoryTheWebServerMayNotEnterCannotBeRead(string $name): void
+    {
+        chmod($this->tempDir, 0755);
+        mkdir($this->tempDir . '/artifacts/job_42', 0o755, true);
+        chmod($this->tempDir . '/artifacts', 0o700);
+        file_put_contents($this->tempDir . '/artifacts/job_42/report.txt', 'x');
+        $artifact = $this->artifact(7, $name, $this->tempDir . '/artifacts/job_42/' . $name);
+        $artifact->job_id = 42;
+
+        [$problem, $logged] = $this->logged(static fn (): ?string => self::unprivileged(
+            static fn (): ?string => self::problemOf($artifact)
+        ));
+
+        $this->assertSame(ArtifactService::FILE_UNREADABLE, $problem);
+        $this->assertSame(
+            [sprintf(ArtifactService::UNREADABLE_LOGGED, 7, 42, sprintf(ArtifactFile::DIRECTORY_CLOSED, $this->tempDir . '/artifacts'))],
+            $logged
+        );
+    }
+
+    /**
+     * Review finding: the download checked the file and then opened it again
+     * by its name, which failed with a server error when the artifact
+     * cleanup removed it in between. The stream it gets is opened once and
+     * still reads after the file is removed.
+     */
+    public function testRegressionTheOpenedFileStillReadsAfterItIsRemoved(): void
+    {
+        $path = $this->tempDir . '/report.txt';
+        file_put_contents($path, 'the report');
+
+        $file = (new ArtifactService())->openFile($this->artifact(7, 'report.txt', $path));
+        $this->assertIsResource($file);
+        unlink($path);
+
+        $this->assertSame('the report', stream_get_contents($file));
+        fclose($file);
+    }
+
+    /**
+     * Regression: the preview of an artifact whose file the web server may
+     * not read answered 500, as fopen() warned.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionGetArtifactContentOfAFileTheWebServerCannotReadIsNull(): void
+    {
+        chmod($this->tempDir, 0755);
+        $path = $this->tempDir . '/locked.txt';
+        file_put_contents($path, 'secret');
+        chmod($path, 0o000);
+        $artifact = $this->makeArtifactStub('text/plain', $path);
+
+        $this->assertNull(self::unprivileged(static fn (): ?string => (new ArtifactService())->getArtifactContent($artifact)));
+    }
+
+    public function testGetArtifactContentOfADirectoryIsNull(): void
+    {
+        $this->assertNull((new ArtifactService())->getArtifactContent($this->makeArtifactStub('text/plain', $this->tempDir)));
+    }
+
+    /**
+     * Review finding: the preview of a text artifact that is not UTF-8, or
+     * that the preview cut inside a character, made the JSON of the answer
+     * fail with a server error. The content is valid UTF-8 now.
+     *
+     * @return array<string, array{0: string, 1: int, 2: string}>
+     */
+    public static function notUtf8Provider(): array
+    {
+        return [
+            'a Latin-1 file' => ["caf\xE9;r\xE9sum\xE9\n", 524288, "caf?;r?sum?\n"],
+            'a character cut at the limit' => ["ab\xC3\xA4", 3, 'ab?'],
+            'valid UTF-8' => ["caf\xC3\xA9", 524288, "caf\xC3\xA9"],
+        ];
+    }
+
+    /**
+     * @dataProvider notUtf8Provider
+     */
+    public function testRegressionGetArtifactContentIsValidUtf8(string $bytes, int $maxBytes, string $content): void
+    {
+        $path = $this->tempDir . '/data.csv';
+        file_put_contents($path, $bytes);
+
+        $preview = (new ArtifactService())->getArtifactContent($this->makeArtifactStub('text/csv', $path), $maxBytes);
+
+        $this->assertSame($content, $preview);
+        $this->assertNotFalse(json_encode(['content' => $preview]));
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers for the artifact file tests
+    // -------------------------------------------------------------------------
+
+    /**
+     * Why openFile() cannot open the artifact's file, or null when it opens
+     * it.
+     */
+    private static function problemOf(JobArtifact $artifact): ?string
+    {
+        $file = (new ArtifactService())->openFile($artifact);
+        if (is_string($file)) {
+            return $file;
+        }
+        fclose($file);
+
+        return null;
+    }
+
+    /**
+     * A service whose job has these artifacts and that records the archive
+     * paths it hands out, from $archivePath or a temporary file.
+     *
+     * @param list<JobArtifact> $artifacts
+     * @param (callable(): (string|false))|null $archivePath
+     */
+    private function zipService(array $artifacts, ?callable $archivePath = null): ArtifactService
+    {
+        $service = new class ($artifacts, $archivePath) extends ArtifactService {
+            /** @var list<string> */
+            public array $archivePaths = [];
+
+            /**
+             * @param list<JobArtifact> $artifacts
+             * @param (callable(): (string|false))|null $archivePath
+             */
+            public function __construct(private array $artifacts, private $archivePath)
+            {
+                parent::__construct();
+            }
+
+            /** @return JobArtifact[] */
+            public function getArtifacts(Job $job): array
+            {
+                return $this->artifacts;
+            }
+
+            protected function newArchivePath(): string|false
+            {
+                $path = $this->archivePath === null ? parent::newArchivePath() : ($this->archivePath)();
+                if ($path !== false) {
+                    $this->archivePaths[] = $path;
+                }
+
+                return $path;
+            }
+        };
+        $this->archives = &$service->archivePaths;
+
+        return $service;
+    }
+
+    /**
+     * A service whose archive's directory is removed after the archive was
+     * opened, before libzip writes it.
+     */
+    private function vanishingArchiveService(): ArtifactService
+    {
+        $kept = $this->tempDir . '/kept.txt';
+        file_put_contents($kept, 'kept');
+        $directory = $this->tempDir . '/archive';
+        $artifact = $this->artifact(7, 'kept.txt', $kept);
+        $artifact->onDisplayName = static function () use ($directory): void {
+            if (is_dir($directory)) {
+                unlink($directory . '/job.zip');
+                rmdir($directory);
+            }
+        };
+
+        return $this->zipService([$artifact], static function () use ($directory): string {
+            mkdir($directory);
+            touch($directory . '/job.zip');
+
+            return $directory . '/job.zip';
+        });
+    }
+
+    private function artifact(int $id, string $displayName, string $storagePath): JobArtifact
+    {
+        $artifact = $this->makeArtifactStub('text/plain', $storagePath);
+        $artifact->id = $id;
+        $artifact->display_name = $displayName;
+
+        return $artifact;
+    }
+
+    /**
+     * The entries of a zip file with their contents.
+     *
+     * @return array<string, string>
+     */
+    private function entries(?string $archive): array
+    {
+        $this->assertIsString($archive);
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open($archive));
+        $entries = [];
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = (string)$zip->getNameIndex($i);
+            $entries[$name] = (string)$zip->getFromName($name);
+        }
+        $zip->close();
+        ksort($entries);
+
+        return $entries;
+    }
+
+    /**
+     * What $code returns, and the messages ArtifactService and ArtifactArchive logged meanwhile.
+     *
+     * @template T
+     * @param callable(): T $code
+     * @return array{0: T, 1: list<string>}
+     */
+    private function logged(callable $code): array
+    {
+        $logger = new Logger();
+        $previous = \Yii::getLogger();
+        \Yii::setLogger($logger);
+        try {
+            $result = $code();
+        } finally {
+            \Yii::setLogger($previous);
+        }
+        $own = array_filter(
+            $logger->messages,
+            static fn (array $message): bool => in_array($message[2], [ArtifactService::class, ArtifactArchive::class, ArtifactFile::class], true)
+        );
+
+        return [$result, array_values(array_map(static fn (array $message): string => (string)$message[0], $own))];
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers for new tests
     // -------------------------------------------------------------------------
 
@@ -622,8 +1211,14 @@ class ArtifactServiceTest extends TestCase
                 $this->_data[$name] = $value;
             }
 
+            /** @var (callable(): mixed)|null called when display_name is read */
+            public $onDisplayName = null;
+
             public function __get($name): mixed
             {
+                if ($name === 'display_name' && $this->onDisplayName !== null) {
+                    ($this->onDisplayName)();
+                }
                 return $this->_data[$name] ?? null;
             }
 

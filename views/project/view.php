@@ -6,11 +6,14 @@ declare(strict_types=1);
 /** @var app\models\Project $model */
 /** @var string[] $playbooks  Detected root-level playbook files */
 /** @var array    $tree       Directory tree nodes */
+/** @var list<string> $unreadable  ProjectFilesystemScanner::unreadable() */
+/** @var string|null $unreadableNote  ProjectFilesNote::of(), null when there is nothing to say */
 /** @var array<string, mixed> $vault  VaultOverviewService::forProject() */
 
 use app\components\GitSyncDiagnostics;
 use app\components\LintVerdict;
 use app\controllers\ProjectController;
+use app\helpers\ProjectTreeHelper;
 use app\models\Project;
 use yii\helpers\Html;
 use yii\helpers\Json;
@@ -394,7 +397,11 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
 
 <?= $this->render('_vault', ['project' => $model, 'vault' => $vault]) ?>
 
-<?php if (empty($playbooks) && empty($tree) && $model->status !== \app\models\Project::STATUS_SYNCED) : ?>
+<?php if ($unreadableNote !== null) : ?>
+<div class="alert alert-warning mt-3 mb-0" data-testid="project-unreadable"><?= Html::encode($unreadableNote) ?></div>
+<?php endif; ?>
+
+<?php if (empty($playbooks) && empty($tree) && $model->status !== \app\models\Project::STATUS_SYNCED && $unreadableNote === null) : ?>
 <div class="row g-3 mt-1">
     <div class="col-12">
         <p class="text-muted">Sync the project to detect playbooks and browse the repository structure.</p>
@@ -426,24 +433,11 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
         <div class="card">
             <div class="card-header">Repository Structure</div>
             <div class="card-body p-2">
-                <pre class="mb-0 small" style="line-height:1.6;"><?php
-
-                function renderTree(array $nodes, string $prefix = ''): void
-                {
-                    $last = count($nodes) - 1;
-                    foreach ($nodes as $i => $node) {
-                        $isLast = ($i === $last);
-                        $connector = $isLast ? '└── ' : '├── ';
-                        $childPfx = $prefix . ($isLast ? '    ' : '│   ');
-                        $icon = $node['type'] === 'dir' ? '📁 ' : '';
-                        echo Html::encode($prefix . $connector . $icon . $node['name']) . "\n";
-                        if (!empty($node['children'])) {
-                            renderTree($node['children'], $childPfx);
-                        }
-                    }
+                <pre class="mb-0 small" style="line-height:1.6;" data-testid="project-tree"><?php
+                // Line by line: a large tree is not held as one string.
+                foreach (ProjectTreeHelper::lines($tree, $unreadable) as $line) {
+                    echo Html::encode($line) . "\n";
                 }
-                renderTree($tree);
-
                 ?></pre>
             </div>
         </div>

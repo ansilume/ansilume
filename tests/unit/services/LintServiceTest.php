@@ -687,6 +687,92 @@ class LintServiceTest extends TestCase
         }
     }
 
+    /**
+     * Regression: a checkout whose .ansible is a symlink that leads nowhere
+     * made mkdir() warn ("File exists"), and Run Lint and the save of a job
+     * template answered 500.
+     */
+    public function testRegressionEnsureCacheDirIgnoresADanglingDotAnsibleSymlink(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_dangling_' . uniqid('', true);
+        mkdir($dir);
+        symlink($dir . '/nowhere', $dir . '/.ansible');
+        $result = '';
+
+        try {
+            $result = $this->ensureCacheDirOf($dir);
+
+            $this->assertStringStartsWith(sys_get_temp_dir() . '/ansilume-ansible-', $result);
+            $this->assertTrue(is_link($dir . '/.ansible') && !file_exists($dir . '/nowhere'), 'nothing was created through the link');
+        } finally {
+            unlink($dir . '/.ansible');
+            rmdir($dir);
+            self::removeFallback($result);
+        }
+    }
+
+    /**
+     * Review finding: a .ansible symlink that leads out of the checkout was
+     * the cache, and ansible-lint wrote there.
+     */
+    public function testEnsureCacheDirIgnoresADotAnsibleSymlinkOutOfTheCheckout(): void
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_lint_cache_link_' . uniqid('', true);
+        mkdir($dir . '/checkout', 0o755, true);
+        mkdir($dir . '/outside');
+        symlink($dir . '/outside', $dir . '/checkout/.ansible');
+        $result = '';
+
+        try {
+            $result = $this->ensureCacheDirOf($dir . '/checkout');
+
+            $this->assertStringStartsWith(sys_get_temp_dir() . '/ansilume-ansible-', $result);
+            $this->assertSame(['.', '..'], scandir($dir . '/outside'));
+        } finally {
+            unlink($dir . '/checkout/.ansible');
+            rmdir($dir . '/checkout');
+            rmdir($dir . '/outside');
+            rmdir($dir);
+            self::removeFallback($result);
+        }
+    }
+
+    /**
+     * Review finding: execute() caught only a RuntimeException, so a warning
+     * while it prepared the environment, as of a cache directory that
+     * cannot be created, failed Run Lint with a server error. Lint did not
+     * run, and the output says why.
+     */
+    public function testAWarningWhilePreparingTheEnvironmentIsNotRun(): void
+    {
+        $svc = new class extends LintService {
+            /** @return array{0: string, 1: int} */
+            public function callExecute(string $cwd): array
+            {
+                return $this->execute(null, $cwd);
+            }
+
+            protected function buildProcessEnv(string $cwd, array $vaultOverrides = []): array
+            {
+                throw new \yii\base\ErrorException('mkdir(): File exists');
+            }
+        };
+
+        $this->assertSame([sprintf(LintService::NOT_RUN, 'mkdir(): File exists'), -1], $svc->callExecute(sys_get_temp_dir()));
+    }
+
+    private function ensureCacheDirOf(string $cwd): string
+    {
+        $svc = new class extends LintService {
+            public function callEnsureCacheDir(string $cwd): string
+            {
+                return $this->ensureCacheDir($cwd);
+            }
+        };
+
+        return $svc->callEnsureCacheDir($cwd);
+    }
+
     public function testEnsureCacheDirFallbackIsDeterministicPerCwd(): void
     {
         $dir = sys_get_temp_dir() . '/ansilume_lint_cache_det_' . uniqid('', true);

@@ -8,12 +8,16 @@ declare(strict_types=1);
 
 use app\components\SurveySecrets;
 use app\helpers\ConfirmHelper;
+use app\models\Schedule;
 use app\services\ScheduleRunAs;
 use app\services\ScheduleSecrets;
 use yii\helpers\Html;
+use yii\helpers\Json;
 use yii\helpers\Url;
 
 $this->title = Html::encode($model->name);
+// Why a save refuses the stored cron expression, which an older version saved.
+$cronProblem = $model->cronExpressionProblem();
 ?>
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h2 class="mb-0"><?= Html::encode($model->name) ?></h2>
@@ -60,7 +64,13 @@ $this->title = Html::encode($model->name);
                     <dt class="col-sm-4">Cron expression</dt>
                     <dd class="col-sm-8">
                         <code id="cron-expr"><?= Html::encode($model->cron_expression) ?></code>
-                        <span id="cron-human" class="text-muted ms-2 small"></span>
+                        <?= Html::tag('span', '', ['id' => 'cron-human', 'class' => 'text-muted ms-2 small', 'data-refused' => $cronProblem === null ? null : '1']) ?>
+                        <?php if ($cronProblem !== null) : ?>
+                            <div class="alert alert-warning small mt-2 mb-0" id="schedule-cron-problem" data-testid="schedule-cron-problem">
+                                <div><?= Html::encode(Schedule::CRON_REFUSED_NOTE) ?></div>
+                                <div class="mt-1" data-testid="schedule-cron-problem-reason"><?= Html::encode($cronProblem) ?></div>
+                            </div>
+                        <?php endif; ?>
                     </dd>
 
                     <dt class="col-sm-4">Timezone</dt>
@@ -101,8 +111,10 @@ $this->title = Html::encode($model->name);
         var expr = document.getElementById('cron-expr');
         var human = document.getElementById('cron-human');
         if (!expr || !human || typeof cronstrue === 'undefined') return;
+        // A save refuses the expression: the scheduler does not run it as the description reads.
+        var prefix = human.hasAttribute('data-refused') ? <?= Json::htmlEncode(Schedule::CRON_AS_WRITTEN . ' ') ?> : '';
         try {
-            human.textContent = '(' + cronstrue.toString(expr.textContent.trim(), { use24HourTimeFormat: true }) + ')';
+            human.textContent = '(' + prefix + cronstrue.toString(expr.textContent.trim(), { use24HourTimeFormat: true }) + ')';
         } catch (e) {}
     })();
     </script>

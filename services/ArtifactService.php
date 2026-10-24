@@ -18,6 +18,25 @@ use yii\base\Component;
  */
 class ArtifactService extends Component
 {
+    /** The answer to a download of an artifact whose file is gone (openFile()). */
+    public const FILE_GONE = 'Artifact file no longer exists on disk.';
+
+    /**
+     * The answer to a download or preview of an artifact whose file the web
+     * server cannot read, as one restored by root (openFile()).
+     */
+    public const FILE_UNREADABLE = 'Artifact file could not be read.';
+
+    /**
+     * Logged when openFile() or a preview finds an artifact's file it cannot
+     * open; sprintf(): the artifact's ID, its job's ID, then PHP's message or
+     * ArtifactFile::DIRECTORY_CLOSED.
+     */
+    public const UNREADABLE_LOGGED = 'ArtifactService: the file of artifact #%d of job #%d cannot be read: %s';
+
+    /** The answer to "Download All" when no artifact file of the job can be read (ArtifactArchive). */
+    public const NOTHING_TO_DOWNLOAD = 'No artifacts to download.';
+
     /** @var string Base directory for artifact storage. Supports Yii aliases. */
     public string $storagePath = '@runtime/artifacts';
 
@@ -457,70 +476,50 @@ class ArtifactService extends Component
     }
 
     /**
-     * Read artifact file content for inline preview.
+     * Read artifact file content for inline preview, as valid UTF-8
+     * (ArtifactFile::content()).
      *
-     * Returns null for binary types, missing files, or read errors.
+     * Returns null for binary types, missing files, files the web server
+     * cannot read, or read errors.
      */
     public function getArtifactContent(JobArtifact $artifact, int $maxBytes = 524288): ?string
     {
-        if (!$this->isPreviewable($artifact->mime_type)) {
-            return null;
-        }
-
-        if (!file_exists($artifact->storage_path)) {
-            return null;
-        }
-
-        $handle = fopen($artifact->storage_path, 'r');
-        if ($handle === false) {
-            return null;
-        }
-
-        $content = fread($handle, max(1, $maxBytes));
-        fclose($handle);
-
-        return $content !== false ? $content : null;
+        return $this->isPreviewable($artifact->mime_type) ? ArtifactFile::content($artifact, $maxBytes) : null;
     }
 
     /**
-     * Create a zip archive of all artifacts for a job.
+     * The artifact's file opened for its download, or why it cannot be
+     * served: FILE_GONE, FILE_UNREADABLE (ArtifactFile::open()). A download
+     * sends this stream: opening the file a second time by its name, as
+     * sendFile() did, failed with a server error when the artifact cleanup
+     * removed it in between.
      *
-     * @return string|null Path to the temporary zip file, or null if no artifacts.
+     * @return resource|string
+     */
+    public function openFile(JobArtifact $artifact): mixed
+    {
+        return ArtifactFile::open($artifact);
+    }
+
+    /**
+     * Create a zip archive of all artifacts for a job (ArtifactArchive): an
+     * artifact whose file is gone or cannot be read is left out.
+     *
+     * @return string|null Path to the temporary zip file, or null if no artifact file can be read.
+     * @throws \RuntimeException ArtifactArchive::NOT_WRITTEN when the zip file cannot be written
      */
     public function createZipArchive(Job $job): ?string
     {
-        $artifacts = $this->getArtifacts($job);
-        if (empty($artifacts)) {
-            return null;
-        }
+        return (new ArtifactArchive(fn (): string|false => $this->newArchivePath()))->create($job, $this->getArtifacts($job));
+    }
 
-        $tmpFile = tempnam(sys_get_temp_dir(), 'ansilume_artifacts_');
-        if ($tmpFile === false) {
-            return null;
-        }
-
-        $zip = new \ZipArchive();
-        if ($zip->open($tmpFile, \ZipArchive::OVERWRITE) !== true) {
-            unlink($tmpFile);
-            return null;
-        }
-
-        $added = 0;
-        foreach ($artifacts as $artifact) {
-            if (file_exists($artifact->storage_path)) {
-                $zip->addFile($artifact->storage_path, $artifact->display_name);
-                $added++;
-            }
-        }
-
-        $zip->close();
-
-        if ($added === 0) {
-            unlink($tmpFile);
-            return null;
-        }
-
-        return $tmpFile;
+    /**
+     * A new, empty temporary file for the zip archive of "Download All", or
+     * false when none can be created.
+     */
+    protected function newArchivePath(): string|false
+    {
+        return tempnam(sys_get_temp_dir(), 'ansilume_artifacts_');
     }
 
     /**

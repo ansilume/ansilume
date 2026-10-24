@@ -191,7 +191,14 @@ and opened locally.
 
 The card header offers **Download All (zip)** when the job has more than
 one artifact. The zip is created on demand into the system temp dir and
-deleted at request shutdown — nothing is left behind on disk.
+deleted at request shutdown — nothing is left behind on disk. An artifact
+whose file is gone or cannot be read by the web server is left out of the
+zip, and the app log names it; when that leaves none, the answer is 404
+`No artifacts to download.` A **Download** or **Preview** of such an
+artifact answers 404 `Artifact file no longer exists on disk.` or
+`Artifact file could not be read.` (see
+[troubleshooting.md](troubleshooting.md#artifact-download-answers-404)). A
+**Preview** shows what is not UTF-8 in a text artifact as `?`.
 
 ### REST API
 
@@ -236,7 +243,14 @@ original name cannot leak path information into the filesystem. The
 wrote, kept in the `job_artifact.display_name` column.
 
 Permissions: directories `0750`, files `0640`. Owned by the same user that
-runs the queue worker / runner.
+runs the queue worker / runner. The app container serves the downloads as
+`www-data`, so it must be able to read the files and enter their
+directories (see
+[troubleshooting.md](troubleshooting.md#artifact-download-answers-404)).
+With the prebuilt images, and the deploy role with
+`ansilume_use_prebuilt_images`, `runtime/artifacts` is on no volume:
+recreating a container, as every update does, removes the files while
+their records stay.
 
 ---
 

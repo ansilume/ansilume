@@ -121,7 +121,7 @@ class ScheduleServiceTest extends DbTestCase
     {
         [$template, $user] = $this->makeFixtures();
 
-        // next_run_at = null → falls back to CronExpression::isDue('now')
+        // next_run_at = null → due when the current minute is a run (CronRuns)
         // Use "* * * * *" (every minute) to ensure it's always due
         $schedule = $this->createSchedule($template->id, $user->id, true, null, '* * * * *');
 

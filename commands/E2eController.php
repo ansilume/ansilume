@@ -206,11 +206,13 @@ class E2eController extends Controller
         // After the team: its launcher joins the teams of e2e-template's project.
         (new E2eApprovalSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
         (new E2eScheduleRunAsSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
+        (new E2eRefusedCronSeeder($logger))->seed($userId, $templateId);
         (new E2eLockedTemplateSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
         (new E2eDeletedTemplateApprovalSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
         (new E2eFailingNotificationSeeder($logger))->seed($userId);
         (new E2eRunnerGroupGuardSeeder($logger))->seed($userId, $templateId);
         $this->seedJobWithArtifacts($userId, $templateId);
+        (new E2eUnreadableArtifactSeeder($logger))->seed($userId, $templateId);
         (new E2eLogStreamSeeder($logger))->seed($userId, $templateId);
         (new E2eWorkflowPausedSeeder($logger))->seed($userId, $templateId);
         (new E2eSurveyTemplateSeeder($logger))->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
@@ -236,6 +238,7 @@ class E2eController extends Controller
         (new E2eVaultScanSeeder($logger))->seed($userId, $runnerGroupId);
         (new E2eVaultEdgeSeeder($logger))->seed($userId, $runnerGroupId);
         (new E2eLintLockedProjectSeeder($logger))->seed($userId);
+        (new E2eUnreadableProjectSeeder($logger))->seed($userId);
     }
 
     private function seedRunnerGroup(int $userId): int

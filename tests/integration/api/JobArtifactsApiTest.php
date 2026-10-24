@@ -9,6 +9,7 @@ use app\models\Job;
 use app\models\JobArtifact;
 use app\services\ArtifactService;
 use app\tests\integration\controllers\WebControllerTestCase;
+use app\tests\unit\RunsUnprivileged;
 
 /**
  * Integration tests for artifact API endpoints.
@@ -18,6 +19,8 @@ use app\tests\integration\controllers\WebControllerTestCase;
  */
 class JobArtifactsApiTest extends WebControllerTestCase
 {
+    use RunsUnprivileged;
+
     private string $tempDir;
 
     protected function setUp(): void
@@ -190,6 +193,200 @@ class JobArtifactsApiTest extends WebControllerTestCase
 
         $this->assertArrayHasKey('error', $result);
         $this->assertSame(404, \Yii::$app->response->statusCode);
+    }
+
+    /**
+     * Regression: GET /api/v1/jobs/{id}/artifacts/download-all of a job
+     * whose artifact files were gone answered 500 instead of 404.
+     */
+    public function testRegressionDownloadAllOfAJobWhoseFilesAreGoneAnswers404(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'a.txt', 'aaa');
+        $this->collectArtifacts($job, 'b.txt', 'bbb');
+        foreach (JobArtifact::find()->where(['job_id' => $job->id])->all() as $artifact) {
+            unlink($artifact->storage_path);
+        }
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+
+        $result = $this->makeController()->actionDownloadAllArtifacts((int)$job->id);
+
+        $this->assertSame(['error' => ['message' => ArtifactService::NOTHING_TO_DOWNLOAD]], $result);
+        $this->assertSame(404, \Yii::$app->response->statusCode);
+    }
+
+    public function testDownloadArtifactWhoseFileIsGoneAnswers404(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'a.txt', 'aaa');
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+        unlink($artifact->storage_path);
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+
+        $result = $this->makeController()->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertSame(['error' => ['message' => ArtifactService::FILE_GONE]], $result);
+        $this->assertSame(404, \Yii::$app->response->statusCode);
+    }
+
+    /**
+     * Regression: the download and the content of an artifact whose file
+     * the server may not read answered 500.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionDownloadAndContentOfAFileThatCannotBeReadAnswer404(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $artifact = $this->lockedArtifact($job);
+        $ctrl = $this->makeController();
+
+        $download = self::unprivileged(static fn () => $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id));
+        $this->assertSame(['error' => ['message' => ArtifactService::FILE_UNREADABLE]], $download);
+        $this->assertSame(404, \Yii::$app->response->statusCode);
+
+        \Yii::$app->response->statusCode = 200;
+        $content = self::unprivileged(static fn () => $ctrl->actionArtifactContent((int)$job->id, (int)$artifact->id));
+        $this->assertSame(['error' => ['message' => ArtifactService::FILE_UNREADABLE]], $content);
+        $this->assertSame(404, \Yii::$app->response->statusCode);
+    }
+
+    /**
+     * Review finding: with a directory above the job directory closed to the
+     * web server, as runtime/artifacts after a restore by root, the download
+     * answered that the file no longer exists. It cannot be read.
+     *
+     * @requires extension posix
+     */
+    public function testADownloadBelowAStorageDirectoryTheWebServerMayNotEnterCannotBeRead(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $artifact = $this->lockedArtifact($job);
+        chmod($artifact->storage_path, 0o644);
+        chmod($this->tempDir . '/storage', 0o700);
+        $ctrl = $this->makeController();
+
+        $download = self::unprivileged(static fn () => $ctrl->actionDownloadArtifact((int)$job->id, (int)$artifact->id));
+
+        $this->assertSame(['error' => ['message' => ArtifactService::FILE_UNREADABLE]], $download);
+        $this->assertSame(404, \Yii::$app->response->statusCode);
+    }
+
+    /**
+     * Regression: GET /api/v1/jobs/{id}/artifacts/download-all answered 500
+     * when one artifact file could not be read; the archive leaves it out.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionDownloadAllLeavesOutAFileThatCannotBeRead(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->lockedArtifact($job);
+        $this->collectArtifacts($job, 'readable.txt', 'readable');
+        chmod($this->tempDir . '/storage/job_' . $job->id . '/' . $this->storedName($job, 'readable.txt'), 0o644);
+        $ctrl = $this->makeController();
+
+        $response = self::unprivileged(static fn () => $ctrl->actionDownloadAllArtifacts((int)$job->id));
+
+        $this->assertInstanceOf(\yii\web\Response::class, $response);
+        $this->assertIsArray($response->stream);
+        $zip = new \ZipArchive();
+        $this->assertTrue($zip->open((string)stream_get_meta_data($response->stream[0])['uri']));
+        $this->assertSame(1, $zip->numFiles);
+        $this->assertSame('readable', $zip->getFromName('readable.txt'));
+        $zip->close();
+    }
+
+    /**
+     * Review finding: the content of a text artifact that is not UTF-8
+     * answered 500, as its JSON could not be encoded.
+     */
+    public function testRegressionContentOfALatin1FileIsValidUtf8(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'latin1.txt', "r\xE9sum\xE9");
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+
+        $result = $this->makeController()->actionArtifactContent((int)$job->id, (int)$artifact->id);
+
+        $this->assertSame('r?sum?', $result['data']['content']);
+        $this->assertNotFalse(json_encode($result));
+    }
+
+    /**
+     * Review finding: the download checked the file and then opened it again
+     * by its name, which failed with a server error when the artifact
+     * cleanup removed it in between. The service here removes the file right
+     * after it opened it: the download still sends it.
+     */
+    public function testRegressionAFileRemovedAfterItsCheckIsStillSent(): void
+    {
+        [$user, $job] = $this->scaffold();
+        $this->loginAs($user);
+        $this->collectArtifacts($job, 'report.txt', 'the report');
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+        $service = new class () extends ArtifactService {
+            public function openFile(JobArtifact $artifact): mixed
+            {
+                $file = parent::openFile($artifact);
+                unlink($artifact->storage_path);
+
+                return $file;
+            }
+        };
+        $service->storagePath = $this->tempDir . '/storage';
+        \Yii::$app->set('artifactService', $service);
+
+        $response = $this->makeController()->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertInstanceOf(\yii\web\Response::class, $response);
+        $this->assertIsArray($response->stream);
+        $this->assertSame('the report', stream_get_contents($response->stream[0], -1, $response->stream[1]));
+    }
+
+    /**
+     * The name ArtifactService stored the artifact $displayName of $job under.
+     */
+    private function storedName(Job $job, string $displayName): string
+    {
+        $artifact = JobArtifact::findOne(['job_id' => $job->id, 'display_name' => $displayName]);
+        $this->assertInstanceOf(JobArtifact::class, $artifact);
+
+        return basename($artifact->storage_path);
+    }
+
+    /**
+     * An artifact of $job whose file nobody but root may read, in a storage
+     * directory every user may enter.
+     */
+    private function lockedArtifact(Job $job): JobArtifact
+    {
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0o755, true);
+        chmod($this->tempDir, 0o755);
+        chmod($this->tempDir . '/storage', 0o755);
+        $path = $storageDir . '/locked.txt';
+        file_put_contents($path, 'locked');
+        chmod($path, 0o000);
+        $artifact = new JobArtifact();
+        $artifact->job_id = $job->id;
+        $artifact->filename = 'locked.txt';
+        $artifact->display_name = 'locked.txt';
+        $artifact->mime_type = 'text/plain';
+        $artifact->size_bytes = 6;
+        $artifact->storage_path = $path;
+        $artifact->created_at = time();
+        $artifact->save(false);
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+
+        return $artifact;
     }
 
     // ─── Previewable flag in artifact list ───────────────────────────

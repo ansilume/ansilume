@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\CronRuns;
 use app\components\ErrorText;
 use app\models\AuditLog;
 use app\models\JobTemplate;
@@ -168,21 +169,26 @@ class ScheduleService extends Component
     }
 
     /**
-     * Returns true if the schedule is due now (next_run_at <= now or not yet set).
-     * Uses the cron expression + timezone for evaluation.
+     * Returns true if the schedule is due now (next_run_at <= now), or, while
+     * next_run_at is not set, when a run of its cron expression in its
+     * timezone (CronRuns) lies in the current minute up to now: in a
+     * timezone whose offset has seconds, runs fall between two minutes of
+     * UTC. A stored value the check fails on otherwise than with an
+     * Exception, such as a timezone with a NUL byte (ValueError), is left
+     * to claimIfDue(), which logs it.
      */
     private function isDue(Schedule $schedule): bool
     {
         if ($schedule->next_run_at === null) {
-            // next_run_at not yet computed — compute and check. Older versions
-            // could store an expression the cron library cannot evaluate; it
-            // is never due.
+            // next_run_at not yet computed — check the current minute. Older
+            // versions could store an expression the cron library cannot
+            // evaluate; it is never due.
             if (!Schedule::isParsableCron((string)$schedule->cron_expression)) {
                 return false;
             }
             try {
-                $cron = new CronExpression($schedule->cron_expression);
-                return $cron->isDue('now', $schedule->timezone ?: 'UTC');
+                $minute = intdiv(time(), 60) * 60;
+                return CronRuns::first(new CronExpression($schedule->cron_expression), $minute, $schedule->timezone ?: 'UTC') <= time();
             } catch (\Exception $e) {
                 return false;
             }

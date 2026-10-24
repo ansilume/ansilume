@@ -15,6 +15,14 @@ const UNUSABLE_NAME_SCHEDULE = 'e2e-unusable-name-schedule';
 const UNUSABLE_PASSWORD_FIELD = 'contraseña_db';
 const UNUSABLE_NAME_ANSWER = 'e2e-unusable-name-answer-Tz58';
 
+/**
+ * commands/E2eRefusedCronSeeder.php: SCHEDULE, saved with 0 18,6 * * *, and
+ * why a save refuses it (CronExpressionRules::LIST_ORDER).
+ */
+const REFUSED_CRON_SCHEDULE = 'e2e-refused-cron-schedule';
+const REFUSED_CRON_REASON = 'Invalid cron expression: the scheduler would skip some values of the list 18,6 of the hour field. '
+  + 'Write its values in ascending order, as in 6,18.';
+
 test.describe('Schedules RBAC', () => {
 
   test.beforeEach(async ({}, testInfo) => {
@@ -91,5 +99,18 @@ test.describe('Schedules RBAC', () => {
     const { id } = await scheduleRow(page, HOST_SCHEDULE);
     await page.goto(`/schedule/view?id=${id}`);
     await expect(page.locator('#schedule-approval')).toHaveText(SCHEDULE_NOTE_INVENTORY(HOST_RULE, HOST_INVENTORY));
+  });
+
+  // e2e-operator's team operates e2e-template's project, the project of the schedule.
+  test('operator sees why a save refuses the stored cron expression of a schedule, in the list, on its page and in its edit form', async ({ page }) => {
+    const id = idWhere(await indexRows(page, '/schedule/index'), 1, REFUSED_CRON_SCHEDULE);
+    await page.goto('/schedule/index');
+    await expect(page.locator('#schedule-table tbody tr', { has: page.getByRole('link', { name: REFUSED_CRON_SCHEDULE, exact: true }) })
+      .getByTestId('schedule-cron-refused')).toHaveAttribute('title', REFUSED_CRON_REASON);
+
+    await page.goto(`/schedule/view?id=${id}`);
+    await expect(page.getByTestId('schedule-cron-problem-reason')).toHaveText(REFUSED_CRON_REASON);
+    await page.goto(`/schedule/update?id=${id}`);
+    await expect(page.getByTestId('schedule-form-cron-problem')).toContainText(REFUSED_CRON_REASON);
   });
 });

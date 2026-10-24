@@ -1466,7 +1466,11 @@ paths:
     get:
       tags: [Jobs]
       summary: Download all artifacts as a zip archive
-      description: Requires `job.view` and view access to the job.
+      description: |
+        Requires `job.view` and view access to the job. An artifact whose
+        file is gone or cannot be read by the server is left out of the
+        archive; when that leaves none, the answer is 404
+        `No artifacts to download.`
       parameters: [{ $ref: '#/components/parameters/IdPath' }]
       responses:
         '200':
@@ -1496,6 +1500,10 @@ paths:
 
         Non-image / non-PDF artifacts ignore the parameter and continue to
         download.
+
+        An artifact whose file is gone answers 404
+        `Artifact file no longer exists on disk.`, one whose file the server
+        cannot read 404 `Artifact file could not be read.`
       parameters:
         - { $ref: '#/components/parameters/IdPath' }
         - name: artifact_id
@@ -1520,7 +1528,10 @@ paths:
     get:
       tags: [Jobs]
       summary: Get artifact content inline (text-based files only)
-      description: Requires `job.view` and view access to the job. Returns 415 for non-previewable MIME types.
+      description: |
+        Requires `job.view` and view access to the job. Returns 415 for
+        non-previewable MIME types, and 404 `Artifact file could not be read.`
+        when the artifact's file is gone or the server cannot read it.
       parameters:
         - { $ref: '#/components/parameters/IdPath' }
         - name: artifact_id
@@ -1642,7 +1653,11 @@ paths:
 
         A schedule whose job template was deleted answers 422
         `The selected job template does not exist.` to every update, unless
-        the body moves it to another job template.
+        the body moves it to another job template. So does one whose stored
+        `cron_expression` a save refuses (`cron_expression_problem`, saved by
+        an older version) until the body sends one a save accepts, with that
+        reason as the message unless another field of the body is refused
+        first.
       requestBody:
         required: true
         content:
@@ -6949,6 +6964,19 @@ components:
         name:            { type: string }
         job_template_id: { type: integer }
         cron_expression: { type: string }
+        cron_expression_problem:
+          type: string
+          nullable: true
+          description: |
+            Why a save refuses the stored `cron_expression`, or `null` when a
+            save accepts it. Versions up to 2.12.2 saved expressions that the
+            cron rules refuse (see `cron_expression` of `ScheduleInput`);
+            such a schedule runs as before, skipped and misplaced runs
+            included, until its expression is changed, and every `PUT` that
+            keeps it answers 422, with this reason as the message unless
+            another field of the body is refused first. `php yii
+            schedule/check` lists these schedules.
+          example: 'Invalid cron expression: the scheduler would skip some values of the list 18,6 of the hour field. Write its values in ascending order, as in 6,18.'
         timezone:        { type: string }
         extra_vars:
           type: string
@@ -6968,7 +6996,19 @@ components:
           example: '{"app_env": "production", "db_password": "$encrypted$"}'
         enabled:         { type: boolean }
         last_run_at:     { type: integer, nullable: true }
-        next_run_at:     { type: integer, nullable: true }
+        next_run_at:
+          type: integer
+          nullable: true
+          description: |
+            When the schedule runs next while it is enabled, a Unix
+            timestamp; `null` when the expression has no run, and after the
+            schedule was disabled with the toggle or because its job template
+            was deleted. A schedule saved with `enabled: false` keeps a
+            computed value. On the nights the clocks change, a time that comes
+            twice runs once, the first time, unless the minute or the hour
+            field of `cron_expression` starts with `*` (then at each time that
+            comes, as in cron), and a time the clocks skip runs when it would
+            have come by the clock before the change (2:30 at 3:30).
         created_by:
           type: integer
           description: |
@@ -7293,7 +7333,26 @@ components:
       properties:
         name: { type: string, maxLength: 128 }
         job_template_id: { type: integer, description: "A job template the caller may operate." }
-        cron_expression: { type: string, description: "Standard 5-field cron expression" }
+        cron_expression:
+          type: string
+          maxLength: 64
+          description: |
+            Standard 5-field cron expression (`min hour dom mon dow`), or an
+            alias such as `@daily`. Refused with 422, with the reason and how
+            to write it, where the scheduler would never run it or would run
+            it at other times than it says in one of these ways: a range that
+            runs backwards (`5-1`), a minute or hour list the scheduler would
+            walk out of order (`0 18,6 * * *`; write `6,18`), a minute list
+            with `*`, day-of-week ranges with Sunday that the scheduler
+            misreads (`SUN-SAT`, `7-7`, `0-0`, `SAT-SUN`, `0-7/2`) or that
+            crons read in different ways (`5-0`; write `5-7`), a step as
+            large as the field's largest value or larger (`*/59`, `*/90`), a
+            step after a range of names (`MON-FRI/2`), `W` after a day later
+            than the 28th, or an expression no date matches (`0 0 30 2 *`).
+            When both the day of the month and the day of the week are
+            restricted, the schedule runs on days that match either. How the
+            runs fall on the nights the clocks change: see `next_run_at` of
+            `Schedule`.
         timezone: { type: string, default: UTC }
         extra_vars:
           type: string

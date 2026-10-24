@@ -22,9 +22,9 @@ class PhpUpdateDocsContractTest extends TestCase
 {
     use ReadsOperatorDocs;
 
-    public const UPDATE_SECTION = '## After updating from 2.12.2 or older: PHP 8.3';
+    public const UPDATE_SECTION = '## After updating from 2.12.2 or older: PHP 8.3, cron expressions, unreadable files';
 
-    private const SECTION_ANCHOR = 'after-updating-from-2122-or-older-php-83';
+    private const SECTION_ANCHOR = 'after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files';
 
     private const UPDATING = 'docs/updating.md';
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\components\ProjectFilesNote;
 use app\controllers\ProjectController;
 use app\models\AuditLog;
 use app\models\Credential;
@@ -16,6 +17,7 @@ use app\models\ProjectVaultEntry;
 use app\services\ProjectService;
 use app\services\VaultOverviewService;
 use app\services\VaultScanService;
+use app\tests\unit\RunsUnprivileged;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
 use yii\web\NotFoundHttpException;
@@ -31,6 +33,8 @@ use yii\web\Response;
  */
 class ProjectControllerActionTest extends WebControllerTestCase
 {
+    use RunsUnprivileged;
+
     /** @var list<array{string, \yii\base\Component}> */
     private array $swappedServices = [];
 
@@ -127,6 +131,96 @@ class ProjectControllerActionTest extends WebControllerTestCase
         // Stubbed ProjectService->localPath returns a path that doesn't exist
         // → resolveEffectivePath → null → empty lists.
         $this->assertSame([], $ctrl->capturedParams['playbooks']);
+    }
+
+    public function testViewOfAReadableProjectDirectoryHasNoUnreadableNote(): void
+    {
+        $dir = $this->manualProjectDirectory(['site.yml' => 0o644]);
+        $ctrl = $this->viewManualProject($dir);
+
+        $this->assertSame(['site.yml'], $ctrl->capturedParams['playbooks']);
+        $this->assertSame([], $ctrl->capturedParams['unreadable']);
+        $this->assertNull($ctrl->capturedParams['unreadableNote']);
+    }
+
+    /**
+     * Regression: a path of the project directory the web server may not
+     * read made the project page answer 500. It renders, and names it.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionViewNamesThePathsTheWebServerCannotRead(): void
+    {
+        $dir = $this->manualProjectDirectory(['site.yml' => 0o644, 'secret.yml' => 0o000]);
+        mkdir($dir . '/private', 0o000);
+
+        $ctrl = $this->viewManualProject($dir, true);
+
+        $this->assertSame('view', $ctrl->capturedView);
+        $this->assertSame(['site.yml'], $ctrl->capturedParams['playbooks']);
+        $this->assertSame(['private', 'secret.yml'], $ctrl->capturedParams['unreadable']);
+        $this->assertSame(sprintf(ProjectFilesNote::UNREADABLE_PATHS, 'private, secret.yml'), $ctrl->capturedParams['unreadableNote']);
+    }
+
+    /**
+     * @requires extension posix
+     */
+    public function testViewSaysWhenTheProjectDirectoryCannotBeRead(): void
+    {
+        $dir = $this->manualProjectDirectory(['site.yml' => 0o644]);
+        chmod($dir, 0o000);
+
+        $ctrl = $this->viewManualProject($dir, true);
+
+        $this->assertSame(['.'], $ctrl->capturedParams['unreadable']);
+        $this->assertSame(ProjectFilesNote::UNREADABLE_DIRECTORY, $ctrl->capturedParams['unreadableNote']);
+    }
+
+    /**
+     * @requires extension posix
+     */
+    public function testViewNamesAtMostTenUnreadablePaths(): void
+    {
+        $files = [];
+        foreach (range(1, 12) as $i) {
+            $files[sprintf('locked-%02d.yml', $i)] = 0o000;
+        }
+        $dir = $this->manualProjectDirectory($files);
+
+        $ctrl = $this->viewManualProject($dir, true);
+
+        $shown = array_slice(array_keys($files), 0, ProjectFilesNote::SHOWN);
+        $shown[] = sprintf(ProjectFilesNote::MORE, 2);
+        $this->assertCount(12, $ctrl->capturedParams['unreadable']);
+        $this->assertSame(sprintf(ProjectFilesNote::UNREADABLE_PATHS, implode(', ', $shown)), $ctrl->capturedParams['unreadableNote']);
+    }
+
+    /**
+     * Review finding: while a sync replaces files, the page named the paths
+     * it read in between as unreadable, and marked them in the tree.
+     *
+     * @requires extension posix
+     */
+    public function testViewOfASyncingProjectNamesNothing(): void
+    {
+        $dir = $this->manualProjectDirectory(['site.yml' => 0o644, 'secret.yml' => 0o000]);
+
+        $ctrl = $this->viewManualProject($dir, true, Project::STATUS_SYNCING);
+
+        $this->assertSame([], $ctrl->capturedParams['unreadable']);
+        $this->assertNull($ctrl->capturedParams['unreadableNote']);
+    }
+
+    /**
+     * Review finding: a manual project whose directory the web server cannot
+     * reach got no note.
+     */
+    public function testViewOfAManualProjectWhoseDirectoryIsMissingSaysSo(): void
+    {
+        $ctrl = $this->viewManualProject('/nonexistent/ansilume-project');
+
+        $this->assertSame([], $ctrl->capturedParams['tree']);
+        $this->assertSame(sprintf(ProjectFilesNote::UNREACHABLE_DIRECTORY, '/nonexistent/ansilume-project'), $ctrl->capturedParams['unreadableNote']);
     }
 
     public function testViewThrowsNotFound(): void
@@ -1365,11 +1459,51 @@ class ProjectControllerActionTest extends WebControllerTestCase
         }
     }
 
+    /**
+     * A temporary project directory holding playbooks with these modes.
+     *
+     * @param array<string, int> $playbooks file name => mode
+     */
+    private function manualProjectDirectory(array $playbooks): string
+    {
+        $dir = sys_get_temp_dir() . '/ansilume_project_view_' . uniqid('', true);
+        mkdir($dir, 0o755);
+        $this->tempDirs[] = $dir;
+        foreach ($playbooks as $name => $mode) {
+            file_put_contents($dir . '/' . $name, "- hosts: all\n");
+            chmod($dir . '/' . $name, $mode);
+        }
+
+        return $dir;
+    }
+
+    /**
+     * Opens the page of a manual project in $dir as a superadmin, as a user
+     * who may not read what the directory denies to others when $unprivileged.
+     */
+    private function viewManualProject(string $dir, bool $unprivileged = false, string $status = Project::STATUS_SYNCED): ProjectController
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_MANUAL;
+        $project->local_path = $dir;
+        $project->status = $status;
+        $project->save(false);
+
+        $ctrl = $this->makeController();
+        $view = static fn (): string => $ctrl->actionView((int)$project->id);
+        $unprivileged ? self::unprivileged($view) : $view();
+
+        return $ctrl;
+    }
+
     private function removeTree(string $dir): void
     {
         if (!is_dir($dir)) {
             return;
         }
+        chmod($dir, 0o755);
         foreach ((array)scandir($dir) as $name) {
             if ($name === '.' || $name === '..') {
                 continue;

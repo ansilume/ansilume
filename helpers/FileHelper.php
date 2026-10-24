@@ -37,10 +37,15 @@ class FileHelper
     }
 
     /**
-     * Recursively remove a directory and all its contents.
+     * Recursively remove a directory and all its contents. Symlinks are
+     * removed, never followed: a link to a directory removes the link, not
+     * the directory it points at.
      */
     public static function removeDirectory(string $path): bool
     {
+        if (is_link($path)) {
+            return unlink($path);
+        }
         if (!is_dir($path)) {
             return true;
         }
@@ -48,12 +53,9 @@ class FileHelper
         if ($items === false) {
             return false;
         }
-        foreach ($items as $item) {
-            if ($item === '.' || $item === '..') {
-                continue;
-            }
+        foreach (array_diff($items, ['.', '..']) as $item) {
             $full = $path . DIRECTORY_SEPARATOR . $item;
-            if (is_dir($full)) {
+            if (is_dir($full) && !is_link($full)) {
                 self::removeDirectory($full);
             } else {
                 unlink($full);

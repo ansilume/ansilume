@@ -45,7 +45,7 @@ class ScheduleServiceTest extends TestCase
         $this->assertFalse($this->isDue->invoke($this->service, $schedule));
     }
 
-    // ── next_run_at is null — falls back to CronExpression::isDue() ──────────
+    // ── next_run_at is null — due when the current minute is a run (CronRuns) ─
 
     public function testIsDueWhenNextRunNullAndCronMatchesNow(): void
     {

@@ -114,7 +114,7 @@ version until a build gets through (`git checkout v2.12.2`, and
 `git checkout main` again before the next update). Updating from 2.12.2
 or older, a container that starts again before the build got through does
 not come up, see
-[After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83).
+[After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files).
 
 If `git pull` fails with merge conflicts, you have local modifications. Either stash them (`git stash`) or reset to upstream (`git reset --hard origin/main`).
 
@@ -158,7 +158,7 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose
 
 ---
 
-## After updating from 2.12.2 or older: PHP 8.3
+## After updating from 2.12.2 or older: PHP 8.3, cron expressions, unreadable files
 
 **The images run PHP 8.3.** The app and runner images, the development
 stack and the deploy role build on `php:8.3-fpm` and `php:8.3-cli`
@@ -265,8 +265,135 @@ above do not appear: a missing `ansible-playbook` of an "Ansilume and
 repository" project, for one, ends the job with exit code 127 and an empty
 log.
 
-Going back to 2.12.2 changes nothing in the database: pin its images, or
-run `git checkout v2.12.2` and step 3, see [Rollback](#rollback).
+**Cron expressions that would never run are refused.** The cron library
+Ansilume uses accepts expressions it then never runs, or runs at other
+times than they say, so a schedule with one was saved without an error.
+Saving a schedule, on its page or with `POST` or `PUT /api/v1/schedules`,
+now refuses:
+
+- a range that runs backwards, such as `5-1 * * * *`, which never ran:
+  `Invalid cron expression: the range 5-1 of the minute field runs
+  backwards.` In a list, as in `1,3-1`, that item never matched. Ranges do
+  not wrap around: split one that would, as the message suggests, each part
+  with the range's step (`22-2` of the hour field as `0-2,22-23`);
+- a list in the minute or hour field that the scheduler walks out of order
+  and so skips some of its values: `0 18,6 * * *` ran at 18:00 only,
+  `5-10,45 * * * *` at minute 45 only, `*,5 * * * *` at minutes 0 and 5
+  only: `Invalid cron expression: the scheduler would skip some values of the
+  list 18,6 of the hour field.` Write the values in ascending order, as the
+  message suggests (`6,18`); it writes the minutes of a list with a range
+  with two digits where the scheduler would sort them out of order as text
+  (`05,10-50`), and asks for `*` alone instead of a minute list with `*`;
+- day-of-week ranges with Sunday: one that starts with Sunday as 7 or `SUN`
+  (`SUN-SAT` never ran; write `0-SAT`), Sunday alone as a range (`7-7` and
+  `0-0` ran on every day), one that ends with the name `SUN` (`SAT-SUN` ran
+  on Saturdays only; write `SAT-7`), `0-7` with a step (`0-7/2` never ran
+  on a Sunday; write `0-6/2`), and one that ends with Sunday as 0, which
+  ran from Friday to Sunday as `5-0` but which Vixie cron refuses as
+  backwards (write `5-7`);
+- a step as large as the field's largest value or larger, as the scheduler
+  runs many of them at other times than cron: `*/90 * * * *` ran at
+  minute 30, `*/59 * * * *` at minute 59 only, a step of 13 months in
+  February. Use a step smaller than 59 for minutes, 23 for hours, 31 for
+  days of the month, 12 for months and 7 for days of the week, or list the
+  values;
+- a step after a range of names, such as `MON-FRI/2`, which ran on Sundays:
+  write `1-5/2`;
+- `W` after the 29th, 30th or 31st: `31W` ran on the 1st of November;
+- an expression no date matches, such as `0 0 30 2 *`: `Invalid cron
+  expression: the scheduler finds no date that matches it, so the schedule
+  would never run.`;
+- numbers written with a sign, an exponent or three digits, such as `+5` or
+  `1e1`, which are no standard cron, and `L`, `W` or `#` after a range or a
+  step, all with
+  `Invalid cron expression. Use standard 5-field format: min hour dom mon dow`.
+
+Schedules saved before keep their expression and run as before, skipped
+and misplaced runs included, until it is changed; the next save of one
+names what to change. `php yii schedule/check` lists every schedule whose
+expression a save refuses, with the reason, and exits with 65 when it lists
+one:
+
+```bash
+docker compose exec app php yii schedule/check
+```
+
+A line of its output reads
+`Schedule #12 "Nightly backup" (0 18,6 * * *): Invalid cron expression: the scheduler would skip some values of the list 18,6 of the hour field. Write its values in ascending order, as in 6,18.`;
+change each expression as its message says. Unchanged, a schedule whose
+expression never matches has no next run and never runs. The schedules
+list marks each such schedule with **Change needed**, the reason in its
+tooltip, its page and its edit form say why, and the API gives the reason
+as `cron_expression_problem`; every save of it, a rename too, shows the
+reason until the expression is changed, and `PUT /api/v1/schedules/{id}`
+answers 422 until the body sends an expression a save accepts, with the
+reason as its message unless another field of the body is refused first.
+See
+[troubleshooting.md](troubleshooting.md#saving-a-schedule-is-refused-the-cron-expression).
+
+**Schedules run once on the night the clocks go back.** Up to 2.12.2, on
+that night a schedule at the hour that comes twice ran twice (`0 2 * * *`
+in `Europe/Berlin` at 2:00 CEST and at 2:00 CET), and one at the hour after
+it an hour early as well (`0 3 * * *` at 2:00 CET and at 3:00 CET); in
+`Africa/Casablanca`, `Antarctica/Troll` and `Australia/Lord_Howe`
+schedules also skipped runs or ran at other times around a change of the
+clocks. A time that comes twice now runs once, the first time, unless the
+minute or the hour field starts with `*`, as in cron: `*/15 * * * *` and
+`0 * * * *` run at each time that comes, the repeated ones too. A time the
+clocks skip runs when it would have come by the clock before the change,
+as before (2:30 at 3:30). The update computes anew the next run of every
+schedule that is not yet due, so a schedule at 3:00 whose next run 2.12.2
+computed for the second 2:00 of the coming such night (in Central Europe
+25 October 2026) runs at 3:00; the migration prints how many moved, as in
+`Computed anew the next runs of the schedules that are not yet due: 3 moved.`
+See
+[troubleshooting.md](troubleshooting.md#a-schedule-ran-twice-or-an-hour-early-on-the-night-the-clocks-went-back).
+
+**The project page names what the web server cannot read.** A project
+directory, a subdirectory or a playbook that the web server's user may not
+read, a directory named like a playbook (`site.yml/`), or a symlink to a
+directory outside the project, such as `etc -> /etc`, made the project page
+answer with a server error. The page now shows what it could read and names
+the rest (`The web server cannot read these paths in the project directory,
+…`), and says when it cannot reach a manual project's directory at all;
+symlinks appear in the repository structure, marked 🔗, and the page never
+follows one into a directory, so a `playbooks/` directory that is a
+symlink is no longer searched for playbooks, and a symlinked playbook is
+listed under Detected Playbooks only when it leads to a file inside the
+project. Run Lint and the save of a job template answered
+with a server error too when the checkout's `.ansible` was a symlink that
+led nowhere; lint no longer uses a symlinked `.ansible`. See
+[troubleshooting.md](troubleshooting.md#project-page-the-web-server-cannot-read-paths).
+
+**Artifact downloads of files that are gone or cannot be read.** "Download
+All" answered with a server error instead of `No artifacts to download.`
+when the job's artifact files were gone, and when one of them could not be
+read or was removed by the artifact cleanup during the download; a
+download or preview of an artifact whose file the web server cannot read
+did too, and so did the preview of a text artifact that is not UTF-8. A
+file in a directory the web server may not enter, such as a job directory
+or `runtime/artifacts` that a restore by root left closed, was answered as
+gone by its download and by the preview of an image or a PDF
+(`Artifact file no longer exists on disk.`); the preview of a text artifact
+answered `Artifact file could not be read.`, with nothing in the log.
+"Download All" now leaves such files out of the archive, and the app log
+names them; the download and the preview of such an artifact answer 404
+`Artifact file could not be read.`, the web UI and the API alike, with the
+reason, and the directory it may not enter, in the app log; and a preview
+shows a character it cannot read as `?`. With the prebuilt images, and the
+deploy role with `ansilume_use_prebuilt_images`, `runtime/artifacts` is on
+no volume: the
+artifacts that older versions collected in the queue-worker stayed in that
+container, and recreating a container, as every update does, removes the
+files while their records stay (see [artifacts.md](artifacts.md)).
+
+Going back to 2.12.2 needs nothing for the database: the next runs the
+update computed anew stay, and 2.12.2 launches them at those times. Pin its
+images, or run `git checkout v2.12.2` and step 3, see [Rollback](#rollback).
+To go back further than 2.12.2, first revert the migration of this release
+with this release, `docker compose exec app php yii migrate/down 1 --interactive=0`,
+which changes nothing: 2.12.2 does not have the migration, so its
+`migrate/down` cannot revert it, nor the migrations before it.
 
 ---
 
@@ -6203,6 +6330,12 @@ inventories, and cannot delete an approval rule that an inventory still
 names. Remove the rules of the inventories, or revert the migration,
 before you deploy 2.11.1: once it runs, its `migrate/down` cannot revert
 `m000088`.
+
+To roll back from the update after 2.12.2 (migration `m000089`, which
+computes the next runs of schedules anew), see the end of
+[After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files):
+2.12.2 needs nothing, but to go back further, revert `m000089` first, with
+the release that has it; `migrate/down 2` there reverts `m000088` as well.
 
 ---
 

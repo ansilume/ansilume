@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\components\GitSyncDiagnostics;
+use app\components\ProjectFilesNote;
 use app\components\WorkerHeartbeat;
 use app\helpers\AppVersion;
 use app\models\AuditLog;
@@ -78,11 +79,14 @@ class ProjectController extends BaseController
         }
         $playbooks = [];
         $tree = [];
+        $unreadable = [];
         $localPath = $this->resolveEffectivePath($model);
         if ($localPath !== null) {
             $scanner = new \app\services\ProjectFilesystemScanner();
             $playbooks = $scanner->detectPlaybooks($localPath);
             $tree = $scanner->buildTree($localPath, $localPath);
+            // A sync replaces files while the page reads them: no marks then.
+            $unreadable = $model->status === Project::STATUS_SYNCING ? [] : $scanner->unreadable($localPath);
         }
         /** @var \app\services\VaultOverviewService $vaultOverview */
         $vaultOverview = \Yii::$app->get('vaultOverviewService');
@@ -92,6 +96,8 @@ class ProjectController extends BaseController
             'model' => $model,
             'playbooks' => $playbooks,
             'tree' => $tree,
+            'unreadableNote' => ProjectFilesNote::of($model, $localPath, $unreadable, $playbooks !== [] || $tree !== []),
+            'unreadable' => $unreadable,
             'vault' => $vaultOverview->forProject($model, static fn (string $permission): bool => $superadmin || \Yii::$app->user->can($permission)),
         ]);
     }

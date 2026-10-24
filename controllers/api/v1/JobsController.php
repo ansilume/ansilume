@@ -268,12 +268,13 @@ class JobsController extends BaseApiController
             return $this->error('Artifact not found.', 404);
         }
 
-        if (!file_exists($artifact->storage_path)) {
-            return $this->error('Artifact file no longer exists on disk.', 404);
-        }
-
         /** @var ArtifactService $svc */
         $svc = \Yii::$app->get('artifactService');
+        $file = $svc->openFile($artifact);
+        if (is_string($file)) {
+            return $this->error($file, 404);
+        }
+
         $request = \Yii::$app->request;
         assert($request instanceof \yii\web\Request);
         $inlineRequested = $request->getQueryParam('inline') === '1';
@@ -298,8 +299,8 @@ class JobsController extends BaseApiController
             $response->headers->set('X-Frame-Options', 'SAMEORIGIN');
         }
 
-        return $response->sendFile(
-            $artifact->storage_path,
+        return $response->sendStreamAsFile(
+            $file,
             $artifact->display_name,
             ['mimeType' => $artifact->mime_type, 'inline' => $inline]
         );
@@ -330,7 +331,7 @@ class JobsController extends BaseApiController
 
         $content = $svc->getArtifactContent($artifact);
         if ($content === null) {
-            return $this->error('Artifact file could not be read.', 404);
+            return $this->error(ArtifactService::FILE_UNREADABLE, 404);
         }
 
         return $this->success([
@@ -356,7 +357,7 @@ class JobsController extends BaseApiController
         $svc = \Yii::$app->get('artifactService');
         $zipPath = $svc->createZipArchive($job);
         if ($zipPath === null) {
-            return $this->error('No artifacts to download.', 404);
+            return $this->error(ArtifactService::NOTHING_TO_DOWNLOAD, 404);
         }
 
         register_shutdown_function(static function () use ($zipPath): void {

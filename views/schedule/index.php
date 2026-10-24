@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 use app\helpers\ConfirmHelper;
 use app\helpers\TimeHelper;
+use app\models\Schedule;
 use yii\helpers\Html;
 use yii\helpers\Url;
 use yii\widgets\LinkPager;
@@ -56,7 +57,13 @@ $this->title = 'Schedules';
                             <span class="text-danger">Template missing</span>
                         <?php endif; ?>
                     </td>
-                    <td><code><?= Html::encode($model->cron_expression) ?></code></td>
+                    <td>
+                        <code><?= Html::encode($model->cron_expression) ?></code>
+                        <?php $cronProblem = $model->cronExpressionProblem(); ?>
+                        <?php if ($cronProblem !== null) : ?>
+                            <span class="badge text-bg-warning ms-1" title="<?= Html::encode($cronProblem) ?>" data-testid="schedule-cron-refused"><?= Html::encode(Schedule::CRON_REFUSED_BADGE) ?></span>
+                        <?php endif; ?>
+                    </td>
                     <td><?= Html::encode($model->timezone) ?></td>
                     <td class="text-nowrap"><?= TimeHelper::relative($model->next_run_at) ?></td>
                     <td class="text-nowrap">

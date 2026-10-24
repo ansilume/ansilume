@@ -7,6 +7,7 @@ namespace app\tests\integration\controllers;
 use app\controllers\JobController;
 use app\models\JobArtifact;
 use app\services\ArtifactService;
+use app\tests\unit\RunsUnprivileged;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
@@ -15,6 +16,8 @@ use yii\web\Response;
  */
 class JobControllerActionTest extends WebControllerTestCase
 {
+    use RunsUnprivileged;
+
     private string $tempDir;
 
     /** @var array<string, mixed> application components replaced by a test */
@@ -50,6 +53,57 @@ class JobControllerActionTest extends WebControllerTestCase
             $item->isDir() ? rmdir($item->getPathname()) : unlink($item->getPathname());
         }
         rmdir($dir);
+    }
+
+    /**
+     * A job of a new user, signed in, with an artifact for each file, written
+     * with its mode into a storage directory every user may enter.
+     *
+     * @param array<string, int> $files name => mode
+     */
+    private function jobWithArtifactFiles(array $files): \app\models\Job
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $inventory = $this->createInventory($user->id);
+        $group = $this->createRunnerGroup($user->id);
+        $template = $this->createJobTemplate($project->id, $inventory->id, $group->id, $user->id);
+        $job = $this->createJob($template->id, $user->id);
+
+        $storageDir = $this->tempDir . '/storage/job_' . $job->id;
+        mkdir($storageDir, 0o755, true);
+        chmod($this->tempDir, 0o755);
+        chmod($this->tempDir . '/storage', 0o755);
+        foreach ($files as $name => $mode) {
+            file_put_contents($storageDir . '/' . $name, 'content of ' . $name);
+            chmod($storageDir . '/' . $name, $mode);
+            $artifact = new JobArtifact();
+            $artifact->job_id = $job->id;
+            $artifact->filename = $name;
+            $artifact->display_name = $name;
+            $artifact->mime_type = 'text/plain';
+            $artifact->size_bytes = strlen('content of ' . $name);
+            $artifact->storage_path = $storageDir . '/' . $name;
+            $artifact->created_at = time();
+            $artifact->save(false);
+        }
+        \Yii::$app->set('artifactService', $this->makeArtifactService());
+
+        return $job;
+    }
+
+    /**
+     * @param callable(): mixed $action
+     */
+    private function assertNotFound(string $message, callable $action): void
+    {
+        try {
+            $action();
+            $this->fail('Expected 404: ' . $message);
+        } catch (NotFoundHttpException $e) {
+            $this->assertSame($message, $e->getMessage());
+        }
     }
 
     private function makeArtifactService(): ArtifactService
@@ -411,6 +465,165 @@ class JobControllerActionTest extends WebControllerTestCase
 
         $this->expectException(NotFoundHttpException::class);
         $ctrl->actionDownloadAllArtifacts((int)$job->id);
+    }
+
+    /**
+     * Regression: "Download All" of a job whose artifact files were gone
+     * answered 500 instead of 404 "No artifacts to download.".
+     */
+    public function testRegressionDownloadAllArtifactsOfAJobWhoseFilesAreGoneAnswers404(): void
+    {
+        $job = $this->jobWithArtifactFiles(['a.txt' => 0o644, 'b.txt' => 0o644]);
+        foreach (JobArtifact::find()->where(['job_id' => $job->id])->all() as $artifact) {
+            unlink($artifact->storage_path);
+        }
+
+        $this->assertNotFound(ArtifactService::NOTHING_TO_DOWNLOAD, fn () => $this->makeController()->actionDownloadAllArtifacts((int)$job->id));
+    }
+
+    public function testDownloadArtifactWhoseFileIsGoneAnswers404(): void
+    {
+        $job = $this->jobWithArtifactFiles(['a.txt' => 0o644]);
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+        unlink($artifact->storage_path);
+
+        $this->assertNotFound(ArtifactService::FILE_GONE, fn () => $this->makeController()->actionDownloadArtifact((int)$job->id, (int)$artifact->id));
+    }
+
+    /**
+     * Regression: a download of an artifact whose file the web server may
+     * not read answered 500: sendFile()'s fopen() warned.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionDownloadArtifactWhoseFileCannotBeReadAnswers404(): void
+    {
+        $job = $this->jobWithArtifactFiles(['locked.txt' => 0o000]);
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+
+        $this->assertNotFound(ArtifactService::FILE_UNREADABLE, fn () => self::unprivileged(
+            fn () => $this->makeController()->actionDownloadArtifact((int)$job->id, (int)$artifact->id)
+        ));
+    }
+
+    /**
+     * Review finding: with a directory above the job directory closed to the
+     * web server, as runtime/artifacts after a restore by root, the download
+     * answered that the file no longer exists. It cannot be read.
+     *
+     * @requires extension posix
+     */
+    public function testADownloadBelowAStorageDirectoryTheWebServerMayNotEnterCannotBeRead(): void
+    {
+        $job = $this->jobWithArtifactFiles(['report.txt' => 0o644]);
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+        chmod($this->tempDir . '/storage', 0o700);
+
+        $this->assertNotFound(ArtifactService::FILE_UNREADABLE, fn () => self::unprivileged(
+            fn () => $this->makeController()->actionDownloadArtifact((int)$job->id, (int)$artifact->id)
+        ));
+    }
+
+    /**
+     * Regression: the preview of an artifact whose file the web server may
+     * not read answered 500: fopen() warned.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionArtifactContentWhoseFileCannotBeReadAnswers404(): void
+    {
+        $job = $this->jobWithArtifactFiles(['locked.txt' => 0o000]);
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+
+        $this->assertNotFound(ArtifactService::FILE_UNREADABLE, fn () => self::unprivileged(
+            fn () => $this->makeController()->actionArtifactContent((int)$job->id, (int)$artifact->id)
+        ));
+    }
+
+    /**
+     * Regression: "Download All" answered 500 when one artifact file could
+     * not be read; the archive leaves it out now.
+     *
+     * @requires extension posix
+     */
+    public function testRegressionDownloadAllArtifactsLeavesOutAFileThatCannotBeRead(): void
+    {
+        $job = $this->jobWithArtifactFiles(['locked.txt' => 0o000, 'readable.txt' => 0o644]);
+
+        $response = self::unprivileged(fn () => $this->makeController()->actionDownloadAllArtifacts((int)$job->id));
+
+        $this->assertInstanceOf(Response::class, $response);
+        $this->assertSame('attachment; filename="job-' . $job->id . '-artifacts.zip"', $response->headers->get('Content-Disposition'));
+        $this->assertSame(['readable.txt' => 'content of readable.txt'], self::zipEntries($response));
+    }
+
+    /**
+     * Review finding: the download checked the file and then opened it again
+     * by its name (sendFile()), which failed with a server error when the
+     * artifact cleanup removed it in between. The service here removes the
+     * file right after it opened it: the download still sends it, as it
+     * sends the stream it opened.
+     */
+    public function testRegressionAFileRemovedAfterItsCheckIsStillSent(): void
+    {
+        $job = $this->jobWithArtifactFiles(['report.txt' => 0o644]);
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+        $service = new class () extends ArtifactService {
+            public function openFile(JobArtifact $artifact): mixed
+            {
+                $file = parent::openFile($artifact);
+                unlink($artifact->storage_path);
+
+                return $file;
+            }
+        };
+        $service->storagePath = $this->tempDir . '/storage';
+        \Yii::$app->set('artifactService', $service);
+
+        $response = $this->makeController()->actionDownloadArtifact((int)$job->id, (int)$artifact->id);
+
+        $this->assertFileDoesNotExist($artifact->storage_path);
+        $this->assertIsArray($response->stream);
+        // [handle, first byte, last byte]: Response::send() starts at the first byte.
+        $this->assertSame('content of report.txt', stream_get_contents($response->stream[0], -1, $response->stream[1]));
+        $this->assertSame('attachment; filename="report.txt"', $response->headers->get('Content-Disposition'));
+    }
+
+    /**
+     * Review finding: the preview of a text artifact that is not UTF-8
+     * answered 500, as its JSON could not be encoded.
+     */
+    public function testRegressionArtifactContentOfALatin1FileIsValidUtf8(): void
+    {
+        $job = $this->jobWithArtifactFiles(['latin1.txt' => 0o644]);
+        $artifact = JobArtifact::findOne(['job_id' => $job->id]);
+        file_put_contents($artifact->storage_path, "r\xE9sum\xE9");
+
+        $response = $this->makeController()->actionArtifactContent((int)$job->id, (int)$artifact->id);
+
+        $this->assertIsArray($response->data);
+        $this->assertSame('r?sum?', $response->data['content']);
+        $this->assertNotFalse(json_encode($response->data));
+    }
+
+    /**
+     * The entries of the zip file a response sends, with their contents.
+     *
+     * @return array<string, string>
+     */
+    private static function zipEntries(Response $response): array
+    {
+        self::assertIsArray($response->stream);
+        $zip = new \ZipArchive();
+        self::assertTrue($zip->open((string)stream_get_meta_data($response->stream[0])['uri']));
+        $entries = [];
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $name = (string)$zip->getNameIndex($i);
+            $entries[$name] = (string)$zip->getFromName($name);
+        }
+        $zip->close();
+
+        return $entries;
     }
 
     // ─── PDF inline with sandbox CSP ───────────────────────────────────
