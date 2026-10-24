@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\GitSyncDiagnostics;
+use app\components\ProcessStarter;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 
@@ -86,7 +87,8 @@ class ProjectSyncProcessRunner
      * @param string[]              $cmd The command, the repository URL with its credentials included.
      * @param array<string, string> $env
      * @return array{0: string, 1: string, 2: int} stdout and stderr without the credentials of URLs, the exit code.
-     * @throws \RuntimeException on proc_open failure or timeout.
+     * @throws \RuntimeException on timeout, and with ProcessStarter::NOT_STARTED when git did not start, which
+     *         is also the last row of the sync output.
      */
     public function run(
         Project $project,
@@ -100,9 +102,10 @@ class ProjectSyncProcessRunner
             2 => ['pipe', 'w'],
         ];
 
-        $process = proc_open($cmd, $descriptors, $pipes, null, $env ?: null);
-        if (!is_resource($process)) {
-            throw new \RuntimeException('proc_open failed for git command.');
+        $process = ProcessStarter::open($cmd, $descriptors, $pipes, null, $env ?: null, $failure);
+        if ($process === null) {
+            $this->appendSystem($project, $failure . "\n");
+            throw new \RuntimeException((string)$failure);
         }
 
         // Stdin not used; close immediately so the child never blocks waiting

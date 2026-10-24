@@ -126,7 +126,7 @@ class ScrutinizerConfigTest extends TestCase
         $build = $this->config()['build'];
 
         $this->assertArrayNotHasKey('services', $build);
-        $this->assertSame(['php' => ['version' => '8.2']], $build['environment'], 'no PECL extensions, databases or Redis');
+        $this->assertSame(['php' => ['version' => '8.3.3']], $build['environment'], 'no PECL extensions, databases or Redis');
         $commands = self::commands($build['dependencies']['override']);
         foreach ($build['nodes'] as $name => $node) {
             $this->assertSame(['override'], array_keys($node['tests']), "{$name}: no setup steps before or after the checks");

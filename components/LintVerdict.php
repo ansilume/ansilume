@@ -25,9 +25,13 @@ final class LintVerdict
         . 'The playbook still runs normally on a runner with its vault credential. '
         . 'Other findings, if any, are in the output below.';
 
+    /**
+     * A negative exit code is LintService's -1 for a lint that did not run
+     * (LintService::NOT_RUN), such as an ansible-lint that did not start.
+     */
     public static function of(?int $exitCode, ?string $output): string
     {
-        if ($exitCode === null) {
+        if ($exitCode === null || $exitCode < 0) {
             return self::NOT_RUN;
         }
         if ($exitCode === 0) {

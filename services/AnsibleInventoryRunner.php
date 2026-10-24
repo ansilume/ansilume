@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ProcessStarter;
 use app\components\SubprocessEnvironment;
 use app\components\VaultIsolation;
 use yii\base\Component;
@@ -100,9 +101,9 @@ class AnsibleInventoryRunner extends Component
      */
     private function runProcess(array $cmd, ?string $cwd, #[\SensitiveParameter] array $env): array
     {
-        $process = $this->openProcess($cmd, $pipes, $cwd, $env);
+        $process = $this->openProcess($cmd, $pipes, $cwd, $env, $failure);
         if ($process === null) {
-            return self::result('', '', null, 'Failed to start ansible-inventory process.');
+            return self::result('', '', null, (string)$failure);
         }
 
         [$stdout, $stderr, $timedOut] = $this->readProcessOutput($pipes, $process);
@@ -138,23 +139,29 @@ class AnsibleInventoryRunner extends Component
 
     /**
      * Open a subprocess and return the process resource + pipes.
-     * Returns null if proc_open fails.
+     * Returns null if the process did not start, and why in $failure
+     * (ProcessStarter::NOT_STARTED, NOT_STARTED_IN).
      *
      * @param string[] $cmd
      * @param resource[]|null $pipes
      * @param array<string, string>|null $env defaults to buildProcessEnv()
      * @return resource|null
      */
-    protected function openProcess(array $cmd, ?array &$pipes, ?string $cwd = null, #[\SensitiveParameter] ?array $env = null)
-    {
+    protected function openProcess(
+        array $cmd,
+        ?array &$pipes,
+        ?string $cwd = null,
+        #[\SensitiveParameter] ?array $env = null,
+        ?string &$failure = null
+    ) {
         $descriptors = [
             0 => ['pipe', 'r'],
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
 
-        $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env ?? $this->buildProcessEnv());
-        if (!is_resource($process)) {
+        $process = ProcessStarter::open($cmd, $descriptors, $pipes, $cwd, $env ?? $this->buildProcessEnv(), $failure);
+        if ($process === null) {
             return null;
         }
 

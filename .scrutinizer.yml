@@ -13,7 +13,9 @@
 build:
   environment:
     php:
-      version: "8.2"
+      # A release of the line composer.json requires, not the line itself:
+      # see docs/ci.md.
+      version: "8.3.3"
   dependencies:
     override:
       - composer self-update --2

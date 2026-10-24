@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace app\tests\unit\components;
 
 use app\components\GitSyncDiagnostics;
+use app\components\ProcessStarter;
 use app\components\RunnerProjectSync;
 use app\helpers\FileHelper;
 use app\tests\unit\GitRemoteFixture;
+use app\tests\unit\ProcessStartFailure;
 use app\tests\unit\TemporaryEnvironment;
 use PHPUnit\Framework\TestCase;
 
@@ -283,6 +285,49 @@ class RunnerProjectSyncTest extends TestCase
         $this->assertSame('present', $state, 'the key existed while git ran');
         $this->assertStringContainsString('/ansilume_ssh_', $keyFile);
         $this->assertFileDoesNotExist($keyFile, 'the key is removed after the sync');
+    }
+
+    /**
+     * Regression (PHP 8.3): a git that is not on the runner's PATH made
+     * proc_open() warn (posix_spawn), the warning threw, and the runner died
+     * with the job it had claimed, which stayed running. The job fails with
+     * the reason and the diagnostics, which find no git either.
+     */
+    public function testAGitThatCannotStartFailsTheJobWithTheReason(): void
+    {
+        $path = ProcessStartFailure::emptyPath();
+        try {
+            $error = $this->sync(['scm_type' => 'git', 'scm_url' => self::OLD_URL, 'project_path' => $this->dir . '/checkout']);
+        } finally {
+            $path->restore();
+        }
+
+        $this->assertIsString($error);
+        $this->assertStringStartsWith(
+            sprintf(RunnerProjectSync::GIT_NOT_STARTED, sprintf(ProcessStarter::NOT_STARTED, 'git', ProcessStartFailure::NO_SUCH_FILE)) . "\n",
+            $error
+        );
+        $this->assertStringContainsString("git: unavailable\n", $error);
+        $this->assertStringNotContainsString(self::OLD_TOKEN, $error . $this->controller->capturedStdout . $this->controller->capturedStderr);
+    }
+
+    /**
+     * Review finding: a NUL byte in a project's branch made proc_open()
+     * throw a ValueError on every PHP version, and the runner died on every
+     * job of the project. The job fails with the reason, which names the
+     * element of git's command, never its value or the URL.
+     */
+    public function testABranchWithANulByteFailsTheJobWithTheReason(): void
+    {
+        $error = $this->sync(['scm_type' => 'git', 'scm_url' => self::OLD_URL, 'scm_branch' => "main\0x", 'project_path' => $this->dir . '/checkout']);
+
+        $this->assertIsString($error);
+        $this->assertStringStartsWith(
+            sprintf(RunnerProjectSync::GIT_NOT_STARTED, sprintf(ProcessStarter::NOT_STARTED, 'git', 'Command array element 6 contains a null byte')) . "\n",
+            $error
+        );
+        $this->assertStringNotContainsString(self::OLD_TOKEN, $error . $this->controller->capturedStdout . $this->controller->capturedStderr);
+        $this->assertDirectoryDoesNotExist($this->dir . '/checkout');
     }
 
     // -- Helpers ------------------------------------------------------------------

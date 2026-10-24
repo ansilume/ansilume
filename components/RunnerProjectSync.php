@@ -22,6 +22,12 @@ final class RunnerProjectSync
     /** Written to the runner's output once the git commands of a sync succeeded; sprintf(): the seconds they took. */
     public const SYNC_COMPLETED = 'Git sync completed in %ss';
 
+    /**
+     * The job's error when a git command did not start, followed by the
+     * diagnostics; sprintf(): why (ProcessStarter::NOT_STARTED).
+     */
+    public const GIT_NOT_STARTED = 'Git sync failed: %s';
+
     public function __construct(
         private readonly Controller $controller,
         private readonly GitEnvBuilder $gitEnv = new GitEnvBuilder(),
@@ -143,10 +149,10 @@ final class RunnerProjectSync
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 
         $startTime = microtime(true);
-        $proc = proc_open($cmd, $descriptors, $pipes, null, $env);
-        if ($proc === false) {
+        $proc = ProcessStarter::open($cmd, $descriptors, $pipes, null, $env, $failure);
+        if ($proc === null) {
             $diag = $this->diagnostics->collect($projectPath, $isClone);
-            return "Failed to start git process.\n" . $diag;
+            return sprintf(self::GIT_NOT_STARTED, $failure) . "\n" . $diag;
         }
 
         fclose($pipes[0]);

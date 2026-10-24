@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\components\ProcessStarter;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\services\ProjectSyncProcessRunner;
 use app\tests\integration\DbTestCase;
+use app\tests\unit\ProcessStartFailure;
 
 /**
  * Integration tests for the runner that drives git subprocesses with a hard
@@ -406,6 +408,34 @@ class ProjectSyncProcessRunnerTest extends DbTestCase
         return static function () use ($soft, $hardLimit): void {
             posix_setrlimit(POSIX_RLIMIT_NOFILE, (int)$soft, $hardLimit);
         };
+    }
+
+    /**
+     * Regression (PHP 8.3): proc_open() reports a git it cannot start with
+     * a warning (posix_spawn), which threw a yii\base\ErrorException
+     * instead of the documented RuntimeException: the project's error was
+     * PHP's warning, and the sync output ended with the command. Both name
+     * the program that did not start now, without the URL.
+     */
+    public function testAGitThatCannotStartIsARuntimeExceptionAndTheLastRow(): void
+    {
+        $project = $this->makeProject();
+        $reason = sprintf(ProcessStarter::NOT_STARTED, 'ansilume-no-such-git-4711', ProcessStartFailure::NO_SUCH_FILE);
+
+        $thrown = null;
+        try {
+            (new ProjectSyncProcessRunner())->run($project, ['ansilume-no-such-git-4711', 'clone', '--', self::URL], [], 5);
+        } catch (\RuntimeException $e) {
+            $thrown = $e;
+        }
+
+        $this->assertInstanceOf(\RuntimeException::class, $thrown);
+        $this->assertSame($reason, $thrown->getMessage());
+        $rows = ProjectSyncLog::find()->where(['project_id' => $project->id])->orderBy(['sequence' => SORT_ASC])->all();
+        $this->assertSame(
+            [[ProjectSyncLog::STREAM_SYSTEM, $reason . "\n"]],
+            array_map(static fn (ProjectSyncLog $row): array => [$row->stream, $row->content], $rows)
+        );
     }
 
     private function makeProject(): Project

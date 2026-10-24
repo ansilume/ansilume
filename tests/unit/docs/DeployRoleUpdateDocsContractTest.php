@@ -29,12 +29,17 @@ class DeployRoleUpdateDocsContractTest extends TestCase
 
     private const UPDATING = 'docs/updating.md';
 
-    public function testTheSectionIsTheNewest(): void
+    /**
+     * The section follows the newest one, of the update to PHP 8.3, and the
+     * section of 2.12.0 follows it.
+     */
+    public function testTheSectionFollowsTheNewest(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read(self::UPDATING), $headings);
 
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.12.0 follows.');
+        $this->assertSame(PhpUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][1] ?? null, 'This section follows.');
+        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The section of 2.12.0 follows.');
         $this->assertSame(self::SECTION_ANCHOR, self::anchor(self::UPDATE_SECTION), 'The anchor GitHub gives the heading.');
         $this->assertMentions('(#' . self::SECTION_ANCHOR . ')', $this->section(self::UPDATING, '## Manual update — source (git)'), 'the manual source update');
     }

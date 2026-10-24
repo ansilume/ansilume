@@ -117,6 +117,8 @@ class SensitiveParametersTest extends TestCase
         'app\components\PlaybookEnvironment::droppedNames($parentEnv)',
         'app\components\PlaybookEnvironment::extraNames($parentEnv)',
         'app\components\PlaybookEnvironment::startupNotices($parentEnv)',
+        'app\components\ProcessStarter::open($command)',
+        'app\components\ProcessStarter::open($env)',
         'app\components\RedactingRedisConnection::isAuth($params)',
         'app\components\RedactingRedisConnection::redact($message)',
         'app\components\RedactingRedisConnection::sendIgnoringErrors($command)',
@@ -324,6 +326,7 @@ class SensitiveParametersTest extends TestCase
         'app\services\LaunchContext::forSchedule($secrets)',
         'app\services\LaunchContext::forWorkflow($secrets)',
         'app\services\LaunchContext::keysOf($secrets)',
+        'app\services\LintService::runProcess($env)',
         'app\services\ProjectService::applyHttpsCredentialEnv($env)',
         'app\services\ProjectService::buildCredentialHelperScript($secret)',
         'app\services\ProjectService::cloneOrPull($env)',
@@ -417,6 +420,9 @@ class SensitiveParametersTest extends TestCase
         'app\components\RunnerTokenResolver' => ['bootstrapSecret', 'token', 'response'],
         'app\components\PlaybookEnvironment' => ['parentEnv'],
         'app\components\SubprocessEnvironment' => ['parentEnv', 'env'],
+        // Every proc_open() call of the application: a git command holds the repository URL with the credentials of its
+        // userinfo, and the environment holds the SCM credential, the vault isolation and the job's credentials.
+        'app\components\ProcessStarter' => ['command', 'env'],
         // Decrypted credentials on their way to Ansible and git, and the files and environment made from them.
         'app\components\CredentialInjector' => ['credentialData', 'credentials', 'data', 'content'],
         'app\components\CredentialInjectionResult' => ['env'],
@@ -485,6 +491,8 @@ class SensitiveParametersTest extends TestCase
         // with its variables), the result and the error made of it, and the values the vault masker walks.
         'app\services\InventoryService' => ['json', 'data', 'groups', 'result', 'error'],
         'app\services\AnsibleInventoryRunner' => ['stdout', 'stderr', 'error', 'env'],
+        // Lint: the environment of ansible-lint, with the proxy URLs (credentials in their userinfo) and ANSIBLE_* settings of the host.
+        'app\services\LintService' => ['env'],
         'app\components\VaultValueMasker' => ['value'],
         'app\components\VaultIsolation' => ['output'],
         // Trigger tokens, and the other secrets whose cipher the release shares.

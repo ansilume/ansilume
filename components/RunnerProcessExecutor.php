@@ -25,6 +25,14 @@ class RunnerProcessExecutor
 {
     private const LOG_CHUNK_BYTES = 8192;
 
+    /**
+     * The job log line, and the runner's output, when the command did not
+     * start; sprintf(): why (ProcessStarter::NOT_STARTED, NOT_STARTED_IN).
+     * run() then returns the exit code -1, with which the runner completes
+     * the job.
+     */
+    public const NOT_STARTED = "[ansilume] The job did not run: %s\n";
+
     private RunnerHttpClient $http;
     private Controller $controller;
     private OutputMasker $masker;
@@ -92,15 +100,17 @@ class RunnerProcessExecutor
 
         $projectCwd = isset($payload['project_path']) ? (string)$payload['project_path'] : '';
         $cwd = ($projectCwd !== '' && is_dir($projectCwd)) ? $projectCwd : null;
-        $process = proc_open($cmd, $descriptorspec, $pipes, $cwd, $env);
+        $process = ProcessStarter::open($cmd, $descriptorspec, $pipes, $cwd, $env, $failure);
 
-        if (!is_resource($process)) {
+        if ($process === null) {
+            // The runner completes the job with run()'s exit code, once.
+            $reason = sprintf(self::NOT_STARTED, $failure);
+            $this->controller->stderr($reason);
             $this->http->post("/api/runner/v1/jobs/{$jobId}/logs", [
                 'stream' => 'stderr',
-                'content' => "proc_open failed — cannot execute ansible-playbook\n",
+                'content' => $reason,
                 'sequence' => 0,
             ]);
-            $this->http->post("/api/runner/v1/jobs/{$jobId}/complete", ['exit_code' => -1]);
             return null;
         }
 

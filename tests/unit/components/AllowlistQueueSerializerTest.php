@@ -114,6 +114,22 @@ class AllowlistQueueSerializerTest extends TestCase
         (new AllowlistQueueSerializer())->unserialize('not-serialized');
     }
 
+    /**
+     * Since PHP 8.3, unserialize() warns about bytes after the serialized
+     * job, so such a message is malformed and dropped; PHP 8.2 ran the job.
+     * The queue never writes one: it stores serialize()'s output.
+     */
+    public function testBytesAfterTheJobMakeTheMessageMalformed(): void
+    {
+        $payload = (new AllowlistQueueSerializer())->serialize(new SyncProjectJob(['projectId' => 42])) . 'x';
+
+        [$job, $error] = $this->queueWith(new AllowlistQueueSerializer())->unserializeMessage($payload);
+
+        $this->assertNull($job);
+        $this->assertInstanceOf(InvalidJobException::class, $error);
+        $this->assertStringStartsWith('Malformed queue message: ', $error->getMessage());
+    }
+
     public function testNonStringPayloadIsRejected(): void
     {
         $this->expectException(\UnexpectedValueException::class);

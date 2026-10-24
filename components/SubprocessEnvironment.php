@@ -68,7 +68,11 @@ final class SubprocessEnvironment
         'LDAP_BIND_PASSWORD',
     ];
 
-    /** Used when the parent process has no PATH at all. */
+    /**
+     * Used when the parent process has no PATH at all. It is the PATH of what
+     * the subprocess starts; PHP finds the subprocess's own program in the
+     * PATH of the PHP process (ProcessStarter).
+     */
     public const DEFAULT_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
 
     /**

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services;
 
+use app\components\ProcessStarter;
 use app\services\AnsibleInventoryRunner;
+use app\tests\unit\ProcessStartFailure;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -122,6 +124,41 @@ class AnsibleInventoryRunnerTest extends TestCase
         $this->assertSame('http://proxy:3128', $env['HTTPS_PROXY']);
         $this->assertSame('yaml,ini', $env['ANSIBLE_INVENTORY_ENABLED']);
         $this->assertSame('C.UTF-8', $env['LANG'], 'the pinned locale wins over the parent value');
+    }
+
+    /**
+     * Regression (PHP 8.3): proc_open() reports an ansible-inventory that is
+     * not on the PATH with a warning (posix_spawn), which threw: Parse
+     * Inventory answered 500 instead of naming the error.
+     */
+    public function testAnAnsibleInventoryThatCannotStartIsTheError(): void
+    {
+        $path = ProcessStartFailure::emptyPath();
+        try {
+            $result = (new AnsibleInventoryRunner())->run('/nonexistent/inventory/hosts.yml');
+        } finally {
+            $path->restore();
+        }
+
+        $this->assertSame(
+            ['stdout' => '', 'stderr' => '', 'exit_code' => null, 'error' => sprintf(ProcessStarter::NOT_STARTED, 'ansible-inventory', ProcessStartFailure::NO_SUCH_FILE)],
+            $result
+        );
+    }
+
+    /**
+     * Regression (PHP 8.3): the same for a project directory that is gone by
+     * the time ansible-inventory starts. PHP 8.2 ran it in PHP's own working
+     * directory and read a relative inventory path from there; the error
+     * names the directory now.
+     */
+    public function testAProjectDirectoryThatIsGoneIsNamedInTheError(): void
+    {
+        $cwd = '/nonexistent/ansilume-project-4711';
+
+        $result = (new AnsibleInventoryRunner())->run('hosts.yml', $cwd);
+
+        $this->assertSame(sprintf(ProcessStarter::NOT_STARTED_IN, 'ansible-inventory', $cwd, ProcessStartFailure::NO_SUCH_FILE), $result['error']);
     }
 }
 

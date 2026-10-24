@@ -11,7 +11,7 @@ source "$(dirname "$0")/tests-common.sh"
 # Worker/schedule-runner privilege drop (regression: prebuilt lint EACCES)
 #
 # queue-worker and schedule-runner containers run `php yii …` commands. Left
-# at the php:8.2-fpm image default USER they exec as root — and everything
+# at the default USER of the php-fpm base image they exec as root — and everything
 # they write to the shared runtime volume becomes root-owned. The www-data
 # pool workers in the app container then can't mkdir inside those trees, so
 # clicking "Run Lint" on a freshly synced SCM project fails with
@@ -23,7 +23,7 @@ source "$(dirname "$0")/tests-common.sh"
 section "Container user (worker runs as www-data)"
 
 if [[ $DOCKER_AVAILABLE -eq 1 ]]; then
-    # The php:8.2-fpm base image ships without procps, so `ps` is unavailable.
+    # The php-fpm base image ships without procps, so `ps` is unavailable.
     # Read PID 1's effective UID from /proc/1/status and compare it to
     # www-data's UID inside the container. The dev Dockerfile remaps
     # www-data's UID to the host UID (USER_ID build arg), so comparing by

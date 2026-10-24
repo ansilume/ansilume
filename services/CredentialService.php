@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\CredentialSecretPolicy;
+use app\components\ProcessStarter;
 use app\components\SecretCipher;
 use app\components\SecretCipherException;
 use app\models\Credential;
@@ -196,14 +197,14 @@ class CredentialService extends Component
      *
      * @param string[] $cmd
      * @param string[] $output
-     * @throws \RuntimeException on non-zero exit.
+     * @throws \RuntimeException on non-zero exit, and with ProcessStarter::NOT_STARTED when it did not start.
      */
     private function runCommand(array $cmd, array &$output = []): void
     {
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $process = proc_open($cmd, $descriptors, $pipes);
-        if (!is_resource($process)) {
-            throw new \RuntimeException('proc_open failed for: ' . implode(' ', $cmd));
+        $process = ProcessStarter::open($cmd, $descriptors, $pipes, null, null, $failure);
+        if ($process === null) {
+            throw new \RuntimeException((string)$failure);
         }
         fclose($pipes[0]);
         $stdout = stream_get_contents($pipes[1]);

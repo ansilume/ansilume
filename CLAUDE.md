@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Ansilume is a self-hostable automation platform built with **PHP 8.2+** and **Yii2**. It manages inventories, credentials, projects, and job templates, and runs **Ansible playbooks** through a web UI with RBAC, execution history, logging, and auditability. Comparable to AWX, Semaphore, or Rundeck.
+Ansilume is a self-hostable automation platform built with **PHP 8.3+** and **Yii2**. It manages inventories, credentials, projects, and job templates, and runs **Ansible playbooks** through a web UI with RBAC, execution history, logging, and auditability. Comparable to AWX, Semaphore, or Rundeck.
 
 This file tells Claude how to work inside this repository.
 
@@ -38,7 +38,7 @@ Focus is now on **hardening, operational polish, and extending** the existing pl
 
 ## Primary Technology Stack
 
-- **PHP 8.2+** with strict typing
+- **PHP 8.3+** with strict typing
 - **Yii2** framework
 - **MySQL / MariaDB**
 - **Redis** for queue and cache
@@ -186,6 +186,7 @@ All code must pass Scrutinizer-CI without issues. Proactively avoid common findi
 
 ### PHP
 - Use strict typing (`declare(strict_types=1)`) in every PHP file.
+- In application code, start a process with `app\components\ProcessStarter::open()`, never with `proc_open()` (test helpers may): where PHP 8.3 uses posix_spawn (glibc 2.29 or newer, as in the images), a program that cannot start, or a working directory that cannot be entered, makes `proc_open()` warn, and the error handlers turn the warning into an exception before any `!is_resource()` check runs; a NUL byte in a command element throws a `ValueError` on every version (`ProcessStarterTest`).
 - Add type hints for method arguments and return values.
 - Avoid static god-classes.
 - Prefer constructor injection or explicit dependency wiring over hidden globals.
@@ -627,7 +628,7 @@ composer install               # Install PHP dependencies
 
 ### Next
 
-1. **PHP 8.5, before 2026-12-31** — PHP 8.2 gets security fixes only until then; 8.5 until 2029-12-31. The assessment of 2026-10-22 found no blocking package (Yii2 2.0.55 supports 8.5) and these changes, one minor release: `fputcsv()` with `$escape` (8.4), yii2-redis 2.1.2 (its `SocketException` breaks on 8.4), `proc_open()` warns instead of failing quietly since 8.3 (8 call sites), no `curl_close()` and no `setAccessible()` in tests (8.5), PHPMD 3, a current composer image instead of `composer:2.6`, the Scrutinizer PHP version, then the `FROM` lines and the composer floor
+1. **PHP 8.5, before 2027-12-31** — Ansilume runs PHP 8.3, which gets security fixes until 2027-12-31; 8.5 until 2029-12-31. The assessment of 2026-10-22 found no blocking package (Yii2 2.0.55 supports 8.5). Done with the move to 8.3: every `proc_open()` call goes through `ProcessStarter`, as `proc_open()` warns instead of failing quietly since 8.3. Left, one minor release: `fputcsv()` with `$escape` (8.4), yii2-redis 2.1.2 (its `SocketException` breaks on 8.4), no `curl_close()` and no `setAccessible()` in tests (8.5), PHPMD 3, a current composer image instead of `composer:2.6`, the Scrutinizer PHP version, then the `FROM` lines and the composer floor, which `PhpBaseImageTest` keeps in step with the lock, the PHP of the composer stages and Scrutinizer's version
 2. **HA / scaling** — multi-worker, runner failover, queue reliability
 3. **Advanced features** — artifact management
 4. **Project and credential locks** — project settings (repository URL, branch, SCM credential, local path, vault source) and the credentials of gated work changed only by admins, and credentials scoped to teams (plan step 11), so that whoever changes them no longer approves the jobs they affect and a project's sync no longer presents a credential its user may not use; until then documented limits (security rule 12, `docs/updating.md` "What an approval rule does not stop" of 2.12.0)

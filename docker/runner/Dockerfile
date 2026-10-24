@@ -18,7 +18,7 @@ COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --no-scripts --optimize-autoloader --prefer-dist
 
 # -- Stage 2: Runtime ---------------------------------------------------------
-FROM php:8.2-cli
+FROM php:8.3-cli
 
 # ansible-lint lives in its own virtualenv. Installing it into the system
 # interpreter (pip --break-system-packages) collides with the Debian-managed

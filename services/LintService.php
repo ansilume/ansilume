@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ProcessStarter;
 use app\components\SubprocessEnvironment;
 use app\components\VaultIsolation;
 use app\models\JobTemplate;
@@ -19,6 +20,13 @@ use yii\base\Component;
  */
 class LintService extends Component
 {
+    /**
+     * The stored output, with the exit code -1, when ansible-lint did not
+     * run; sprintf(): why, such as ProcessStarter::NOT_STARTED_IN when
+     * ansible-lint did not start.
+     */
+    public const NOT_RUN = 'Lint did not run: %s';
+
     /**
      * Run ansible-lint on an entire project directory (no specific playbook —
      * ansible-lint auto-discovers all playbooks, roles, tasks, and collections).
@@ -131,7 +139,7 @@ class LintService extends Component
             $env = $this->buildProcessEnv($cwd, $vault->overrides());
             return $this->runProcess($cmd, $cwd, $env);
         } catch (\RuntimeException $e) {
-            return ['Lint did not run: ' . $e->getMessage(), -1];
+            return [sprintf(self::NOT_RUN, $e->getMessage()), -1];
         } finally {
             $vault->cleanup();
         }
@@ -147,7 +155,7 @@ class LintService extends Component
      * @param array<string, string> $env
      * @return array{0: string, 1: int}  [combined output, exit code]
      */
-    private function runProcess(array $cmd, string $cwd, array $env): array
+    private function runProcess(array $cmd, string $cwd, #[\SensitiveParameter] array $env): array
     {
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -155,10 +163,10 @@ class LintService extends Component
             2 => ['pipe', 'w'],
         ];
 
-        $process = proc_open($cmd, $descriptors, $pipes, $cwd, $env);
+        $process = ProcessStarter::open($cmd, $descriptors, $pipes, $cwd, $env, $failure);
 
-        if (!is_resource($process)) {
-            return ['Failed to start ansible-lint process.', -1];
+        if ($process === null) {
+            return [sprintf(self::NOT_RUN, $failure), -1];
         }
 
         fclose($pipes[0]);

@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\components\ProcessStarter;
+use app\helpers\FileHelper;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\services\ProjectService;
 use app\tests\integration\DbTestCase;
+use app\tests\unit\ProcessStartFailure;
 
 /**
  * Integration tests for ProjectService::sync() with manual projects,
@@ -81,6 +84,38 @@ class ProjectServiceIntegrationTest extends DbTestCase
 
         $this->expectException(\RuntimeException::class);
         $this->service->sync($project);
+    }
+
+    /**
+     * Regression (PHP 8.3): git that is not on the queue worker's PATH
+     * failed the sync with PHP's warning as the project's error and in the
+     * project.sync_failed notification: "proc_open(): posix_spawn() failed:
+     * No such file or directory". The error names git now.
+     */
+    public function testASyncWhoseGitCannotStartFailsWithTheReason(): void
+    {
+        $user = $this->createUser();
+        $project = $this->createProject($user->id);
+        $project->scm_type = Project::SCM_TYPE_GIT;
+        $project->scm_url = 'https://git.example.invalid/org/repo.git';
+        $project->save(false);
+        $workspace = sys_get_temp_dir() . '/ansilume_sync_not_started_' . uniqid('', true);
+
+        $path = ProcessStartFailure::emptyPath();
+        try {
+            (new ProjectService(['workspacePath' => $workspace]))->sync($project);
+            $failed = false;
+        } catch (\RuntimeException $e) {
+            $failed = true;
+        } finally {
+            $path->restore();
+            FileHelper::removeDirectory($workspace);
+        }
+
+        $this->assertTrue($failed, 'the sync fails');
+        $project->refresh();
+        $this->assertSame(Project::STATUS_ERROR, $project->status);
+        $this->assertSame(sprintf(ProcessStarter::NOT_STARTED, 'git', ProcessStartFailure::NO_SUCH_FILE), $project->last_sync_error);
     }
 
     // ── SCM credential type validation ───────────────────────────────────────

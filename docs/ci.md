@@ -53,6 +53,14 @@ gh api repos/actions/checkout/commits/v6.1.0 --jq .sha
 - Quote every step that contains `: ` (a colon followed by a space).
   Unquoted, YAML reads it as a mapping, and Scrutinizer aborts the whole
   inspection with `Config Error: Unrecognized option`.
+- `build.environment.php.version` is a release of the PHP line that
+  `composer.json` requires, `8.3.3` for `>=8.3`: the build's
+  `composer install` refuses an older PHP. Name a release, not the line:
+  builds of other projects with a plain `8.3` errored on Scrutinizer's
+  build image, while `8.3.3` builds there (for example for
+  thephpleague/oauth2-server).
+  `tests/unit/docker/PhpBaseImageTest.php` checks the version against
+  `composer.json` and the base images.
 
 `tests/unit/config/ScrutinizerConfigTest.php` enforces these rules, so PHPUnit
 fails in GitHub Actions before a broken config reaches Scrutinizer. If you
@@ -113,6 +121,8 @@ gh run view <run id> --log-failed
 | `tests=failed` | PSR-12 violation | Run `bin/tests-style.sh` and fix what it reports |
 | `analysis=errored`, `Config Error` | Invalid `.scrutinizer.yml` (for example an unquoted `: `) | `ScrutinizerConfigTest` should have caught it; extend the test |
 | `analysis=errored` in `phpcs-run` | The `analysis` node is missing or was changed | Restore the `analysis` node |
+| `build=failed` in `composer install` with `Root composer.json requires php >=8.3 but your php version (…) does not satisfy that requirement` | `build.environment.php.version` is older than the PHP line `composer.json` requires | Set a release of that line, see the rules above |
+| `build=errored` after a change of `build.environment.php.version` | Scrutinizer's build image has no such PHP, as for a plain `8.3` in other projects | Name a release that builds there, such as `8.3.3` |
 | Fails without any code reason | An outage at Scrutinizer | Retry the inspection in Scrutinizer's UI. Do not add services, tests or wait loops to work around it |
 
 Treat a red Scrutinizer build like a red GitHub Actions run: fix it before

@@ -20,6 +20,10 @@ class LintVerdictTest extends TestCase
             'vault vars_files' => [2, 'internal-error: Decryption failed (no vault secrets were found that could decrypt) on /p/vault.yml', LintVerdict::VAULT_SKIPPED],
             'findings' => [2, 'name[missing]: All tasks should be named.', LintVerdict::ISSUES],
             'failure without output' => [2, null, LintVerdict::ISSUES],
+            // Regression: a lint that did not run was badged "issues found".
+            'did not start' => [-1, 'Lint did not run: ansible-lint could not be started in /srv/p: proc_open(): posix_spawn() failed: Permission denied', LintVerdict::NOT_RUN],
+            'no vault isolation' => [-1, 'Lint did not run: Could not prepare vault isolation', LintVerdict::NOT_RUN],
+            'stored up to 2.12.2' => [-1, 'Failed to start ansible-lint process.', LintVerdict::NOT_RUN],
         ];
     }
 

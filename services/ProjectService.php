@@ -306,7 +306,7 @@ class ProjectService extends Component
 
     /**
      * Writable HOME for the git subprocess. The default www-data home in the
-     * php:8.2-fpm image is `/var/www`, which is root-owned and not writable
+     * php-fpm base image is `/var/www`, which is root-owned and not writable
      * by the worker. Anything that probes `~/.gitconfig`, `~/.config/git`,
      * or — crucially — SSH's `~/.ssh/known_hosts` blows up with
      * "Permission denied". The matching directory is created and chowned in

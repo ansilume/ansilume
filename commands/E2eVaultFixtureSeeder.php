@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\commands;
 
+use app\components\ProcessStarter;
 use app\helpers\FileHelper;
 use app\models\Inventory;
 use app\models\JobTemplate;
@@ -35,15 +36,23 @@ class E2eVaultFixtureSeeder
     /** @var callable(string): void */
     private $logger;
 
-    /** @param callable(string): void $logger */
-    public function __construct(callable $logger)
+    /** Where the fixture project goes. */
+    private string $dir;
+
+    /**
+     * @param callable(string): void $logger
+     * @param string|null $dir where the fixture project goes, by default ansilume-e2e-vault-project in the temp
+     *        directory
+     */
+    public function __construct(callable $logger, ?string $dir = null)
     {
         $this->logger = $logger;
+        $this->dir = $dir ?? sys_get_temp_dir() . '/ansilume-e2e-vault-project';
     }
 
     public function seed(int $userId, int $runnerGroupId): void
     {
-        $dir = sys_get_temp_dir() . '/ansilume-e2e-vault-project';
+        $dir = $this->dir;
         try {
             $this->writeFixtures($dir);
         } catch (\RuntimeException $e) {
@@ -125,15 +134,16 @@ class E2eVaultFixtureSeeder
                 $secretFile,
                 ...array_slice($args, 1),
             ];
-            $process = proc_open(
+            $process = ProcessStarter::open(
                 $command,
                 [1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
                 $pipes,
                 sys_get_temp_dir(),
-                ['PATH' => (string)getenv('PATH'), 'HOME' => sys_get_temp_dir()]
+                ['PATH' => (string)getenv('PATH'), 'HOME' => sys_get_temp_dir()],
+                $failure
             );
-            if (!is_resource($process)) {
-                throw new \RuntimeException('ansible-vault is not available');
+            if ($process === null) {
+                throw new \RuntimeException((string)$failure);
             }
             $out = (string)stream_get_contents($pipes[1]);
             $err = (string)stream_get_contents($pipes[2]);

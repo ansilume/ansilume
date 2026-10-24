@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services;
 
+use app\components\ProcessStarter;
 use app\models\Credential;
 use app\services\CredentialService;
+use app\tests\unit\ProcessStartFailure;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -257,5 +259,40 @@ class CredentialServiceTest extends TestCase
         $credential->secret_data = base64_encode(random_bytes(64));
 
         $this->assertSame(CredentialService::SECRET_STATUS_UNDECRYPTABLE, $this->service->secretStatus($credential));
+    }
+
+    /**
+     * Regression (PHP 8.3): proc_open() reports an ssh-keygen that is not on
+     * the PATH with a warning (posix_spawn), which threw past the catch of
+     * \RuntimeException: an SSH key credential was not saved (500), though
+     * analyzePrivateKey() promises its fallback instead of throwing.
+     */
+    public function testAnalyzePrivateKeyKeepsItsFallbackWhenSshKeygenCannotStart(): void
+    {
+        $path = ProcessStartFailure::emptyPath();
+        try {
+            $info = $this->service->analyzePrivateKey("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n");
+        } finally {
+            $path->restore();
+        }
+
+        $this->assertSame(['public_key' => '', 'algorithm' => 'unknown', 'bits' => 0, 'key_secure' => null], $info);
+    }
+
+    /**
+     * Regression (PHP 8.3): the same for Generate Key, whose controller
+     * answers {"ok": false} for a \RuntimeException and gave a bare 500.
+     */
+    public function testGenerateSshKeyPairThrowsTheRuntimeExceptionItsCallerHandles(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage(sprintf(ProcessStarter::NOT_STARTED, 'ssh-keygen', ProcessStartFailure::NO_SUCH_FILE));
+
+        $path = ProcessStartFailure::emptyPath();
+        try {
+            $this->service->generateSshKeyPair();
+        } finally {
+            $path->restore();
+        }
     }
 }

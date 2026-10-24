@@ -165,16 +165,17 @@ class InventoryApprovalDocsContractTest extends TestCase
     }
 
     /**
-     * The section follows the newest one, of the update after 2.12.1, and
-     * its anchor is the one GitHub gives its heading, which the docs link
-     * to.
+     * The section follows the newest ones, of the update to PHP 8.3 and of
+     * the update after 2.12.1, and its anchor is the one GitHub gives its
+     * heading, which the docs link to.
      */
     public function testTheSectionFollowsTheNewest(): void
     {
         preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][1] ?? null, 'This section follows.');
-        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The section of 2.11.1 follows.');
+        $this->assertSame(PhpUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
+        $this->assertSame(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.12.2 follows.');
+        $this->assertSame(self::UPDATE_SECTION, $headings[0][2] ?? null, 'This section follows.');
+        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][3] ?? null, 'The section of 2.11.1 follows.');
         $this->assertSame(
             self::SECTION_ANCHOR,
             str_replace(' ', '-', (string)preg_replace('/[^a-z0-9 -]/', '', strtolower(substr(self::UPDATE_SECTION, 3)))),

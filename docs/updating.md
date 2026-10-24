@@ -106,12 +106,15 @@ Every build pulls its base image (`pull: true` in `docker-compose.yml`), so
 a base image rebuilt with security fixes, such as `php:8.2-fpm` with PHP
 8.2.35 for 2.12.1, arrives with the update. Up to 2.12.1 it did not, see
 [After updating from 2.12.1 or older](#after-updating-from-2121-or-older-base-images-the-deploy-role-nginx-130).
-The builds need Docker Hub (`php:8.2-fpm`, `composer:2.6`), which limits
+The builds need Docker Hub (`php:8.3-fpm`, `composer:2.6`), which limits
 anonymous pulls: `docker login` lifts the limit. When a build fails after
 `git pull`, the running containers already serve the new code without its
 migrations: fix the cause and run step 3 again, or go back to the previous
-version until a build gets through (`git checkout v2.12.1`, and
-`git checkout main` again before the next update).
+version until a build gets through (`git checkout v2.12.2`, and
+`git checkout main` again before the next update). Updating from 2.12.2
+or older, a container that starts again before the build got through does
+not come up, see
+[After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83).
 
 If `git pull` fails with merge conflicts, you have local modifications. Either stash them (`git stash`) or reset to upstream (`git reset --hard origin/main`).
 
@@ -152,6 +155,118 @@ Run the diagnostics script if anything looks wrong:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 ```
+
+---
+
+## After updating from 2.12.2 or older: PHP 8.3
+
+**The images run PHP 8.3.** The app and runner images, the development
+stack and the deploy role build on `php:8.3-fpm` and `php:8.3-cli`
+instead of `php:8.2-fpm` and `php:8.2-cli`: PHP 8.2 gets no security
+fixes after 2026-12-31, PHP 8.3 until 2027-12-31. `composer.json`
+requires PHP 8.3, so `composer install` refuses PHP 8.2. Nothing in the
+database changes. Check after the update:
+
+```bash
+docker compose exec app php -v    # PHP 8.3
+```
+
+- **Prebuilt images:** the update pulls them; there is nothing else to do.
+  This holds for an installation the quickstart made from source too: it
+  runs `docker-compose.prebuilt.yml`. Do not run the steps of the manual
+  source update there, as they start the development stack of
+  `docker-compose.yml`.
+- **Source installations** started from `docker-compose.yml`: the update
+  builds the images on `php:8.3-fpm` from Docker Hub (see
+  [Manual update — source (git)](#manual-update--source-git)). Until a
+  build gets through, the containers of 2.12.2 serve the new code, but one
+  that starts again does not come up: its `composer install` refuses the
+  new `composer.lock` on PHP 8.2 (`Root composer.json requires php >=8.3
+  but your php version (8.2.35) does not satisfy that requirement`, then
+  `[entrypoint] ERROR: composer install failed`). Run steps 2 and 3 right
+  after `git pull`: step 3 builds every image before it recreates a
+  container. When the build fails, fix the cause and run step 3 again, or
+  go back to 2.12.2 (`git checkout v2.12.2`) before a container restarts.
+- **The deploy role** builds the images right after its checkout, on
+  `php:8.3-fpm` and, for the bundled runners, `php:8.3-cli`. When the
+  build fails, the containers of 2.12.2 serve the new code with the same
+  hazard: fix the cause and run the playbook again, or run it with
+  `ansilume_version: "v2.12.2"` (or the release archive of 2.12.2); a
+  `git checkout` by hand is undone by its next run. With
+  `ansilume_use_prebuilt_images` it builds nothing. The role no longer has
+  `ansilume_php_image`: it never had an effect, as the role builds from
+  the repository's Dockerfiles; remove it from your inventory.
+- **Runners:** runners on the images of 2.12.2 keep working with the new
+  server; pull the new image for PHP's fixes. A runner installed without
+  Docker (see [runners.md](runners.md#running-without-docker)) needs PHP
+  8.3 or newer before you update its code; check its programs first, see
+  below.
+- **Images and overrides of your own:** an image you build `FROM` the
+  Ansilume images needs nothing. One you build from the Dockerfiles on a
+  base of your own, or a `docker-compose.override.yml` that changes the
+  build of the PHP services, needs PHP 8.3 as well.
+
+**A program that does not start.** Where PHP 8.3 starts programs with
+`posix_spawn()`, as it does with glibc 2.29 or newer (the images, and
+current distributions), it reports a program it cannot run, and a working
+directory that is gone or may not be entered, before anything runs. PHP
+8.2 started such a process, which ended with exit code 127 or ran in PHP's
+own working directory. So two setups that worked with PHP 8.2 stop working
+for the programs PHP starts itself: `git`, `ansible-lint`,
+`ansible-inventory`, `ssh-keygen`, and `ansible-playbook` for projects
+whose vault password source is "Ansilume and repository"; for "Ansilume
+only" projects the runner starts `ansible-playbook` through
+`/usr/bin/env`, which still handles both. Check a runner installed without
+Docker, and an image of your own, before the update:
+
+- a wrapper script without a `#!` line: PHP 8.2 ran it through `/bin/sh`,
+  PHP 8.3 refuses it with `Exec format error`;
+- a program that only the `PATH` of the job's environment finds, such as
+  one in a directory that a Token credential named `PATH` adds: PHP 8.3
+  looks programs up in the `PATH` of the runner or server process itself.
+
+Ansilume names the program that did not start, and the working directory
+when that is gone or may not be entered:
+
+- A job on a runner fails with exit code -1, and its log ends with
+  `[ansilume] The job did not run: ansible-playbook could not be started:
+  proc_open(): posix_spawn() failed: No such file or directory`; a git
+  sync fails with `Git sync failed: git could not be started: …` and the
+  diagnostics. For a project whose vault password source is "Ansilume
+  only", the default since 2.8, the runner starts `ansible-playbook`
+  through `/usr/bin/env`, which reports a missing one itself, with exit
+  code 127, as before. The runner goes on with its next job. Runners up to
+  2.12.2 on PHP 8.3 or newer, a runner installed without Docker for one,
+  exited instead when `git` was missing, when the project directory could
+  not be entered, or when `ansible-playbook` was missing for a project
+  whose vault password source is "Ansilume and repository", as for
+  projects created before 2.8; the job stayed running until someone
+  canceled it. See [runners.md](runners.md#common-issues).
+- A sync on the server fails with `git could not be started: …` as the
+  project's error, in its `project.sync_failed` notification and as the
+  last line of its sync output.
+- Lint of a project whose directory the server may list but not enter
+  stores `Lint did not run: ansible-lint could not be started in
+  <directory>: …`, and its badge says "not run". With PHP 8.2
+  ansible-lint checked Ansilume's own files instead, and their findings
+  were stored as the project's. This can happen on any installation, as a
+  manual project's directory is any directory on the server.
+- Parse Inventory shows `ansible-inventory could not be started: …` as the
+  inventory's error when `ansible-inventory` is found but cannot run. A
+  missing one still gives `ansible-inventory is not installed on this
+  server.`, and a missing `ansible-lint` still skips lint.
+- Without `ssh-keygen`, an SSH key credential is saved without its key
+  details, and Generate Ed25519 Key Pair answers `Key generation failed.`;
+  the app log says why.
+
+On a runner installed without Docker on an older glibc, such as 2.28 (EL8,
+Debian 10), PHP 8.3 still starts programs as PHP 8.2 did, and the messages
+above do not appear: a missing `ansible-playbook` of an "Ansilume and
+repository" project, for one, ends the job with exit code 127 and an empty
+log.
+
+Going back to 2.12.2 changes nothing in the database: pin its images, or
+run `git checkout v2.12.2` and step 3, see [Rollback](#rollback).
 
 ---
 

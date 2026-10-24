@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\docker;
 
+use app\components\ProcessStarter;
 use PHPUnit\Framework\TestCase;
 use Symfony\Component\Yaml\Yaml;
 
@@ -279,8 +280,10 @@ class ExceptionIgnoreArgsTest extends TestCase
      */
     private function python(array $args): array
     {
-        $process = proc_open(['python3', ...$args], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        if (!is_resource($process)) {
+        // Since PHP 8.3 a python3 that is missing warns (posix_spawn), and the
+        // tests' error handler would throw instead of the skip.
+        $process = ProcessStarter::open(['python3', ...$args], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if ($process === null) {
             return ['rc' => 127, 'out' => '', 'err' => 'python3 not available'];
         }
         $out = (string)stream_get_contents($pipes[1]);

@@ -190,7 +190,8 @@ final class GitSyncDiagnostics
      * Run a short diagnostic command and return trimmed stdout. Uses
      * proc_open (not shell_exec) to comply with the security check that
      * forbids shell_exec / exec outside services/. Returns empty string
-     * on any failure — diagnostics must never throw.
+     * on any failure, a git that does not start included (ProcessStarter) —
+     * diagnostics must never throw.
      *
      * @param array<int, string> $cmd
      */
@@ -199,8 +200,8 @@ final class GitSyncDiagnostics
         $sshKeyFile = null;
         $env = $this->gitEnv->build('', null, $sshKeyFile);
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $proc = proc_open($cmd, $descriptors, $pipes, null, $env);
-        if (!is_resource($proc)) {
+        $proc = ProcessStarter::open($cmd, $descriptors, $pipes, null, $env);
+        if ($proc === null) {
             return '';
         }
         fclose($pipes[0]);

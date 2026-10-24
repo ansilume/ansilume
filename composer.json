@@ -4,7 +4,7 @@
     "type": "project",
     "license": "MIT",
     "require": {
-        "php": ">=8.2",
+        "php": ">=8.3",
         "yiisoft/yii2": "~2.0.49",
         "yiisoft/yii2-redis": "~2.0.0",
         "yiisoft/yii2-queue": "~2.3.0",

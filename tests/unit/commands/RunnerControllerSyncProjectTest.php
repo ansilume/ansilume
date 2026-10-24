@@ -221,11 +221,11 @@ class RunnerControllerSyncProjectTest extends TestCase
             $source,
             'the git command must get the env built by buildGitEnv()'
         );
-        // The 4th arg to proc_open is $cwd, the 5th is $env_vars.
+        // The 4th arg to ProcessStarter::open (proc_open) is $cwd, the 5th is $env_vars.
         $this->assertMatchesRegularExpression(
-            '/proc_open\s*\(\s*\$cmd\s*,\s*\$descriptors\s*,\s*\$pipes\s*,\s*null\s*,\s*\$env\s*\)/',
+            '/ProcessStarter::open\s*\(\s*\$cmd\s*,\s*\$descriptors\s*,\s*\$pipes\s*,\s*null\s*,\s*\$env\s*,/',
             $source,
-            'proc_open in RunnerProjectSync must pass env as 5th argument'
+            'ProcessStarter::open in RunnerProjectSync must pass env as 5th argument'
         );
     }
 

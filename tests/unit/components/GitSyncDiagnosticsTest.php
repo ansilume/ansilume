@@ -6,6 +6,7 @@ namespace app\tests\unit\components;
 
 use app\components\GitSyncDiagnostics;
 use app\helpers\FileHelper;
+use app\tests\unit\ProcessStartFailure;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -241,6 +242,28 @@ class GitSyncDiagnosticsTest extends TestCase
 
         $this->assertStringContainsString("git repo state (from {$checkout}):\n  current branch: HEAD\n  effective config (first 20 lines):\n", $report);
         $this->assertStringNotContainsString('  remote:', $report);
+    }
+
+    /**
+     * Regression (PHP 8.3): diagnostics must never throw, but a git that is
+     * not on the PATH made proc_open() warn (posix_spawn), and the warning
+     * threw, so the report of a sync whose git did not start was lost with
+     * the runner. Each git command of the report now shows nothing.
+     */
+    public function testAGitThatCannotStartIsReportedAsUnavailable(): void
+    {
+        $checkout = $this->dir . '/checkout';
+        $this->git(['init', '-q', '-b', 'main', $checkout]);
+
+        $path = ProcessStartFailure::emptyPath();
+        try {
+            $report = (new GitSyncDiagnostics())->collect($checkout, false);
+        } finally {
+            $path->restore();
+        }
+
+        $this->assertStringContainsString("git: unavailable\n", $report);
+        $this->assertStringContainsString("git repo state (from {$checkout}):\n----------------------------\n", $report);
     }
 
     /**

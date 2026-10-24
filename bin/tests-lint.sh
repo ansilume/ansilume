@@ -413,7 +413,7 @@ fi
 # =============================================================================
 #
 # queue-worker and schedule-runner containers run `php yii …` which, left
-# to their own devices, exec as root (the php:8.2-fpm base image's default
+# to their own devices, exec as root (the php-fpm base image's default
 # USER). When the worker clones an SCM project and runs LintService's
 # post-sync auto-lint, the cache dir ends up root-owned. The web container
 # (app) later runs as www-data via php-fpm pool config — it can no longer
@@ -467,7 +467,7 @@ done
 # =============================================================================
 # Writable subprocess HOME (regression: SSH/git/ansible permission denied)
 #
-# The php:8.2-fpm image's default www-data home is /var/www, which on our
+# The php-fpm base image's default www-data home is /var/www, which on our
 # bind-mounted compose layout is root-owned. Anything that probes
 # ~/.ssh/known_hosts (git-via-SSH), ~/.gitconfig, or ~/.ansible (lookup
 # plugins, op CLI, etc.) blows up with EACCES. The fix is two-sided:

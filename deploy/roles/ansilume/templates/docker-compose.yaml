@@ -5,7 +5,7 @@ services:
 {% if ansilume_use_prebuilt_images %}
     image: {{ ansilume_app_image }}:{{ ansilume_image_tag }}
 {% else %}
-    # pull: every build fetches the current base image (php:8.2-fpm), so a
+    # pull: every build fetches the current base image (php-fpm), so a
     # base rebuilt with security fixes reaches the next deploy; without it
     # Docker keeps building on the copy it already has.
     build:

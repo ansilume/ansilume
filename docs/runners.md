@@ -388,7 +388,7 @@ If you prefer to run the runner directly on a host:
 
 ### Prerequisites
 
-- PHP 8.2+ with extensions: `pcntl`, `posix`, `zip`, `curl`, and `ffi` (recommended: without it,
+- PHP 8.3+ with extensions: `pcntl`, `posix`, `zip`, `curl`, and `ffi` (recommended: without it,
   playbooks running as the same user can read the runner's environment, see
   [What playbooks can see](#what-playbooks-can-see)). Without `posix` the
   runner cannot tell its own user, so its check at start removes no job
@@ -403,6 +403,22 @@ If you prefer to run the runner directly on a host:
 - `ansible-lint` (optional, for linting jobs)
 - OpenSSH client (for SSH-based connections)
 - Git (for project sync)
+
+`ansible-playbook` and `git` must be on the `PATH` of the runner process
+itself: PHP looks up there the programs it starts. For a project whose
+vault password source is "Ansilume only", the runner starts
+`ansible-playbook` through `/usr/bin/env`, which looks it up in the job's
+environment, whose `PATH` is the runner's unless a Token credential sets
+`PATH`. systemd gives a service its own default `PATH` without your
+shell's additions, such as the `bin` directory of a pipx or virtualenv
+Ansible; name it in the unit
+(`Environment=PATH=/opt/ansible/bin:/usr/local/bin:/usr/bin:/bin`). A
+wrapper script needs the interpreter it names; one that PHP starts itself
+(`git`, and `ansible-playbook` for projects whose vault password source is
+"Ansilume and repository") also needs a `#!` line, or it does not start.
+A job whose `ansible-playbook` or `git` does not start fails and its log
+says why (see [Common issues](#common-issues)); the runner goes on with
+the next job.
 
 ### Setup
 
@@ -696,6 +712,10 @@ After starting a runner, verify it registered and is online:
 | Runner online but no jobs claimed | Wrong runner group | Ensure the job template's runner group matches |
 | Runner group page shows "Plain HTTP" for a runner | The runner talks plain HTTP from outside the trusted networks | Use an `https://` `API_URL` behind a TLS reverse proxy that sends `X-Forwarded-Proto`, see [Plain HTTP warning](#plain-http-warning) |
 | Job fails with `The runner could not create the job's private directory or files in its temp directory.` or `The runner could not write the survey answers file.` | The runner's temp directory (`TMPDIR`) is missing, not writable, read-only or full | Fix the directory or free space; the job did not run. See [Password survey answers](#password-survey-answers) |
+| Job fails with exit code -1 and `[ansilume] The job did not run: ansible-playbook could not be started: proc_open(): posix_spawn() failed: No such file or directory`, or with exit code 127 and `env: 'ansible-playbook': No such file or directory` (quoted with ‘ ’ in a UTF-8 locale) | `ansible-playbook` is not on the `PATH` of the runner process, or the interpreter its `#!` line names is gone. The second form is for projects whose vault password source is "Ansilume only" | Install Ansible there, or add its directory to the runner's `PATH`, see [Prerequisites](#prerequisites). In the first case, runners up to 2.12.2 on PHP 8.3 or newer exited instead, and the job stayed running |
+| Job fails with `[ansilume] The job did not run: <program> could not be started in <directory>: proc_open(): posix_spawn() failed: Permission denied` | The runner's user may not enter the project directory | Fix the permissions of the directory |
+| Job fails with `[ansilume] The job did not run: <program> could not be started: proc_open(): posix_spawn() failed: Permission denied`, or `… failed: Exec format error` | The runner's user may not run the program, or a wrapper script has no `#!` line | Make the program executable for the runner's user, or give the wrapper a `#!` line such as `#!/bin/sh` |
+| Job fails with `Git sync failed: git could not be started: proc_open(): posix_spawn() failed: No such file or directory` and the diagnostics say `git: unavailable` | `git` is not on the `PATH` of the runner process | Install git, or add its directory to the runner's `PATH`, see [Prerequisites](#prerequisites) |
 | `WARNING: Left <path> in place (<reason>). It may hold survey answers or host passwords of an earlier runner process; remove it by hand.` at start | A job directory of a killed runner process that this runner may not remove: another user's directory, a file or a link with such a name, or a directory it could not empty | Remove it by hand; it can hold answers or host passwords in plain text. See [Password survey answers](#password-survey-answers) |
 | `WARNING: Left <path> in place (the runner's user is unknown: the posix extension is missing). ...` at start | PHP has no `posix` extension, so the runner cannot tell whose a job directory is and removes none | Install the extension and restart the runner, or remove the directories by hand. See [Password survey answers](#password-survey-answers) |
 | `WARNING: Left <path> in place (a runner of 2.8.1 or older left it). ...` at start | A runner of 2.8.1 or older left a static inventory or task records in the temp directory | Remove the file once every runner on the host is updated; it can hold host passwords that every local user can read. See [Password survey answers](#password-survey-answers) |

@@ -114,9 +114,6 @@ ansilume_nginx_fastcgi_timeout: 120
 
 # -- PHP / App container -----------------------------------------------------
 
-# Base PHP-FPM image to build from.
-ansilume_php_image: "php:8.2-fpm"
-
 # PHP configuration.
 ansilume_php_upload_max_filesize: 40M
 ansilume_php_post_max_size: 40M

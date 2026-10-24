@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services;
 
+use app\components\ProcessStarter;
 use app\models\JobTemplate;
 use app\models\Project;
 use app\services\LintService;
+use app\tests\unit\ProcessStartFailure;
 use PHPUnit\Framework\TestCase;
 use yii\db\BaseActiveRecord;
 
@@ -415,11 +417,11 @@ class LintServiceTest extends TestCase
             'execute() must create .ansible cache dir inside project CWD'
         );
 
-        // proc_open must receive an env argument (5th parameter)
+        // ProcessStarter::open (proc_open) must receive an env argument (5th parameter)
         $this->assertMatchesRegularExpression(
-            '/proc_open\s*\(\s*\$cmd\s*,\s*\$descriptors\s*,\s*\$pipes\s*,\s*\$cwd\s*,\s*\$env\s*\)/',
+            '/ProcessStarter::open\s*\(\s*\$cmd\s*,\s*\$descriptors\s*,\s*\$pipes\s*,\s*\$cwd\s*,\s*\$env\s*,/',
             $source,
-            'proc_open in execute() must pass $env as 5th argument'
+            'ProcessStarter::open in execute() must pass $env as 5th argument'
         );
     }
 
@@ -540,6 +542,7 @@ class LintServiceTest extends TestCase
         $dir = sys_get_temp_dir() . '/ansilume_lint_cache_blocked_' . uniqid('', true);
         mkdir($dir);
         file_put_contents($dir . '/.ansible', '');
+        $result = '';
 
         try {
             $svc = new class extends LintService {
@@ -568,6 +571,7 @@ class LintServiceTest extends TestCase
         } finally {
             unlink($dir . '/.ansible');
             rmdir($dir);
+            self::removeFallback($result);
         }
     }
 
@@ -587,6 +591,7 @@ class LintServiceTest extends TestCase
         $cache = $dir . '/.ansible';
         mkdir($cache);
         chmod($cache, 0);
+        $result = '';
 
         try {
             $svc = new class extends LintService {
@@ -608,6 +613,7 @@ class LintServiceTest extends TestCase
             chmod($cache, 0o755);
             rmdir($cache);
             rmdir($dir);
+            self::removeFallback($result);
         }
     }
 
@@ -626,6 +632,7 @@ class LintServiceTest extends TestCase
         $dir = sys_get_temp_dir() . '/ansilume_lint_cache_parent_' . uniqid('', true);
         mkdir($dir);
         chmod($dir, 0o555); // readable+executable, not writable — parent blocks mkdir
+        $result = '';
 
         try {
             $svc = new class extends LintService {
@@ -646,6 +653,7 @@ class LintServiceTest extends TestCase
         } finally {
             chmod($dir, 0o755);
             rmdir($dir);
+            self::removeFallback($result);
         }
     }
 
@@ -684,6 +692,7 @@ class LintServiceTest extends TestCase
         $dir = sys_get_temp_dir() . '/ansilume_lint_cache_det_' . uniqid('', true);
         mkdir($dir);
         file_put_contents($dir . '/.ansible', '');
+        $first = '';
 
         try {
             $svc = new class extends LintService {
@@ -704,6 +713,50 @@ class LintServiceTest extends TestCase
         } finally {
             unlink($dir . '/.ansible');
             rmdir($dir);
+            self::removeFallback($first);
+        }
+    }
+
+    /**
+     * Regression (PHP 8.3): proc_open() reports an ansible-lint it cannot
+     * start, or a project directory it may not enter, with a warning
+     * (posix_spawn), which threw: the Lint action answered 500. For the
+     * directory PHP 8.2 ran ansible-lint in PHP's own working directory and
+     * stored the findings of Ansilume's own files as the project's. Lint now
+     * did not run, and the output says why.
+     */
+    public function testAnAnsibleLintThatCannotStartDidNotRun(): void
+    {
+        $cwd = sys_get_temp_dir() . '/ansilume_lint_not_started_' . uniqid('', true);
+        mkdir($cwd);
+        $svc = new class extends LintService {
+            /** @return array{0: string, 1: int} */
+            public function lint(string $cwd): array
+            {
+                return $this->execute(null, $cwd);
+            }
+        };
+
+        $path = ProcessStartFailure::emptyPath();
+        try {
+            $result = $svc->lint($cwd);
+        } finally {
+            $path->restore();
+            $this->removeDir($cwd);
+        }
+
+        $this->assertSame([sprintf(LintService::NOT_RUN, sprintf(ProcessStarter::NOT_STARTED, 'ansible-lint', ProcessStartFailure::NO_SUCH_FILE)), -1], $result);
+    }
+
+    /**
+     * Review finding: the tests left the fallback cache directory that
+     * ensureCacheDir() made for their checkout in the temporary directory,
+     * a new one on every run. $result is the directory it returned.
+     */
+    private static function removeFallback(string $result): void
+    {
+        if (str_starts_with($result, sys_get_temp_dir() . '/ansilume-ansible-') && is_dir($result)) {
+            rmdir($result);
         }
     }
 
