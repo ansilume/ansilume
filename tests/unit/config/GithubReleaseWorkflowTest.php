@@ -189,6 +189,82 @@ class GithubReleaseWorkflowTest extends TestCase
         $this->assertStringContainsString($image, $stdout . $stderr);
     }
 
+    /**
+     * @return array<string, array{0: array<string, string>, 1: int, 2: string, 3: list<string>}>
+     */
+    public static function failedInspectProvider(): array
+    {
+        $digest = 'sha256:' . str_repeat('a', 64);
+        $revisions = self::COMMIT . ' ' . self::COMMIT . ' ';
+        $listed = static fn (string $image): string => "ghcr.io/ansilume/{$image}:2.12.2 {$digest}";
+        $error = static function (string $image, string $digestRead, string $revisionsRead): string {
+            return "::error::ghcr.io/ansilume/{$image}:2.12.2 has no digest or no platform image"
+                . " (digest '{$digestRead}', revisions '{$revisionsRead}')\n";
+        };
+
+        return [
+            'an image of the tag is missing' => [
+                ['STUB_MISSING' => 'ansilume-nginx'],
+                1,
+                $error('ansilume-nginx', '', ''),
+                [$listed('ansilume')],
+            ],
+            'the first inspect fails after printing the digest' => [
+                ['STUB_FAILING' => 'Manifest.Digest', 'STUB_PARTIAL' => '1'],
+                1,
+                $error('ansilume', '', $revisions),
+                [],
+            ],
+            'the second inspect fails' => [
+                ['STUB_FAILING' => 'image.revision'],
+                1,
+                $error('ansilume', $digest, ''),
+                [],
+            ],
+            'the second inspect fails after printing the revisions' => [
+                ['STUB_FAILING' => 'image.revision', 'STUB_PARTIAL' => '1'],
+                1,
+                $error('ansilume', $digest, ''),
+                [],
+            ],
+            'a good inspect lists every image' => [
+                [],
+                0,
+                '',
+                [$listed('ansilume'), $listed('ansilume-nginx'), $listed('ansilume-runner')],
+            ],
+        ];
+    }
+
+    /**
+     * Regression: the step kept the digest and the revisions with
+     * `digest=$(docker buildx imagetools inspect …)` and `revisions=$(…)`, so
+     * a failed inspect (an image of the tag missing, a registry error between
+     * the two calls) ended the step at the assignment under set -e: its
+     * ::error:: line, which names the image without a digest or a platform
+     * image, never appeared, only docker's own error. A failed call now
+     * leaves its value empty, whatever it printed before it failed, for that
+     * check to report; the step still fails, and lists no image it could not
+     * read.
+     *
+     * @param array<string, string> $stub
+     * @param list<string> $listed
+     * @dataProvider failedInspectProvider
+     */
+    public function testRegressionAFailedInspectIsReportedByTheCheck(
+        array $stub,
+        int $exitCode,
+        string $stdout,
+        array $listed,
+    ): void {
+        [$code, $out, $stderr, $runnerTemp] = $this->runImageDigests($stub);
+
+        $this->assertSame([$exitCode, $stdout], [$code, $out], $stderr);
+        $file = $runnerTemp . '/images.txt';
+        $images = is_file($file) ? explode("\n", trim((string)file_get_contents($file))) : [];
+        $this->assertSame($listed, $images, 'The images the release notes name.');
+    }
+
     public function testANewReleaseIsCreatedWithItsNotesAndItsSignedArchive(): void
     {
         [$code, $calls, $stderr, $work] = $this->runPublish('v1.1.0', ['v1.0.0', 'v1.1.0'], 'none');
@@ -391,10 +467,20 @@ if [[ "$ref" == *"/${STUB_MISSING:-none}:"* ]]; then
     exit 1
 fi
 case "$6" in
-    *Manifest.Digest*) echo "$STUB_DIGEST" ;;
-    *image.revision*) echo "$STUB_REVISIONS" ;;
+    *Manifest.Digest*) output="$STUB_DIGEST" ;;
+    *image.revision*) output="$STUB_REVISIONS" ;;
     *) echo "unexpected template: $6" >&2; exit 2 ;;
 esac
+# A registry error in the call whose template holds STUB_FAILING, after its
+# output when STUB_PARTIAL is set.
+if [[ -n "${STUB_FAILING:-}" && "$6" == *"${STUB_FAILING}"* ]]; then
+    if [[ -n "${STUB_PARTIAL:-}" ]]; then
+        echo "$output"
+    fi
+    echo "ERROR: failed to fetch ${ref}: 502 Bad Gateway" >&2
+    exit 1
+fi
+echo "$output"
 BASH,
             'gh' => <<<'BASH'
 #!/usr/bin/env bash

@@ -282,23 +282,24 @@ fi
 
 # Check available disk space (need at least 2 GB for images + data)
 if command -v df >/dev/null 2>&1; then
-    DISK_AVAIL_KB=$(df -k . 2>/dev/null | awk 'NR==2 {print $4}')
+    DISK_AVAIL_KB=$(df -k . 2>/dev/null | awk 'NR==2 {print $4}' || true)
     if [ -n "$DISK_AVAIL_KB" ] && [ "$DISK_AVAIL_KB" -lt 2097152 ] 2>/dev/null; then
         DISK_AVAIL_MB=$((DISK_AVAIL_KB / 1024))
         fail "Not enough disk space: ${DISK_AVAIL_MB}MB available, at least 2048MB recommended."
         info "Free up disk space and try again."
         exit 1
+    elif [ -n "$DISK_AVAIL_KB" ]; then
+        ok "Disk space: $((DISK_AVAIL_KB / 1024))MB available"
     fi
-    ok "Disk space: $((DISK_AVAIL_KB / 1024))MB available"
 fi
 
 # Check available memory (need at least 512 MB)
 if command -v free >/dev/null 2>&1; then
-    MEM_AVAIL_MB=$(free -m 2>/dev/null | awk '/^Mem:/ {print $7}')
+    MEM_AVAIL_MB=$(free -m 2>/dev/null | awk '/^Mem:/ {print $7}' || true)
     if [ -n "$MEM_AVAIL_MB" ] && [ "$MEM_AVAIL_MB" -lt 512 ] 2>/dev/null; then
         warn "Low memory: ${MEM_AVAIL_MB}MB available. Ansilume needs at least 512MB."
         info "Containers may fail to start or be killed by the OOM killer."
-    else
+    elif [ -n "$MEM_AVAIL_MB" ]; then
         ok "Memory: ${MEM_AVAIL_MB}MB available"
     fi
 fi
@@ -955,8 +956,7 @@ COMPOSE_EXIT=0
 if [ "$VERBOSE" -ge 2 ]; then
     $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
         info "  $line"
-    done
-    COMPOSE_EXIT=${PIPESTATUS[0]:-$?}
+    done || COMPOSE_EXIT=$?
 else
     COMPOSE_UP_OUT=$($COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1) || COMPOSE_EXIT=$?
 fi

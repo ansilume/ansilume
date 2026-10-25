@@ -1734,6 +1734,46 @@ encrypt their stored answers, but `APP_SECRET_KEY` cannot encrypt.
 then `docker compose up -d` (git checkout:
 `docker compose up -d --build --force-recreate`).
 
+## App container does not start: the database check could not run
+
+**Symptom:** The app container restarts again and again, and
+`docker compose logs app` shows, after
+`[entrypoint] waiting for database...`:
+
+```
+[entrypoint] ERROR: the database check could not run (php failed)
+[entrypoint] Check PHP's error log /var/log/php_errors.log in this container for details.
+```
+
+A line such as `Killed` or `Segmentation fault (core dumped)` right above
+it says that PHP was killed or crashed.
+
+**Cause:** PHP itself failed while it checked whether the database answers:
+it stopped at an error, crashed, or was killed, for example by the kernel's
+out-of-memory killer. It is not the database: a database that does not
+answer gives `[entrypoint] ERROR: database not reachable after 60s`, and
+rejected credentials give `database credentials rejected`. Up to 2.13.0 the
+container ended at this point without a word.
+
+**Fix:** Read PHP's error. While the container restarts,
+`docker compose exec` cannot reach it, but `docker compose cp` can:
+
+```bash
+docker compose cp app:/var/log/php_errors.log php_errors.log
+tail -20 php_errors.log
+```
+
+If the file does not exist or holds nothing new, PHP was killed or crashed
+before it could log. Whether the out-of-memory killer did it: Docker resets
+`OOMKilled` each time the container starts again, so ask while it waits to
+restart, more than once if it says `false`, or look in the kernel log (which
+may need root):
+
+```bash
+docker inspect --format '{{.State.Status}} {{.State.OOMKilled}}' $(docker compose ps -aq app)
+journalctl -k | grep -i 'out of memory'
+```
+
 ## Launch fails: "The database update has not finished; run the migrations."
 
 **Symptom:** Right after an update, a launch with password answers fails

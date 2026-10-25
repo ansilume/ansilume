@@ -64,7 +64,7 @@ if [ "$1" = "php-fpm" ]; then
     echo "[entrypoint] waiting for database..."
     elapsed=0
     while true; do
-        db_result=$(php -r "
+        if ! db_result=$(php -r "
             try {
                 new PDO('mysql:host=' . getenv('DB_HOST') . ';port=' . (getenv('DB_PORT') ?: '3306'),
                         getenv('DB_USER'), getenv('DB_PASSWORD'));
@@ -76,7 +76,11 @@ if [ "$1" = "php-fpm" ]; then
                     echo 'unavailable';
                 }
             }
-        " 2>/dev/null)
+        " 2>/dev/null); then
+            echo "[entrypoint] ERROR: the database check could not run (php failed)" >&2
+            echo "[entrypoint] Check PHP's error log /var/log/php_errors.log in this container for details." >&2
+            exit 1
+        fi
 
         if [ "$db_result" = "ok" ]; then
             break

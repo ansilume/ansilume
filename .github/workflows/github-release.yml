@@ -63,12 +63,15 @@ jobs:
             exit 1
           fi
 
+      # A failed inspect leaves its value empty, whatever it printed before it
+      # failed, for the check below to report: under set -e the assignment
+      # alone would end the step with docker's error only.
       - name: Find the image digests
         run: |
           for image in ansilume ansilume-nginx ansilume-runner; do
             ref="ghcr.io/ansilume/${image}:${TAG#v}"
-            digest=$(docker buildx imagetools inspect "${ref}" --format '{{.Manifest.Digest}}')
-            revisions=$(docker buildx imagetools inspect "${ref}" --format '{{range .Image}}{{index .Config.Labels "org.opencontainers.image.revision"}} {{end}}')
+            digest=$(docker buildx imagetools inspect "${ref}" --format '{{.Manifest.Digest}}') || digest=''
+            revisions=$(docker buildx imagetools inspect "${ref}" --format '{{range .Image}}{{index .Config.Labels "org.opencontainers.image.revision"}} {{end}}') || revisions=''
             read -r -a platforms <<< "${revisions}"
             if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ || ${#platforms[@]} -eq 0 ]]; then
               echo "::error::${ref} has no digest or no platform image (digest '${digest}', revisions '${revisions}')"

@@ -277,22 +277,27 @@ jobs:
             fi
           done
 
+      # curl's status is kept after ||: these steps run with bash -e, which
+      # would end them at the assignment when nginx does not answer, before
+      # they say so. A body cut off (curl exit 18) fails them too.
       - name: Check /health through nginx
         run: |
-          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' http://localhost:8080/health)
-          cat /tmp/health.json
+          curl_status=0
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' http://localhost:8080/health) || curl_status=$?
+          cat /tmp/health.json || true
           echo
-          if [ "${code}" != "200" ]; then
-            echo "::error::/health returned HTTP ${code}"
+          if [ "${curl_status}" -ne 0 ] || [ "${code}" != "200" ]; then
+            echo "::error::/health returned HTTP ${code} (curl exit ${curl_status})"
             exit 1
           fi
 
       # nginx serves the API spec as a static file baked into its image.
       - name: Check /openapi.yaml through nginx
         run: |
-          code=$(curl -sS -o /tmp/openapi.yaml -w '%{http_code}' http://localhost:8080/openapi.yaml)
-          if [ "${code}" != "200" ] || ! head -n 1 /tmp/openapi.yaml | grep -q '^openapi: '; then
-            echo "::error::/openapi.yaml returned HTTP ${code} without the spec"
+          curl_status=0
+          code=$(curl -sS -o /tmp/openapi.yaml -w '%{http_code}' http://localhost:8080/openapi.yaml) || curl_status=$?
+          if [ "${curl_status}" -ne 0 ] || [ "${code}" != "200" ] || ! head -n 1 /tmp/openapi.yaml | grep -q '^openapi: '; then
+            echo "::error::/openapi.yaml returned HTTP ${code} without the spec (curl exit ${curl_status})"
             head -n 5 /tmp/openapi.yaml || true
             exit 1
           fi

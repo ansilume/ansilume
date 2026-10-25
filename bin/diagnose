@@ -181,19 +181,27 @@ info "Uptime: $(uptime -p 2>/dev/null || uptime)"
 
 # Memory
 if command -v free >/dev/null 2>&1; then
-    total_mb=$(free -m | awk '/^Mem:/ {print $2}')
-    avail_mb=$(free -m | awk '/^Mem:/ {print $7}')
-    info "Memory: ${avail_mb}MB available / ${total_mb}MB total"
-    if [ "$avail_mb" -lt 256 ]; then
-        fail "Very low available memory (${avail_mb}MB) — containers may OOM"
+    total_mb=$(free -m | awk '/^Mem:/ {print $2}' || true)
+    avail_mb=$(free -m | awk '/^Mem:/ {print $7}' || true)
+    if [ -n "$avail_mb" ] && [ -n "$total_mb" ]; then
+        info "Memory: ${avail_mb}MB available / ${total_mb}MB total"
+        if [ "$avail_mb" -lt 256 ]; then
+            fail "Very low available memory (${avail_mb}MB) — containers may OOM"
+        fi
+    else
+        warn "Could not get memory usage (free -m)"
     fi
 fi
 
 # Disk
 if command -v df >/dev/null 2>&1; then
-    disk_avail=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}')
-    disk_use=$(df -h . 2>/dev/null | awk 'NR==2 {print $5}')
-    info "Disk:   ${disk_avail} available (${disk_use} used)"
+    disk_avail=$(df -h . 2>/dev/null | awk 'NR==2 {print $4}' || true)
+    disk_use=$(df -h . 2>/dev/null | awk 'NR==2 {print $5}' || true)
+    if [ -n "$disk_avail" ] && [ -n "$disk_use" ]; then
+        info "Disk:   ${disk_avail} available (${disk_use} used)"
+    else
+        warn "Could not get disk usage of the current directory (df -h .)"
+    fi
 fi
 
 # ── 2. Docker ────────────────────────────────────────────────────────────────
@@ -263,7 +271,7 @@ if [ -f .env ]; then
     info "Non-secret configuration:"
     grep -E '^(APP_ENV|YII_ENV|YII_DEBUG|NGINX_PORT|DB_NAME|DB_USER|DB_HOST|REDIS_HOST|REDIS_PORT|REDIS_DB|SMTP_HOST|SMTP_PORT)=' .env 2>/dev/null | while read -r line; do
         info "  ${line}"
-    done
+    done || true
 else
     fail ".env file not found"
     info "Create it with: cp .env.prod.example .env"
@@ -273,6 +281,11 @@ fi
 
 section "Docker Compose File"
 
+# When docker compose cannot load the configuration, every compose command
+# fails the same way: the sections below that ask it for containers say so,
+# instead of reporting each container as not running.
+compose_loads=true
+compose_unloaded="Container state unknown: docker compose cannot load the compose configuration (see Docker Compose File)"
 compose_file=""
 for f in docker-compose.yml docker-compose.yaml docker-compose.prebuilt.yml; do
     if [ -f "$f" ]; then
@@ -283,8 +296,13 @@ done
 
 if [ -n "$compose_file" ]; then
     ok "Found: ${compose_file}"
-    services=$(docker compose config --services 2>/dev/null | sort)
-    info "Services defined: $(echo "$services" | tr '\n' ' ')"
+    services=$(docker compose config --services 2>/dev/null | sort || true)
+    if [ -n "$services" ]; then
+        info "Services defined: $(echo "$services" | tr '\n' ' ')"
+    else
+        compose_loads=false
+        fail "docker compose cannot load the compose configuration — see why with: docker compose config --quiet"
+    fi
 
     # A password in .env only protects the bundled Redis when the compose file
     # passes it on; otherwise Redis has none and every AUTH is rejected.
@@ -310,10 +328,10 @@ echo ""
 
 # Detailed health for each container
 for container in $(docker compose ps -q 2>/dev/null); do
-    name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | sed 's|^/||')
-    state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null)
-    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container" 2>/dev/null)
-    restarts=$(docker inspect --format '{{.RestartCount}}' "$container" 2>/dev/null)
+    name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | sed 's|^/||' || true)
+    state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || true)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' "$container" 2>/dev/null || true)
+    restarts=$(docker inspect --format '{{.RestartCount}}' "$container" 2>/dev/null || true)
 
     status_icon="✓"
     color="$GREEN"
@@ -342,9 +360,9 @@ done
 section "Image Versions"
 
 for container in $(docker compose ps -q 2>/dev/null); do
-    name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | sed 's|^/||')
-    image=$(docker inspect --format '{{.Config.Image}}' "$container" 2>/dev/null)
-    created=$(docker inspect --format '{{.Created}}' "$container" 2>/dev/null | cut -d. -f1)
+    name=$(docker inspect --format '{{.Name}}' "$container" 2>/dev/null | sed 's|^/||' || true)
+    image=$(docker inspect --format '{{.Config.Image}}' "$container" 2>/dev/null || true)
+    created=$(docker inspect --format '{{.Created}}' "$container" 2>/dev/null | cut -d. -f1 || true)
     info "$(printf '%-30s %s  (created: %s)' "$name" "$image" "$created")"
 done
 
@@ -358,21 +376,21 @@ nginx_container=$(docker compose ps -q nginx 2>/dev/null | head -1 || true)
 
 if [ -n "$app_container" ]; then
     # Read DB and Redis host from .env (fall back to container defaults)
-    db_host=$(grep -v '^\s*#' .env 2>/dev/null | grep '^DB_HOST=' | head -1 | cut -d= -f2-)
+    db_host=$(grep -v '^\s*#' .env 2>/dev/null | grep '^DB_HOST=' | head -1 | cut -d= -f2- || true)
     db_host=${db_host:-db}
-    redis_host=$(grep -v '^\s*#' .env 2>/dev/null | grep '^REDIS_HOST=' | head -1 | cut -d= -f2-)
+    redis_host=$(grep -v '^\s*#' .env 2>/dev/null | grep '^REDIS_HOST=' | head -1 | cut -d= -f2- || true)
     redis_host=${redis_host:-redis}
-    redis_port=$(grep -v '^\s*#' .env 2>/dev/null | grep '^REDIS_PORT=' | head -1 | cut -d= -f2-)
+    redis_port=$(grep -v '^\s*#' .env 2>/dev/null | grep '^REDIS_PORT=' | head -1 | cut -d= -f2- || true)
     redis_port=${redis_port:-6379}
 
     # App → DB
-    db_err=$(docker exec "$app_container" php -r "try { new PDO('mysql:host=${db_host}', 'x', 'x'); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | head -1)
+    db_err=$(docker exec "$app_container" php -r "try { new PDO('mysql:host=${db_host}', 'x', 'x'); echo 'ok'; } catch(Exception \$e) { echo \$e->getMessage(); }" 2>/dev/null | head -1 || true)
     if grep -qi "ok\|access denied" <<< "$db_err"; then
         ok "app → db (${db_host}): reachable"
     elif grep -qi "refused\|timed out\|no such host\|getaddrinfo" <<< "$db_err"; then
         fail "app → db (${db_host}): connection failed — ${db_err}"
     else
-        warn "app → db (${db_host}): uncertain — ${db_err}"
+        warn "app → db (${db_host}): uncertain — ${db_err:-no answer from the app container}"
     fi
 
     # App → Redis
@@ -423,6 +441,10 @@ section "Recent Logs (last 30 lines per container)"
 for svc in db redis app nginx queue-worker schedule-runner runner-1; do
     container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1 || true)
     if [ -z "$container_id" ]; then
+        if [ "$compose_loads" = false ]; then
+            warn "$compose_unloaded"
+            break
+        fi
         warn "${svc}: not running"
         continue
     fi
@@ -460,6 +482,8 @@ if [ -n "$app_container" ]; then
             info "  ${line}"
         done
     fi
+elif [ "$compose_loads" = false ]; then
+    warn "$compose_unloaded"
 else
     warn "App container not running — cannot check migrations"
 fi
@@ -470,7 +494,9 @@ section "Runner — Project Sync"
 
 runner_svcs=$(docker compose config --services 2>/dev/null | grep '^runner' || true)
 
-if [ -z "$runner_svcs" ]; then
+if [ "$compose_loads" = false ]; then
+    warn "$compose_unloaded"
+elif [ -z "$runner_svcs" ]; then
     warn "No runner services defined in compose file"
 else
     for runner_svc in $runner_svcs; do
@@ -677,6 +703,8 @@ if [ -n "$app_container" ]; then
     else
         warn "Could not check user accounts"
     fi
+elif [ "$compose_loads" = false ]; then
+    warn "$compose_unloaded"
 else
     warn "App container not running — cannot check application integrity"
 fi
@@ -788,6 +816,8 @@ nginx_port=$(published_nginx_port)
 compose_binding=$(docker compose port nginx 80 2>/dev/null | head -1 || true)
 if [ -n "$compose_binding" ]; then
     ok "Port ${nginx_port} is published by the nginx container (${compose_binding})"
+elif [ "$compose_loads" = false ]; then
+    warn "Port ${nginx_port}: cannot tell whether this stack listens on it — docker compose cannot load the compose configuration"
 elif command -v ss >/dev/null 2>&1; then
     listeners=$(ss -tlnp 2>/dev/null | grep ":${nginx_port} " | grep -v docker || true)
     if [ -n "$listeners" ]; then
@@ -827,7 +857,13 @@ section "Diagnosis Summary"
 all_ok=true
 
 # Build list of expected services from compose config
-expected_services=$(docker compose config --services 2>/dev/null || echo "app nginx redis")
+if [ "$compose_loads" = false ]; then
+    fail "containers: state unknown — docker compose cannot load the compose configuration"
+    all_ok=false
+    expected_services=""
+else
+    expected_services=$(docker compose config --services 2>/dev/null || echo "app nginx redis")
+fi
 
 for svc in $expected_services; do
     container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1 || true)
@@ -840,8 +876,8 @@ for svc in $expected_services; do
         esac
         continue
     fi
-    state=$(docker inspect --format '{{.State.Status}}' "$container_id" 2>/dev/null)
-    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null)
+    state=$(docker inspect --format '{{.State.Status}}' "$container_id" 2>/dev/null || true)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null || true)
 
     if [ "$state" != "running" ]; then
         fail "${svc}: stopped (state=${state})"
@@ -893,7 +929,7 @@ echo ""
 nginx_id=$(docker compose ps -q nginx 2>/dev/null | head -1 || true)
 runner_id=$(docker compose ps -q runner-1 2>/dev/null | head -1 || true)
 if [ -n "$nginx_id" ] && [ -z "$runner_id" ]; then
-    nginx_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$nginx_id" 2>/dev/null)
+    nginx_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$nginx_id" 2>/dev/null || true)
     if [ "$nginx_health" = "unhealthy" ]; then
         echo ""
         printf "  ${YELLOW}${BOLD}Likely cause: Nginx healthcheck deadlock${NC}\n"
