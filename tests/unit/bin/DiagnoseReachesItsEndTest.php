@@ -27,6 +27,14 @@ use PHPUnit\Framework\TestCase;
  * vanished between its listing and its docker inspect. Lost each time: every
  * section after it, among them the Recent Logs that name why the app does
  * not start, and the Diagnosis Summary with its verdict.
+ *
+ * Regression: run outside the install directory, as with curl … | bash from
+ * a home directory, diagnose found no compose file there, every compose
+ * command failed, and it reported the running stack as not running, app and
+ * nginx as "NOT RUNNING (critical)". It took an .env it may not read, as
+ * the deploy role writes it 0600 for its own user, for one without any key:
+ * "No CHANGE-ME defaults remaining", then every required variable "is
+ * missing from .env".
  */
 class DiagnoseReachesItsEndTest extends TestCase
 {
@@ -56,23 +64,49 @@ class DiagnoseReachesItsEndTest extends TestCase
     /** A line of Image Versions: name, image, created. */
     private const IMAGE_LINE = "  %-30s %s  (created: %s)\n";
 
-    /** What the sections that list containers through compose say when it cannot load the configuration. */
-    private const COMPOSE_UNLOADED = 'Container state unknown: docker compose cannot load the compose configuration'
-        . ' (see Docker Compose File)';
+    /** What the sections that list containers through compose say when it loads no configuration, and why. */
+    private const STATE_UNKNOWN = 'Container state unknown: %s (see Docker Compose File)';
+
+    /** Why compose loads no configuration although the directory has a compose file. */
+    private const CANNOT_LOAD = 'docker compose cannot load the compose configuration';
+
+    /** Why compose loads no configuration in a directory without a compose file. */
+    private const NO_COMPOSE_FILE = 'there is no compose file in %s';
+
+    /** What real compose says in a directory without a compose file. */
+    private const NO_CONFIGURATION = 'no configuration file provided: not found';
+
+    /** What the stand-in for compose says when it loads no configuration of a compose file. */
+    private const UNPARSABLE_ENV = 'failed to read .env: line 2: key cannot contain a space';
+
+    /** Why compose cannot tell the state of the containers when the user may not reach the daemon. */
+    private const NO_DAEMON = 'docker cannot reach the Docker daemon';
 
     private const STUBS = [
         'docker' => <<<'BASH'
             #!/usr/bin/env bash
             # docker for DiagnoseReachesItsEndTest: a running stack of app (appcid) and
-            # nginx (nginxcid). STUB_CONFIG_FAILS: compose cannot load the configuration,
-            # so every compose command but its version fails, as with real compose;
+            # nginx (nginxcid). STUB_CONFIG_FAILS: compose loads no configuration and says
+            # so, so every compose command but its version fails, as with real compose;
             # STUB_EXEC_REFUSED: app restarts, so docker exec is refused; STUB_INSPECT_FAILS:
-            # the listed containers are gone. Other calls print nothing.
+            # the listed containers are gone; STUB_STACK_DIRS: the working directories of
+            # the schedule-runner containers; STUB_NO_DAEMON: the user may not reach the
+            # daemon, so only what compose does on its own works. Other calls print nothing.
             if [ -n "${STUB_CONFIG_FAILS:-}" ] && [ "$1" = compose ] && [ "${2:-}" != version ]; then
-                echo "failed to read .env: line 2: key cannot contain a space" >&2
+                echo "$STUB_CONFIG_FAILS" >&2
                 exit 1
             fi
+            if [ -n "${STUB_NO_DAEMON:-}" ]; then
+                case "$*" in
+                    "compose version" | "compose version --short" | "compose config --services") ;;
+                    *)
+                        echo "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock" >&2
+                        exit 1 ;;
+                esac
+            fi
             case "$*" in
+                'ps -a --filter label=com.docker.compose.service=schedule-runner --format {{.Label "com.docker.compose.project.working_dir"}}')
+                    printf '%s' "${STUB_STACK_DIRS:-}" ;;
                 "version --format {{.Server.Version}}") echo "27.3.1" ;;
                 "compose version") echo "Docker Compose version v2.29.7" ;;
                 "compose version --short") echo "2.29.7" ;;
@@ -213,19 +247,217 @@ class DiagnoseReachesItsEndTest extends TestCase
     }
 
     /**
-     * See testRegressionAnEnvWithoutTheListedKeysGoesOnToTheComposeFile.
-     * Compose cannot read the .env either, so it loads no configuration
-     * (review finding: the test let compose answer as if it could).
+     * See testRegressionAnEnvWithoutTheListedKeysGoesOnToTheComposeFile: the
+     * run ended at the listing. Once it went on, diagnose took the .env for
+     * one without any key. It now says that the user may not read it and how
+     * to run diagnose so that it can. Compose cannot read the .env either, so
+     * it loads no configuration (review finding: the test let compose answer
+     * as if it could), and the port of the stack is unknown: review finding,
+     * the HTTP checks probed 8080 all the same and reported a stack on
+     * another port as unreachable.
      */
-    public function testRegressionAnEnvTheUserMayNotReadGoesOnToTheComposeFile(): void
+    public function testRegressionAnEnvTheUserMayNotReadIsReportedAsSuch(): void
     {
         $this->writeEnv(self::env());
         chmod($this->directory . '/.env', 0);
 
-        [$status, $output] = $this->runDiagnose(['STUB_CONFIG_FAILS' => '1'], true);
+        [$status, $output] = $this->runDiagnose(
+            ['STUB_CONFIG_FAILS' => 'open ' . $this->directory . '/.env: permission denied'],
+            true
+        );
 
-        $this->assertStringContainsString("  Non-secret configuration:\n\n═══ Docker Compose File ═══\n", $output);
-        $this->assertSame(4, substr_count($output, "  ⚠ " . self::COMPOSE_UNLOADED . "\n"), $output);
+        $this->assertStringContainsString(
+            "═══ Configuration (.env) ═══\n\n"
+            . '  ✗ .env is not readable for user ' . self::unprivilegedUser()
+            . ", and docker compose needs it too: run diagnose with sudo\n"
+            . "    curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | sudo bash\n"
+            . "\n═══ Docker Compose File ═══\n",
+            $output
+        );
+        $this->assertStringNotContainsString('is missing from .env', $output);
+        $this->assertStringNotContainsString('No CHANGE-ME defaults remaining', $output);
+        $this->assertStringNotContainsString('.env file exists', $output);
+        $this->assertSame(
+            4,
+            substr_count($output, '  ⚠ ' . sprintf(self::STATE_UNKNOWN, self::CANNOT_LOAD) . "\n"),
+            $output
+        );
+        $this->assertPortUnknown(self::CANNOT_LOAD, $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * Run outside the install directory, as with curl … | bash from a home
+     * directory: no .env and no compose file, and compose loads none. The
+     * containers of the stack run all the same; their state is unknown here,
+     * and so is its port. diagnose names the directories Ansilume's
+     * containers were started from, each once.
+     */
+    public function testRegressionARunOutsideTheInstallDirectoryNamesWhereTheStackRuns(): void
+    {
+        unlink($this->directory . '/docker-compose.yml');
+        $here = (string)realpath($this->directory);
+        $noComposeFile = sprintf(self::NO_COMPOSE_FILE, $here);
+
+        [$status, $output] = $this->runDiagnose([
+            'STUB_CONFIG_FAILS' => self::NO_CONFIGURATION,
+            'STUB_STACK_DIRS' => "/opt/ansilume\n/srv/ansilume-staging\n/opt/ansilume\n",
+        ]);
+
+        $this->assertStringContainsString(
+            "  ✗ .env file not found\n\n═══ Docker Compose File ═══\n\n"
+            . "  ✗ No docker-compose file found in {$here}\n"
+            . "  Run diagnose in the install directory, the one with .env and the compose file.\n"
+            . "  Ansilume's containers were started from: /opt/ansilume /srv/ansilume-staging\n"
+            . "\n═══ Container Status ═══\n",
+            $output,
+            'no hint to create an .env in a directory that is no install directory'
+        );
+        $this->assertSame(
+            4,
+            substr_count($output, '  ⚠ ' . sprintf(self::STATE_UNKNOWN, $noComposeFile) . "\n"),
+            'Recent Logs, Migration Status, Runner and Application Integrity say so once each: ' . $output
+        );
+        $this->assertStringContainsString(
+            "═══ Diagnosis Summary ═══\n\n  ✗ containers: state unknown — {$noComposeFile}\n",
+            $output
+        );
+        $this->assertStringNotContainsString('not running', $output, 'no running container is reported as not running');
+        $this->assertStringNotContainsString('NOT RUNNING', $output);
+        $this->assertPortUnknown($noComposeFile, $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * Review finding: run from a directory removed after the shell entered
+     * it, pwd fails there. The message took its path from $(pwd) in a plain
+     * assignment, so set -e ended the run after "No docker-compose file
+     * found in", without the summary.
+     */
+    public function testRegressionARunInADirectoryRemovedMeanwhileReachesItsEnd(): void
+    {
+        mkdir($this->directory . '/removed');
+        $noComposeFile = sprintf(self::NO_COMPOSE_FILE, 'a directory that no longer exists');
+
+        [$status, $output] = $this->runDiagnose(
+            ['STUB_CONFIG_FAILS' => 'getwd: no such file or directory', 'STUB_STACK_DIRS' => "/opt/ansilume\n"],
+            false,
+            $this->directory . '/removed'
+        );
+
+        $this->assertStringContainsString(
+            "  ✗ No docker-compose file found in a directory that no longer exists\n"
+            . "  Run diagnose in the install directory, the one with .env and the compose file.\n"
+            . "  Ansilume's containers were started from: /opt/ansilume\n",
+            $output
+        );
+        $this->assertSame(
+            4,
+            substr_count($output, '  ⚠ ' . sprintf(self::STATE_UNKNOWN, $noComposeFile) . "\n"),
+            $output
+        );
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * Review finding: in a subdirectory of the install directory compose
+     * still finds the compose file of the parent directory, and the state of
+     * the containers is known; diagnose reads .env from the directory it runs
+     * in, though, so it says where to run it all the same.
+     */
+    public function testARunInASubdirectoryOfTheInstallDirectorySaysWhereToRunIt(): void
+    {
+        unlink($this->directory . '/docker-compose.yml');
+        $here = (string)realpath($this->directory);
+
+        [$status, $output] = $this->runDiagnose(['STUB_STACK_DIRS' => dirname($here) . "\n"]);
+
+        $this->assertStringContainsString(
+            "  ✗ No docker-compose file found in {$here}\n"
+            . "  Run diagnose in the install directory, the one with .env and the compose file.\n"
+            . "  Ansilume's containers were started from: " . dirname($here) . "\n"
+            . "  Services defined: app nginx \n",
+            $output
+        );
+        $this->assertStringContainsString("  ✓ nginx: healthy\n  ✓ app: healthy\n", $output, 'compose knows the state');
+        $this->assertStringNotContainsString('state unknown', $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * Review finding: a user who may not reach the Docker daemon (not in the
+     * docker group) got a running stack reported as not running, app and
+     * nginx as "NOT RUNNING (critical)", and its own published port as taken
+     * by another process: compose reads its files without the daemon, so
+     * diagnose went on as if it could ask for containers. The checks from
+     * the host still run: .env names the port.
+     */
+    public function testRegressionARunWithoutAccessToTheDaemonDoesNotReportTheStackAsNotRunning(): void
+    {
+        $this->writeEnv(self::env());
+
+        [$status, $output] = $this->runDiagnose(['STUB_NO_DAEMON' => '1']);
+
+        $this->assertStringContainsString(
+            '  ✗ ' . self::NO_DAEMON . ': permission denied while trying to connect to the docker API'
+            . " at unix:///var/run/docker.sock\n"
+            . '  Run diagnose with sudo or as a member of the docker group, and check that the daemon runs'
+            . " (systemctl status docker).\n",
+            $output
+        );
+        $this->assertStringContainsString("  ✓ Found: docker-compose.yml\n  Services defined: app nginx \n", $output);
+        $unknown = sprintf('Container state unknown: %s (see Docker)', self::NO_DAEMON);
+        $this->assertSame(4, substr_count($output, "  ⚠ {$unknown}\n"), $output);
+        $this->assertStringContainsString(
+            '  ⚠ Port 8080: cannot tell whether this stack listens on it — ' . self::NO_DAEMON . "\n",
+            $output
+        );
+        $this->assertStringContainsString(
+            "═══ Diagnosis Summary ═══\n\n  ✗ containers: state unknown — " . self::NO_DAEMON . "\n",
+            $output
+        );
+        $this->assertStringContainsString(
+            '  ✗ GET / → HTTP unreachable on http://127.0.0.1:8080',
+            $output,
+            'the checks from the host run'
+        );
+        $this->assertStringNotContainsString('not running', $output, 'no running container is reported as not running');
+        $this->assertStringNotContainsString('NOT RUNNING', $output);
+        $this->assertStringNotContainsString('also used by another process', $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * Without containers of an Ansilume stack on the host, diagnose names no
+     * directory.
+     */
+    public function testARunOutsideTheInstallDirectoryWithoutAStackNamesNoDirectory(): void
+    {
+        unlink($this->directory . '/docker-compose.yml');
+
+        [$status, $output] = $this->runDiagnose(['STUB_CONFIG_FAILS' => self::NO_CONFIGURATION]);
+
+        $this->assertStringContainsString(
+            "  Run diagnose in the install directory, the one with .env and the compose file.\n"
+            . "\n═══ Container Status ═══\n",
+            $output
+        );
+        $this->assertStringNotContainsString('were started from', $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * An install directory without .env: diagnose says how to create it.
+     */
+    public function testAnInstallDirectoryWithoutAnEnvSaysHowToCreateIt(): void
+    {
+        [$status, $output] = $this->runDiagnose();
+
+        $this->assertStringContainsString(
+            "  ✗ .env file not found\n  Create it with: cp .env.prod.example .env\n",
+            $output
+        );
+        $this->assertStringContainsString("  ✓ Found: docker-compose.yml\n  Services defined: app nginx \n", $output);
         $this->assertReachesItsEnd($status, $output);
     }
 
@@ -279,29 +511,27 @@ class DiagnoseReachesItsEndTest extends TestCase
     {
         $this->writeEnv(self::env());
 
-        [$status, $output] = $this->runDiagnose(['STUB_CONFIG_FAILS' => '1']);
+        [$status, $output] = $this->runDiagnose(['STUB_CONFIG_FAILS' => self::UNPARSABLE_ENV]);
 
         $this->assertStringContainsString(
             "  ✓ Found: docker-compose.yml\n"
-            . "  ✗ docker compose cannot load the compose configuration"
-            . " — see why with: docker compose config --quiet\n",
+            . '  ✗ ' . self::CANNOT_LOAD . " — see why with: docker compose config --quiet\n",
             $output
         );
         $this->assertStringNotContainsString('Services defined', $output, 'no empty list of services');
+        $this->assertStringNotContainsString('Run diagnose in the install directory', $output, 'it runs there');
         $this->assertStringContainsString("\n═══ Container Status ═══\n\n  ⚠ Could not list containers\n", $output);
         $this->assertSame(
             4,
-            substr_count($output, "  ⚠ " . self::COMPOSE_UNLOADED . "\n"),
+            substr_count($output, '  ⚠ ' . sprintf(self::STATE_UNKNOWN, self::CANNOT_LOAD) . "\n"),
             'Recent Logs, Migration Status, Runner and Application Integrity say so once each: ' . $output
         );
         $this->assertStringContainsString(
-            "  ⚠ Port 8080: cannot tell whether this stack listens on it"
-            . " — docker compose cannot load the compose configuration\n",
+            '  ⚠ Port 8080: cannot tell whether this stack listens on it — ' . self::CANNOT_LOAD . "\n",
             $output
         );
         $this->assertStringContainsString(
-            "═══ Diagnosis Summary ═══\n\n"
-            . "  ✗ containers: state unknown — docker compose cannot load the compose configuration\n",
+            "═══ Diagnosis Summary ═══\n\n  ✗ containers: state unknown — " . self::CANNOT_LOAD . "\n",
             $output
         );
         $this->assertStringNotContainsString('not running', $output, 'no running container is reported as not running');
@@ -418,16 +648,56 @@ class DiagnoseReachesItsEndTest extends TestCase
     }
 
     /**
+     * The user runDiagnose() runs diagnose as when $unprivileged: nobody
+     * where the test runs as root, the test's own user otherwise.
+     */
+    private static function unprivilegedUser(): string
+    {
+        if (posix_geteuid() === 0) {
+            return 'nobody';
+        }
+        $user = posix_getpwuid(posix_geteuid());
+
+        return $user === false ? (string)posix_geteuid() : $user['name'];
+    }
+
+    /**
+     * Where the port of the stack is unknown, diagnose probes no guessed
+     * port, names none and reports no reachability issue: it says why.
+     * Final-check finding: the port check named the guessed port 8080 right
+     * after the HTTP section had called the port unknown.
+     */
+    private function assertPortUnknown(string $why, string $output): void
+    {
+        $this->assertStringContainsString(
+            "═══ HTTP Reachability (host) ═══\n\n  ⚠ HTTP checks skipped: the port of the stack is unknown — {$why}\n",
+            $output
+        );
+        $this->assertStringContainsString(
+            "═══ Port Conflicts ═══\n\n  ⚠ Port conflicts not checked: the port of the stack is unknown — {$why}\n",
+            $output
+        );
+        $this->assertStringNotContainsString('GET /', $output);
+        $this->assertStringNotContainsString('host-side reachability issues', $output);
+        $this->assertStringNotContainsString('Port 8080', $output);
+    }
+
+    /**
      * Runs the copy of bin/diagnose from the test's directory with the
      * stand-ins first on PATH and $env. $unprivileged runs it as nobody
      * where the test runs as root, which reads every file whatever its mode.
+     * With $removed it runs in that empty directory, removed after the shell
+     * entered it.
      *
      * @param array<string, string> $env
      * @return array{0: int, 1: string} exit code, output without colours
      */
-    private function runDiagnose(array $env = [], bool $unprivileged = false): array
+    private function runDiagnose(array $env = [], bool $unprivileged = false, string $removed = ''): array
     {
         $command = ['bash', $this->directory . '/diagnose'];
+        if ($removed !== '') {
+            $command = ['bash', '-c', 'cd "$1" && rmdir "$1" && exec bash "$2"', 'bash', $removed, $command[1]];
+        }
         if ($unprivileged && posix_geteuid() === 0) {
             $command = array_merge(['setpriv', '--reuid=65534', '--regid=65534', '--clear-groups'], $command);
         }

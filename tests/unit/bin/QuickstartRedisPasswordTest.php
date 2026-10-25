@@ -205,7 +205,8 @@ class QuickstartRedisPasswordTest extends TestCase
 
     /**
      * The password may only be enabled after the images are pulled (so the
-     * probe sees the image that will run) and before the containers start.
+     * probe sees the image that will run) and before the containers start:
+     * start_containers(), which runs `up -d`, in the install and the update.
      */
     public function testThePasswordIsEnabledBetweenPullAndUp(): void
     {
@@ -215,8 +216,33 @@ class QuickstartRedisPasswordTest extends TestCase
         $this->assertCount(2, $calls, 'update path and fresh install');
         foreach ($calls as $index) {
             $this->assertStringContainsString(' pull ', $this->nearestComposeCommand($lines, $index, -1));
-            $this->assertStringContainsString(' up -d', $this->nearestComposeCommand($lines, $index, 1));
+            $this->assertMatchesRegularExpression('/^\s*start_containers\b/', $this->nextStart($lines, $index));
         }
+        $this->assertStringContainsString(
+            '$COMPOSE_CMD $COMPOSE_ARGS up -d "$@"',
+            $this->extractFunction('start_containers'),
+            'start_containers() runs up -d'
+        );
+    }
+
+    /**
+     * The first line after $from that starts containers or runs compose,
+     * leaving out what debug and info only print.
+     *
+     * @param list<string> $lines
+     */
+    private function nextStart(array $lines, int $from): string
+    {
+        for ($i = $from + 1; isset($lines[$i]); $i++) {
+            $line = trim($lines[$i]);
+            if (str_starts_with($line, 'debug ') || str_starts_with($line, 'info ')) {
+                continue;
+            }
+            if (str_starts_with($line, 'start_containers') || str_contains($line, '$COMPOSE_CMD $COMPOSE_ARGS')) {
+                return $lines[$i];
+            }
+        }
+        $this->fail('no start of the containers found after line ' . ($from + 1));
     }
 
     /**

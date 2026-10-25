@@ -80,7 +80,7 @@ class QuickstartPinnedImageTagTest extends TestCase
 
         $this->assertStringContainsString("    PINNED_TAG=\$(pinned_image_tag)\n    if [ -n \"\$PINNED_TAG\" ]; then\n        warn \"ANSILUME_IMAGE_TAG=\${PINNED_TAG} keeps the images on \${PINNED_TAG}: remove it from .env to update to the latest release.\"\n", $quickstart);
         $this->assertStringContainsString("pull < /dev/null >/dev/null 2>&1 || PULL_OK=0\n", $quickstart);
-        $this->assertStringContainsString("pull < /dev/null 2>&1 | while IFS= read -r line || [ -n \"\$line\" ]; do\n            info \"  \$line\"\n        done || PULL_OK=0\n", $quickstart, 'The -vv branch notices a failed pull too.');
+        $this->assertStringContainsString("pull < /dev/null 2>&1 | show_compose_output || PULL_OK=0\n", $quickstart, 'The -vv branch notices a failed pull too.');
         $this->assertStringContainsString("    if [ \"\$PULL_OK\" = \"0\" ]; then\n        warn \"Update incomplete: the images could not be pulled (see above). Ansilume \${RUNNING_VERSION:+\${RUNNING_VERSION} }is running at \${APP_URL}\"\n    else\n        warn \"Update finished but verification checks failed (see above).\"\n    fi\n    printf \"\\n\"\n    exit 1\n", $quickstart, 'A failed pull ends the update with exit 1.');
         $this->assertStringContainsString("    if [ \"\$UPDATE_OK\" = \"1\" ] && [ \"\$PULL_OK\" = \"1\" ]; then\n        ok \"Update complete. Ansilume \${RUNNING_VERSION:+\${RUNNING_VERSION} }is running at \${APP_URL}\"\n", $quickstart);
         $this->assertStringNotContainsString('running the latest version', $quickstart);

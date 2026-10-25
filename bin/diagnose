@@ -213,8 +213,19 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 
-docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo "unknown")
-info "Docker version: ${docker_version}"
+# Without the daemon docker compose still reads its files, but every command
+# that asks for containers fails: the sections below then say that the state
+# of the containers is unknown and why (daemon_problem), instead of "not
+# running".
+daemon_problem=""
+if docker_version=$(docker version --format '{{.Server.Version}}' 2>/dev/null) && [ -n "$docker_version" ]; then
+    info "Docker version: ${docker_version}"
+else
+    daemon_error=$(docker version --format '{{.Server.Version}}' 2>&1 >/dev/null || true)
+    daemon_problem="docker cannot reach the Docker daemon"
+    fail "${daemon_problem}${daemon_error:+: ${daemon_error##*$'\n'}}"
+    info "Run diagnose with sudo or as a member of the docker group, and check that the daemon runs (systemctl status docker)."
+fi
 
 if docker compose version >/dev/null 2>&1; then
     compose_version=$(docker compose version --short 2>/dev/null || echo "unknown")
@@ -227,8 +238,26 @@ fi
 
 section "Configuration (.env)"
 
+# The directory diagnose runs in, the install directory: pwd fails in one
+# removed after the shell entered it. Without a compose file it is no install
+# directory (see Docker Compose File).
+here=$(pwd 2>/dev/null || true)
+here=${here:-a directory that no longer exists}
+compose_file=""
+for f in docker-compose.yml docker-compose.yaml docker-compose.prebuilt.yml; do
+    if [ -f "$f" ]; then
+        compose_file="$f"
+        break
+    fi
+done
+
 redis_password_set=0
-if [ -f .env ]; then
+if [ -f .env ] && [ ! -r .env ]; then
+    # The deploy role writes .env 0600 for its own user. docker compose reads
+    # it too, so without it neither the checks below nor compose tell anything.
+    fail ".env is not readable for user $(id -un 2>/dev/null || id -u), and docker compose needs it too: run diagnose with sudo"
+    info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | sudo bash"
+elif [ -f .env ]; then
     ok ".env file exists"
 
     # Check for CHANGE-ME defaults (skip comment lines)
@@ -274,45 +303,72 @@ if [ -f .env ]; then
     done || true
 else
     fail ".env file not found"
-    info "Create it with: cp .env.prod.example .env"
+    if [ -n "$compose_file" ]; then
+        info "Create it with: cp .env.prod.example .env"
+    fi
 fi
 
 # ── 4. Docker Compose file ───────────────────────────────────────────────────
 
 section "Docker Compose File"
 
-# When docker compose cannot load the configuration, every compose command
-# fails the same way: the sections below that ask it for containers say so,
-# instead of reporting each container as not running.
+# When docker compose loads no configuration or cannot reach the daemon, every
+# compose command that asks for containers fails the same way: the sections
+# below say why (compose_problem), instead of reporting each container as not
+# running.
 compose_loads=true
-compose_unloaded="Container state unknown: docker compose cannot load the compose configuration (see Docker Compose File)"
-compose_file=""
-for f in docker-compose.yml docker-compose.yaml docker-compose.prebuilt.yml; do
-    if [ -f "$f" ]; then
-        compose_file="$f"
-        break
-    fi
-done
-
+compose_problem=""
+problem_section="Docker Compose File"
+services=$(docker compose config --services 2>/dev/null | sort || true)
 if [ -n "$compose_file" ]; then
     ok "Found: ${compose_file}"
-    services=$(docker compose config --services 2>/dev/null | sort || true)
-    if [ -n "$services" ]; then
-        info "Services defined: $(echo "$services" | tr '\n' ' ')"
-    else
-        compose_loads=false
-        fail "docker compose cannot load the compose configuration — see why with: docker compose config --quiet"
+else
+    # Run elsewhere, as with curl … | bash from a home directory. Name the
+    # directories compose started Ansilume's containers from, each once: those
+    # of the schedule-runner containers, a service every compose file of
+    # Ansilume has.
+    fail "No docker-compose file found in ${here}"
+    info "Run diagnose in the install directory, the one with .env and the compose file."
+    stack_dirs=$(docker ps -a --filter label=com.docker.compose.service=schedule-runner \
+        --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null | awk 'NF && !seen[$0]++' || true)
+    if [ -n "$stack_dirs" ]; then
+        info "Ansilume's containers were started from: ${stack_dirs//$'\n'/ }"
     fi
+fi
+# Compose also finds a compose file of a parent directory, or by COMPOSE_FILE.
+if [ -n "$services" ]; then
+    info "Services defined: $(echo "$services" | tr '\n' ' ')"
+elif [ -n "$compose_file" ]; then
+    compose_loads=false
+    compose_problem="docker compose cannot load the compose configuration"
+    fail "${compose_problem} — see why with: docker compose config --quiet"
+else
+    compose_loads=false
+    compose_problem="there is no compose file in ${here}"
+fi
+if [ -n "$daemon_problem" ]; then
+    compose_loads=false
+    compose_problem="$daemon_problem"
+    problem_section="Docker"
+fi
+compose_unloaded="Container state unknown: ${compose_problem} (see ${problem_section})"
 
-    # A password in .env only protects the bundled Redis when the compose file
-    # passes it on; otherwise Redis has none and every AUTH is rejected.
+# Without compose and without a readable .env the port of the stack is a
+# guess (published_nginx_port falls back to 8080): the HTTP and port checks
+# then say so instead of naming or probing it.
+port_known=true
+if [ "$compose_loads" = false ] && [ ! -r .env ]; then
+    port_known=false
+fi
+
+# A password in .env only protects the bundled Redis when the compose file
+# passes it on; otherwise Redis has none and every AUTH is rejected.
+if [ -n "$compose_file" ]; then
     env_redis_host=$(grep '^REDIS_HOST=' .env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]' || true)
     if [ "$redis_password_set" = "1" ] && [ "${env_redis_host:-redis}" = "redis" ] \
         && ! grep -q 'REDIS_PASSWORD' "$compose_file"; then
         fail "REDIS_PASSWORD is set, but ${compose_file} does not pass it to the redis service — download the current compose file"
     fi
-else
-    fail "No docker-compose file found"
 fi
 
 # ── 5. Container status ─────────────────────────────────────────────────────
@@ -733,7 +789,10 @@ http_reach_failed=""
 diag_port=$(published_nginx_port)
 base_url="http://127.0.0.1:${diag_port}"
 
-if ! command -v curl >/dev/null 2>&1; then
+# Probing a guessed port would report a stack on another port as unreachable.
+if [ "$port_known" = false ]; then
+    warn "HTTP checks skipped: the port of the stack is unknown — ${compose_problem}"
+elif ! command -v curl >/dev/null 2>&1; then
     warn "curl not found on the host — skipping HTTP reachability checks"
 else
     http_reach_failed=false
@@ -816,8 +875,10 @@ nginx_port=$(published_nginx_port)
 compose_binding=$(docker compose port nginx 80 2>/dev/null | head -1 || true)
 if [ -n "$compose_binding" ]; then
     ok "Port ${nginx_port} is published by the nginx container (${compose_binding})"
+elif [ "$port_known" = false ]; then
+    warn "Port conflicts not checked: the port of the stack is unknown — ${compose_problem}"
 elif [ "$compose_loads" = false ]; then
-    warn "Port ${nginx_port}: cannot tell whether this stack listens on it — docker compose cannot load the compose configuration"
+    warn "Port ${nginx_port}: cannot tell whether this stack listens on it — ${compose_problem}"
 elif command -v ss >/dev/null 2>&1; then
     listeners=$(ss -tlnp 2>/dev/null | grep ":${nginx_port} " | grep -v docker || true)
     if [ -n "$listeners" ]; then
@@ -858,7 +919,7 @@ all_ok=true
 
 # Build list of expected services from compose config
 if [ "$compose_loads" = false ]; then
-    fail "containers: state unknown — docker compose cannot load the compose configuration"
+    fail "containers: state unknown — ${compose_problem}"
     all_ok=false
     expected_services=""
 else

@@ -10,6 +10,24 @@ Before digging into specific issues, run the diagnostics script. It collects sys
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 ```
 
+Run it in the install directory, the one with `.env` and the compose file,
+as a user who may read `.env` and reach the Docker daemon: a member of the
+docker group, or with sudo. The deploy role writes `.env` for its own user
+only (`0600`). Otherwise diagnose says what it lacks:
+
+- Where it may not read `.env` or reach the daemon, it says so and how to run
+  it, as `docker compose` needs both.
+- Run in another directory, it says that there is no compose file there and
+  names the directories Ansilume's containers were started from. In a
+  subdirectory of the install directory `docker compose` still finds the
+  compose file of the parent directory.
+
+Where `docker compose` cannot tell the state of the containers, diagnose
+reports it as unknown, and where it cannot tell the port of the stack either,
+it skips the HTTP and port checks. Up to 2.13.1 it reported every variable of
+an `.env` it could not read as missing, a running stack as not running, and
+one published on another port than 8080 as unreachable.
+
 To save the output for sharing:
 
 ```bash

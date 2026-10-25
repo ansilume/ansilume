@@ -65,6 +65,18 @@ curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/quicksta
 
 If no existing installation is found (no `.env` in the current directory), the script exits with an error.
 
+The update ends with exit code 1 when the images cannot be pulled, when the
+containers cannot be started, or when the checks after the start fail, so a
+cron job or pipeline can alert on it. A failed start shows compose's exit
+code and the last lines of its output (with `-vv` all of it), points to the
+logs and the diagnostics, and ends the update there. Compose quotes values of
+`.env` when it cannot read them or reads a variable from them, and they can
+hold a secret: the quickstart leaves every line about `.env`, a variable, a
+template or an interpolation out of what it shows, and names
+`docker compose config --quiet`, which shows them. Up to 2.13.1 the update
+reported a failed start as "Containers updated", and ended with "Update
+complete" and exit code 0 while the old containers still answered.
+
 ---
 
 ## Manual update — prebuilt images

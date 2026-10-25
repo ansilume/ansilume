@@ -400,6 +400,58 @@ ensure_redis_password() {
     ok "Enabled Redis authentication (REDIS_PASSWORD generated)"
 }
 
+# ── Helper: show compose's output ───────────────────────────────────────────
+# Prints compose's output as info lines, and the output can end up in a log
+# file. Compose quotes values of .env in more than one way: the rest of a
+# line it cannot read ("line 5: unterminated quoted value …", "Invalid
+# template: …"), the text of ${VAR:?…}, the name after a $ in a value
+# ("The "…" variable is not set"), and any of them can be a secret. So every
+# line about .env, a variable, a template or an interpolation is left out,
+# and the first one is replaced by the command that shows them.
+
+show_compose_output() {
+    local line hidden=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            *.env* | *[Vv]ariable* | *[Tt]emplate* | *nterpolat*)
+                if [ "$hidden" = 0 ]; then
+                    info "  (lines about .env are left out, as they can hold a secret: see them with ${COMPOSE_CMD}${COMPOSE_ARGS:+ $COMPOSE_ARGS} config --quiet)"
+                fi
+                hidden=1
+                continue ;;
+        esac
+        info "  $line"
+    done
+}
+
+# ── Helper: start the containers ────────────────────────────────────────────
+# Runs `up -d` with the arguments given; with -vv compose's output streams as
+# it comes. A failed start is reported with compose's exit code, the end of
+# its output and where to look next, and ends the quickstart with exit 1, the
+# install and the update alike: what runs then may be the old containers,
+# some of the new ones, or none. The end of the output goes through a pipe:
+# a here-string needs a temp file (bash 5.0 and older, or past 64 KiB),
+# which a full disk denies.
+
+start_containers() {
+    local exit_code=0 output=""
+    if [ "$VERBOSE" -ge 2 ]; then
+        $COMPOSE_CMD $COMPOSE_ARGS up -d "$@" < /dev/null 2>&1 | show_compose_output || exit_code=$?
+    else
+        output=$($COMPOSE_CMD $COMPOSE_ARGS up -d "$@" < /dev/null 2>&1) || exit_code=$?
+    fi
+    if [ "$exit_code" -ne 0 ]; then
+        fail "Failed to start containers (exit code: ${exit_code})"
+        if [ -n "$output" ]; then
+            printf '%s\n' "$output" | tail -10 | show_compose_output
+        fi
+        info ""
+        info "Check logs: $COMPOSE_CMD $COMPOSE_ARGS logs"
+        info "Run diagnostics: curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
+        exit 1
+    fi
+}
+
 # ── Helper: wait for app container health ───────────────────────────────────
 
 wait_healthy() {
@@ -692,9 +744,7 @@ if [ "$INSTALL_MODE" = "update" ]; then
     info "Pulling latest images and restarting..."
     PULL_OK=1
     if [ "$VERBOSE" -ge 2 ]; then
-        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
-            info "  $line"
-        done || PULL_OK=0
+        $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null 2>&1 | show_compose_output || PULL_OK=0
     else
         $COMPOSE_CMD $COMPOSE_ARGS pull < /dev/null >/dev/null 2>&1 || PULL_OK=0
     fi
@@ -702,13 +752,7 @@ if [ "$INSTALL_MODE" = "update" ]; then
         warn "Pulling the images failed, so the containers keep the images they have. Run the update with -vv to see why."
     fi
     ensure_redis_password
-    if [ "$VERBOSE" -ge 2 ]; then
-        $COMPOSE_CMD $COMPOSE_ARGS up -d < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
-            info "  $line"
-        done || true
-    else
-        $COMPOSE_CMD $COMPOSE_ARGS up -d < /dev/null >/dev/null 2>&1 || true
-    fi
+    start_containers
     ok "Containers updated"
 
     # ── Health check ──
@@ -952,26 +996,7 @@ ensure_redis_password
 
 debug "Running: $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always"
 info "Starting services..."
-COMPOSE_EXIT=0
-if [ "$VERBOSE" -ge 2 ]; then
-    $COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
-        info "  $line"
-    done || COMPOSE_EXIT=$?
-else
-    COMPOSE_UP_OUT=$($COMPOSE_CMD $COMPOSE_ARGS up -d --pull always < /dev/null 2>&1) || COMPOSE_EXIT=$?
-fi
-
-if [ "$COMPOSE_EXIT" -ne 0 ]; then
-    fail "Failed to start containers (exit code: ${COMPOSE_EXIT})"
-    if [ -n "${COMPOSE_UP_OUT:-}" ]; then
-        echo "$COMPOSE_UP_OUT" | tail -10 | while IFS= read -r line || [ -n "$line" ]; do info "  $line"; done
-    fi
-    info ""
-    info "Check logs: $COMPOSE_CMD $COMPOSE_ARGS logs"
-    info "Run diagnostics: curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"
-    exit 1
-fi
-
+start_containers --pull always
 ok "Containers started"
 
 # ── 10. Wait for app to be healthy ───────────────────────────────────────────
