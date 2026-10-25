@@ -50,9 +50,14 @@ section "Shell script checks"
 SHELL_SCRIPTS=$(find . -path ./vendor -prune -o -path ./node_modules -prune -o -path ./runtime -prune -o -path './@runtime' -prune -o \( -name '*.sh' -o -path './bin/*' \) -print | sed 's|^\./||' | sort)
 SHELL_ERRORS=0
 
+# The checks test the parser and ShellCheck in a condition (if !) and read
+# a first line with || true: set -e ended the suite at the first syntax
+# error or ShellCheck warning, before the check showed it
+# (tests/unit/bin/LintSuiteFindingsTest.php).
+
 # ── Shebang ─────────────────────────────────────────────────────────────────
 for script in $SHELL_SCRIPTS; do
-    firstline=$(head -1 "$script")
+    firstline=$(head -1 "$script" || true)
     case "$firstline" in
         '#!'*) ;;
         *)
@@ -64,14 +69,13 @@ done
 
 # ── Syntax ───────────────────────────────────────────────────────────────────
 for script in $SHELL_SCRIPTS; do
-    shebang=$(head -1 "$script")
+    shebang=$(head -1 "$script" || true)
     case "$shebang" in
         *bash*)  checker="bash" ;;
         *sh*)    checker="sh"   ;;
         *)       continue       ;;
     esac
-    output=$($checker -n "$script" 2>&1)
-    if [[ $? -ne 0 ]]; then
+    if ! output=$($checker -n "$script" 2>&1); then
         fail "Syntax error ($checker): $script"
         echo "     $output"
         SHELL_ERRORS=$((SHELL_ERRORS+1))
@@ -94,8 +98,7 @@ done
 if command -v shellcheck >/dev/null 2>&1; then
     SC_ERRORS=0
     for script in $SHELL_SCRIPTS; do
-        sc_output=$(shellcheck -S warning "$script" 2>&1)
-        if [[ $? -ne 0 ]]; then
+        if ! sc_output=$(shellcheck -S warning "$script" 2>&1); then
             fail "ShellCheck warnings: $script"
             head -20 <<< "$sc_output" | sed 's/^/     /'
             SC_ERRORS=$((SC_ERRORS+1))
@@ -256,7 +259,7 @@ section "Migration naming consistency"
 MIGRATION_ERRORS=0
 while IFS= read -r file; do
     filename=$(basename "$file" .php)
-    classname=$(grep -oP 'class\s+\K[A-Za-z0-9_]+' "$file" 2>/dev/null | head -1)
+    classname=$(grep -oP 'class\s+\K[A-Za-z0-9_]+' "$file" 2>/dev/null | head -1 || true)
     if [[ -n "$classname" && "$classname" != "$filename" ]]; then
         echo -e "  ${RED}✘${NC}  $file: class '$classname' ≠ filename '$filename'"
         MIGRATION_ERRORS=$((MIGRATION_ERRORS+1))
@@ -271,7 +274,7 @@ fi
 
 # Duplicate migration timestamps
 DUPES=$(find migrations -name "m*.php" 2>/dev/null \
-    | sed 's|.*/||;s|\.php||' | sort | uniq -d)
+    | sed 's|.*/||;s|\.php||' | sort | uniq -d || true)
 if [[ -z "$DUPES" ]]; then
     ok "No duplicate migration timestamps"
 else

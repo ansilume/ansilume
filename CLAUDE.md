@@ -194,6 +194,10 @@ All code must pass Scrutinizer-CI without issues. Proactively avoid common findi
 - Prefer constructor injection or explicit dependency wiring over hidden globals.
 - Keep methods short enough to understand without scrolling.
 
+### Shell scripts
+- Most shell code here runs with `set -e` (the scripts in `bin/`, the docker entrypoints, the run steps of the workflows), most of it with `pipefail` too: a command whose failure the script handles, reports or tolerates runs in a condition (`if ! out=$(cmd); then`), keeps its status after `||` (`rc=0; out=$(cmd) || rc=$?`) or tolerates its failure in the substitution (`out=$(cmd || true)`, for a pipeline too), never as a plain statement followed by a test of `$?`, `PIPESTATUS` or an empty result, which `set -e` never reaches: it ends the script at the statement without the script's message. `ErrexitExitStatusTest` finds a test of `$?` or `PIPESTATUS` after a statement; no test finds a plain capture whose empty result is tested after it, so check every new capture for it. A suite of `bin/tests-*.sh` that `set -e` still ends early names the line and the command it ended at (`bin/tests-common.sh`, `SuiteEndedEarlyTest`).
+- Pass a captured output to `grep -q`, `head` and awk with `exit` as a here-string (`grep -q … <<< "$OUT"`), never through `echo "$OUT" |`, which fails under `pipefail` once the reader stops (`PipefailCapturedOutputTest`).
+
 ### Yii2
 - Use Yii2 conventions unless there is a strong reason not to.
 - Keep controllers thin.

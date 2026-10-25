@@ -48,7 +48,7 @@ if dc php vendor/bin/php-cs-fixer --version >/dev/null 2>&1; then
         ok "PHP-CS-Fixer passed (0 fixable issues)"
     else
         fail "PHP-CS-Fixer: $CSFIXER_COUNT file(s) need fixing — run: php vendor/bin/php-cs-fixer fix"
-        grep -m 20 '^\s*[0-9]\+)' <<< "$CSFIXER_OUT" | sed 's/^/     /'
+        grep -m 20 '^\s*[0-9]\+)' <<< "$CSFIXER_OUT" | sed 's/^/     /' || true
     fi
 else
     skip "php-cs-fixer not available"

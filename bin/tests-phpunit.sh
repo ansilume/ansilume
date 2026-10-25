@@ -40,7 +40,7 @@ elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
 else
     DB_ROOT_PWD="${DB_ROOT_PASSWORD:-}"
     if [[ -z "$DB_ROOT_PWD" ]] && [[ -f ".env" ]]; then
-        DB_ROOT_PWD=$(grep -m1 '^DB_ROOT_PASSWORD=' .env | cut -d= -f2-)
+        DB_ROOT_PWD=$(grep -m1 '^DB_ROOT_PASSWORD=' .env | cut -d= -f2- || true)
     fi
 
     if [[ -n "$DB_ROOT_PWD" ]]; then
@@ -70,7 +70,9 @@ try {
 }
 PHPEOF
 
-        SETUP_OUT=$(php "$_PHP_HELPER" setup "$_DB_HOST" "$_DB_PORT" "$DB_ROOT_PWD" "$SCRATCH_DB" "$_DB_USER" 2>&1)
+        # The helper prints its error and exits 1: || true keeps the error
+        # for the skip below, where set -e ended the suite without it.
+        SETUP_OUT=$(php "$_PHP_HELPER" setup "$_DB_HOST" "$_DB_PORT" "$DB_ROOT_PWD" "$SCRATCH_DB" "$_DB_USER" 2>&1 || true)
 
         if [[ "$SETUP_OUT" == "ok" ]]; then
             MIGRATE_OUT=$(DB_NAME=${SCRATCH_DB} php yii migrate --interactive=0 2>&1 || true)
@@ -161,11 +163,18 @@ else
     fi
 
     # ── Coverage (from the same run) ─────────────────────────────────────────
+    # A "Summary:" without figures (a run that died before its report after
+    # an error that names DbErrorSummary::of(), or a total of 0, which has no
+    # percentage) cannot be parsed: the figures are read with || true, so
+    # that set -e does not end the suite and the skip below says so.
+    LINE_COV=""
     if grep -q "Summary:" <<< "$COMBINED_OUT"; then
         SUMMARY_BLOCK=$(echo "$COMBINED_OUT" | grep -A3 'Summary:')
-        CLASS_COV=$(echo "$SUMMARY_BLOCK"  | grep -oP 'Classes:\s+\K[\d.]+%')
-        METHOD_COV=$(grep -m1 -oP 'Methods:\s+\K[\d.]+%' <<< "$COMBINED_OUT")
-        LINE_COV=$(grep -m1 -oP 'Lines:\s+\K[\d.]+%' <<< "$COMBINED_OUT")
+        CLASS_COV=$(echo "$SUMMARY_BLOCK"  | grep -oP 'Classes:\s+\K[\d.]+%' || true)
+        METHOD_COV=$(grep -m1 -oP 'Methods:\s+\K[\d.]+%' <<< "$COMBINED_OUT" || true)
+        LINE_COV=$(grep -m1 -oP 'Lines:\s+\K[\d.]+%' <<< "$COMBINED_OUT" || true)
+    fi
+    if [[ -n "$LINE_COV" ]]; then
         ok "Coverage — Lines: ${LINE_COV}  Methods: ${METHOD_COV}  Classes: ${CLASS_COV}"
     elif grep -qi "No code coverage driver" <<< "$COMBINED_OUT"; then
         skip "Code coverage (no coverage driver — install pcov or xdebug)"

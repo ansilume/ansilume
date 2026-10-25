@@ -8,6 +8,17 @@
 # awk with exit as a here-string (grep -q … <<< "$OUT"), never through
 # echo "$OUT" |, which fails once such a command has stopped reading
 # (tests/unit/bin/PipefailCapturedOutputTest.php).
+#
+# They run with set -e too: a check tests a command it expects to fail in a
+# condition (if ! out=$(cmd); then), keeps its status after ||
+# (rc=0; out=$(cmd) || rc=$?), or tolerates its failure inside the
+# substitution (out=$(cmd || true)). A test of $? after a plain statement
+# never runs when the statement failed: set -e has ended the suite there,
+# before the check said what it found (tests/unit/bin/ErrexitExitStatusTest.php
+# finds such a test of $?; a plain capture whose empty result is tested later
+# fails the same way, and no test finds that). A suite that set -e ends
+# before print_summary names the line and the command it ended at
+# (report_early_end).
 
 # Navigate to repo root
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,7 +74,10 @@ dc() {
 }
 
 # ─── Summary ────────────────────────────────────────────────────────────────
+SUMMARY_REACHED=0
+
 print_summary() {
+    SUMMARY_REACHED=1
     local ELAPSED=$(( $(date +%s) - START_TIME ))
     local HOURS=$(( ELAPSED / 3600 ))
     local MINUTES=$(( (ELAPSED % 3600) / 60 ))
@@ -90,3 +104,34 @@ print_summary() {
     echo -e "\n${GREEN}${BOLD}All checks passed.${NC}\n"
     exit 0
 }
+
+# ─── Early end ──────────────────────────────────────────────────────────────
+# Every suite ends with print_summary. When set -e ends it earlier, at a
+# command that failed outside a condition, name the line and the command
+# instead of ending without a word (tests/unit/bin/SuiteEndedEarlyTest.php).
+# The ERR trap fires where set -e ends the suite, in functions too
+# (errtrace), and only notes the line: it fires in command substitutions as
+# well, where the note is lost with the subshell. The command alone could
+# mislead: for a pipeline it is the last command of the pipeline. set -u and
+# an explicit exit end a suite without the ERR trap. printf %s prints the
+# command as written: echo -e would expand its backslashes. The report goes
+# to the suite's stdout as it was here, so that the redirection of a loop or
+# a block it ended in (done > /dev/null) does not swallow it.
+EARLY_END_LINE=""
+exec {EARLY_END_FD}>&1
+report_early_end() {
+    local status="$1" ended_at="$2"
+    if [[ $SUMMARY_REACHED -eq 1 || $status -eq 0 ]]; then
+        return 0
+    fi
+    if [[ -n "$EARLY_END_LINE" ]]; then
+        printf '\n  %b✘%b  The suite ended early (exit %s), before its summary, at %s: %s\n' "$RED" "$NC" "$status" "${EARLY_END_LINE##*/}" "$ended_at"
+        echo "     set -e ends a suite where a command fails outside a condition; the checks after it did not run."
+    else
+        printf '\n  %b✘%b  The suite ended early (exit %s), before its summary, at: %s\n' "$RED" "$NC" "$status" "$ended_at"
+        echo "     The checks after it did not run; the lines above say why."
+    fi
+}
+set -o errtrace
+trap 'EARLY_END_LINE="${BASH_SOURCE[0]:-$0}:${LINENO}"' ERR
+trap 'report_early_end "$?" "$BASH_COMMAND" >&"$EARLY_END_FD"' EXIT
