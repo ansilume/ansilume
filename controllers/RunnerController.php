@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\SubmittedId;
 use app\models\AuditLog;
 use app\models\Job;
 use app\models\Runner;
@@ -11,6 +12,14 @@ use app\models\RunnerGroup;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
+/**
+ * Runners: registered, moved, deleted and given a new token by admins. The
+ * group_id that create posts and the target_group_id that move posts are
+ * read as the model's integer rule reads them (SubmittedId): a value that is
+ * no ID, such as a fraction, a boolean, a list or a JSON number beyond the
+ * int range (the request's JSON parser serves the forms too), finds no
+ * group, as an unknown ID.
+ */
 class RunnerController extends BaseController
 {
     /**
@@ -38,11 +47,10 @@ class RunnerController extends BaseController
 
     public function actionCreate(): Response
     {
-        /** @var int|string $rawGroupId */
-        $rawGroupId = \Yii::$app->request->post('group_id');
-        $groupId = (int)$rawGroupId;
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $groupId = SubmittedId::of(\Yii::$app->request->post('group_id'));
         /** @var RunnerGroup|null $group */
-        $group = RunnerGroup::findOne($groupId);
+        $group = $groupId === null ? null : RunnerGroup::findOne($groupId);
 
         if ($group === null) {
             $this->session()->setFlash('danger', 'Runner group not found.');
@@ -94,9 +102,8 @@ class RunnerController extends BaseController
         $runner = $this->findModel($id);
         $sourceGroupId = $runner->runner_group_id;
 
-        /** @var int|string $rawTargetGroupId */
-        $rawTargetGroupId = \Yii::$app->request->post('target_group_id');
-        $targetGroupId = (int)$rawTargetGroupId;
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $targetGroupId = SubmittedId::of(\Yii::$app->request->post('target_group_id'));
 
         if ($targetGroupId === $sourceGroupId) {
             $this->session()->setFlash('warning', 'Runner is already in that group.');
@@ -104,7 +111,7 @@ class RunnerController extends BaseController
         }
 
         /** @var RunnerGroup|null $targetGroup */
-        $targetGroup = RunnerGroup::findOne($targetGroupId);
+        $targetGroup = $targetGroupId === null ? null : RunnerGroup::findOne($targetGroupId);
         if ($targetGroup === null) {
             $this->session()->setFlash('danger', 'Target runner group not found.');
             return $this->redirect(['/runner-group/view', 'id' => $sourceGroupId]);

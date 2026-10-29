@@ -68,9 +68,13 @@ class JobTemplateControllerSurveySecretsTest extends WebControllerTestCase
 
     /**
      * Regression: overrides[limit][]=x made the launch fail with "Array to
-     * string conversion" (a 500) instead of launching without the list.
+     * string conversion" (a 500). The form then dropped such a list and
+     * launched the job with the template's limit and verbosity, where
+     * POST /api/v1/jobs and the job trigger refuse it. It is refused now
+     * with the job record's messages, and nothing is launched
+     * (LaunchInputTest has every launch path).
      */
-    public function testAListWhereTheFormSendsOneValueIsDropped(): void
+    public function testAListWhereTheFormSendsOneValueIsRefused(): void
     {
         $this->useRealLaunchService();
         $template = $this->createJobTemplate(
@@ -82,10 +86,9 @@ class JobTemplateControllerSurveySecretsTest extends WebControllerTestCase
 
         $result = $this->launch($template, ['overrides' => ['limit' => ['x'], 'verbosity' => ['3']]]);
 
-        $this->assertInstanceOf(Response::class, $result);
-        $job = $this->latestJobOf($template);
-        $this->assertNull($job->limit);
-        $this->assertNull($job->verbosity);
+        $this->assertSame('rendered:launch', $result, 'the form again, no server error');
+        $this->assertSame('Launch failed: Limit must be a string. Verbosity must be an integer.', \Yii::$app->session->getFlash('danger'));
+        $this->assertSame(0, (int)Job::find()->where(['job_template_id' => $template->id])->count(), 'nothing was launched');
     }
 
     public function testPostedOverridesThatAreNoListLaunchWithoutOverrides(): void

@@ -12,6 +12,13 @@ return [
     'id' => 'ansilume-tests',
     'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
+    // As config/web.php and config/console.php: every 'integer', 'number'
+    // and 'double' rule is a WholeNumberValidator.
+    'container' => [
+        'definitions' => [
+            \yii\validators\NumberValidator::class => \app\components\WholeNumberValidator::class,
+        ],
+    ],
     'components' => [
         'log' => [
             'targets' => [
@@ -24,6 +31,11 @@ return [
                     // Never dump request/environment context ($_SERVER contains
                     // APP_SECRET_KEY, DB_PASSWORD, ...) into the log file.
                     'logVars' => [],
+                    // A file of their own: the tests run as root in the app
+                    // container, and in a git checkout a file that root
+                    // creates or rotates there, such as runtime/logs/app.log,
+                    // is one that php-fpm's workers (www-data) cannot append to.
+                    'logFile' => '@runtime/logs/test.log',
                 ],
             ],
         ],

@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
-import { expectFlash, expectForbidden } from '../../lib/helpers';
+import { expectFlash, expectForbidden, fieldError, postJsonWithPageCsrf, showAnswer } from '../../lib/helpers';
+import { NOT_A_CREDENTIAL_ID, gitProjectWithCredential } from '../../lib/projects';
 import { asAdmin, forgePost } from '../../lib/scoping';
 import { BTN_CREATE } from '../../lib/selectors';
 
@@ -121,6 +122,25 @@ test.describe('Projects RBAC', () => {
     }
     await page.goto(`/project/update?id=${match[1]}`);
     await expectForbidden(page);
+  });
+
+  // Regression: the project form posted as JSON with an empty list as the
+  // repository credential answered 500 for an operator too, who may create
+  // projects: Yii's rules took the list for empty, the column stored it as
+  // 0, and its foreign key refused that. The field's integer error is shown
+  // now, and no project is created.
+  test('operator gets the field error for a project posted as JSON with an empty list as the repository credential, and none is created', async ({ page }) => {
+    const name = 'e2e-json-operator-credential-list-project';
+    await page.goto('/project/create');
+
+    const answer = await postJsonWithPageCsrf(page, '/project/create', gitProjectWithCredential(name, '[]'));
+
+    expect(answer.status(), 'the form again, not a server error').toBe(200);
+    await showAnswer(page, answer);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+    await expect(fieldError(page, 'project', 'scm_credential_id')).toHaveText(NOT_A_CREDENTIAL_ID);
+    await page.goto('/project/index');
+    await expect(page.locator('#project-table tbody'), 'no project was created').not.toContainText(name);
   });
 
   test('operator can see edit button on project view', async ({ page }) => {

@@ -612,7 +612,6 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
             ['approver_config', ['approver_config' => '{not json']],
             // Review of step 3 (contract-2): JSON, but no object.
             ['approver_config', ['approver_config' => '[7, 12]']],
-            ['required_approvals', ['approver_type' => 'users', 'approver_config' => '{"user_ids": [7]}', 'required_approvals' => 3]],
         ];
         foreach ($invalid as [$attribute, $values]) {
             $rule = new ApprovalRule();
@@ -621,6 +620,11 @@ class OpenApiApprovalWorkflowContractTest extends TestCase
             $this->assertFalse($rule->validate([$attribute]), $attribute);
             $messages[] = (string)$rule->getFirstError($attribute);
         }
+        // A users rule counts the users who exist (ApprovalRule::countEligibleApprovers()),
+        // which this test, without a transaction, does not create:
+        // ApprovalRulesControllerTest::testMoreRequiredApprovalsThanTheListedUsersAre422
+        // gets this answer for a user who exists.
+        $messages[] = sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 3, 1);
 
         return $messages;
     }

@@ -47,15 +47,36 @@ class WebLaunchOverridesTest extends TestCase
     }
 
     /**
-     * Regression: overrides[limit][]=x reached the service as a list, and
-     * casting it failed the request with "Array to string conversion".
+     * A list as check_mode, which the launch normalises, is dropped, and so
+     * are extra vars that are neither JSON text nor fields.
      */
-    public function testListsWhereTheFormSendsSingleValuesAreDropped(): void
+    public function testAListAsCheckModeAndExtraVarsOfAnotherKindAreDropped(): void
     {
-        $this->assertSame([], WebLaunchOverrides::fromRequest(
-            ['limit' => ['x'], 'verbosity' => ['3'], 'check_mode' => ['1'], 'extra_vars' => 5],
-            null
-        ));
+        $this->assertSame([], WebLaunchOverrides::fromRequest(['check_mode' => ['1'], 'extra_vars' => 5], null));
+    }
+
+    /**
+     * Regression: a list as the limit or the verbosity was dropped, also
+     * one of an empty value (a forged overrides[verbosity][]=), and the job
+     * launched with the template's limit and verbosity. It goes on as
+     * posted, as POST /api/v1/jobs and the job trigger hand it on, for
+     * JobLaunchInput to refuse before the launch (LaunchInputTest), so that
+     * it cannot fail the launch with "Array to string conversion" either, as
+     * overrides[limit][]=x did before the form dropped it.
+     */
+    public function testAListAsTheLimitOrTheVerbosityGoesOnForTheLaunchInputToRefuse(): void
+    {
+        $this->assertSame(
+            ['limit' => ['x'], 'verbosity' => ['']],
+            WebLaunchOverrides::fromRequest(['limit' => ['x'], 'verbosity' => [''], 'check_mode' => ['1']], null)
+        );
+        // An empty list, as the form posted as JSON gives [] and {}.
+        $this->assertSame(['limit' => [], 'verbosity' => []], WebLaunchOverrides::fromRequest(['limit' => [], 'verbosity' => []], null));
+    }
+
+    public function testANullLimitOrVerbosityIsNone(): void
+    {
+        $this->assertSame([], WebLaunchOverrides::fromRequest(['limit' => null, 'verbosity' => null, 'check_mode' => null], null));
     }
 
     public function testOverridesThatAreNoListGiveNothing(): void

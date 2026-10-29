@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\Percent;
 use app\models\AnalyticsQuery;
 use yii\base\Component;
 use yii\db\Connection;
@@ -73,7 +74,7 @@ class AnalyticsService extends Component
             'total_jobs' => $total,
             'succeeded' => $succeeded,
             'failed' => (int)($row['failed'] ?? 0),
-            'success_rate' => $total > 0 ? round($succeeded / $total * 100, 2) : 0.0,
+            'success_rate' => Percent::rate($succeeded, $total),
             'avg_duration_seconds' => round((float)($row['avg_duration'] ?? 0), 1),
             'avg_failure_duration_seconds' => round((float)($row['avg_failure_duration'] ?? 0), 1),
             'mttr_seconds' => $this->computeMttr($query),
@@ -161,7 +162,7 @@ class AnalyticsService extends Component
                 'total' => $total,
                 'succeeded' => $succeeded,
                 'failed' => (int)$r['failed'],
-                'success_rate' => $total > 0 ? round($succeeded / $total * 100, 2) : 0.0,
+                'success_rate' => Percent::rate($succeeded, $total),
                 'avg_duration_seconds' => round((float)($r['avg_duration'] ?? 0), 1),
             ];
         }, $rows);
@@ -246,7 +247,7 @@ class AnalyticsService extends Component
                 'total' => $total,
                 'succeeded' => $succeeded,
                 'failed' => (int)$r['failed'],
-                'success_rate' => $total > 0 ? round($succeeded / $total * 100, 2) : 0.0,
+                'success_rate' => Percent::rate($succeeded, $total),
             ];
         }, $rows);
     }
@@ -376,7 +377,7 @@ class AnalyticsService extends Component
             'failed' => (int)($row['failed'] ?? 0),
             'canceled' => (int)($row['canceled'] ?? 0),
             'running' => (int)($row['running'] ?? 0),
-            'success_rate' => $finished > 0 ? round($succeeded / $finished * 100, 2) : 0.0,
+            'success_rate' => Percent::rate($succeeded, $finished),
             'avg_duration_seconds' => round((float)($row['avg_duration'] ?? 0), 1),
         ];
     }
@@ -423,7 +424,7 @@ class AnalyticsService extends Component
                 'total' => $total,
                 'succeeded' => $succeeded,
                 'failed' => $failed,
-                'success_rate' => $finished > 0 ? round($succeeded / $finished * 100, 2) : 0.0,
+                'success_rate' => Percent::rate($succeeded, $finished),
                 'avg_duration_seconds' => round((float)($r['avg_duration'] ?? 0), 1),
             ];
         }, $rows);
@@ -487,7 +488,7 @@ class AnalyticsService extends Component
                 'total' => $total,
                 'succeeded' => $succeeded,
                 'failed' => (int)$r['failed'],
-                'success_rate' => $total > 0 ? round($succeeded / $total * 100, 2) : 0.0,
+                'success_rate' => Percent::rate($succeeded, $total),
                 'avg_duration_seconds' => round((float)($r['avg_duration'] ?? 0), 1),
                 'last_seen_at' => $r['last_seen_at'] !== null ? (int)$r['last_seen_at'] : null,
             ];

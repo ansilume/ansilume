@@ -53,12 +53,12 @@ sed -i \
 docker compose up -d
 
 # 5. Create the first admin user
-docker compose exec app php yii setup/admin admin admin@example.com yourpassword
+docker compose exec -u www-data app php yii setup/admin admin admin@example.com yourpassword
 ```
 
 Open **http://localhost:8080**.
 
-> Migrations run automatically on startup. The first `setup/admin`, run while no user exists, also seeds the demo project and selftest template. While no active superadmin exists, `setup/admin` creates a new superadmin, the way back in when no superadmin can sign in (see [troubleshooting.md](troubleshooting.md#no-superadmin-can-sign-in-any-more)); while one exists it answers `An active superadmin already exists. Aborting.` and changes nothing.
+> Migrations run automatically on startup. The first `setup/admin`, run while no user exists, also seeds the demo project and selftest template. While no active superadmin exists, `setup/admin` creates a new superadmin, the way back in when no superadmin can sign in (see [troubleshooting.md](troubleshooting.md#no-superadmin-can-sign-in-any-more)); while one exists it answers `An active superadmin already exists. Aborting.` and changes nothing. Console commands run as `www-data` (`-u www-data`), the user of the web server, so that what they log to `runtime/logs/app.log` stays writable for it (see [troubleshooting.md](troubleshooting.md#app-or-queue-worker-container-is-unhealthy-the-log-file-cannot-be-written)).
 
 ---
 
@@ -81,7 +81,7 @@ sed -i \
 
 docker compose up -d --build
 
-docker compose exec app php yii setup/admin admin admin@example.com yourpassword
+docker compose exec -u www-data app php yii setup/admin admin admin@example.com yourpassword
 ```
 
 > This uses the development compose file. Its runners mount the source tree,
@@ -107,7 +107,7 @@ docker compose exec app php yii setup/admin admin admin@example.com yourpassword
 
 ## External database
 
-To connect to an existing MySQL or MariaDB server, set the following in `.env` and remove the `db:` service from `docker-compose.yml`:
+To connect to an existing MySQL or MariaDB server, set the following in `.env`, with `COMPOSE_PROFILES` empty, as the quickstart does when you choose an external database:
 
 ```dotenv
 DB_HOST=your-db-host
@@ -115,7 +115,10 @@ DB_PORT=3306
 DB_NAME=ansilume
 DB_USER=ansilume
 DB_PASSWORD=your-password
+COMPOSE_PROFILES=
 ```
+
+Without the `internal-db` profile, the bundled MariaDB container (the `db` service) does not start. Leave the `db:` service in `docker-compose.yml`: the other services name it in `depends_on`, and Docker Compose refuses a file without it (`service "app" depends on undefined service "db": invalid compose project`, or another service in place of `app`).
 
 The database and user must exist before starting the stack. Ansilume only needs standard DML/DDL permissions — no `SUPER` or `GRANT` required.
 
@@ -219,10 +222,10 @@ docker compose up -d
 docker compose logs -f app queue-worker
 
 # Run migrations manually if needed
-docker compose exec app php yii migrate
+docker compose exec -u www-data app php yii migrate
 
 # Create admin user
-docker compose exec app php yii setup/admin admin admin@example.com yourpassword
+docker compose exec -u www-data app php yii setup/admin admin admin@example.com yourpassword
 
 # Full test suite
 bin/tests.sh

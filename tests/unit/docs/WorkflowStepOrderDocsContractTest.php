@@ -53,15 +53,13 @@ class WorkflowStepOrderDocsContractTest extends TestCase
         . 'enter the number of the step it should follow: steps are renumbered 10, 20, 30… after every add and '
         . 'move. Use ▲ / ▼ to move a step.';
 
+    /**
+     * The section follows the one of 2.11.0, and the one of 2.10.0, of the
+     * update to approvals and workflows, follows it.
+     */
     public function testTheSectionFollowsTheOneOf2110(): void
     {
-        preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(PhpUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.12.2 follows.');
-        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The section of 2.12.0 follows.');
-        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][3] ?? null, 'The section of 2.11.1 follows.');
-        $this->assertSame(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, $headings[0][4] ?? null, 'The section of 2.11.0 follows.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][5] ?? null, 'This section comes next.');
+        $this->assertUpdateSectionBetween(WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION, self::UPDATE_SECTION, ApprovalWorkflowDocsContractTest::UPDATE_SECTION);
         $this->assertSame(
             self::SECTION_ANCHOR,
             str_replace(' ', '-', (string)preg_replace('/[^a-z0-9 -]/', '', strtolower(substr(self::UPDATE_SECTION, 3)))),

@@ -23,7 +23,6 @@ class SlackChannelTest extends TestCase
         );
         $nt->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($nt, [
             'id' => 1,
             'name' => 'Slack Test',
@@ -137,6 +136,11 @@ class SlackChannelTest extends TestCase
         $this->assertTrue(true);
     }
 
+    /**
+     * Regression: post() called curl_close(), which PHP 8.5 deprecates, after
+     * the delivery; the error handler turned the deprecation into an
+     * exception, so every delivered notification was recorded as failed.
+     */
     public function testPostSucceedsAgainstLoopbackServer(): void
     {
         $server = new HttpLoopbackServer();
@@ -165,5 +169,19 @@ class SlackChannelTest extends TestCase
         } finally {
             $server->stop();
         }
+    }
+
+    /**
+     * curl_init() gives false for a URL longer than libcurl takes
+     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes).
+     */
+    public function testAWebhookUrlThatCurlDoesNotTakeIsAnError(): void
+    {
+        $url = 'http://127.0.0.1/' . str_repeat('a', 8000000);
+        $nt = $this->makeTemplate((string)json_encode(['webhook_url' => $url]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('SlackChannel: failed to init curl');
+        (new SlackChannel())->send($nt, 'Hello', 'World', []);
     }
 }

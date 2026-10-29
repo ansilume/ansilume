@@ -7,12 +7,16 @@ namespace app\tests\integration\controllers;
 use app\controllers\ApprovalRuleController;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
+use app\tests\integration\ApproverListFixtures;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
 class ApprovalRuleControllerActionTest extends WebControllerTestCase
 {
+    use ApproverListFixtures;
+    use RendersRealViews;
+
     public function testIndexRendersDataProvider(): void
     {
         $user = $this->createUser();
@@ -185,6 +189,78 @@ class ApprovalRuleControllerActionTest extends WebControllerTestCase
         $ctrl->actionUpdate(9999999);
     }
 
+    /**
+     * Regression: the form saved a users rule that requires more approvals
+     * than the users it names, as the count took every entry of user_ids:
+     * also one that is no ID, the same user again or a user who does not
+     * exist. Every launch the rule gates was then refused as one that could
+     * never be approved. The form is shown again with the error under
+     * Required Approvals, and nothing is saved or audited. The form the
+     * browser sends lists each chosen user once.
+     *
+     * @dataProvider oneUserListedProvider
+     */
+    public function testRegressionTheFormRefusesAUsersRuleThatNeedsMoreApprovalsThanItsUsers(string $list): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $stored = $this->createRule((int)$user->id);
+        $audits = $this->ruleAudits();
+        $error = [sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 2, 1)];
+        $posted = [
+            'approver_type' => ApprovalRule::APPROVER_TYPE_USERS,
+            'approver_config' => $this->oneUserConfig($list),
+            'required_approvals' => '2',
+        ];
+
+        $this->setPost(['ApprovalRule' => ['name' => 'form-one-approver'] + $posted]);
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:form', $ctrl->actionCreate());
+        $this->assertSame($error, $ctrl->capturedParams['model']->getErrors('required_approvals'));
+        $this->assertFalse(ApprovalRule::find()->where(['name' => 'form-one-approver'])->exists(), 'nothing created');
+
+        $this->setPost(['ApprovalRule' => $posted]);
+        $ctrl = $this->makeController();
+        $this->assertSame('rendered:form', $ctrl->actionUpdate((int)$stored->id));
+        $this->assertSame($error, $ctrl->capturedParams['model']->getErrors('required_approvals'));
+        $reloaded = ApprovalRule::findOne($stored->id);
+        $this->assertNotNull($reloaded);
+        $this->assertSame(ApprovalRule::APPROVER_TYPE_ROLE, $reloaded->approver_type, 'the rule stays as it was');
+        $this->assertSame('{"role":"admin"}', $reloaded->approver_config);
+        $this->assertSame(1, (int)$reloaded->required_approvals);
+        $this->assertSame($audits, $this->ruleAudits(), 'no audit entry');
+    }
+
+    /**
+     * The form shown again says so under Required Approvals.
+     */
+    public function testTheFormShowsTheCountErrorUnderRequiredApprovals(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $this->setPost(['ApprovalRule' => [
+            'name' => 'form-one-approver',
+            'approver_type' => ApprovalRule::APPROVER_TYPE_USERS,
+            'approver_config' => $this->oneUserConfig('[{user}, "abc"]'),
+            'required_approvals' => '2',
+        ]]);
+        $app = \Yii::$app;
+        $this->assertNotNull($app);
+        $ctrl = new class ('approval-rule', $app) extends ApprovalRuleController {
+            public function render($view, $params = []): string
+            {
+                return $this->renderPartial($view, $params);
+            }
+        };
+
+        $html = $this->withRealViews($ctrl, '/approval-rule/create', static fn (): mixed => $ctrl->actionCreate());
+
+        $this->assertIsString($html);
+        $field = $this->between($html, 'field-required-approvals', 'id="approver-count-warning"');
+        $this->assertStringContainsString(sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 2, 1), $field);
+        $this->assertFalse(ApprovalRule::find()->where(['name' => 'form-one-approver'])->exists(), 'nothing created');
+    }
+
     public function testDeleteRemovesRuleAndAudits(): void
     {
         $user = $this->createUser();
@@ -214,6 +290,27 @@ class ApprovalRuleControllerActionTest extends WebControllerTestCase
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * The audit entries of approval rules.
+     */
+    private function ruleAudits(): int
+    {
+        return (int)AuditLog::find()->where(['object_type' => 'approval_rule'])->count();
+    }
+
+    /**
+     * The part of $html from the first $from on, up to the next $to.
+     */
+    private function between(string $html, string $from, string $to): string
+    {
+        $start = strpos($html, $from);
+        $this->assertNotFalse($start, "No {$from}");
+        $end = strpos($html, $to, $start);
+        $this->assertNotFalse($end, "No {$to} after {$from}");
+
+        return substr($html, $start, $end - $start);
+    }
 
     private function createRule(int $createdBy): ApprovalRule
     {

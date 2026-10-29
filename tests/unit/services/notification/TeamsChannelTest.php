@@ -23,7 +23,6 @@ class TeamsChannelTest extends TestCase
         );
         $nt->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($nt, [
             'id' => 1,
             'name' => 'Teams Test',
@@ -148,6 +147,11 @@ class TeamsChannelTest extends TestCase
         $this->assertArrayNotHasKey('potentialAction', $decoded);
     }
 
+    /**
+     * Regression: post() called curl_close(), which PHP 8.5 deprecates, after
+     * the delivery; the error handler turned the deprecation into an
+     * exception, so every delivered notification was recorded as failed.
+     */
     public function testPostSucceedsAgainstLoopbackServer(): void
     {
         $server = new HttpLoopbackServer();
@@ -176,5 +180,19 @@ class TeamsChannelTest extends TestCase
         } finally {
             $server->stop();
         }
+    }
+
+    /**
+     * curl_init() gives false for a URL longer than libcurl takes
+     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes).
+     */
+    public function testAWebhookUrlThatCurlDoesNotTakeIsAnError(): void
+    {
+        $url = 'http://127.0.0.1/' . str_repeat('a', 8000000);
+        $nt = $this->makeTemplate((string)json_encode(['webhook_url' => $url]));
+
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('TeamsChannel: failed to init curl');
+        (new TeamsChannel())->send($nt, 'Hello', 'World', ['job.status' => 'failed']);
     }
 }

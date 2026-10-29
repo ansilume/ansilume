@@ -80,11 +80,15 @@ class WebhookService extends \yii\base\Component
             $networkError = $errstr;
             return true;
         }, E_WARNING);
+        // PHP keeps the headers of the last HTTP answer for the whole process
+        // until the next HTTP request: cleared, so that a delivery that got no
+        // HTTP answer has no status line.
+        http_clear_last_response_headers();
         $response = file_get_contents($webhook->url, false, $ctx);
         restore_error_handler();
 
         // Log non-2xx responses for diagnostics but do not throw.
-        $statusLine = $http_response_header[0] ?? '';
+        $statusLine = http_get_last_response_headers()[0] ?? '';
         if ($response === false || !str_contains($statusLine, '2')) {
             $detail = $networkError !== '' ? " ({$networkError})" : '';
             \Yii::warning(

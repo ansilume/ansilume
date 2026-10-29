@@ -22,7 +22,6 @@ class ScheduleServiceTest extends TestCase
     {
         $this->service = new ScheduleService();
         $this->isDue   = new \ReflectionMethod(ScheduleService::class, 'isDue');
-        $this->isDue->setAccessible(true);
     }
 
     // ── next_run_at is set ────────────────────────────────────────────────────
@@ -106,7 +105,6 @@ class ScheduleServiceTest extends TestCase
         );
         $s->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($s, array_merge([
             'id'              => 1,
             'name'            => 'test',

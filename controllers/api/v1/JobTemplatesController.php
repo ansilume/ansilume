@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\components\JobTemplateWarnings;
+use app\components\SubmittedInteger;
 use app\models\Credential;
 use app\models\JobTemplate;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
@@ -43,10 +44,33 @@ use yii\web\NotFoundHttpException;
  * see answers 422 "The selected inventory does not exist.", whether it has
  * a rule or not, and an own rule that differs from the inventory's answers
  * 422 (JobTemplateRuleAssignment::RULES_DIFFER).
+ *
+ * An integer field that is no whole number, such as 5.5, "abc", true or a
+ * JSON number beyond the int range (1e30, 1e999), answers 422 with the
+ * field's message ("Forks must be an integer.") and writes nothing
+ * (applyIntFields()); on a gated template the lock's 403 comes first, for
+ * the users it applies to, unless the lock sees no change: it compares a
+ * field after the column's type cast, PHP's (int), so 5.5, "5abc" or " 5"
+ * where 5 is stored, true where 1 is, and "abc", false or 0.5 where 0 is
+ * are no change to it, and a body that changes nothing else it guards gets
+ * the field's 422. A project that is no project ID answers 422 before the
+ * lock and before the access checks of the project it names, which read
+ * the project ID as the save stores it (refusesSubmittedProject()). A list
+ * or an object in an integer field, also an empty one (a JSON [] or {}),
+ * which the rules would take for empty, answers 422 with the field's
+ * message too, before anything reads the body: on POST after the
+ * permission check, on PUT after the 403 of the stored template's project,
+ * for every caller before the access check of the project it names and the
+ * lock (applyBodyUnlessRefused()). As approval_rule_id, it is a change of the
+ * rule (403) for everyone but admins, and 422 "Approval rule must be an
+ * integer." for them (ruleAssignmentError()).
  */
 class JobTemplatesController extends BaseApiController
 {
     use ApiTeamScopingTrait;
+
+    /** The integer fields of a body, which applyIntFields() sets. */
+    private const INTEGER_FIELDS = ['project_id', 'inventory_id', 'credential_id', 'verbosity', 'forks', 'timeout_minutes', 'runner_group_id'];
 
     protected function apiAccessRules(): array
     {
@@ -92,7 +116,7 @@ class JobTemplatesController extends BaseApiController
         $page = $this->requestedPage();
 
         /** @var JobTemplate[] $templates */
-        $templates = $dp->getModels();
+        $templates = $this->modelsOfPage($dp, $page);
         $changeable = $this->changeableIds(array_map(static fn (JobTemplate $t): int => (int)$t->id, $templates));
 
         return $this->paginated(
@@ -130,17 +154,19 @@ class JobTemplatesController extends BaseApiController
 
         $model = new JobTemplate();
         $body = (array)\Yii::$app->request->bodyParams;
-        $this->applyBody($model, $body);
         $model->created_by = (int)\Yii::$app->user->id;
-
+        $bodyRefusal = $this->applyBodyUnlessRefused($model, $body);
+        if ($bodyRefusal !== null) {
+            return $this->error($bodyRefusal, 422);
+        }
         $userId = $this->currentUserId();
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
         }
         $ruleAssignment = new JobTemplateRuleAssignment();
-        $refusal = $ruleAssignment->apply($model, $body, $userId, null);
-        if ($refusal !== null) {
-            return $this->error($refusal, 403);
+        $ruleError = $this->ruleAssignmentError($ruleAssignment, $model, $body, $userId, null);
+        if ($ruleError !== null) {
+            return $ruleError;
         }
         $this->restrictInventories($model, $userId);
 
@@ -171,16 +197,19 @@ class JobTemplatesController extends BaseApiController
             return $this->error('Forbidden.', 403);
         }
         $body = (array)\Yii::$app->request->bodyParams;
-        $this->applyBody($model, $body);
+        $bodyRefusal = $this->applyBodyUnlessRefused($model, $body);
+        if ($bodyRefusal !== null) {
+            return $this->error($bodyRefusal, 422);
+        }
         // The project it moves to as well, not only the one it comes from.
         if (!$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
         }
         $storedRule = ApprovalRuleAssignmentPolicy::storedRuleId($model);
         $ruleAssignment = new JobTemplateRuleAssignment();
-        $refusal = $ruleAssignment->apply($model, $body, $userId, $storedRule);
-        if ($refusal !== null) {
-            return $this->error($refusal, 403);
+        $ruleError = $this->ruleAssignmentError($ruleAssignment, $model, $body, $userId, $storedRule);
+        if ($ruleError !== null) {
+            return $ruleError;
         }
         $this->restrictInventories($model, $userId);
 
@@ -226,6 +255,59 @@ class JobTemplatesController extends BaseApiController
     }
 
     /**
+     * Applies $body to $model (applyBody()) unless the body is refused: the
+     * refusal (422), else null. Refused are, before anything reads them, a
+     * list or an object in an integer field, with the field's message
+     * ("Verbosity must be an integer.", SubmittedInteger::refusesLists()):
+     * the rules would take an empty one for empty, and the column store it
+     * as 0 (verbosity 0 was saved), or its foreign key refuse 0; then a
+     * project that is no project ID (refusesSubmittedProject()), before the
+     * access checks, which read the project ID as the save stores it.
+     *
+     * @phpstan-impure it changes $model
+     * @param array<string, mixed> $body
+     */
+    private function applyBodyUnlessRefused(JobTemplate $model, array $body): ?string
+    {
+        if (SubmittedInteger::refusesLists($model, $body, self::INTEGER_FIELDS)) {
+            return $this->firstError($model);
+        }
+        $this->applyBody($model, $body);
+
+        return $this->refusesSubmittedProject($model) ? $this->firstError($model) : null;
+    }
+
+    /**
+     * Applies the approval rule $body submits ($assignment->apply()): 403
+     * with the refusal for a caller who may not change the rule, a list
+     * among the values they may not send; for an admin, 422 for a list or an
+     * object, also an empty one, which the integer rule would take for empty
+     * and the foreign key refuse as rule 0, a 500
+     * (SubmittedInteger::refusesLists()); null when the rule was applied or
+     * the body sends none.
+     *
+     * @param array<string, mixed> $body
+     * @return array{error: array{message: string}}|null
+     */
+    private function ruleAssignmentError(
+        JobTemplateRuleAssignment $assignment,
+        JobTemplate $model,
+        array $body,
+        int $userId,
+        ?int $baseline
+    ): ?array {
+        $refusal = $assignment->apply($model, $body, $userId, $baseline);
+        if ($refusal !== null) {
+            return $this->error($refusal, 403);
+        }
+        if (SubmittedInteger::refusesLists($model, $body, [JobTemplateRuleAssignment::FIELD])) {
+            return $this->error($this->firstError($model), 422);
+        }
+
+        return null;
+    }
+
+    /**
      * @param array<string, mixed> $body
      */
     private function applyBody(JobTemplate $model, array $body): void
@@ -265,20 +347,32 @@ class JobTemplatesController extends BaseApiController
      * approval_rule_id is not among them: only JobTemplateRuleAssignment
      * sets it, after its check.
      *
+     * A whole number is set as its int (SubmittedInteger: 5, "5", "+5" and
+     * 5.0 are 5); any other value as sent, for the field's integer rule to
+     * refuse with 422, a JSON number beyond the int range (1e30, 1e999)
+     * among them, whose (int) cast warns since PHP 8.5: the request answered
+     * 500. null clears credential_id and runner_group_id; an empty value
+     * (null or "") is 0 otherwise, as the cast made it: the integer rule
+     * skips empty values, and verbosity, forks and timeout_minutes hold no
+     * NULL. A list or an object never gets here (applyBodyUnlessRefused()).
+     *
      * @param array<string, mixed> $body
      */
     private function applyIntFields(JobTemplate $model, array $body): void
     {
-        $fields = ['project_id', 'inventory_id', 'credential_id', 'verbosity', 'forks', 'timeout_minutes', 'runner_group_id'];
         $nullable = ['credential_id', 'runner_group_id'];
-        foreach ($fields as $field) {
+        foreach (self::INTEGER_FIELDS as $field) {
             if (!array_key_exists($field, $body)) {
                 continue;
             }
-            if ($body[$field] === null && in_array($field, $nullable, true)) {
+            $value = $body[$field];
+            if ($value === null && in_array($field, $nullable, true)) {
                 $model->$field = null;
+            } elseif (in_array($value, [null, ''], true)) {
+                $model->$field = 0;
             } else {
-                $model->$field = (int)$body[$field];
+                // Perhaps no int: assigned as load() assigns, for the rules to check.
+                $model->setAttribute($field, SubmittedInteger::orAsSubmitted($value));
             }
         }
     }

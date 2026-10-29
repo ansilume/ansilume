@@ -46,9 +46,11 @@ class WebhooksController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<Webhook> $webhooks */
+        $webhooks = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($w) => $this->serialize($w), $dp->getModels()),
+            array_map(fn ($w) => $this->serialize($w), $webhooks),
             (int)$dp->totalCount,
             $page,
             25

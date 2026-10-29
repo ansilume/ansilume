@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\unit\bin;
 
+use app\commands\HealthController;
 use app\helpers\FileHelper;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
@@ -13,7 +14,9 @@ use PHPUnit\Framework\TestCase;
  * the install directory, here one of the test's own with its .env and
  * docker-compose.yml, with stand-ins for docker, free, df, uptime and curl.
  * The stand-in for docker answers as a running stack of app and nginx; each
- * test makes one part fail, as it fails on an operator's host.
+ * test makes one part fail, as it fails on an operator's host. Its docker
+ * exec runs as the user of -u, root without it, and root may write every
+ * file, as in the app image.
  *
  * Regression: set -euo pipefail ended the run at the first command whose
  * failure diagnose means to tolerate, mostly without a word: free or df that
@@ -91,7 +94,11 @@ class DiagnoseReachesItsEndTest extends TestCase
             # STUB_EXEC_REFUSED: app restarts, so docker exec is refused; STUB_INSPECT_FAILS:
             # the listed containers are gone; STUB_STACK_DIRS: the working directories of
             # the schedule-runner containers; STUB_NO_DAEMON: the user may not reach the
-            # daemon, so only what compose does on its own works. Other calls print nothing.
+            # daemon, so only what compose does on its own works; STUB_EXEC_LOG: a file
+            # that gets a line per docker exec, "<user> <container>: <command>"; STUB_HEALTH:
+            # what health/check prints as www-data, exiting 1; STUB_NOT_WRITABLE: a
+            # directory www-data may not write; STUB_LOG_NOT_WRITABLE: www-data may not
+            # write app.log. Other calls print nothing.
             if [ -n "${STUB_CONFIG_FAILS:-}" ] && [ "$1" = compose ] && [ "${2:-}" != version ]; then
                 echo "$STUB_CONFIG_FAILS" >&2
                 exit 1
@@ -116,13 +123,42 @@ class DiagnoseReachesItsEndTest extends TestCase
                 "compose ps -q nginx") echo nginxcid ;;
                 "compose port nginx 80") echo "0.0.0.0:8080" ;;
                 "exec "*)
+                    # docker exec [options] <container> <command>, as the user of -u, root without it.
+                    shift
+                    user=root
+                    while [ "$#" -gt 0 ]; do
+                        case "$1" in
+                            -u | --user) user=$2; shift 2 ;;
+                            -*) shift ;;
+                            *) break ;;
+                        esac
+                    done
+                    container=$1
+                    shift
+                    if [ -n "${STUB_EXEC_LOG:-}" ]; then
+                        command="$*"
+                        printf '%s %s: %s\n' "$user" "$container" "${command//$'\n'/ }" >> "$STUB_EXEC_LOG"
+                    fi
                     if [ -n "${STUB_EXEC_REFUSED:-}" ]; then
-                        echo "Error response from daemon: Container $2 is restarting," \
+                        echo "Error response from daemon: Container $container is restarting," \
                             "wait until the container is running" >&2
                         exit 1
                     fi
-                    case "$*" in
+                    # Root may write every directory and file, www-data not STUB_NOT_WRITABLE
+                    # and, with STUB_LOG_NOT_WRITABLE, not app.log (the check exits 3).
+                    case "$user $*" in
                         *"new PDO("* | *"new Redis()"*) echo ok ;;
+                        "root php /var/www/yii health/check") printf '[health] db: ok\n[health] dirs: ok\n[health] status: ok\n' ;;
+                        "www-data php /var/www/yii health/check")
+                            if [ -n "${STUB_HEALTH:-}" ]; then
+                                printf '%s' "$STUB_HEALTH"
+                                exit 1
+                            fi ;;
+                        "www-data test -w ${STUB_NOT_WRITABLE:-}") exit 1 ;;
+                        "www-data sh -c "*" sh /var/www/runtime/logs/app.log")
+                            if [ -n "${STUB_LOG_NOT_WRITABLE:-}" ]; then
+                                exit 3
+                            fi ;;
                     esac ;;
                 "inspect "*)
                     if [ -n "${STUB_INSPECT_FAILS:-}" ]; then
@@ -578,6 +614,120 @@ class DiagnoseReachesItsEndTest extends TestCase
             $output
         );
         $this->assertStringContainsString("  ✓ nginx: healthy\n  ✗ app: stopped (state=restarting)\n", $output);
+        $this->assertStringContainsString(
+            "  ⚠ Could not check whether www-data can write /var/www/runtime/logs/app.log\n",
+            $output,
+            'a refused exec is no finding about the log file'
+        );
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * Regression: diagnose ran health/check, migrate/history and its PHP_BOOT
+     * probes as root, the user of the app image. Each logs to
+     * runtime/logs/app.log, and as root one that rotated a full log left
+     * copies that www-data cannot write, or one that found no log created it
+     * as root's, so that the errors of the web UI were lost
+     * (YiiExecUserTest). Its check of the runtime directories ran test -w as
+     * root, for whom it holds for every directory. All of them run as
+     * www-data now, as php-fpm's workers do; the probes that run no Yii (the
+     * database and Redis, vendor/autoload.php, VERSION) as before.
+     */
+    public function testRegressionTheProbesThatRunYiiRunAsWwwData(): void
+    {
+        $this->writeEnv(self::env());
+        $log = $this->directory . '/execs.log';
+
+        [$status, $output] = $this->runDiagnose(['STUB_EXEC_LOG' => $log]);
+
+        $execs = file($log, FILE_IGNORE_NEW_LINES) ?: [];
+        $this->assertSame(
+            ['www-data appcid: php /var/www/yii health/check', 'www-data appcid: php /var/www/yii migrate/history 10'],
+            array_values(array_filter($execs, static fn (string $exec): bool => str_contains($exec, ' php /var/www/yii ')))
+        );
+        $boots = array_values(array_filter($execs, static fn (string $exec): bool => str_contains($exec, 'new yii\console\Application')));
+        $this->assertCount(6, $boots, 'project sync, runner transport, trusted networks, RBAC, users, summary');
+        foreach ($boots as $boot) {
+            $this->assertStringStartsWith('www-data appcid: php -r ', $boot);
+        }
+        $this->assertSame(
+            [
+                'www-data appcid: test -w /var/www/runtime',
+                'www-data appcid: test -w /var/www/runtime/projects',
+                'www-data appcid: test -w /var/www/runtime/artifacts',
+                'www-data appcid: test -w /var/www/runtime/logs',
+                'www-data appcid: test -w /var/www/web/assets',
+                'www-data appcid: sh -c if [ -e "$1" ] && [ ! -w "$1" ]; then exit 3; fi sh /var/www/runtime/logs/app.log',
+            ],
+            array_values(array_filter(
+                $execs,
+                static fn (string $exec): bool => preg_match('/^\S+ appcid: (?:test -w|sh -c) /', $exec) === 1
+            ))
+        );
+        $this->assertSame(
+            [],
+            array_values(array_filter($execs, static fn (string $exec): bool => str_starts_with($exec, 'root ') && str_contains($exec, 'yii'))),
+            'no exec runs Yii as root'
+        );
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * Regression: as root, test -w holds for every directory, so diagnose
+     * said "Runtime directories: all writable" where php-fpm's workers
+     * (www-data) could not write; and a runtime/logs/app.log that www-data
+     * cannot write, so that every error of the web UI and the API was lost,
+     * went unreported. Both are reported as www-data sees them, the log file
+     * with the fix.
+     */
+    public function testRegressionWhatWwwDataCannotWriteIsReportedWithTheFix(): void
+    {
+        $this->writeEnv(self::env());
+
+        [$status, $output] = $this->runDiagnose(['STUB_NOT_WRITABLE' => '/var/www/runtime/logs', 'STUB_LOG_NOT_WRITABLE' => '1']);
+
+        $this->assertStringContainsString(
+            "  ✗ Directory not writable for www-data: /var/www/runtime/logs\n"
+            . "  ✗ Log file not writable for www-data: /var/www/runtime/logs/app.log — the errors of the web UI and the API are lost\n"
+            . "    Fix: docker compose exec app chown -R www-data:www-data /var/www/runtime/logs, or restart the app container\n",
+            $output
+        );
+        $this->assertStringNotContainsString('Runtime directories and the log file: writable', $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    public function testWhatWwwDataCanWriteIsReportedInOneLine(): void
+    {
+        $this->writeEnv(self::env());
+
+        [$status, $output] = $this->runDiagnose();
+
+        $this->assertStringContainsString("  ✓ Runtime directories and the log file: writable for www-data\n", $output);
+        $this->assertStringNotContainsString('not writable', $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * health/check runs as www-data, as the health checks of the app and the
+     * queue-worker run it: diagnose shows its lines as the check prints
+     * them, the log file that www-data cannot write with its fix
+     * (HealthController::LOG_FILE_NOT_WRITABLE) too. As root, the check said
+     * "dirs: ok" for it.
+     */
+    public function testTheHealthCheckIsShownAsWwwDataSeesIt(): void
+    {
+        $this->writeEnv(self::env());
+        $dirs = sprintf(
+            HealthController::DIRS_NOT_WRITABLE,
+            sprintf(HealthController::LOG_FILE_NOT_WRITABLE, '/var/www/runtime/logs/app.log', '/var/www/runtime/logs')
+        );
+
+        [$status, $output] = $this->runDiagnose(['STUB_HEALTH' => "[health] db: ok\n[health] redis: ok\n{$dirs}[health] status: degraded\n"]);
+
+        $this->assertStringContainsString(
+            "  App health check:\n    [health] db: ok\n    [health] redis: ok\n    {$dirs}    [health] status: degraded\n",
+            $output
+        );
         $this->assertReachesItsEnd($status, $output);
     }
 

@@ -1,8 +1,20 @@
-import { test, expect, Page } from '@playwright/test';
-import { expectFlash, fillForm, submitForm } from '../../lib/helpers';
+import { test, expect, Locator, Page } from '@playwright/test';
+import { expectFlash, fillForm, notAnInteger, postJsonWithPageCsrf, showAnswer, submitForm } from '../../lib/helpers';
 import { PAGE_TITLE } from '../../lib/selectors';
 import { forgePost, idWhere, indexRows } from '../../lib/scoping';
-import { APPROVAL_RULE, DELETE_BLOCKED, GATED_TEMPLATE, NOT_IN_USE, flash } from '../../lib/approvals';
+import {
+  APPROVAL_RULE,
+  BEYOND_INT_TEAM_RULE,
+  BEYOND_INT_USERS_RULE,
+  DELETE_BLOCKED,
+  GATED_TEMPLATE,
+  NOT_IN_USE,
+  NO_TEAM_CONFIGURED,
+  NO_USERS_CONFIGURED,
+  approverCell,
+  expectNoApproverSelected,
+  flash,
+} from '../../lib/approvals';
 import { HOST_INVENTORY, HOST_RULE } from '../../lib/inventories';
 
 /** The rule this file creates, changes and deletes. */
@@ -51,6 +63,70 @@ async function openRule(page: Page, name: string, newest = false): Promise<strin
   expect(id, `a rule named ${name}`).toMatch(/^\d+$/);
   await page.goto(`/approval-rule/view?id=${id}`);
   return id;
+}
+
+/**
+ * The fields of the rule form that hold a whole number: its label, the id of
+ * its input and the class of its field, which the input's id names
+ * (required_approvals has an id of its own, #required-approvals).
+ */
+const WHOLE_NUMBER_FIELDS = {
+  required_approvals: { label: 'Required Approvals', input: '#required-approvals', field: '.field-required-approvals' },
+  timeout_minutes: { label: 'Timeout Minutes', input: '#approvalrule-timeout_minutes', field: '.field-approvalrule-timeout_minutes' },
+} as const;
+
+/** The error of the whole-number field `attribute` of the rule form on the open page. */
+function ruleFieldError(page: Page, attribute: keyof typeof WHOLE_NUMBER_FIELDS): Locator {
+  return page.locator(`${WHOLE_NUMBER_FIELDS[attribute].field} .help-block`);
+}
+
+/**
+ * Lists and objects as a whole-number field of the rule form posted as JSON,
+ * with what 2.13.1 and the move to PHP 8.5 up to its fixes did: Yii's rules
+ * take an empty list for empty and skip it, so the column stored it as 0: a
+ * rule that needs no approval, whose requests any vote approved, a rejection
+ * too, or one whose requests time out at once. The form, shown again for a
+ * list with values, made text of it and answered 500 ("Array to string
+ * conversion"). ApprovalRuleWriteService refuses each now with the field's
+ * integer error, the field emptied.
+ */
+const REFUSED_LISTS = [
+  { attribute: 'required_approvals', value: '[]' },
+  { attribute: 'required_approvals', value: '{}' },
+  { attribute: 'timeout_minutes', value: '[]' },
+  { attribute: 'required_approvals', value: '[5]' },
+] as const;
+
+/**
+ * Creates the rule `name` through a real form post: approvers of the role
+ * admin, 1 required approval, a timeout of 30 minutes that rejects; its ID.
+ * Its page opens.
+ */
+async function createAdminRoleRule(page: Page, name: string): Promise<string> {
+  await page.goto('/approval-rule/index');
+  await forgePost(page, '/approval-rule/create', {
+    'ApprovalRule[name]': name,
+    'ApprovalRule[approver_type]': 'role',
+    'ApprovalRule[approver_config]': '{"role":"admin"}',
+    'ApprovalRule[required_approvals]': '1',
+    'ApprovalRule[timeout_minutes]': '30',
+    'ApprovalRule[timeout_action]': 'reject',
+  }, /\/approval-rule\/view\?id=\d+$/);
+  return new URL(page.url()).searchParams.get('id') ?? '';
+}
+
+/** What the open rule page says the rule is: the rows of its first table, by heading. */
+async function ruleDetails(page: Page): Promise<Record<string, string>> {
+  return page.locator('#page-content table').first().locator('tr').evaluateAll((rows) => Object.fromEntries(rows.map((row) => [
+    (row.querySelector('th')?.textContent ?? '').trim(),
+    (row.querySelector('td')?.textContent ?? '').replace(/\s+/g, ' ').trim(),
+  ])));
+}
+
+/** Deletes the unused rule #`id` through a real form post; the rule list opens. */
+async function deleteRule(page: Page, id: string): Promise<void> {
+  await page.goto(`/approval-rule/view?id=${id}`);
+  await forgePost(page, `/approval-rule/delete?id=${id}`, {}, /\/approval-rule\/index$/);
 }
 
 test.describe('Approval Rules CRUD', () => {
@@ -299,4 +375,82 @@ test.describe('Approval Rules CRUD', () => {
     const ids = (await indexRows(page, '/approval-rule/index')).map((row) => row.id);
     expect(ids).not.toContain(id);
   });
+
+  // Regression: the rule form posted as JSON (the request's JSON parser
+  // serves the web forms too) with an empty list as the required approvals
+  // created the rule with 0 of them: a rule that needs no approval, whose
+  // requests any vote approved, a rejection too. It is refused now with the
+  // field's integer error, and nothing is created.
+  test('a create posted as JSON with required_approvals [] shows the field\'s error, and creates nothing', async ({ page }) => {
+    const name = 'e2e-json-list-rule';
+    await page.goto('/approval-rule/create');
+
+    const answer = await postJsonWithPageCsrf(page, '/approval-rule/create', `{"ApprovalRule": {"name": "${name}", "approver_type": "role", `
+      + '"approver_config": "{\\"role\\":\\"admin\\"}", "required_approvals": [], "timeout_action": "reject"}}');
+
+    expect(answer.status(), 'the form again, not a server error').toBe(200);
+    await showAnswer(page, answer);
+    await expect(ruleFieldError(page, 'required_approvals')).toHaveText(notAnInteger('Required Approvals'));
+    await expect(page.locator('#required-approvals'), 'the field empty').toHaveValue('');
+    expect((await indexRows(page, '/approval-rule/index')).filter((row) => row.cells[0] === name), 'no rule was created').toHaveLength(0);
+  });
+
+  // Regression: the rule form posted as JSON stored a list or an object in a
+  // whole-number field, also an empty one, as 0 (REFUSED_LISTS), or answered
+  // 500 for one with values ([5]). It is refused now with the field's
+  // integer error, the field empty, and the rule stays as it was.
+  for (const { attribute, value } of REFUSED_LISTS) {
+    test(`an update posted as JSON with ${attribute} ${value} shows the field's error with the field empty, and changes nothing`, async ({ page }) => {
+      const id = await createAdminRoleRule(page, `e2e-json-${attribute.replace('_', '-')}-rule`);
+      try {
+        const before = await ruleDetails(page);
+        expect(before['Required Approvals'], 'the rule as made').toBe('1');
+        expect(before.Timeout, 'the rule as made').toBe('30 minutes');
+        await page.goto(`/approval-rule/update?id=${id}`);
+
+        const answer = await postJsonWithPageCsrf(page, `/approval-rule/update?id=${id}`, `{"ApprovalRule": {"description": "e2e-json-changed", "${attribute}": ${value}}}`);
+
+        expect(answer.status(), 'the form again, not a server error').toBe(200);
+        await showAnswer(page, answer);
+        await expect(ruleFieldError(page, attribute)).toHaveText(notAnInteger(WHOLE_NUMBER_FIELDS[attribute].label));
+        await expect(page.locator(WHOLE_NUMBER_FIELDS[attribute].input), 'the field empty').toHaveValue('');
+        await page.goto(`/approval-rule/view?id=${id}`);
+        expect(await ruleDetails(page), 'not even the description was saved').toEqual(before);
+      } finally {
+        await deleteRule(page, id);
+      }
+    });
+  }
+
+  // Regression: on PHP 8.5 the page and the edit form of a rule whose
+  // approver config names its approvers by a JSON number beyond the int
+  // range answered 500 ("The float 1.0E+30 is not representable as an int,
+  // cast occurred"): views/approval-rule/view.php and form.php cast the
+  // number with (int). The rule form and the API store such a config, for a
+  // users rule whose only user is such a number only up to 2.13.1 (it
+  // requires more approvals than its users). The number names nobody now
+  // (app\components\ApproverConfigIds): the page says
+  // that no approver is configured (for such a users rule it said "Users: "
+  // and nothing, for a team rule without a team ID "Team: #"), and the form
+  // selects none. Fixtures: commands/E2eApproverConfigSeeder.php.
+  const BEYOND_INT_RULES = [
+    { name: BEYOND_INT_TEAM_RULE, title: 'a team rule whose team', type: 'team', panel: '#config-team', approver: NO_TEAM_CONFIGURED },
+    { name: BEYOND_INT_USERS_RULE, title: 'a users rule whose user', type: 'users', panel: '#config-users', approver: NO_USERS_CONFIGURED },
+  ];
+  for (const rule of BEYOND_INT_RULES) {
+    test(`the page and the edit form of ${rule.title} is a number beyond the int range name no approver and select none`, async ({ page }) => {
+      const id = idWhere(await indexRows(page, '/approval-rule/index'), 0, rule.name);
+
+      const shown = await page.goto(`/approval-rule/view?id=${id}`);
+      expect(shown?.status(), 'the rule page').toBe(200);
+      await expect(page.locator('h2').first()).toHaveText(rule.name);
+      await expect(approverCell(page)).toHaveText(rule.approver);
+
+      const form = await page.goto(`/approval-rule/update?id=${id}`);
+      expect(form?.status(), 'the edit form').toBe(200);
+      await expect(page.locator('#approver-type')).toHaveValue(rule.type);
+      await expect(page.locator(rule.panel)).toBeVisible();
+      await expectNoApproverSelected(page);
+    });
+  }
 });

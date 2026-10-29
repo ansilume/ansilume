@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubmittedId;
 use app\models\Credential;
 use app\models\Job;
 use app\models\Project;
@@ -29,7 +30,7 @@ class JobCredentialResolver extends Component
     {
         $ids = [];
         foreach ((array)($raw['credential_ids'] ?? []) as $value) {
-            $id = is_numeric($value) ? (int)$value : 0;
+            $id = SubmittedId::of($value) ?? 0;
             if ($id > 0 && !in_array($id, $ids, true)) {
                 $ids[] = $id;
             }
@@ -185,7 +186,7 @@ class JobCredentialResolver extends Component
      */
     private static function primaryId(array $raw): ?int
     {
-        $primary = is_numeric($raw['credential_id'] ?? null) ? (int)$raw['credential_id'] : 0;
+        $primary = SubmittedId::of($raw['credential_id'] ?? null) ?? 0;
 
         return $primary > 0 ? $primary : null;
     }
@@ -198,8 +199,12 @@ class JobCredentialResolver extends Component
     {
         $byId = [];
         foreach ((array)($raw[Job::PAYLOAD_CREDENTIAL_SNAPSHOT] ?? []) as $entry) {
-            if (is_array($entry) && is_numeric($entry['id'] ?? null)) {
-                $byId[(int)$entry['id']] = [
+            if (!is_array($entry)) {
+                continue;
+            }
+            $id = SubmittedId::of($entry['id'] ?? null);
+            if ($id !== null) {
+                $byId[$id] = [
                     'name' => isset($entry['name']) ? (string)$entry['name'] : null,
                     'credential_type' => isset($entry['credential_type']) ? (string)$entry['credential_type'] : null,
                 ];

@@ -36,11 +36,19 @@ final class DbErrorSummary
      * was lost: too many connections (1040, 1203), access denied (1044,
      * 1045), unknown database (1049), host blocked or not allowed (1129,
      * 1130), cannot connect (2002, 2003), unknown host (2005), server gone
-     * away (2006), connection lost (2013). Their driver texts name the host,
-     * the user or the database, never a statement or a value.
+     * away (2006), connection lost (2013), and MySQL's
+     * ER_CLIENT_INTERACTION_TIMEOUT (4031): a MySQL server of 8.0.24 or
+     * later closed an idle connection after wait_timeout or
+     * interactive_timeout, which mysqlnd reports as 4031 since PHP 8.4,
+     * where it reported 2006. MariaDB reports such a connection as 2006,
+     * and uses 4031 for a trigger error (ER_REFERENCED_TRG_DOES_NOT_EXIST)
+     * that only CREATE TRIGGER with FOLLOWS or PRECEDES raises, which
+     * Ansilume never issues; its text would name only a trigger. Their
+     * driver texts name the host, the user or the database, or the timeouts
+     * to configure, never a statement or a value.
      */
     private const CONNECTION_FAILURE_CODES = [
-        '1040', '1044', '1045', '1049', '1129', '1130', '1203', '2002', '2003', '2005', '2006', '2013',
+        '1040', '1044', '1045', '1049', '1129', '1130', '1203', '2002', '2003', '2005', '2006', '2013', '4031',
     ];
 
     /**

@@ -78,7 +78,6 @@ class ProjectSyncTest extends TestCase
         $project->method('save')->willReturn(true);
 
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($project, array_merge($defaults, $attrs));
 
         return $project;

@@ -1,7 +1,23 @@
-import { test, expect } from '@playwright/test';
-import { expectFlash, fillForm, submitForm, getTableRowCount, deleteByRowText } from '../../lib/helpers';
+import { test, expect, Page } from '@playwright/test';
+import {
+  deleteByRowText,
+  expectFlash,
+  fieldError,
+  fillForm,
+  getTableRowCount,
+  postJsonWithPageCsrf,
+  showAnswer,
+  submitForm,
+} from '../../lib/helpers';
 import { jobTemplateDetail, queuedJobOf } from '../../lib/jobs';
+import { NOT_A_CREDENTIAL_ID, gitProjectWithCredential, projectId } from '../../lib/projects';
 import { PAGE_TITLE, CONFIRM_OK } from '../../lib/selectors';
+
+/** The text of the Description card of the open project page; '' without one. */
+async function shownDescription(page: Page): Promise<string> {
+  const card = page.locator('#page-content .card', { has: page.locator('.card-header', { hasText: /^Description$/ }) }).locator('.card-body');
+  return (await card.count()) > 0 ? ((await card.textContent()) ?? '').trim() : '';
+}
 
 test.describe('Projects CRUD', () => {
   test('index page lists projects', async ({ page }) => {
@@ -85,6 +101,45 @@ test.describe('Projects CRUD', () => {
   test('delete project', async ({ page }) => {
     await deleteByRowText(page, '/project/index', 'e2e-crud-project');
     await expectFlash(page, 'success');
+  });
+
+  // Regression: the project form posted as JSON (the request's JSON parser
+  // serves the web forms too; a script sends the CSRF token as a header) with
+  // an empty list as the repository credential answered 500: Yii's rules took
+  // the list for empty and skipped it, the column stored it as 0, and its
+  // foreign key refused that. The field's integer error is shown now, and
+  // nothing is saved (Project::rules(), SubmittedInteger::isEmpty()).
+  test('a create posted as JSON with an empty list as the repository credential shows the field\'s error, and creates nothing', async ({ page }) => {
+    const name = 'e2e-json-credential-list-project';
+    await page.goto('/project/create');
+
+    const answer = await postJsonWithPageCsrf(page, '/project/create', gitProjectWithCredential(name, '[]'));
+
+    expect(answer.status(), 'the form again, not a server error').toBe(200);
+    await showAnswer(page, answer);
+    await expect(fieldError(page, 'project', 'scm_credential_id')).toHaveText(NOT_A_CREDENTIAL_ID);
+    await expect(page.locator('#project-scm_credential_id'), 'no credential chosen').toHaveValue('');
+    await page.goto('/project/index');
+    await expect(page.locator('#project-table tbody'), 'no project was created').not.toContainText(name);
+  });
+
+  // Regression: the same post on an update answered 500 too. On e2e-project,
+  // a manual project, the form hides the Git fields and names their errors
+  // above itself.
+  test('an update posted as JSON with an empty list as the repository credential shows the error, and changes nothing', async ({ page }) => {
+    const id = await projectId(page, 'e2e-project');
+    await page.goto(`/project/view?id=${id}`);
+    const before = await shownDescription(page);
+    await page.goto(`/project/update?id=${id}`);
+
+    const answer = await postJsonWithPageCsrf(page, `/project/update?id=${id}`, '{"Project": {"description": "e2e-json-changed", "scm_credential_id": []}}');
+
+    expect(answer.status(), 'the form again, not a server error').toBe(200);
+    await showAnswer(page, answer);
+    await expect(page.locator('#project-git-field-errors li')).toHaveText([NOT_A_CREDENTIAL_ID]);
+    await expect(fieldError(page, 'project', 'scm_credential_id')).toHaveText(NOT_A_CREDENTIAL_ID);
+    await page.goto(`/project/view?id=${id}`);
+    expect(await shownDescription(page), 'not even the description was saved').toBe(before);
   });
 
   test('delete project whose templates were soft-deleted (integrity violation regression)', async ({ page, request, baseURL }) => {

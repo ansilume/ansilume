@@ -68,6 +68,17 @@ class ApprovalRuleAssignmentPolicyTest extends DbTestCase
     }
 
     /**
+     * The rule a submitted value stands for: null for none; the ID for a
+     * whole number as the template's integer rule reads it, which is the
+     * value the column stores; anything else as it is, for the integer rule
+     * to refuse.
+     *
+     * Regression: only an int and a text of digits were read as the ID, so
+     * "+5", "5\n", 5.0 and "-1" came back as they were. The check of who may
+     * assign a rule and the job template's audit then took the rule that
+     * the column stores for no rule ID (a refused re-send of the stored
+     * rule, an audit without the rule or with its removal).
+     *
      * @return array<string, array{0: mixed, 1: mixed}>
      */
     public static function submittedValueProvider(): array
@@ -79,12 +90,20 @@ class ApprovalRuleAssignmentPolicyTest extends DbTestCase
             'string of digits' => ['5', 5],
             'leading zero' => ['05', 5],
             'zero' => ['0', 0],
-            'negative' => ['-1', '-1'],
+            'plus sign' => ['+5', 5],
+            'final line break' => ["5\n", 5],
+            'negative' => ['-1', -1],
+            'whole float' => [5.0, 5],
             'not a number' => ['abc', 'abc'],
             'padded' => [' 5', ' 5'],
-            'decimal' => [5.0, 5.0],
+            'whole float as text' => ['5.0', '5.0'],
+            'exponent as text' => ['5e0', '5e0'],
+            'fraction' => [5.5, 5.5],
+            'beyond the int range' => [1e30, 1e30],
+            'infinity' => [INF, INF],
             'list' => [[5], [5]],
             'boolean' => [true, true],
+            'false' => [false, false],
         ];
     }
 
@@ -127,6 +146,30 @@ class ApprovalRuleAssignmentPolicyTest extends DbTestCase
                 $case
             );
         }
+    }
+
+    /**
+     * Regression: a user without approval-rule.update who sent the stored
+     * rule 7 again as "+7", "7\n" or 7.0, which the template stores as rule
+     * 7, was refused (ASSIGN_REFUSED). Every spelling of the stored rule is
+     * no change; every spelling of another rule is one, and so is a value
+     * that is no rule ID, a float beyond the int range included.
+     */
+    public function testEverySpellingOfTheStoredRuleIsNoChange(): void
+    {
+        $operatorId = (int)$this->createUserWithRole('assign-spelling-operator', 'operator')->id;
+
+        foreach (['+7', '007', "7\n", 7.0] as $same) {
+            $this->assertNull($this->policy->templateRuleRefusal($operatorId, $same, 7), var_export($same, true));
+        }
+        foreach (['+8', "8\n", 8.0, ' 7', '7.0', '7e0', 7.5, 1e30, INF, true, [7]] as $other) {
+            $this->assertSame(
+                ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED,
+                $this->policy->templateRuleRefusal($operatorId, $other, 7),
+                var_export($other, true)
+            );
+        }
+        $this->assertSame(ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED, $this->policy->templateRuleRefusal($operatorId, '+7', null), 'a new template with one');
     }
 
     public function testAnAdminMayAssignAndRemoveRules(): void

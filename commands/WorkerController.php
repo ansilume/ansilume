@@ -27,6 +27,13 @@ use yii\queue\Queue as BaseQueue;
  * (see `stop_grace_period: 300s` in docker-compose.yml) for the longest-running
  * job to complete; jobs killed mid-flight are picked up by the JobReclaim sweep
  * on the next start.
+ *
+ * Database connection:
+ * yii2-queue runs every job in this process, so a database connection that
+ * the worker kept between jobs sat idle as long as the queue did, and the
+ * database closes a connection that sat idle longer than its wait_timeout.
+ * The worker closes it before and after each job instead
+ * ({@see attachWorkerEvents()}).
  */
 class WorkerController extends Controller
 {
@@ -188,13 +195,28 @@ class WorkerController extends Controller
     /**
      * Attach lifecycle hooks to the queue worker so graceful shutdowns are
      * visible in operator logs and the heartbeat is deregistered as soon as
-     * the loop exits — even before the surrounding actionStart() can clean up.
+     * the loop exits — even before the surrounding actionStart() can clean up,
+     * and so that each job runs on a database connection of its own.
      *
      * Public for testability: tests trigger {@see CliQueue::EVENT_WORKER_STOP}
-     * directly to verify the cleanup hook runs without spawning a real signal.
+     * directly to verify the cleanup hook runs without spawning a real signal,
+     * and run jobs through a queue with these hooks (WorkerJobDbConnectionTest).
      */
     public function attachWorkerEvents(WorkerHeartbeat $heartbeat): void
     {
+        // The worker closes the application's database connection before
+        // and after each job, whether the job succeeded or failed: the job
+        // opens a new one with its first query, and the worker holds none
+        // while the queue sits idle. Up to 2.13.1 it kept one for its whole
+        // life; the database closed it once the queue had sat idle longer
+        // than its wait_timeout (8 hours by default), and every job after
+        // that failed with 2006 or 4031 until the worker restarted.
+        $closeDbConnection = static function (): void {
+            \Yii::$app->getDb()->close();
+        };
+        foreach ([BaseQueue::EVENT_BEFORE_EXEC, BaseQueue::EVENT_AFTER_EXEC, BaseQueue::EVENT_AFTER_ERROR] as $event) {
+            Event::on(BaseQueue::class, $event, $closeDbConnection);
+        }
         Event::on(CliQueue::class, CliQueue::EVENT_WORKER_START, function (): void {
             \Yii::info('Worker entered listening loop.', __CLASS__);
         });

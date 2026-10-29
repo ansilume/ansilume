@@ -15,6 +15,14 @@ return [
     // ProcessHardeningBootstrap marks console workers non-dumpable so child
     // processes running repository code cannot read their environment.
     'bootstrap' => ['log', 'queue', \app\components\ProcessHardeningBootstrap::class],
+    // As config/web.php: every 'integer', 'number' and 'double' rule is a
+    // WholeNumberValidator, which refuses a float that is no whole number
+    // also when its text of 14 digits reads as one (2.9999999999999996).
+    'container' => [
+        'definitions' => [
+            \yii\validators\NumberValidator::class => \app\components\WholeNumberValidator::class,
+        ],
+    ],
     'aliases' => [
         '@bower' => '@vendor/bower-asset',
         '@npm' => '@vendor/npm-asset',
@@ -77,8 +85,10 @@ return [
                 'scheme' => ($_ENV['SMTP_ENCRYPTION'] ?? '') === 'ssl' ? 'smtps' : 'smtp',
                 'host' => $_ENV['SMTP_HOST'],
                 'port' => (int)($_ENV['SMTP_PORT'] ?? 587),
-                'username' => $_ENV['SMTP_USER'] ?: null,
-                'password' => $_ENV['SMTP_PASSWORD'] ?: null,
+                // Optional, as for a relay that takes mail without a password
+                // (tests/unit/config/OptionalVariablesConfigTest.php).
+                'username' => ($_ENV['SMTP_USER'] ?? '') ?: null,
+                'password' => ($_ENV['SMTP_PASSWORD'] ?? '') ?: null,
             ]),
         ],
         ...$services,

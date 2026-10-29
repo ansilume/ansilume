@@ -16,8 +16,10 @@ use app\models\JobTemplate;
  * is for admins (ApprovalRuleAssignmentPolicy): any change by another user is
  * refused before anything is saved, also setting a rule on a new template
  * and removing one. Not submitting the field, or submitting the rule the
- * template has, is no change. A clone keeps its source's rule without a
- * check: copying is not assigning.
+ * template has, is no change, in any spelling of its ID that the integer
+ * rule reads as it: "+5", "5\n" and 5.0 are 5
+ * (ApprovalRuleAssignmentPolicy::normalizeRuleId()). A clone keeps its
+ * source's rule without a check: copying is not assigning.
  *
  * approval_rule_id is no safe attribute of JobTemplate, so a form or a JSON
  * body never sets it on its own: only apply() does, after the check.
@@ -81,7 +83,10 @@ class JobTemplateRuleAssignment
     /**
      * Apply the rule $submitted holds (the form's JobTemplate fields or the
      * JSON body), when it holds one, to $template. $baseline is the rule the
-     * template has: the stored one on an update, null on a create.
+     * template has: the stored one on an update, null on a create. The rule
+     * is set as ApprovalRuleAssignmentPolicy::normalizeRuleId() reads it: a
+     * whole number as the ID the column stores, anything else as sent, for
+     * the integer rule to refuse.
      *
      * @param array<array-key, mixed> $submitted
      * @return string|null why $userId may not make this change (answer 403
@@ -136,14 +141,16 @@ class JobTemplateRuleAssignment
     /**
      * The audit context of a save that gives $template another rule than
      * $baseline: approval_rule with the rule before and after, each as ID
-     * and name (null for none). Empty when the rule stays as it is.
+     * and name (null for none). Empty when the rule stays as it is. The rule
+     * is read as the column stores it (SubmittedId, as InventoryWriteService
+     * reads an inventory's), so that the entry names the rule that gates the
+     * template: "+5" and 5.0 are rule 5.
      *
      * @return array<string, array{from: array{id: int, name: string|null}|null, to: array{id: int, name: string|null}|null}>
      */
     public function auditContext(JobTemplate $template, ?int $baseline): array
     {
-        $current = ApprovalRuleAssignmentPolicy::normalizeRuleId($template->getAttribute(self::FIELD));
-        $ruleId = is_int($current) ? $current : null;
+        $ruleId = SubmittedId::of($template->getAttribute(self::FIELD));
         if ($ruleId === $baseline) {
             return [];
         }
@@ -166,16 +173,21 @@ class JobTemplateRuleAssignment
      * waits for nothing and locks no other row (C16). The template's
      * validation reads it without a lock; the save's transaction checks the
      * pair it stores instead (persistVetoes()).
+     *
+     * Both IDs are read as the integer rule reads them (SubmittedId), so the
+     * check needs no earlier rule to have refused a value that is no ID,
+     * such as a JSON number beyond the int range, whose (int) cast warns on
+     * PHP 8.5: an own rule that is no ID is none here, its rule reports it.
      */
     public static function vetoesDifferentRules(JobTemplate $template, bool $shareLock): bool
     {
-        $ownRuleId = $template->getAttribute(self::FIELD);
-        if ($template->hasErrors(self::FIELD) || $template->hasErrors('inventory_id') || !is_numeric($ownRuleId)) {
+        $ownRuleId = SubmittedId::of($template->getAttribute(self::FIELD));
+        if ($template->hasErrors(self::FIELD) || $template->hasErrors('inventory_id') || $ownRuleId === null) {
             return false;
         }
-        $inventoryId = $template->getAttribute('inventory_id');
+        $inventoryId = (int)SubmittedId::of($template->getAttribute('inventory_id'));
 
-        return self::vetoesPair($template, [(int)$ownRuleId, is_numeric($inventoryId) ? (int)$inventoryId : 0, false], $shareLock);
+        return self::vetoesPair($template, [$ownRuleId, $inventoryId, false], $shareLock);
     }
 
     /**

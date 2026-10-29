@@ -15,7 +15,7 @@ info:
     Create a token via the browser (*Profile → API Tokens*) or from the console:
 
     ```bash
-    docker compose exec app php yii api-token/create admin "my-token" --raw
+    docker compose exec -u www-data app php yii api-token/create admin "my-token" --raw
     ```
 
     Pass it as:
@@ -114,6 +114,39 @@ info:
     or revoked token, and every other path under `/trigger/`) and `405`
     (another method than POST, also on `/trigger/{token}`) are the web UI's
     HTML error page, without a JSON body.
+
+    ## Whole numbers
+
+    An ID or another whole number in a request body is an integer, its
+    digits as text (with a sign or leading zeros: `"+5"`, `"05"`) or a
+    number without a fraction (`5.0`). Anything else, a fraction however
+    close to a whole number (`12.5`, and `2.9999999999999996` too, which is
+    no 3), other text, a boolean, a list or a JSON number beyond the 64-bit
+    range (`1e30`, `9223372036854775808`, `1e999`), is refused as the endpoint
+    refuses an invalid value, mostly with 422 and the field's message, such
+    as `Forks must be an integer.`, and nothing is written. The IDs of
+    workflow steps and of the vault password assignment are read as
+    releases up to 2.13.1 read them: `job_template_id` and
+    `approval_rule_id` of `WorkflowStepCreateInput`,
+    `WorkflowStepUpdateInput` and `WorkflowStepInput`, and the entries of
+    `job_template_ids` of `VaultAssignmentInput`, take an integer or its
+    digits, also with a plus sign or with whitespace around them (`"+5"`,
+    `" 5"`), and refuse leading zeros (`"05"`) and a number with a fraction
+    or an exponent (`5.0`, `5e0`); `WorkflowStepBranchInput`,
+    `WorkflowStepPositionInput` and `WorkflowStepAfterInput` take an
+    integer or its digits, also with leading zeros, and refuse a sign,
+    whitespace and a number with a fraction or an exponent. An empty value
+    (`null`, `""`) keeps its meaning, except a user's `status` (`null` and
+    `""` answer 422, where they deactivated the user), a project's
+    `scm_credential_id` (`""` is no credential, where it answered 422) and
+    the `verbosity` of a launch (`""` is the job template's, where it was
+    0; a list or an object, empty or not, as `verbosity` or `limit` answers
+    422). Releases up to 2.13.1 took such a value for another number (`5.5`
+    for 5, `"abc"` and `false` for 0, `true` for 1), and on PHP 8.5 a
+    number beyond the range would have answered 500. The runner API
+    (`/api/runner/v1/`, not described here) refuses a number it cannot
+    store in a report the same way, with 422, and `""` too, where releases
+    up to 2.13.1 took it for 0; `null` or a missing number is 0.
 
 servers:
   - url: http://localhost:8080
@@ -345,7 +378,14 @@ tags:
       counts nothing. Each filter takes a single value. An ID that is not a
       whole number, a date not in `YYYY-MM-DD` form, a granularity other
       than `daily` or `weekly`, or a `date_to` before `date_from` or more
-      than 365 days after it answers 422.
+      than 365 days after it answers 422. Whitespace around a date is
+      ignored, and a date of only whitespace is an empty one: an empty
+      `date_from` is no lower bound, an empty `date_to` the end of today,
+      and the 365-day check applies only when both are given (releases up
+      to 2.13.1 answered 422 for such a date). A date with a NUL byte inside
+      answers 422 `Date From is invalid.` (or `Date To is invalid.`), where
+      it answered 500; a NUL at either end is dropped. With `format=csv` the
+      answer is CSV with RFC 4180 quoting (see `AnalyticsResult`).
   - name: Triggers
     description: |
       Inbound triggers: another system launches a job template or a
@@ -372,8 +412,8 @@ tags:
 # Defined once via a YAML anchor and referenced with `*` so we don't
 # repeat eight parameters ten times.
 x-analytics-filters: &analyticsFilters
-  - { in: query, name: date_from, required: false, schema: { type: string, format: date }, description: "Inclusive start date (YYYY-MM-DD). Defaults to 30 days ago." }
-  - { in: query, name: date_to, required: false, schema: { type: string, format: date }, description: "Inclusive end date (YYYY-MM-DD). Defaults to today. Not before date_from and at most 365 days after it (422 otherwise)." }
+  - { in: query, name: date_from, required: false, schema: { type: string, format: date }, description: "Inclusive start date (YYYY-MM-DD). Defaults to 30 days ago when the parameter is missing; empty, or only whitespace, means no lower bound. Whitespace around a date is ignored." }
+  - { in: query, name: date_to, required: false, schema: { type: string, format: date }, description: "Inclusive end date (YYYY-MM-DD). Defaults to today when the parameter is missing; empty, or only whitespace, means the end of today. Not before date_from and at most 365 days after it (422 otherwise)." }
   - { in: query, name: project_id, required: false, schema: { type: integer, minimum: 1 } }
   - { in: query, name: template_id, required: false, schema: { type: integer, minimum: 1 } }
   - { in: query, name: user_id, required: false, schema: { type: integer, minimum: 1 } }
@@ -1313,7 +1353,23 @@ paths:
         may see (deleted templates count with their project). Jobs without a
         job template, such as the placeholder job of a workflow approval
         step, are listed only for unrestricted callers; fetch them by ID.
-      parameters: [{ $ref: '#/components/parameters/Page' }]
+
+        Every filter is optional, and none is refused: a date that is not in
+        `YYYY-MM-DD` form is applied as PHP's `strtotime()` reads it.
+        Whitespace around a date is ignored, and a date of only whitespace
+        is no filter, where releases up to 2.13.1 listed no job for a
+        `date_from` of only whitespace and every job up to the end of today
+        for such a `date_to`; a NUL byte at either end of a date is dropped,
+        where it answered 500.
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { in: query, name: status, required: false, schema: { type: string }, description: "Only the jobs with this status (`status` of `Job`)." }
+        - { in: query, name: template_id, required: false, schema: { type: integer, minimum: 1 }, description: "Only the jobs of this job template." }
+        - { in: query, name: launched_by, required: false, schema: { type: integer, minimum: 1 }, description: "Only the jobs this user launched." }
+        - { in: query, name: runner_group_id, required: false, schema: { type: integer, minimum: 1 }, description: "Only the jobs of the job templates of this runner group." }
+        - { in: query, name: date_from, required: false, schema: { type: string, format: date }, description: "Only the jobs created on this day (YYYY-MM-DD) or later." }
+        - { in: query, name: date_to, required: false, schema: { type: string, format: date }, description: "Only the jobs created on this day (YYYY-MM-DD) or earlier." }
+        - { in: query, name: has_changes, required: false, schema: { type: string, enum: ['1', '0'] }, description: "1 for the jobs that changed something, 0 for those that changed nothing." }
       responses:
         '200':
           description: Paginated list
@@ -1343,7 +1399,21 @@ paths:
         before anything is written: `error.message` has the job record's
         messages, and `error.fields` each such field with its message
         (example `invalidInput`). Releases up to 2.9.0 answered 500 for
-        it, or took a list or an object as the verbosity for a number.
+        it, or took a list or an object as the verbosity for a number. A
+        list or an object is refused also when it is empty (`[]` or `{}`),
+        which releases up to 2.13.1 launched with the job template's limit
+        and at verbosity 0. An empty `limit` (`""`) is none: the job runs
+        with the job template's limit.
+
+        A `verbosity` that is no whole number (a fraction such as `2.5`,
+        text, `true` or `false`, a number beyond the int range such as
+        `1e30`) is refused the same way, with `Verbosity must be an
+        integer.` (example `verbosityNotAnInteger`), and an empty one (`""`)
+        is the job template's. A `job_template_id` that is no positive whole
+        number answers 422 `job_template_id is required.`, as a missing one
+        does. Releases up to 2.13.1 took such values for another number:
+        `"verbosity": 2.5` ran at verbosity 2, and `"job_template_id": 12.5`
+        launched job template 12.
 
         A template with an approval rule (`approval_rule_id`) creates the
         job with status `pending_approval` and its approval request in one
@@ -1971,7 +2041,7 @@ paths:
               type: object
               required: [user_id]
               properties:
-                user_id: { type: integer }
+                user_id: { type: integer, description: "A value that is no whole number, such as 5.5 or a number beyond the int range, is looked up as #0: 404 `User #0 not found.`, as for a missing one." }
             example:
               user_id: 5
       responses:
@@ -2008,7 +2078,7 @@ paths:
               type: object
               required: [project_id]
               properties:
-                project_id: { type: integer }
+                project_id: { type: integer, description: "A value that is no whole number, such as 5.5 or a number beyond the int range, is looked up as #0: 404 `Project #0 not found.`, as for a missing one." }
                 role: { type: string, default: viewer, enum: [viewer, operator] }
             example:
               project_id: 3
@@ -2065,8 +2135,10 @@ paths:
         assign.` The answers come in this order: 403
         `Forbidden.` without `user.create`; 422 for an unknown
         `auth_source` or `role`; 403 for a role the caller may not assign;
-        403 for `is_superadmin: true` from a caller who is no superadmin;
-        422 for a password or another field that is not valid.
+        422 `Status is invalid.` for a `status` that is no whole number; 403
+        for `is_superadmin: true` from a caller who is no superadmin; 422
+        for a password or another field that is not valid, such as a
+        `status` other than 0 and 10.
       requestBody:
         required: true
         content:
@@ -2082,9 +2154,11 @@ paths:
         '403': { $ref: '#/components/responses/UserGrantForbidden' }
         '422':
           description: |
-            Invalid input, such as a missing password, or a `role` that is not
-            the name of one of the instance's roles, compared exactly; that
-            answer names the roles. Nothing was written.
+            Invalid input, such as a missing password, a `status` that is no
+            whole number or neither 0 nor 10 (`Status is invalid.`), or a
+            `role` that is not the name of one of the instance's roles,
+            compared exactly; that answer names the roles. Nothing was
+            written.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -2158,11 +2232,12 @@ paths:
         in this order: 403 `Forbidden.` without `user.update`; 404 for an
         unknown user; 403 for a user the caller may not change, for their
         roles or their teams; 422 for a change of `auth_source` or an unknown
-        `role`; 403 for a role the caller may not assign; 403 for a change of
+        `role`; 403 for a role the caller may not assign; 422 `Status is
+        invalid.` for a `status` that is no whole number; 403 for a change of
         `is_superadmin` from a caller who is no superadmin; 422 `Cannot
         demote the only active superadmin.` or `Cannot deactivate the only
         active superadmin.`; 422 for a password or another field that is not
-        valid.
+        valid, such as a `status` other than 0 and 10.
       requestBody:
         required: true
         content:
@@ -2174,11 +2249,13 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '422':
           description: |
-            Invalid input, such as a password that is too short, taking the
-            superadmin flag from the only active superadmin or deactivating
-            them, or a `role` that is not the name of one of the instance's
-            roles, compared exactly; that answer names the roles. Nothing was
-            written: neither the user nor their roles changed.
+            Invalid input, such as a password that is too short, a `status`
+            that is no whole number or neither 0 nor 10 (`Status is
+            invalid.`), taking the superadmin flag from the only active
+            superadmin or deactivating them, or a `role` that is not the name
+            of one of the instance's roles, compared exactly; that answer
+            names the roles. Nothing was written: neither the user nor their
+            roles changed.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -4193,11 +4270,12 @@ paths:
         a password field of the template's survey are password answers,
         stored only encrypted. A launch the server refuses for a reason the
         caller can fix answers 422 with the reason, for example
-        `$encrypted$` sent as a password answer, a `verbosity` above 5, an
-        approval rule that leaves too few eligible approvers besides the
-        user the trigger runs as (that user never approves the job), or a
-        template whose own approval rule differs from its inventory's. A
-        template with an approval rule, its own or its inventory's, creates
+        `$encrypted$` sent as a password answer, a `verbosity` above 5 or one
+        that is no whole number, an approval rule that leaves too few
+        eligible approvers besides the user the trigger runs as (that user
+        never approves the job), or a template whose own approval rule
+        differs from its inventory's. A template with an approval rule, its
+        own or its inventory's, creates
         a job that waits for approval: the answer's `status` is then
         `pending_approval`, and `queued` for a job that waits for a runner.
         Any method but POST answers 405.
@@ -4573,6 +4651,15 @@ components:
       name: page
       in: query
       required: false
+      description: |
+        The page of the list, `meta.per_page` items each: the whole number
+        that PHP's `(int)` reads from the text (`2.5` and `2abc` are page 2,
+        `1e30` is 9223372036854775807); less than 1, text without a number
+        or a list is page 1. A page past the last (`meta.pages`) answers 200
+        with an empty `data`, the requested page in `meta.page` and the
+        list's `total` and `pages`, so a client that pages until `data` is
+        empty stops; releases up to 2.13.1 answered the items of the last
+        page again.
       schema: { type: integer, minimum: 1, default: 1 }
     StepIdPath:
       name: stepId
@@ -4694,6 +4781,20 @@ components:
         scope). When `format=json` the body wraps the report under
         `data.result` with the echoed filter set under `data.filters`. When
         `format=csv` the body is raw CSV.
+
+        The CSV quotes fields as RFC 4180 says, without an escape character:
+        a quote inside a field is doubled, and a backslash is an ordinary
+        character. A header row with the keys of the first row comes first,
+        then a line for each row, each line ending with a line feed, not
+        with the carriage return and line feed of RFC 4180; a
+        summary (`summary`, `workflow-summary`, `approval-summary`) is one
+        row, and a report without rows is an empty body. The answer has
+        `Content-Type: text/csv; charset=UTF-8` and `Content-Disposition:
+        attachment; filename="analytics-<report>-<YYYY-MM-DD>.csv"`, the
+        report named as in the method of the API, such as
+        `analytics-approvalSummary-2026-10-26.csv`. Rates (`success_rate`,
+        `approval_rate`) have two decimals at most, the exact share rounded
+        half up. Releases up to 2.13.1 answered every CSV request with 500.
       content:
         application/json:
           schema:
@@ -4739,11 +4840,12 @@ components:
         body that holds a list or an object (`<field> must be a single
         value, not a list or an object.`), or the first validation error,
         such as `Name cannot be blank.`, `The selected project does not
-        exist.`, `The selected approval rule does not exist.`, `Approval
-        rule must be an integer.`, a dynamic inventory with an approval rule
-        but without a source path, a change of the type or the project that
-        would leave job templates of another project on a file or dynamic
-        inventory of this one, static content that the inventory brings
+        exist.`, `Project Id must be an integer.`, `The selected approval
+        rule does not exist.`, `Approval rule must be an integer.`, a
+        dynamic inventory with an approval rule but without a source path, a
+        change of the type or the project that would leave job templates of
+        another project on a file or dynamic inventory of this one, static
+        content that the inventory brings
         (new, changed, or of an inventory that becomes static) and that is
         no YAML mapping (`Invalid YAML: …`, `Inventory must be a YAML
         mapping (not a scalar).`), and, on an update that gives the
@@ -4922,11 +5024,36 @@ components:
         template on it may have only that rule as its own, or none.`). More
         than one vault password, a file or dynamic inventory of another
         project, and the rules of `survey_fields` and `extra_vars` of
-        `JobTemplateInput` answer 422 as well.
+        `JobTemplateInput` answer 422 as well. So does an integer field that
+        is no whole number (a fraction, text that is not digits, a boolean,
+        a list or an object, also an empty one (`[]`, `{}`), or a number
+        beyond the 64-bit int range such as `1e30`, `9223372036854775808` or
+        `1e999`), with `<Label> must be an integer.`: `Project Id`,
+        `Inventory Id`, `Credential Id`, `Runner`, `Verbosity`, `Forks` or
+        `Timeout Minutes`, and `Approval rule must be an integer.` for
+        `approval_rule_id`. A `project_id` that is no ID is refused before the
+        403 of the access check of the project it names and of the lock of a
+        template with an approval rule; on PUT a caller who may not change the
+        stored job template gets 403 first. On a template with an approval
+        rule, the lock's 403 comes before these 422s for a user without
+        `approval-rule.update`, except for `project_id`, and except when the
+        body changes the fields the lock guards (all but `name` and
+        `description`) only to values that PHP's `(int)` reads as the stored
+        ones (`5.5`, `"5abc"` or `" 5"` where 5 is stored, `true` where 1 is,
+        `"abc"`, `false` or `0.5` where 0 is): the lock compares the cast
+        values, sees no change, and the field's 422 comes. With any other
+        change of such a field the lock's 403 comes. A list or an object in
+        any of these fields but `approval_rule_id` is refused as early as a
+        `project_id` that is no ID.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
           examples:
+            notAnInteger:
+              summary: An integer field that is no whole number
+              value:
+                error:
+                  message: 'Forks must be an integer.'
             rulesDiffer:
               summary: An own approval rule other than the rule of the template's inventory
               value:
@@ -5761,7 +5888,9 @@ components:
         the job record does not take (longer than 255 characters; below 0
         or above 5; a list or an object) is refused with the record's
         messages; releases up to 2.9.0 answered 500 for it, or took a list
-        or an object as the verbosity for a number.
+        or an object as the verbosity for a number. A `verbosity` that is no
+        whole number answers `Verbosity must be an integer.`; releases up to
+        2.13.1 took it for another number.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/TriggerRejectedError' }
@@ -5770,6 +5899,10 @@ components:
               summary: A verbosity the job record does not take
               value:
                 error: Verbosity must be no greater than 5.
+            verbosityNotAnInteger:
+              summary: A verbosity that is no whole number
+              value:
+                error: Verbosity must be an integer.
             placeholder:
               summary: A password answer was the placeholder
               value:
@@ -5909,7 +6042,9 @@ components:
         `limit` or a `verbosity` the job record does not take (longer than
         255 characters; below 0 or above 5; a list or an object) is refused
         with the record's messages, and `error.fields` names each such
-        field with its message.
+        field with its message; so is a `verbosity` that is no whole number
+        (`Verbosity must be an integer.`). A `job_template_id` that is no
+        positive whole number answers as a missing one.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/JobLaunchError' }
@@ -5921,6 +6056,13 @@ components:
                   message: Verbosity must be no greater than 5.
                   fields:
                     verbosity: Verbosity must be no greater than 5.
+            verbosityNotAnInteger:
+              summary: A verbosity that is no whole number, such as 2.5 or 1e30
+              value:
+                error:
+                  message: Verbosity must be an integer.
+                  fields:
+                    verbosity: Verbosity must be an integer.
             placeholder:
               summary: A password answer was the placeholder
               value:
@@ -5999,7 +6141,8 @@ components:
     ApprovalSummaryResult:
       description: |
         The approval summary of the period, counting only the requests the
-        caller may see. With `format=csv` the body is raw CSV.
+        caller may see. With `format=csv` the body is raw CSV, a header row
+        and one row of values, as `AnalyticsResult` describes it.
       content:
         application/json:
           schema:
@@ -6064,7 +6207,11 @@ components:
       type: object
       properties:
         total:    { type: integer }
-        page:     { type: integer }
+        page:
+          type: integer
+          description: |
+            The requested page (`page`), also one past the last (`pages`),
+            whose `data` is empty.
         per_page: { type: integer }
         pages:    { type: integer }
 
@@ -6298,7 +6445,11 @@ components:
         `created_by` is not accepted: the caller who creates the inventory
         is its creator. A field below that holds a list or an object answers
         422 (`project_id must be a single value, not a list or an object.`),
-        and nothing is written.
+        and nothing is written. A `project_id` that is no whole number, such
+        as `5.5` or a number beyond the int range, answers 422 `Project Id
+        must be an integer.` before the access check of the project it
+        names; on PUT a caller who may not change the stored inventory gets
+        403 first. Releases up to 2.13.1 took `5.5` for project 5.
       properties:
         name:           { type: string, maxLength: 128 }
         description:    { type: string, nullable: true, maxLength: 1000 }
@@ -6336,16 +6487,21 @@ components:
           nullable: true
           description: |
             The approval rule that every launch of every job template on the
-            inventory waits for; null or `""` for none, and text with a whole
-            number such as `"3"` is that number. Only admins
+            inventory waits for; null or `""` for none. Its ID may be written
+            as an integer, its digits (a sign and leading zeros allowed) or a
+            number without a fraction: `3`, `"3"`, `"+3"`, `"03"` and `3.0`
+            are rule 3. Only admins
             (`approval-rule.update`) set, change or remove it: another value
             than the stored one, `null` and `""` included, answers 403 `Only
             admins may assign or remove an approval rule: that needs
             approval-rule.update.` for everyone else, and nothing is
-            written; sending the stored value again, or leaving the field
-            out, is allowed. For admins, an ID that names no rule answers 422
+            written; sending the stored value again, in any of these forms,
+            or leaving the field out, is allowed for everyone and changes no
+            rule. For admins, an ID that names no rule answers 422
             `The selected approval rule does not exist.`, and a value that is
-            no whole number 422 `Approval rule must be an integer.` On an
+            no whole number 422 `Approval rule must be an integer.`, also
+            `5.5` or `"5abc"` for an inventory whose rule is 5, which
+            releases up to 2.13.1 answered with 200 and the rule kept. On an
             update, live job templates on the inventory with another rule of
             their own answer 422 `Job templates that use this inventory have
             another approval rule of their own: "deploy-web". A launch waits
@@ -6888,8 +7044,8 @@ components:
       type: object
       required: [job_template_id]
       properties:
-        job_template_id: { type: integer }
-        template_id: { type: integer, deprecated: true, description: "Older name of job_template_id, still accepted." }
+        job_template_id: { type: integer, minimum: 1, description: "The job template to launch: a positive whole number. Anything else, such as 0, a fraction (12.5), text that is not digits or a number beyond the int range, answers 422 `job_template_id is required.`; an unknown ID answers 404 `Job template #N not found.`" }
+        template_id: { type: integer, minimum: 1, deprecated: true, description: "Older name of job_template_id, still accepted, read the same way." }
         extra_vars:
           description: |
             Extra vars for this run, merged over the template's. An object or
@@ -6906,8 +7062,8 @@ components:
           oneOf:
             - { type: object, additionalProperties: true }
             - { type: string }
-        limit: { type: string, maxLength: 255, description: "Longer text, a list or an object is refused with 422 (error.fields)." }
-        verbosity: { type: integer, minimum: 0, maximum: 5, description: "A value below 0 or above 5, a list or an object is refused with 422 (error.fields)." }
+        limit: { type: string, maxLength: 255, description: "Longer text, or a list or an object, also an empty one (`[]` or `{}`), is refused with 422 (error.fields). An empty string or `null` is none: the job runs with the job template's limit, as when the field is left out." }
+        verbosity: { type: integer, minimum: 0, maximum: 5, description: "A value below 0 or above 5 is refused with 422 (error.fields), and so are a list or an object, also an empty one (`[]` or `{}`), and a value that is no whole number (a fraction such as 2.5, text that is not a number, true or false, a number beyond the int range such as 1e30 or 1e999), with `Verbosity must be an integer.` An empty string or `null` is none: the job runs at the job template's verbosity, as when the field is left out." }
         check_mode: { type: boolean }
       example:
         job_template_id: 12
@@ -7104,6 +7260,13 @@ components:
     ProjectInput:
       type: object
       required: [name, scm_type]
+      description: |
+        `scm_credential_id` takes a whole number: an integer, its digits as
+        text or a number without a fraction. Anything else, a list or an
+        object among them, also an empty one (`[]` or `{}`), answers 422
+        `Scm Credential Id must be an integer.`; `null` and `""` mean no
+        credential (releases up to 2.13.1 answered 422 `Scm Credential Id is
+        invalid.` for `""`, `[]` and `{}`).
       properties:
         name: { type: string, maxLength: 128 }
         description: { type: string, nullable: true }
@@ -7156,6 +7319,24 @@ components:
     JobTemplateInput:
       type: object
       required: [name, project_id, inventory_id, playbook]
+      description: |
+        `project_id`, `inventory_id`, `credential_id`, `runner_group_id`,
+        `verbosity`, `forks`, `timeout_minutes` and `approval_rule_id` take a
+        whole number: an integer, its digits as text (a sign and leading
+        zeros allowed) or a number without a fraction (`5.0`), each read as
+        that number wherever it is checked (`"+5"`, `"05"` and `5.0` are 5).
+        Anything else answers 422 (`JobTemplateRejected`), except in
+        `approval_rule_id` from a user without `approval-rule.update`: 403,
+        as another rule than the stored one (see there). On a template with
+        an approval rule, a user without `approval-rule.update` gets the
+        lock's 403 first, with the exceptions that `JobTemplateRejected`
+        names. `null` and `""` are no rule for `approval_rule_id`; for the
+        other fields `null` and `""` keep the meaning they had: 0, while
+        `null` clears `credential_id` and `runner_group_id`, which is
+        required (`Runner cannot be blank.`). A list or an object is no
+        whole number, also an empty one (`[]` or `{}`), which releases up to
+        2.13.1 took for 0: they saved verbosity 0, and answered 500 for an
+        admin's `approval_rule_id`.
       properties:
         name: { type: string, maxLength: 128 }
         description: { type: string, nullable: true }
@@ -7222,14 +7403,16 @@ components:
             sends another value than the stored one, answers 403 `Only admins
             may assign or remove an approval rule: that needs
             approval-rule.update.` and writes nothing. Sending the stored
-            value again, or leaving the field out, is allowed for everyone.
-            An unusable value answers 422 `Approval rule must be an integer.`
-            or `The selected approval rule does not exist.` While a template
-            has a rule, an update by anyone else that changes another field
-            than `name` and `description` answers 403 `This job template has
-            an approval rule: only admins may change what it runs
-            (approval-rule.update). You may change its name and
-            description.` A launch waits for one rule only: when the
+            value again, as an integer, its digits or a number without a
+            fraction (`3`, `"3"`, `"+3"`, `"03"` or `3.0` for rule 3), or
+            leaving the field out, is allowed for everyone and changes no
+            rule. For admins, an unusable value answers 422 `Approval rule
+            must be an integer.` or `The selected approval rule does not
+            exist.` While a template has a rule, an update by anyone else
+            that changes another field than `name` and `description` answers
+            403 `This job template has an approval rule: only admins may
+            change what it runs (approval-rule.update). You may change its
+            name and description.` A launch waits for one rule only: when the
             template's inventory has a rule, this may be null or that rule
             only (422 `Inventory "web-prod" has the approval rule
             "deploy-prod": a job template on it may have only that rule as its
@@ -7332,7 +7515,7 @@ components:
       required: [name, job_template_id, cron_expression]
       properties:
         name: { type: string, maxLength: 128 }
-        job_template_id: { type: integer, description: "A job template the caller may operate." }
+        job_template_id: { type: integer, description: "A job template the caller may operate. A value that is no whole number (a fraction, text that is not digits, a boolean, a list or an object with values, a number beyond the int range) answers 422 `Job Template Id must be an integer.`, and null, an empty string or an empty list or object (`[]`, `{}`) 422 `Job Template Id cannot be blank.`; an unknown ID answers 422 `The selected job template does not exist.`" }
         cron_expression:
           type: string
           maxLength: 64
@@ -7487,7 +7670,7 @@ components:
       type: object
       required: [target_group_id]
       properties:
-        target_group_id: { type: integer, description: ID of the target runner group }
+        target_group_id: { type: integer, description: "ID of the target runner group. A value that is no whole number, such as 5.5 or a number beyond the int range, answers 404 `Target runner group not found.`" }
     RunnerList:
       type: object
       properties:
@@ -7588,7 +7771,20 @@ components:
           type: string
           minLength: 5
           description: Required on create for local users; rejected for LDAP users. Optional on update.
-        status: { type: integer, description: "10 = active, 0 = inactive" }
+        status:
+          type: integer
+          enum: [0, 10]
+          description: |
+            10 = active, 0 = inactive: an integer (10.0 included) or its
+            digits as text, with an optional sign or leading zeros (`"+10"`,
+            `"010"`). Anything else, `true`, `false`, `null`, `""`, `5`,
+            `10.5`, any other fraction however close to 0 or 10
+            (`0.999999999999999`, `9.99999999999999`), a list or an object,
+            also an empty one (`[]`, `{}`), and text such as `"abc"`
+            included, answers 422 `Status is invalid.` before anything is
+            written; releases up to 2.13.1 took `false`, `null`, `""`, `[]`,
+            `{}`, such text and a fraction below 1 for 0, which deactivated
+            the user.
         is_superadmin:
           type: boolean
           description: |
@@ -7957,6 +8153,9 @@ components:
             Always a JSON object: `{}` for a rule without approvers. A rule
             whose approver list an older version stored as a JSON list or a
             single value names no approvers and is returned with `{}` too.
+            A `team_id` or an entry of `user_ids` that is no ID, such as a
+            fraction, text or `true`, names nobody; a launch the rule gates
+            is then refused when no other approver may decide.
           example: { user_ids: [7, 12] }
         job_template_id:
           type: integer
@@ -8009,11 +8208,30 @@ components:
           maximum: 50
           default: 1
           description: |
-            For a `users` rule, at most the number of listed users: more
-            answers 422 `Required approvals (3) exceeds eligible approvers
-            (1).` Role and team rules are checked at launch, where too few
-            eligible approvers besides the launcher refuse the launch.
-        timeout_minutes: { type: integer, nullable: true, minimum: 1, maximum: 10080 }
+            For a `users` rule, at most the number of users it lists who
+            exist, active or not, each counted once: an entry of
+            `user_ids` that is no ID, a user listed twice (also as `"07"`
+            beside `7`) and a user who does not exist, such as a deleted
+            one, do not count. More answers 422 `Required approvals (3)
+            exceeds eligible approvers (1).`, also on an update that
+            leaves `approver_config` out: the next update of a rule that
+            an older version saved with such entries is refused until the
+            rule lists enough users or requires fewer approvals. Role and
+            team rules are checked at launch, where too few eligible
+            approvers besides the launcher refuse the launch. A list or an
+            object, also an empty one (`[]` or `{}`), answers 422
+            `Required Approvals must be an integer.`; releases up to
+            2.13.1 stored an empty one as 0, a rule that needs no
+            approval.
+        timeout_minutes:
+          type: integer
+          nullable: true
+          minimum: 1
+          maximum: 10080
+          description: |
+            A list or an object, also an empty one (`[]` or `{}`), answers 422
+            `Timeout Minutes must be an integer.`; releases up to 2.13.1 stored
+            an empty one as 0, which timed the rule's requests out at once.
         timeout_action: { type: string, enum: [reject, approve], default: reject }
         job_template_id:
           type: integer
@@ -8385,7 +8603,8 @@ components:
           description: |
             Required for a job step: a job template the caller may operate
             (see the endpoint). An integer, or text with a whole number such
-            as `"15"` (a sign or spaces around it are read away); text with a
+            as `"15"` (a plus sign, and whitespace around it, are read
+            away); text with a
             leading zero, `true` and `1.0` count as none, which answers 422
             `A job step needs a job template.`
             Ignored for other step types. A job template with an approval
@@ -9144,8 +9363,8 @@ components:
       description: Optional launch overrides for the job template.
       properties:
         extra_vars: { type: object, additionalProperties: true, description: "Merged over the template's extra vars." }
-        limit: { type: string, maxLength: 255, description: "Longer text, a list or an object is refused with 422." }
-        verbosity: { type: integer, minimum: 0, maximum: 5, description: "A value below 0 or above 5, a list or an object is refused with 422." }
+        limit: { type: string, maxLength: 255, description: "Longer text, or a list or an object, also an empty one (`[]` or `{}`), is refused with 422. An empty string or `null` is none: the job runs with the job template's limit, as when the field is left out." }
+        verbosity: { type: integer, minimum: 0, maximum: 5, description: "A value below 0 or above 5 is refused with 422, and so are a list or an object, also an empty one (`[]` or `{}`), and a value that is no whole number (a fraction such as 2.5, text that is not a number, true or false, a number beyond the int range such as 1e30), with `Verbosity must be an integer.` An empty string or `null` is none: the job runs at the job template's verbosity, as when the field is left out." }
     TriggerWorkflowInput:
       type: object
       properties:

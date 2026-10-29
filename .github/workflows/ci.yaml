@@ -99,7 +99,9 @@ jobs:
             "CREATE DATABASE IF NOT EXISTS \`${DB_TEST_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; \
              GRANT ALL PRIVILEGES ON \`${DB_TEST_NAME}\`.* TO '${DB_USER}'@'%'; \
              FLUSH PRIVILEGES;"
-          docker compose exec -T app bash -c "DB_NAME=${DB_TEST_NAME} php yii migrate --interactive=0"
+          # As www-data, as bin/tests-phpunit.sh migrates: run as root, a console
+          # command creates or rotates runtime/logs/app.log as root's.
+          docker compose exec -T -u www-data app bash -c "DB_NAME=${DB_TEST_NAME} php yii migrate --interactive=0"
 
       - name: Build Playwright container
         if: matrix.suite == 'e2e'

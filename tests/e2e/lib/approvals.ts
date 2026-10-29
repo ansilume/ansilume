@@ -30,6 +30,36 @@ export const HISTORY_TEMPLATE = 'e2e-history-gated-template';
 export const DUAL_RULE = 'e2e-dual-approval-rule';
 export const DUAL_TEMPLATE = 'e2e-dual-gated-template';
 
+/**
+ * commands/E2eApproverConfigSeeder.php: rules whose approver config names
+ * its approvers by a JSON number beyond the int range: a team rule
+ * ({"team_id": 1e30}), which the rule form and the API store, and a users
+ * rule ({"user_ids": [1e30]}), which 2.13.1 and older stored (it requires
+ * more approvals than its users, which they refuse now). Such a number
+ * names nobody (app\components\ApproverConfigIds). Neither rule gates
+ * anything.
+ */
+export const BEYOND_INT_TEAM_RULE = 'e2e-team-beyond-int-rule';
+export const BEYOND_INT_USERS_RULE = 'e2e-users-beyond-int-rule';
+
+/** views/approval-rule/view.php: the Approver cell of a team rule, and of a users rule, that names nobody. */
+export const NO_TEAM_CONFIGURED = 'Team: none configured';
+export const NO_USERS_CONFIGURED = 'Users: none configured';
+
+/** The Approver cell of the open approval rule page (the row below Approver Type). */
+export function approverCell(page: Page): Locator {
+  return page.locator('#page-content table').first().locator('tr')
+    .filter({ has: page.locator('th', { hasText: /^Approver$/ }) })
+    .locator('td');
+}
+
+/** The open edit form of an approval rule selects no approver: no role, no team and no user. */
+export async function expectNoApproverSelected(page: Page): Promise<void> {
+  await expect(page.locator('#approver-role'), 'no role').toHaveValue('');
+  await expect(page.locator('#approver-team'), 'no team').toHaveValue('');
+  await expect(page.locator('#approver-users option:checked'), 'no user').toHaveCount(0);
+}
+
 /** The disabled schedule of the soft-deleted job template e2e-deleted-template. */
 export const DELETED_TEMPLATE_SCHEDULE = 'e2e-deleted-template-schedule';
 

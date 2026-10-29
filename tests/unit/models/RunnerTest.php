@@ -18,7 +18,6 @@ class RunnerTest extends TestCase
             ->onlyMethods([])
             ->getMock();
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($r, $attributes);
         return $r;
     }

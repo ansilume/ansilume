@@ -27,11 +27,15 @@ test.describe('Analytics Dashboard', () => {
     await expect(page.locator('body')).toContainText(/analytics|job|chart|stat|success|fail/i);
   });
 
+  // The filter's date range: the last 30 days by default (AnalyticsQuery::applyDefaults()).
+  // It counted any such input and accepted none.
   test('date filter present', async ({ page }) => {
     await page.goto('/analytics/index');
-    const dateFilter = page.locator('input[type="date"], select[name*="period"], input[name*="from"], .date-filter');
-    const count = await dateFilter.count();
-    expect(count).toBeGreaterThanOrEqual(0);
+    for (const name of ['date_from', 'date_to']) {
+      const input = page.locator(`#page-content input[type="date"][name="${name}"]`);
+      await expect(input, name).toBeVisible();
+      await expect(input, name).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+    }
   });
 
   test('shows workflows, approvals, runners tabs', async ({ page }) => {
@@ -73,4 +77,26 @@ test.describe('Analytics Dashboard', () => {
     await cancelJob(page);
     expect(await canceledApprovals(page)).toBeGreaterThanOrEqual(before + 1);
   });
+
+  // Regression: a date_from of only whitespace (?date_from=%20) showed the
+  // danger alert "The format of Date From is invalid." instead of the
+  // reports, and a NUL byte (?date_from=%00) answered 500, a ValueError of the
+  // date rule. Both are trimmed to no date now (models/AnalyticsQuery.php).
+  //
+  // The success and approval rates of the reports round the exact share
+  // (app\components\Percent: 23 of 160 is 14.38, not 14.37 as part / whole *
+  // 100 rounds since PHP 8.4). tests/integration/services/AnalyticsRatesTest.php
+  // covers that for every report: here the page would need exactly 23
+  // succeeded of 160 jobs in its range, which the jobs of the other specs
+  // change.
+  for (const [what, value] of [['a space', '%20'], ['a NUL byte', '%00']]) {
+    test(`a date_from of ${what} shows the reports without an error`, async ({ page }) => {
+      const answer = await page.goto(`/analytics/index?date_from=${value}`);
+
+      expect(answer?.status(), 'the analytics page').toBe(200);
+      await expect(page.locator('#page-content .alert-danger'), 'no filter error').toHaveCount(0);
+      await expect(page.locator('#page-content')).toContainText('Total Jobs');
+      await expect(page.locator('#page-content input[name="date_from"]')).toHaveAttribute('value', '');
+    });
+  }
 });

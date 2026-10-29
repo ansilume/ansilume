@@ -37,15 +37,13 @@ class PhpUpdateDocsContractTest extends TestCase
     private const KEY_GENERATION_FAILED = 'Key generation failed.';
 
     /**
-     * The section is the newest, the one of 2.12.2 follows, and the manual
-     * source update links to it under the anchor GitHub gives its heading.
+     * The section follows the one of the update to PHP 8.5, the one of
+     * 2.12.2 follows it, and the manual source update links to it under the
+     * anchor GitHub gives its heading.
      */
-    public function testTheSectionIsTheNewest(): void
+    public function testTheSectionFollowsTheUpdateToPhp85(): void
     {
-        preg_match_all('/^## After updating from .*$/m', $this->read(self::UPDATING), $headings);
-
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.12.2 follows.');
+        $this->assertUpdateSectionBetween(Php85UpdateDocsContractTest::UPDATE_SECTION, self::UPDATE_SECTION, DeployRoleUpdateDocsContractTest::UPDATE_SECTION);
         $this->assertSame(
             self::SECTION_ANCHOR,
             str_replace(' ', '-', (string)preg_replace('/[^a-z0-9 -]/', '', strtolower(substr(self::UPDATE_SECTION, 3)))),

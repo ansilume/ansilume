@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubmittedId;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\Inventory;
@@ -346,19 +347,22 @@ final class JobTemplateGate
     }
 
     /**
-     * An approval rule ID as stored or assigned: any numeric value is an ID,
-     * anything else (null included) is none.
+     * An approval rule ID as stored or assigned: a whole number as the
+     * integer rule reads it (SubmittedId) is an ID; anything else is none,
+     * null and a number beyond the int range included (a JSON body's 1e30
+     * or 1e999, whose (int) cast warns since PHP 8.5).
      */
     private static function ruleIdOf(mixed $value): ?int
     {
-        return is_numeric($value) ? (int)$value : null;
+        return SubmittedId::of($value);
     }
 
     /**
-     * A record ID as stored or assigned; 0 for none (a new record).
+     * A record ID as stored or assigned, read as ruleIdOf() reads it; 0 for
+     * none (a new record).
      */
     private static function idOf(mixed $value): int
     {
-        return is_numeric($value) ? (int)$value : 0;
+        return SubmittedId::of($value) ?? 0;
     }
 }

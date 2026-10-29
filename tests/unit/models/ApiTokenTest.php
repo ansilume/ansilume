@@ -17,7 +17,6 @@ class ApiTokenTest extends TestCase
             ->onlyMethods([])
             ->getMock();
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($t, $attributes);
         return $t;
     }

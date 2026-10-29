@@ -130,6 +130,81 @@ class JobSearchFormTest extends TestCase
     }
 
     /**
+     * Dates of only whitespace that trim() strips: strtotime() read " ",
+     * "\t", "\n" and "  " as now on PHP 8.3 and as no date on PHP 8.4 and
+     * later, and reads a NUL byte as now on every version.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function whitespaceOnlyDateProvider(): array
+    {
+        return [
+            'a space' => [' '],
+            'a tab' => ["\t"],
+            'a line break' => ["\n"],
+            'a carriage return' => ["\r"],
+            'a vertical tab' => ["\v"],
+            'a NUL byte' => ["\0"],
+            'two spaces' => ['  '],
+            'all of them' => [" \t\n\r\v\0"],
+        ];
+    }
+
+    /**
+     * Regression: a date of only whitespace was a filter from now on PHP
+     * 8.3 (the job list was empty) and no filter on PHP 8.5, and it failed
+     * the date rule; one with a NUL byte answered 500 on every version (see
+     * below). The dates are trimmed first: such a date is empty, as an
+     * empty one is, on every version.
+     *
+     * @dataProvider whitespaceOnlyDateProvider
+     */
+    public function testRegressionAWhitespaceOnlyDateIsEmpty(string $value): void
+    {
+        $form = new JobSearchForm();
+        $form->load(['date_from' => $value, 'date_to' => $value], '');
+
+        $this->assertTrue($form->validate(), 'no error');
+        $this->assertSame('', $form->date_from);
+        $this->assertSame('', $form->date_to);
+    }
+
+    /**
+     * Whitespace around a date is trimmed, so the date is valid; a date that
+     * is not set stays null and an empty one empty.
+     */
+    public function testTheDatesAreTrimmed(): void
+    {
+        $form = new JobSearchForm();
+        $form->load(['date_from' => " 2025-01-15\t", 'date_to' => "\n2025-12-31 "], '');
+        $unset = new JobSearchForm();
+        $unset->date_to = '';
+
+        $this->assertTrue($form->validate());
+        $this->assertSame('2025-01-15', $form->date_from);
+        $this->assertSame('2025-12-31', $form->date_to);
+        $this->assertTrue($unset->validate());
+        $this->assertNull($unset->date_from);
+        $this->assertSame('', $unset->date_to);
+    }
+
+    /**
+     * Regression: a date with a NUL byte answered 500 on every PHP version:
+     * the date rule's DateTime::createFromFormat() throws a ValueError for
+     * it. The trim strips one at either end, and a rule before the date rule
+     * refuses one inside, so the date rule skips that date.
+     */
+    public function testRegressionADateWithANulByteFailsValidationInsteadOfThrowing(): void
+    {
+        $form = new JobSearchForm();
+        $form->load(['date_from' => "2025-01\0-15", 'date_to' => "2025-12-31\0"], '');
+
+        $this->assertFalse($form->validate());
+        $this->assertSame(['date_from' => 'Date From is invalid.'], $form->getFirstErrors());
+        $this->assertSame('2025-12-31', $form->date_to);
+    }
+
+    /**
      * Regression: empty strings from GET params must not cause TypeError on ?string properties.
      */
     public function testEmptyStringParamsDoNotThrow(): void

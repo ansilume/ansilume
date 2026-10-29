@@ -41,9 +41,6 @@ class UsersControllerTest extends WebControllerTestCase
     use CountsQueries;
     use OpenApiSchemaAssertions;
 
-    /** A page number beyond the last page: the list answers its last page. */
-    private const LAST_PAGE = '1000000';
-
     private UsersController $ctrl;
 
     /** @var list<string> the default roles of the manager before the test */
@@ -329,13 +326,15 @@ class UsersControllerTest extends WebControllerTestCase
     {
         $this->authenticateWithAdmin();
         $this->createOperators(2);
-        $this->listPage(self::LAST_PAGE);
-        $fewQueries = $this->queriesOf(fn () => $this->listPage(self::LAST_PAGE));
-        $fewUsers = count($this->listPage(self::LAST_PAGE));
+        $lastPage = $this->lastPageNumber();
+        $this->listPage($lastPage);
+        $fewQueries = $this->queriesOf(fn () => $this->listPage($lastPage));
+        $fewUsers = count($this->listPage($lastPage));
         $this->createOperators(10);
+        $lastPage = $this->lastPageNumber();
 
-        $this->assertSame($fewQueries, $this->queriesOf(fn () => $this->listPage(self::LAST_PAGE)), 'a page after 2 new users and one after 12');
-        $this->assertNotSame($fewUsers, count($this->listPage(self::LAST_PAGE)), 'precondition: the two pages hold a different number of users');
+        $this->assertSame($fewQueries, $this->queriesOf(fn () => $this->listPage($lastPage)), 'a page after 2 new users and one after 12');
+        $this->assertNotSame($fewUsers, count($this->listPage($lastPage)), 'precondition: the two pages hold a different number of users');
     }
 
     // -- Role: one of the instance's roles, or 422 ------------------------------
@@ -1264,6 +1263,19 @@ class UsersControllerTest extends WebControllerTestCase
         $this->assertArrayHasKey('data', $result);
 
         return $result['data'];
+    }
+
+    /**
+     * The number of the last page of GET /api/v1/users (meta.pages), as the
+     * query text: a page past the last has no users.
+     */
+    private function lastPageNumber(): string
+    {
+        $this->setQueryParams(['page' => '1']);
+        $result = $this->ctrl->actionIndex();
+        $this->assertIsInt($result['meta']['pages'] ?? null);
+
+        return (string)$result['meta']['pages'];
     }
 
     private function createOperators(int $count): void

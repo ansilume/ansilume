@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\CsvText;
 use app\models\AnalyticsQuery;
 use app\services\AnalyticsService;
+use yii\web\Response;
 
 /**
  * API v1: Analytics
@@ -46,89 +48,92 @@ class AnalyticsController extends BaseApiController
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionSummary(): array
+    public function actionSummary(): array|Response
     {
         return $this->runReport('summary');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionTemplateReliability(): array
+    public function actionTemplateReliability(): array|Response
     {
         return $this->runReport('templateReliability');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionProjectActivity(): array
+    public function actionProjectActivity(): array|Response
     {
         return $this->runReport('projectActivity');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionUserActivity(): array
+    public function actionUserActivity(): array|Response
     {
         return $this->runReport('userActivity');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionHostHealth(): array
+    public function actionHostHealth(): array|Response
     {
         return $this->runReport('hostHealth');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionJobTrend(): array
+    public function actionJobTrend(): array|Response
     {
         return $this->runReport('jobTrend');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionWorkflowSummary(): array
+    public function actionWorkflowSummary(): array|Response
     {
         return $this->runReport('workflowSummary');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionWorkflowActivity(): array
+    public function actionWorkflowActivity(): array|Response
     {
         return $this->runReport('workflowActivity');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionApprovalSummary(): array
+    public function actionApprovalSummary(): array|Response
     {
         return $this->runReport('approvalSummary');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    public function actionRunnerActivity(): array
+    public function actionRunnerActivity(): array|Response
     {
         return $this->runReport('runnerActivity');
     }
 
     /**
-     * @return array{data: mixed}|array{error: array{message: string}}
+     * The report $method of AnalyticsService for the request's filters, as
+     * JSON, or with format=csv as CSV.
+     *
+     * @return array{data: mixed}|array{error: array{message: string}}|Response
      */
-    private function runReport(string $method): array
+    private function runReport(string $method): array|Response
     {
         $query = new AnalyticsQuery();
         $query->load((array)\Yii::$app->request->get(), '');
@@ -161,46 +166,30 @@ class AnalyticsController extends BaseApiController
     }
 
     /**
+     * The rows as a CSV answer: the response itself, which the application
+     * sends as it is. Any other result of the action would become the
+     * response's data, and a raw response refuses an array.
+     *
      * @param array<int|string, mixed> $rows
-     * @return array{data: mixed}
      */
-    private function respondCsv(array $rows, string $report): array
+    private function respondCsv(array $rows, string $report): Response
     {
+        /** @var Response $response */
         $response = \Yii::$app->response;
-        $response->format = \yii\web\Response::FORMAT_RAW;
+        $response->format = Response::FORMAT_RAW;
         $response->headers->set('Content-Type', 'text/csv; charset=UTF-8');
         $response->headers->set(
             'Content-Disposition',
             'attachment; filename="analytics-' . $report . '-' . date('Y-m-d') . '.csv"'
         );
-
-        $output = fopen('php://temp', 'r+');
-        if ($output === false) {
-            $response->data = '';
-            return ['data' => null];
-        }
-
-        // summary returns a single assoc array, wrap it
-        if (!empty($rows) && !is_array(reset($rows))) {
+        // A summary is a single row of values: wrap it.
+        if ($rows !== [] && !is_array(reset($rows))) {
             $rows = [$rows];
         }
+        /** @var array<int|string, array<int|string, scalar|null>> $rows */
+        $response->data = CsvText::of($rows);
 
-        if (!empty($rows)) {
-            $first = reset($rows);
-            if (is_array($first)) {
-                fputcsv($output, array_keys($first));
-                foreach ($rows as $row) {
-                    /** @var array<int|string, scalar|null> $row */
-                    fputcsv($output, $row);
-                }
-            }
-        }
-
-        rewind($output);
-        $response->data = (string)stream_get_contents($output);
-        fclose($output);
-
-        return ['data' => null];
+        return $response;
     }
 
     private function firstQueryError(AnalyticsQuery $query): string

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\CsvText;
 use app\models\AnalyticsQuery;
 use app\models\JobTemplate;
 use app\models\Project;
@@ -114,7 +115,9 @@ class AnalyticsController extends BaseController
     }
 
     /**
-     * @return array<int|string, mixed>
+     * The rows of the report: a summary is one row.
+     *
+     * @return array<int, array<string, scalar|null>>
      */
     private function getReportData(AnalyticsService $service, AnalyticsQuery $query, string $report): array
     {
@@ -133,7 +136,7 @@ class AnalyticsController extends BaseController
     }
 
     /**
-     * @param array<int|string, mixed> $rows
+     * @param array<int, array<string, scalar|null>> $rows
      */
     private function exportCsv(array $rows, string $report): Response
     {
@@ -145,27 +148,7 @@ class AnalyticsController extends BaseController
             'Content-Disposition',
             'attachment; filename="analytics-' . $report . '-' . date('Y-m-d') . '.csv"'
         );
-
-        $output = fopen('php://temp', 'r+');
-        if ($output === false) {
-            $response->data = '';
-            return $response;
-        }
-
-        if (!empty($rows)) {
-            $first = reset($rows);
-            if (is_array($first)) {
-                fputcsv($output, array_keys($first));
-                foreach ($rows as $row) {
-                    /** @var array<int|string, scalar|null> $row */
-                    fputcsv($output, $row);
-                }
-            }
-        }
-
-        rewind($output);
-        $response->data = (string)stream_get_contents($output);
-        fclose($output);
+        $response->data = CsvText::of($rows);
 
         return $response;
     }

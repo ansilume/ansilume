@@ -15,31 +15,42 @@ section "PHP syntax check"
 # Lints every file of the NUL-separated list on stdin and sets SYNTAX_ERRORS.
 # dc runs `docker compose exec`, which reads stdin: without </dev/null it
 # swallowed the rest of the list, so only the first file was ever checked.
-# The `if !` form keeps set -e from aborting at the first broken file.
+# php -l exits 0 for a compile-time deprecation (an implicitly nullable
+# parameter, a cast such as (integer)), and the app container's php.ini
+# writes every message to the error log: the check passed a test file whose
+# deprecation aborted the whole Integration suite on PHP 8.5, where Yii's
+# error handler throws it when the file loads. So PHP shows every message
+# here, and a file passes only when its output is the one line of a clean
+# file (tests/unit/bin/LintSyntaxCheckTest.php). || true keeps set -e from
+# aborting at the first broken file, whose output fails the comparison.
 php_syntax_check() {
     local file output
     SYNTAX_ERRORS=0
     while IFS= read -r -d '' file; do
-        if ! output=$(dc php -l "$file" </dev/null 2>&1); then
+        output=$(dc php -d display_errors=stderr -d log_errors=0 -d error_reporting=-1 -l "$file" </dev/null 2>&1 || true)
+        if [[ "$output" != "No syntax errors detected in $file" ]]; then
             echo -e "  ${RED}✘${NC}  $file"
-            echo "     $output"
+            sed 's/^/     /' <<< "$output"
             SYNTAX_ERRORS=$((SYNTAX_ERRORS+1))
         fi
     done
 }
 
+# Every PHP file outside the dependencies, runtime/ and docker/, and the yii
+# entry script, which every console command, queue worker, runner and
+# schedule run starts and which has no .php extension.
 php_syntax_check < <(find . \
     -not -path "./vendor/*" \
     -not -path "./.composer/*" \
     -not -path "./runtime/*" \
     -not -path "./@runtime/*" \
     -not -path "./docker/*" \
-    -name "*.php" -print0)
+    \( -name "*.php" -o -path ./yii \) -print0)
 
 if [[ $SYNTAX_ERRORS -eq 0 ]]; then
     ok "All PHP files pass syntax check"
 else
-    fail "$SYNTAX_ERRORS PHP file(s) have syntax errors"
+    fail "$SYNTAX_ERRORS PHP file(s) fail the syntax check"
 fi
 
 # =============================================================================

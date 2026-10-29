@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\unit\components;
 
 use app\components\RunnerHttpClient;
+use app\tests\unit\services\notification\HttpLoopbackServer;
 use PHPUnit\Framework\TestCase;
 
 class RunnerHttpClientTest extends TestCase
@@ -153,6 +154,96 @@ class RunnerHttpClientTest extends TestCase
 
         $this->assertNull($result);
         $this->assertSame([], $requests);
+    }
+
+    /**
+     * The status is the one of the answer's status line, which the runner
+     * acts on: a new token on 401, another registration attempt on 502 and
+     * 503. The body is read whatever the status.
+     *
+     * @dataProvider answeredStatuses
+     */
+    public function testTheStatusIsTheOneTheServerAnsweredWith(int $status): void
+    {
+        $server = new HttpLoopbackServer();
+        $client = new RunnerHttpClient($server->start($status, '{"ok":false,"error":"refused"}'), 'runner-token');
+        try {
+            $result = $client->post('/api/runner/v1/heartbeat', []);
+        } finally {
+            $server->stop();
+        }
+
+        $this->assertSame(['ok' => false, 'error' => 'refused'], $result);
+        $this->assertSame($status, $client->getLastHttpStatus());
+    }
+
+    /**
+     * @return array<string, array{0: int}>
+     */
+    public static function answeredStatuses(): array
+    {
+        return [
+            'created' => [201],
+            'unauthorized' => [401],
+            'conflict' => [409],
+            'bad gateway' => [502],
+            'not ready' => [503],
+        ];
+    }
+
+    /**
+     * A request that got no answer has no status, whatever the request
+     * before it got: a 503 left over would make the runner try again to
+     * register where it cannot connect at all, a 401 would make it drop its
+     * token. PHP 8.5 deprecates $http_response_header, the headers local to
+     * the call; http_get_last_response_headers(), which replaces it, keeps
+     * them for the whole process.
+     */
+    public function testARequestThatGotNoAnswerHasNoStatus(): void
+    {
+        $server = new HttpLoopbackServer();
+        $client = new RunnerHttpClient($server->start(503, '{"ok":false}'), 'runner-token');
+        try {
+            $client->postUnauthenticated('/api/runner/v1/register', ['name' => 'runner-1']);
+        } finally {
+            $server->stop();
+        }
+        $this->assertSame(503, $client->getLastHttpStatus());
+
+        $result = $client->postUnauthenticated('/api/runner/v1/register', ['name' => 'runner-1']);
+
+        $this->assertNull($result, 'the server is gone');
+        $this->assertSame(0, $client->getLastHttpStatus());
+    }
+
+    /**
+     * An answer that did not come over HTTP has no status either, although
+     * PHP keeps the headers of the last HTTP answer until the next HTTP
+     * request: the client clears them before each request.
+     */
+    public function testAnAnswerThatDidNotComeOverHttpHasNoStatus(): void
+    {
+        $server = new HttpLoopbackServer();
+        $answered = new RunnerHttpClient($server->start(401, '{"ok":false}'), 'runner-token');
+        try {
+            $answered->post('/api/runner/v1/heartbeat', []);
+        } finally {
+            $server->stop();
+        }
+        $directory = sys_get_temp_dir() . '/runner_http_client_' . uniqid('', true);
+        mkdir($directory, 0o700, true);
+        file_put_contents($directory . '/heartbeat', '{"ok":true}');
+        try {
+            $local = new RunnerHttpClient('file://' . $directory, 'runner-token');
+            $result = $local->post('/heartbeat', []);
+        } finally {
+            unlink($directory . '/heartbeat');
+            rmdir($directory);
+        }
+
+        $this->assertSame(401, $answered->getLastHttpStatus());
+        $this->assertSame(['ok' => true], $result);
+        $this->assertSame(0, $local->getLastHttpStatus());
     }
 
     /**

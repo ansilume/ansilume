@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * Runs the real "waiting for database" loop of docker/php/entrypoint.sh (the
  * dev image) and docker/php/entrypoint-prod.sh (the prebuilt image
  * ghcr.io/ansilume/ansilume) under /bin/sh with set -e, as the app container
- * runs it (/bin/sh is dash in php:8.3-fpm), with a stand-in php that gives
+ * runs it (/bin/sh is dash in php:8.5-fpm), with a stand-in php that gives
  * the answers of the database check and a sleep that returns at once.
  *
  * Regression: the loop kept the answer of the check with

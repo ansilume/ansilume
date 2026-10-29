@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\SubmittedId;
 use app\models\AuditLog;
 use app\models\Project;
 use app\models\Team;
@@ -15,8 +16,21 @@ use yii\web\BadRequestHttpException;
 use yii\web\NotFoundHttpException;
 use yii\web\Response;
 
+/**
+ * Teams, their members and their projects. The user_id and project_id that
+ * add-member and add-project post are read as the models' integer rules
+ * read them (SubmittedId): a value that is no ID, such as a fraction, a
+ * boolean, a list or a JSON number beyond the int range (the request's JSON
+ * parser serves the forms too), answers 400 as a missing one does.
+ */
 class TeamController extends BaseController
 {
+    /** The 400 of add-member without a user ID. */
+    public const USER_ID_REQUIRED = 'user_id required.';
+
+    /** The 400 of add-project without a project ID. */
+    public const PROJECT_ID_REQUIRED = 'project_id required.';
+
     /**
      * @return array<int, array<string, mixed>>
      */
@@ -112,11 +126,10 @@ class TeamController extends BaseController
     public function actionAddMember(int $id): Response
     {
         $team = $this->findModel($id);
-        /** @var int|string $rawUserId */
-        $rawUserId = \Yii::$app->request->post('user_id');
-        $userId = (int)$rawUserId;
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $userId = SubmittedId::of(\Yii::$app->request->post('user_id'));
         if (!$userId) {
-            throw new BadRequestHttpException('user_id required.');
+            throw new BadRequestHttpException(self::USER_ID_REQUIRED);
         }
         $member = new TeamMember();
         $member->team_id = $team->id;
@@ -142,13 +155,12 @@ class TeamController extends BaseController
     public function actionAddProject(int $id): Response
     {
         $team = $this->findModel($id);
-        /** @var int|string $rawProjectId */
-        $rawProjectId = \Yii::$app->request->post('project_id');
-        $projectId = (int)$rawProjectId;
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $projectId = SubmittedId::of(\Yii::$app->request->post('project_id'));
         /** @var string $role */
         $role = \Yii::$app->request->post('role', TeamProject::ROLE_VIEWER);
         if (!$projectId) {
-            throw new BadRequestHttpException('project_id required.');
+            throw new BadRequestHttpException(self::PROJECT_ID_REQUIRED);
         }
         if (!in_array($role, [TeamProject::ROLE_VIEWER, TeamProject::ROLE_OPERATOR], true)) {
             $role = TeamProject::ROLE_VIEWER;

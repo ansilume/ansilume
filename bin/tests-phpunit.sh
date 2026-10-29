@@ -7,6 +7,21 @@ set -euo pipefail
 # shellcheck source=tests-common.sh
 source "$(dirname "$0")/tests-common.sh"
 
+# Runs a command in the app container as www-data, the user of php-fpm's
+# workers, or locally as dc does without Docker. The migrations run so: a
+# console command logs to runtime/logs/app.log, and run as root, one that
+# rotates a full log leaves copies that www-data cannot write
+# (tests/unit/YiiExecUserTest.php). PHPUnit itself runs as root through dc,
+# as the tests that drop privileges need (tests/unit/RunsUnprivileged.php),
+# and logs to runtime/logs/test.log.
+dc_www_data() {
+    if [[ $DOCKER_AVAILABLE -eq 1 ]]; then
+        docker compose exec -T -u www-data app "$@"
+    else
+        "$@"
+    fi
+}
+
 # =============================================================================
 # Migrations end-to-end on a clean database
 # =============================================================================
@@ -21,7 +36,7 @@ elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
     SETUP_SQL="DROP DATABASE IF EXISTS \`${SCRATCH_DB}\`; CREATE DATABASE \`${SCRATCH_DB}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON \`${SCRATCH_DB}\`.* TO '${DB_USER:-ansilume}'@'%'; FLUSH PRIVILEGES;"
 
     if docker compose exec -T db mariadb -uroot -p"${DB_ROOT_PWD}" -e "${SETUP_SQL}" 2>/dev/null; then
-        MIGRATE_OUT=$(docker compose exec -T app bash -c \
+        MIGRATE_OUT=$(dc_www_data bash -c \
             "DB_NAME=${SCRATCH_DB} php yii migrate --interactive=0 2>&1" || true)
 
         if grep -q "Migrated up successfully\|No new migrations found" <<< "$MIGRATE_OUT"; then
@@ -101,7 +116,7 @@ fi
 # =============================================================================
 section "Test database migrations"
 
-TEST_MIGRATE_OUT=$(dc sh -c 'DB_NAME=ansilume_test php yii migrate --interactive=0 2>&1' || true)
+TEST_MIGRATE_OUT=$(dc_www_data sh -c 'DB_NAME=ansilume_test php yii migrate --interactive=0 2>&1' || true)
 if grep -qP "applied|No new migrations" <<< "$TEST_MIGRATE_OUT"; then
     ok "Test database migrations up to date"
 else
@@ -151,7 +166,7 @@ else
     elif grep -q "No tests executed" <<< "$COMBINED_OUT"; then
         skip "Integration tests (no tests executed)"
     elif grep -qi "Access denied\|Connection refused\|SQLSTATE\[HY000\] \[1044\]" <<< "$COMBINED_OUT"; then
-        skip "Integration tests (test database not available — run: php yii setup/test-db)"
+        skip "Integration tests (test database not available — create it: docker compose exec -T db sh -c 'mariadb -uroot -p\"\$MYSQL_ROOT_PASSWORD\" < /docker-entrypoint-initdb.d/init-test-db.sql', then migrate it: docker compose exec -T -u www-data app sh -c 'DB_NAME=ansilume_test php yii migrate --interactive=0')"
     else
         fail "Integration tests failed"
         # PHPUnit prints the failing-test details BEFORE the --coverage-text

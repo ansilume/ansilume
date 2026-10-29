@@ -8,12 +8,30 @@ namespace app\tests\unit\services\notification;
  * Tiny loopback HTTP server used by notification-channel unit tests.
  *
  * Spawns `php -S 127.0.0.1:<port>` as a child process pointed at a
- * throwaway docroot whose index.php returns a configurable status code.
+ * throwaway docroot whose index.php returns a configurable status code
+ * and records every request it answers (requests()).
  * The caller can then point curl at the returned base URL to exercise
  * real HTTP code paths without touching the network.
  */
 final class HttpLoopbackServer
 {
+    /**
+     * The docroot's index.php, which answers every path: records the
+     * request before it answers, so the record is there once the caller has
+     * the answer. sprintf(): the status code, then the body as PHP code.
+     */
+    private const INDEX = <<<'PHP'
+        <?php
+        file_put_contents(__DIR__ . '/requests.ndjson', json_encode([
+            'method' => (string)($_SERVER['REQUEST_METHOD'] ?? ''),
+            'path' => (string)($_SERVER['REQUEST_URI'] ?? ''),
+            'headers' => getallheaders(),
+            'body' => base64_encode((string)file_get_contents('php://input')),
+        ]) . "\n", FILE_APPEND | LOCK_EX);
+        http_response_code(%d);
+        echo %s;
+        PHP;
+
     /** @var resource|null */
     private $process;
     private string $docroot = '';
@@ -35,10 +53,7 @@ final class HttpLoopbackServer
 
         $this->docroot = sys_get_temp_dir() . '/ansilume_loopback_' . uniqid('', true);
         mkdir($this->docroot, 0755, true);
-        file_put_contents(
-            $this->docroot . '/index.php',
-            "<?php http_response_code({$statusCode}); echo " . var_export($body, true) . ";\n"
-        );
+        file_put_contents($this->docroot . '/index.php', sprintf(self::INDEX, $statusCode, var_export($body, true)));
 
         $cmd = ['php', '-S', '127.0.0.1:' . $this->port, '-t', $this->docroot];
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
@@ -73,13 +88,41 @@ final class HttpLoopbackServer
                     fclose($sock);
                     return 'http://127.0.0.1:' . $this->port;
                 }
-                usleep(50_000);
+                usleep(50000);
             }
         } finally {
             restore_error_handler();
         }
         $this->stop();
         throw new \RuntimeException('HttpLoopbackServer: server did not come up in time');
+    }
+
+    /**
+     * The requests the server answered so far, in order; headers by the
+     * names the client sent.
+     *
+     * @return list<array{method: string, path: string, headers: array<string, string>, body: string}>
+     */
+    public function requests(): array
+    {
+        $log = $this->docroot . '/requests.ndjson';
+        if ($this->docroot === '' || !is_file($log)) {
+            return [];
+        }
+        $requests = [];
+        foreach (file($log, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [] as $line) {
+            $record = json_decode($line, true);
+            if (is_array($record)) {
+                $requests[] = [
+                    'method' => (string)$record['method'],
+                    'path' => (string)$record['path'],
+                    'headers' => array_map('strval', (array)$record['headers']),
+                    'body' => (string)base64_decode((string)$record['body'], true),
+                ];
+            }
+        }
+
+        return $requests;
     }
 
     public function stop(): void

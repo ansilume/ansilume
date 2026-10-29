@@ -46,7 +46,6 @@ class JobLaunchServicePayloadTest extends TestCase
             ->onlyMethods([])
             ->getMock();
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($t, $attributes);
         $t->populateRelation('inventory', $inventoryName === null ? null : $this->makeInventory([
             'id' => $attributes['inventory_id'] ?? null,
@@ -62,7 +61,6 @@ class JobLaunchServicePayloadTest extends TestCase
             ->onlyMethods([])
             ->getMock();
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($i, $attributes);
         return $i;
     }
@@ -74,7 +72,6 @@ class JobLaunchServicePayloadTest extends TestCase
             ->onlyMethods([])
             ->getMock();
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($j, $attributes);
         return $j;
     }

@@ -217,7 +217,6 @@ class CredentialServiceTest extends TestCase
             ->getMock();
         $stub->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($stub, ['secret_data' => '', 'credential_type' => $type]);
         return $stub;
     }

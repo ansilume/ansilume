@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { expectFlash } from '../../lib/helpers';
+import { expectFlash, postWithPageCsrf } from '../../lib/helpers';
+import { forgePost } from '../../lib/scoping';
 import { openWorkflowTemplate } from '../../lib/triggers';
 import {
   JOB_TEMPLATE,
@@ -11,13 +12,17 @@ import {
   STEPS_COLUMNS,
   STEPS_WORKFLOW,
   STEP_NOT_ADDED,
+  addStepThroughForm,
   routeCell,
   routeNext,
   routeTo,
   stepReference,
   stepRoutedTo,
+  templateStepId,
+  templateStepNames,
   templateStepRow,
   typeBadge,
+  withNewWorkflow,
 } from '../../lib/workflows';
 
 /**
@@ -92,5 +97,31 @@ test.describe('Workflow Steps', () => {
     await expect(page.locator('#workflow-steps-table tbody tr')).toHaveCount(2);
     await expect(templateStepRow(page, STEPS_CLEANUP)).toHaveCount(1);
     await expect(routeCell(templateStepRow(page, STEPS_BUILD), 'failure')).toHaveText(routeTo(2, STEPS_CLEANUP));
+  });
+
+  // Regression: move-step and remove-step read step_id with an (int) cast,
+  // so a forged "<id>.5" moved the step <id> and "<id>abc" removed it (and on
+  // PHP 8.5 a JSON number beyond the int range answered 500). A step_id that
+  // is no ID is step 0 (SubmittedId): the move answers 404
+  // (WorkflowStepWriteService::STEP_NOT_FOUND), the removal changes nothing.
+  // On a workflow of its own, deleted afterwards.
+  test('forged step moves and removals with a step ID that is no ID change nothing', async ({ page }) => {
+    const first = 'e2e-step-id-first';
+    const second = 'e2e-step-id-second';
+    await withNewWorkflow(page, 'e2e-step-id-workflow', async (id) => {
+      await addStepThroughForm(page, { name: first, type: 'pause' });
+      await addStepThroughForm(page, { name: second, type: 'pause' });
+      const firstId = await templateStepId(page, first);
+      const secondId = await templateStepId(page, second);
+
+      const moved = await postWithPageCsrf(page, `/workflow-template/move-step?id=${id}`, { step_id: `${firstId}.5`, direction: 'down' });
+      expect(moved.status(), 'the forged move').toBe(404);
+      expect(await moved.text()).toContain(`Workflow template #${id} has no step with ID 0.`);
+
+      await page.goto('/workflow-template/index');
+      await forgePost(page, `/workflow-template/remove-step?id=${id}`, { step_id: `${secondId}abc` }, /\/workflow-template\/view\?id=\d+/);
+      await expect(page.locator('#page-content > .alert-success'), 'nothing was removed').toHaveCount(0);
+      await expect(templateStepNames(page), 'the steps in their order').toHaveText([first, second]);
+    });
   });
 });

@@ -28,7 +28,6 @@ class WorkflowStepTest extends TestCase
     {
         $step = $this->createPartialMock(WorkflowStep::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($step, ['extra_vars_template' => null]);
 
         $this->assertSame([], $step->getParsedExtraVarsTemplate());
@@ -38,7 +37,6 @@ class WorkflowStepTest extends TestCase
     {
         $step = $this->createPartialMock(WorkflowStep::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($step, ['extra_vars_template' => '{"target": "hosts"}']);
 
         $this->assertSame(['target' => 'hosts'], $step->getParsedExtraVarsTemplate());

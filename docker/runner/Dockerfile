@@ -11,14 +11,21 @@
 # =============================================================================
 
 # -- Stage 1: Composer dependencies -------------------------------------------
-FROM composer:2.6 AS composer
+# On the PHP line of the runtime, with the Composer binary copied in: the
+# composer image itself runs the newest PHP (it is built FROM php:8-alpine),
+# and composer install refuses a lock whose packages do not allow that PHP.
+FROM php:8.5-cli AS composer
+
+COPY --from=composer:2.10 /usr/bin/composer /usr/bin/composer
+RUN apt-get update && apt-get install -y unzip \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --no-interaction --no-scripts --optimize-autoloader --prefer-dist
 
 # -- Stage 2: Runtime ---------------------------------------------------------
-FROM php:8.3-cli
+FROM php:8.5-cli
 
 # ansible-lint lives in its own virtualenv. Installing it into the system
 # interpreter (pip --break-system-packages) collides with the Debian-managed

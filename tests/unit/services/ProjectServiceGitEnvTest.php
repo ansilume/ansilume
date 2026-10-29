@@ -120,7 +120,6 @@ class ProjectServiceGitEnvTest extends TestCase
         $service = new ProjectService();
 
         $ref = new \ReflectionMethod(ProjectService::class, 'buildGitEnv');
-        $ref->setAccessible(true);
         $keyFile = null;
         $args = [$project, &$keyFile];
         $env = $ref->invokeArgs($service, $args);
@@ -136,7 +135,6 @@ class ProjectServiceGitEnvTest extends TestCase
     {
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'baseGitEnv');
-        $ref->setAccessible(true);
         return (array)$ref->invoke($service);
     }
 
@@ -158,7 +156,6 @@ class ProjectServiceGitEnvTest extends TestCase
         $service = new ProjectService();
 
         $ref = new \ReflectionMethod(ProjectService::class, 'buildGitEnv');
-        $ref->setAccessible(true);
         $keyFile = null;
         $args = [$project, &$keyFile];
         $env = $ref->invokeArgs($service, $args);
@@ -182,7 +179,6 @@ class ProjectServiceGitEnvTest extends TestCase
         );
         $cred->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($cred, [
             'id' => 1,
             'name' => 'Test SSH Credential',
@@ -209,7 +205,6 @@ class ProjectServiceGitEnvTest extends TestCase
         );
         $project->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($project, [
             'id' => 1,
             'name' => 'Test',
@@ -229,7 +224,6 @@ class ProjectServiceGitEnvTest extends TestCase
         ]);
         if ($credential !== null) {
             $relRef = new \ReflectionProperty(BaseActiveRecord::class, '_related');
-            $relRef->setAccessible(true);
             $relRef->setValue($project, ['scmCredential' => $credential]);
         }
         return $project;

@@ -155,21 +155,21 @@ LDAP_GROUP_NAME_ATTR=cn
 
 ```bash
 # Verify the directory is reachable and the service-account bind works.
-docker compose exec app php yii ldap/test-connection
+docker compose exec -u www-data app php yii ldap/test-connection
 
 # Look up a single user (no password needed). Shows DN, UID, email,
 # group membership, and the resulting Ansilume role assignment.
-docker compose exec app php yii ldap/test-user jdoe
+docker compose exec -u www-data app php yii ldap/test-user jdoe
 
 # Reconcile every LDAP-backed user with the directory. Updates attributes
 # and roles, disables accounts whose user search finds no entry, and
 # re-enables the ones it disabled once it finds them again; an account
 # deactivated in Ansilume stays inactive. A lookup that fails changes
 # nothing.
-docker compose exec app php yii ldap/sync
+docker compose exec -u www-data app php yii ldap/sync
 
 # Same as above but reports without making changes.
-docker compose exec app php yii ldap/sync --dry-run
+docker compose exec -u www-data app php yii ldap/sync --dry-run
 ```
 
 Run `ldap/sync` from cron (e.g. nightly) so accounts that have been removed
@@ -199,8 +199,14 @@ prints, and the entry below writes that to a log (see
 Suggested crontab entry:
 
 ```
-0 3 * * * cd /opt/ansilume && docker compose exec -T app php yii ldap/sync >> /var/log/ansilume/ldap-sync.log 2>&1
+0 3 * * * cd /opt/ansilume && docker compose exec -T -u www-data app php yii ldap/sync >> /var/log/ansilume/ldap-sync.log 2>&1
 ```
+
+The entry runs the sync as `www-data`, the user of the web server, as
+every console command of this guide does. Run as root, a sync that finds
+no `runtime/logs/app.log` creates it as root's, so the errors of the web
+UI are lost; one that rotates a full log leaves copies that root owns (see
+[troubleshooting.md](troubleshooting.md#app-or-queue-worker-container-is-unhealthy-the-log-file-cannot-be-written)).
 
 ---
 

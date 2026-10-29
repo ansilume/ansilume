@@ -6,6 +6,7 @@ namespace app\services;
 
 use app\components\CronRuns;
 use app\components\ErrorText;
+use app\components\SubmittedId;
 use app\models\AuditLog;
 use app\models\JobTemplate;
 use app\models\NotificationTemplate;
@@ -360,7 +361,7 @@ class ScheduleService extends Component
             ->andWhere(['id' => $schedule->job_template_id])
             ->scalar();
 
-        return is_numeric($projectId) ? (int)$projectId : null;
+        return SubmittedId::of($projectId);
     }
 
     private function projects(): ProjectAccessChecker

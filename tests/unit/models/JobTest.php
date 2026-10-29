@@ -163,7 +163,6 @@ class JobTest extends TestCase
         );
         $job->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($job, ['status' => $status]);
         return $job;
     }

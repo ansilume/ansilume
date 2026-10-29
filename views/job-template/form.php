@@ -16,6 +16,7 @@ declare(strict_types=1);
 /** @var string|null $inventoryHint JobTemplateInventoryOptions::GATED_INVENTORIES_HINT when inventories with a rule were left out */
 /** @var string|null $inventoryRuleHint JobTemplateRuleAssignment::INVENTORY_RULE_HINT for admins, when the template's inventory has a rule */
 
+use app\components\SubmittedId;
 use app\components\VersionedAssetUrl;
 use app\controllers\JobTemplateController;
 use app\services\ApprovalRuleAssignmentPolicy;
@@ -90,7 +91,9 @@ $this->title = $model->isNewRecord ? 'New Job Template' : 'Edit: ' . $model->nam
     <?php
     /** @var int[] $selectedCredentialIds */
     $selectedExtraIds = $selectedCredentialIds;
-    $extraCredentials = array_filter($credentials, static fn ($c) => (int)$c->id !== (int)$model->credential_id);
+    // As the integer rule reads an ID: a rejected submission's value that is none, such as 1e30, is no primary credential.
+    $primaryCredentialId = SubmittedId::of($model->credential_id);
+    $extraCredentials = array_filter($credentials, static fn ($c) => (int)$c->id !== $primaryCredentialId);
     ?>
     <div class="mb-3">
         <label class="form-label">Additional credentials</label>

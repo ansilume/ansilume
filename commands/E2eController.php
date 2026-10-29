@@ -211,6 +211,7 @@ class E2eController extends Controller
         (new E2eDeletedTemplateApprovalSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
         (new E2eFailingNotificationSeeder($logger))->seed($userId);
         (new E2eRunnerGroupGuardSeeder($logger))->seed($userId, $templateId);
+        (new E2eApproverConfigSeeder($logger))->seed($userId);
         $this->seedJobWithArtifacts($userId, $templateId);
         (new E2eUnreadableArtifactSeeder($logger))->seed($userId, $templateId);
         (new E2eLogStreamSeeder($logger))->seed($userId, $templateId);

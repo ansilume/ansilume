@@ -34,6 +34,14 @@ class JobSearchForm extends Model
         return [
             [['status'], 'in', 'range' => array_merge([''], Job::statuses())],
             [['template_id', 'launched_by', 'runner_group_id'], 'integer'],
+            // Trimmed first: a date of only whitespace is empty, no filter, on
+            // every PHP version. strtotime() read " " as now on PHP 8.3 (the
+            // job list was empty) and as no date on PHP 8.4 and later, and
+            // reads a NUL byte as now on every version.
+            [['date_from', 'date_to'], 'trim', 'skipOnEmpty' => true],
+            // Before the date rule, whose DateTime::createFromFormat() throws
+            // a ValueError for a NUL byte; the date rule skips such a date.
+            [['date_from', 'date_to'], 'match', 'pattern' => '/\x00/', 'not' => true],
             [['date_from', 'date_to'], 'date', 'format' => 'php:Y-m-d'],
             [['has_changes'], 'in', 'range' => ['', '1', '0']],
         ];

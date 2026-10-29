@@ -140,7 +140,6 @@ class ScheduleTest extends TestCase
         );
         $s->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($s, [
             'id'              => null,
             'name'            => 'test',

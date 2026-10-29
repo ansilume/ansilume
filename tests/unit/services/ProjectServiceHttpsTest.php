@@ -54,13 +54,11 @@ class ProjectServiceHttpsTest extends TestCase
         // Wire credential into the project's _related cache
         if ($credential !== null) {
             $relRef = new \ReflectionProperty(BaseActiveRecord::class, '_related');
-            $relRef->setAccessible(true);
             $relRef->setValue($project, ['scmCredential' => $credential]);
         }
 
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'applyHttpsCredentialEnv');
-        $ref->setAccessible(true);
         $args = [$project, &$env];
         $ref->invokeArgs($service, $args);
     }
@@ -76,7 +74,6 @@ class ProjectServiceHttpsTest extends TestCase
         );
         $cred->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($cred, [
             'id' => 1,
             'name' => 'Test Credential',
@@ -103,7 +100,6 @@ class ProjectServiceHttpsTest extends TestCase
         );
         $project->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($project, [
             'id' => 1,
             'name' => 'Test',

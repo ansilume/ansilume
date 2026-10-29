@@ -1,7 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
-import { expectForbidden, userId } from '../../lib/helpers';
+import { expectForbidden, fieldError, notAnInteger, userId } from '../../lib/helpers';
 import { BTN_CREATE } from '../../lib/selectors';
-import { asAdmin, forgePost, idWhere, indexRows } from '../../lib/scoping';
+import { asAdmin, forgePost, idWhere, indexRows, optionValue, rowsWhere } from '../../lib/scoping';
 import { flash, ruleLabel } from '../../lib/approvals';
 import {
   ASSIGN_REFUSED,
@@ -14,6 +14,7 @@ import {
   HOST_TEMPLATE,
   INVENTORY_CHANGE_REFUSED,
   INVENTORY_LOCK_NOTICE,
+  INVENTORY_NAME_COLUMN,
   cardHidden,
   expectLockedInventoryForm,
   gatedBadge,
@@ -97,6 +98,29 @@ test.describe('Inventories RBAC', () => {
     await openInventory(page, 'e2e-alpha-inv');
     await expect(page.locator('body')).toContainText('e2e-alpha-proj');
     await expect(page.locator('body')).not.toContainText('e2e-alpha-viewed-proj');
+  });
+
+  // Regression: the access check read a forged project that is no project
+  // ID, such as a fraction of the ID of a project the operator's team only
+  // views, as that project: a 403. Its error comes first now, before the
+  // access check (TeamScopingTrait::refusesSubmittedProject()), and nothing
+  // is created.
+  test('operator gets the form error, not a 403, for a project that is no project ID, and no inventory is created', async ({ page }) => {
+    const name = 'e2e-fraction-project-inventory';
+    await page.goto('/inventory/create');
+    const viewed = await optionValue(page, '#inventory-project_id', 'e2e-alpha-viewed-proj');
+    await page.goto('/inventory/index');
+
+    await forgePost(page, '/inventory/create', {
+      'Inventory[name]': name,
+      'Inventory[inventory_type]': 'dynamic',
+      'Inventory[source_path]': 'inventory.yml',
+      'Inventory[project_id]': `${viewed}.5`,
+    }, /\/inventory\/create$/);
+
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+    await expect(fieldError(page, 'inventory', 'project_id')).toHaveText(notAnInteger('Project Id'));
+    expect(rowsWhere(await indexRows(page, '/inventory/index'), INVENTORY_NAME_COLUMN, name), 'no inventory was created').toHaveLength(0);
   });
 
   test('operator can access index', async ({ page }) => {

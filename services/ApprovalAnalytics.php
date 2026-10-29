@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\Percent;
 use yii\db\Connection;
 
 /**
@@ -71,7 +72,7 @@ final class ApprovalAnalytics
             'timed_out' => (int)($row['timed_out'] ?? 0),
             'canceled' => (int)($row['canceled'] ?? 0),
             'pending' => (int)($row['pending'] ?? 0),
-            'approval_rate' => $decided > 0 ? round($approved / $decided * 100, 2) : 0.0,
+            'approval_rate' => Percent::rate($approved, $decided),
             'avg_decision_seconds' => round((float)($row['avg_decision'] ?? 0), 1),
         ];
     }

@@ -187,7 +187,6 @@ class UserTest extends TestCase
         );
         $user->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($user, [
             'id'                   => 1,
             'username'             => 'testuser',

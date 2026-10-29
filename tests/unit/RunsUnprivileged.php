@@ -15,7 +15,7 @@ namespace app\tests\unit;
  * and stat() check; access(), and so is_readable() and file_exists(),
  * checks the real user, root. Root's groups stay, so the files under test
  * give their group no more than others. The log is flushed first: nobody
- * may not append to runtime/logs/app.log, and a flush of the buffered
+ * may not append to runtime/logs/test.log, and a flush of the buffered
  * messages while the code runs would fail. Tests that use it need the
  * posix extension.
  */

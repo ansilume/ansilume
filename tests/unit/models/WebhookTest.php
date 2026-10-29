@@ -90,7 +90,6 @@ class WebhookTest extends TestCase
         );
         $w->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($w, array_merge(
             ['id' => null, 'name' => 'test', 'url' => 'http://example.com', 'events' => '', 'secret' => null, 'enabled' => true],
             $attrs

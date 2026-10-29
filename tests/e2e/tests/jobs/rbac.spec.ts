@@ -28,6 +28,18 @@ test.describe('Jobs RBAC', () => {
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
   });
 
+  // Regression: a date_from of a NUL byte answered 500 for every role (a
+  // ValueError of the date rule), and one of only whitespace was kept as a
+  // filter that Clear filters offered to remove (models/JobSearchForm.php).
+  test('viewer sees the job list for a date_from of a NUL byte or only whitespace, without a filter', async ({ page }) => {
+    for (const value of ['%00', '%20']) {
+      const answer = await page.goto(`/job/index?date_from=${value}`);
+      expect(answer?.status(), value).toBe(200);
+      await expect(page.locator('#page-content input[name="date_from"]'), value).toHaveAttribute('value', '');
+      await expect(page.locator('#page-content').getByRole('link', { name: 'Clear filters' }), value).toHaveCount(0);
+    }
+  });
+
   test('viewer cannot see cancel/relaunch buttons', async ({ page }) => {
     await page.goto('/job/index');
     const firstRow = page.locator('table.table tbody tr a').first();

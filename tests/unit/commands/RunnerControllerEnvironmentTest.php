@@ -26,7 +26,6 @@ class RunnerControllerEnvironmentTest extends TestCase
     {
         $controller = new RunnerController('runner', \Yii::$app);
         $method = new \ReflectionMethod(RunnerController::class, 'buildProcessEnv');
-        $method->setAccessible(true);
         /** @var array<string, string> $env */
         $env = $method->invoke($controller, '/tmp/cb.ndjson');
 

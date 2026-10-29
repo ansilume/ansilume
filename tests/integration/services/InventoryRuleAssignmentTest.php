@@ -54,15 +54,24 @@ class InventoryRuleAssignmentTest extends DbTestCase
         return [
             'an integer' => ['rule', 'rule'],
             'a string of digits' => ['rule-string', 'rule'],
+            'a plus sign' => ['rule-plus', 'rule'],
+            'a final line break' => ['rule-line-break', 'rule'],
+            'a whole float' => ['rule-float', 'rule'],
             'an empty form value' => ['', 'null'],
             'null from JSON' => [null, 'null'],
             'no rule ID at all' => ['abc', 'as-is'],
+            'a leading space' => [' 5', 'as-is'],
+            'a fraction' => [5.5, 'as-is'],
+            'a float beyond the int range' => [1e30, 'as-is'],
+            'true' => [true, 'as-is'],
         ];
     }
 
     /**
-     * An admin's value is applied as the rule it stands for; a value that is
-     * no rule ID stays as it is, for the model's integer rule to refuse.
+     * An admin's value is applied as the rule it stands for, in every
+     * spelling that the integer rule reads as the ID ("+5", "5\n" and 5.0 are
+     * 5); a value that is no rule ID stays as it is, for the model's integer
+     * rule to refuse.
      *
      * @dataProvider submittedValueProvider
      */
@@ -74,6 +83,9 @@ class InventoryRuleAssignmentTest extends DbTestCase
         $value = match ($submitted) {
             'rule' => (int)$rule->id,
             'rule-string' => (string)$rule->id,
+            'rule-plus' => '+' . $rule->id,
+            'rule-line-break' => $rule->id . "\n",
+            'rule-float' => (float)$rule->id,
             default => $submitted,
         };
 
@@ -153,6 +165,31 @@ class InventoryRuleAssignmentTest extends DbTestCase
 
         $this->assertNull($refusal);
         $this->assertSame((int)$rule->id, $inventory->getAttribute('approval_rule_id'));
+    }
+
+    /**
+     * Regression: the stored rule sent back as "+5", "5\n" or 5.0, which the
+     * integer rule reads as rule 5, was refused for a user who may not
+     * assign rules (ASSIGN_REFUSED). It is no change, in every spelling, and
+     * is applied as the stored ID.
+     */
+    public function testSubmittingTheStoredRuleInAnotherSpellingIsNoChange(): void
+    {
+        $operator = $this->inventoryOperator();
+        $rule = $this->createApprovalRule((int)$operator->id);
+        $inventory = $this->gate($this->staticInventory((int)$operator->id), $rule);
+
+        foreach (['+' . $rule->id, $rule->id . "\n", '00' . $rule->id, (float)$rule->id] as $spelling) {
+            $refusal = $this->assignment->apply(
+                $inventory,
+                [InventoryRuleAssignment::FIELD => $spelling],
+                (int)$operator->id,
+                InventoryRuleAssignment::storedRuleId($inventory)
+            );
+
+            $this->assertNull($refusal, var_export($spelling, true));
+            $this->assertSame((int)$rule->id, $inventory->getAttribute('approval_rule_id'), var_export($spelling, true));
+        }
     }
 
     public function testOnlyAdminsMayAssignRules(): void

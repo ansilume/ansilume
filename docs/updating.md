@@ -16,12 +16,23 @@ install it, and do not pin it.
 
 ```bash
 cp .env .env.backup
-docker compose exec db mysqldump -uansilume -p"$DB_PASSWORD" ansilume > backup.sql
+docker compose exec -T db sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' > backup.sql
 ```
+
+The single quotes leave the user, the password and the database to the
+shell of the database container, which has them from `.env`: your own
+shell does not read `.env`.
 
 In a source installation, or one deployed with the role, keep these copies
 outside the install directory, for example in `/root`: the images are built
 from that directory.
+
+Update while no job runs. The update creates the runners anew, and Docker
+kills a playbook that still runs 10 seconds after it asked the runner to
+stop. Its job then stays **Running**, and so does a workflow run that
+waits on it: the runner reports in again as the same runner, and
+`php yii job/reclaim-stale` takes only the jobs of runners that are
+offline. Cancel such a job, check its hosts, and launch it again.
 
 Database migrations run automatically when the app container starts. You do not need to run them manually.
 
@@ -118,15 +129,18 @@ Every build pulls its base image (`pull: true` in `docker-compose.yml`), so
 a base image rebuilt with security fixes, such as `php:8.2-fpm` with PHP
 8.2.35 for 2.12.1, arrives with the update. Up to 2.12.1 it did not, see
 [After updating from 2.12.1 or older](#after-updating-from-2121-or-older-base-images-the-deploy-role-nginx-130).
-The builds need Docker Hub (`php:8.3-fpm`, `composer:2.6`), which limits
+The builds need Docker Hub (`php:8.5-fpm`, `composer:2.10`), which limits
 anonymous pulls: `docker login` lifts the limit. When a build fails after
 `git pull`, the running containers already serve the new code without its
 migrations: fix the cause and run step 3 again, or go back to the previous
-version until a build gets through (`git checkout v2.12.2`, and
-`git checkout main` again before the next update). Updating from 2.12.2
+version until a build gets through (`git checkout v2.13.1`, and
+`git checkout main` again before the next update). Updating from 2.13.1
 or older, a container that starts again before the build got through does
 not come up, see
-[After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files).
+[After updating from 2.13.1 or older](#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers),
+and from 2.12.2 or older
+[After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files)
+as well.
 
 If `git pull` fails with merge conflicts, you have local modifications. Either stash them (`git stash`) or reset to upstream (`git reset --hard origin/main`).
 
@@ -136,7 +150,7 @@ If `git pull` fails with merge conflicts, you have local modifications. Either s
 
 1. **Compose file** — prebuilt installations get the latest `docker-compose.yml` from GitHub. Source installations get it via `git pull`.
 2. **Container images** — all services pull the latest images from `ghcr.io/ansilume/`.
-3. **Database migrations** — the app container's entrypoint runs `php yii migrate --interactive=0` on every start. This is idempotent and safe to run repeatedly.
+3. **Database migrations** — the app container's entrypoint runs `php yii migrate --interactive=0` as `www-data` on every start. This is idempotent and safe to run repeatedly.
 4. **Configuration** — the quickstart merges new `.env` variables that were introduced in newer versions. Your existing values are never modified.
 5. **Health check** — the quickstart waits for the app container to report healthy.
 6. **HTTP verification** — the quickstart then probes the stack from the host through the published port: the `/health` endpoint, the `/` → `/login` redirect, the login page, and one published asset (catches a missing `web_assets` volume). If any check fails, the script prints what failed, points you at the diagnostics script, and **exits with status 1**. Unattended runs (cron, CI) can rely on that exit code.
@@ -152,7 +166,7 @@ After updating, verify the application is running correctly:
 docker compose ps
 
 # Check app health
-docker compose exec app php yii health/check
+docker compose exec -u www-data app php yii health/check
 
 # Check the health endpoint (adjust the port to your NGINX_PORT)
 curl -s http://localhost:8080/health
@@ -167,6 +181,617 @@ Run the diagnostics script if anything looks wrong:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 ```
+
+---
+
+## After updating from 2.13.1 or older: PHP 8.5, time zone data, CSV exports, whole numbers
+
+**The images run PHP 8.5.** The app and runner images, the development
+stack and the deploy role build on `php:8.5-fpm` and `php:8.5-cli`
+instead of `php:8.3-fpm` and `php:8.3-cli`: PHP 8.3 gets security fixes
+until 2027-12-31, PHP 8.5 until 2029-12-31. The app and runner images
+install their PHP dependencies on `php:8.5-cli` with the Composer binary
+of `composer:2.10`, no longer in the image `composer:2.6`, whose PHP 8.3
+refuses them, and the development image has Composer 2.10 too.
+`composer.json` requires PHP 8.5, so `composer install` refuses PHP 8.3
+and 8.4. In the database only the next runs of schedules change (see
+**Schedules in 11 time zones run at their time again**). Check after the
+update:
+
+```bash
+docker compose exec app php -v    # PHP 8.5
+```
+
+- **Prebuilt images:** the update pulls them; there is nothing else to do.
+  This holds for an installation the quickstart made from source too: it
+  runs `docker-compose.prebuilt.yml`. Do not run the steps of the manual
+  source update there, as they start the development stack of
+  `docker-compose.yml`.
+- **Source installations** started from `docker-compose.yml`: the update
+  builds the images on `php:8.5-fpm`, with the Composer binary of
+  `composer:2.10`, from Docker Hub (see
+  [Manual update — source (git)](#manual-update--source-git)). Until a
+  build gets through, the containers of 2.13.1 serve the new code, which
+  delivers no webhooks on PHP 8.3, and one that starts again does not come
+  up: its `composer install` refuses the new `composer.lock` on PHP 8.3
+  (`Root composer.json requires php >=8.5 but your php version (8.3.36)
+  does not satisfy that requirement.`, then
+  `[entrypoint] ERROR: composer install failed`). Run steps 2 and 3 right
+  after `git pull`: step 3 builds every image before it recreates a
+  container. When the build fails, fix the cause and run step 3 again, or
+  go back to 2.13.1 (`git checkout v2.13.1`) before a container restarts
+  (see
+  [A container does not start after the update: composer install failed](troubleshooting.md#a-container-does-not-start-after-the-update-composer-install-failed)).
+- **The deploy role** builds the images right after its checkout, on
+  `php:8.5-fpm` and, for the bundled runners, `php:8.5-cli`, both with the
+  Composer binary of `composer:2.10`. When the build fails, the containers
+  of 2.13.1 serve the new code with the same hazard: fix the cause and run
+  the playbook again, or run it with `ansilume_version: "v2.13.1"` (or the
+  release archive of 2.13.1); a `git checkout` by hand is undone by its
+  next run. With `ansilume_use_prebuilt_images` it builds nothing.
+- **Runners:** runners of 2.13.1, on its images or installed without
+  Docker, keep working with the new server; pull the new image for PHP
+  8.5 and Debian's fix of brotli (see **The images of 2.13.1 carry a
+  brotli flaw**). A runner installed without Docker (see
+  [runners.md](runners.md#running-without-docker)) needs PHP 8.5 before you
+  update its code: stop it, install PHP 8.5 with `pcntl`, `posix`, `zip`,
+  `curl` and `ffi`, check that the `php` its service starts is 8.5, then
+  update the code, run `composer install --no-dev` with that `php`, and
+  start it. Debian 13 ships PHP 8.4 and Ubuntu 24.04
+  PHP 8.3: take PHP 8.5 from packages.sury.org or `ppa:ondrej/php`, and on
+  RHEL, AlmaLinux and Rocky Linux from Remi's repository (`php:remi-8.5`);
+  Ubuntu 26.04, Fedora 44 and Alpine 3.24 or later ship it (on Alpine 3.23
+  `/usr/bin/php` and `composer` are PHP 8.4, see
+  [runners.md](runners.md#prerequisites)). On an older PHP,
+  `composer install` refuses the new lock
+  (`Root composer.json requires php >=8.5 but your php version (8.4.27)
+  does not satisfy that requirement.`) and leaves the dependencies of
+  2.13.1 in place: PHP 8.3 starts the new code with them, and the runner
+  exits at its first request with
+  `Error: Call to undefined function app\components\http_clear_last_response_headers()`.
+  PHP 8.4 runs the new code with them without a message: the runner
+  starts and runs jobs on the dependencies of 2.13.1 until a later release
+  needs PHP 8.5.
+  A runner that an older PHP starts after `composer install` ran on PHP 8.5
+  exits at once with
+  `Composer detected issues in your platform: Your Composer dependencies require a PHP version ">= 8.5.0". You are running 8.4.27.`
+  (see
+  [A runner installed without Docker does not start after the update](troubleshooting.md#a-runner-installed-without-docker-does-not-start-after-the-update)).
+  PHP 8.5 brings a php.ini of its own, which sets `variables_order` to
+  `GPCS`, as the php.ini of the distributions do: a runner that took its
+  settings from its environment, because the php.ini of its old PHP set
+  `EGPCS`, exits with `ERROR: API_URL environment variable is required.`;
+  put its settings in `.env` and remove them from its unit, where one that
+  is left hides the one in `.env` (see [runners.md](runners.md#setup)).
+  Keep the old PHP installed until the runner works, where your packages
+  allow it, as those of packages.sury.org and `ppa:ondrej/php` do, and
+  name the new one in the unit (`ExecStart=/usr/bin/php8.5 yii runner/start`):
+  going back is then `git checkout v2.13.1`,
+  `composer install --no-dev` with the old `php`, and that line.
+  runners.md said to install such a runner in `/opt/ansilume-runner`,
+  with its settings in `Environment=` lines of its unit: so installed, it
+  does not start on the PHP packages of the distributions. It needs
+  `/var/www`, and its settings in `.env` (see [runners.md](runners.md#setup)).
+- **Images and overrides of your own:** an image you build `FROM` the
+  Ansilume images gets PHP 8.5 with its next build, and the PHP extensions
+  it adds must be built anew: one built for PHP 8.3 does not load, and PHP
+  warns at every start
+  (`PHP Startup: <extension>: Unable to initialize module`, with
+  `Module compiled with module API=20230831` and
+  `PHP    compiled with module API=20250925`). OPcache is part of PHP 8.5 and
+  on in PHP-FPM, as it was: `docker-php-ext-install opcache` and
+  `docker-php-ext-enable opcache` fail on PHP 8.5, and
+  `zend_extension=opcache` warns at every start
+  (`Failed loading Zend extension 'opcache'`); remove them. In a php.ini
+  of your own, PHP 8.5 deprecates `report_memleaks`, and
+  `register_argc_argv = On` for PHP-FPM; Ansilume needs neither. Nor has
+  it `disable_classes` any more: the classes that setting names are no
+  longer disabled. An image you build from the Dockerfiles on a base of
+  your own, or a `docker-compose.override.yml` that changes the build of
+  the PHP services, needs PHP 8.5 as well.
+
+**The images of 2.13.1 carry a brotli flaw.** Their `libbrotli1`
+(1.1.0-2+b7), as that of every older image, has CVE-2026-111497, which
+CISA lists as exploited. git decodes the answers of `http` and `https`
+servers with it: in the queue-worker and on the runners when they sync a
+project, and in the app and the queue-worker when ansible-lint installs
+the roles and collections that a project's `requirements.yml` takes from
+git (on the save of a job template, on **Run Lint** and after every
+sync). Whoever runs such a server, or sits on the path of an `http://`
+URL, reaches it. The images of 2.14.0 have Debian's fix. Update the
+runner on every other host that runs one too, with `docker compose pull`
+and `docker compose up -d` there: a pulled image takes effect only once
+the container is created anew. Pin no runner or server to a version
+before 2.14.0, such as 2.13.1 or `2.13` (`ANSILUME_IMAGE_TAG`). A runner
+installed without Docker runs the git of its host: install its
+distribution's fixes for brotli (DSA-6582-1, DLA-4855-1, USN-8956-1) and,
+after the compromise of eMudhra's intermediate certificates, for
+ca-certificates (DSA-6572-1, DLA-4845-1, USN-8944-1). Check the app and
+each runner container (`runner-1` in Ansilume's compose files, `runner`
+in [runners.md](runners.md#docker-compose-standalone-runner)): an older
+version means that the container still runs an image without the fix.
+
+```bash
+docker compose exec app dpkg-query -W libbrotli1         # 1.1.0-2+deb13u1 or later
+docker compose exec runner-1 dpkg-query -W libbrotli1    # the same for each runner
+```
+
+**PHP-FPM tracks no upload progress.** `docker/php/php.ini`, which the app
+image and the development stack load, and the deploy role's php.ini set
+`session.upload_progress.enabled = Off`. With PHP's default, `On`, PHP's
+own session handler wrote a session file to `/tmp` for every multipart
+request that named its upload progress field, also from signed-out
+visitors, before Ansilume's code ran: the way into CVE-2026-115560, which
+PHP has not fixed yet, and which also needs code that switches the
+session's serialize handler, as Ansilume does not. Ansilume keeps its
+sessions in Redis and shows no upload progress, so nothing else changes.
+A php.ini of your own for the app image sets it too.
+
+**Fatal errors carry a stack trace.** PHP 8.5 writes a stack trace under
+a fatal error, such as an exceeded time or memory limit, in the PHP error
+log and in the runner's output. It leaves the arguments of the calls out
+while `zend.exception_ignore_args = On`, which every Ansilume image sets
+and a runner installed without Docker needs (see
+[runners.md](runners.md#prerequisites)).
+
+**Schedules in 11 time zones run at their time again.** PHP brings its
+own time zone data, and a PHP line in security support gets updates of it
+seldom: PHP 8.3 got 2026.1 with 8.3.31 (2026-05-07) and none since, so
+PHP 8.3.36, which 2.13.1 runs on, has 2026.1, while PHP 8.5.12 has
+2026.5. Their rules differ in 14 zones since 1970, and in 11 of them from
+2026 on. `Africa/Casablanca` and `Africa/El_Aaiun` are at UTC+0 since
+2026-09-20, where 2026.1 has UTC+1 except in the weeks of Ramadan
+(2027-02-07 to 2027-03-14, for example): on 2.13.1 their schedules run an
+hour early, except in those weeks. From 2026-11-01 `America/Vancouver`
+stays at UTC-7, `America/Edmonton`, `America/Inuvik` and
+`America/Yellowknife` at UTC-6, and `America/Winnipeg` and
+`America/Rainy_River` at UTC-5, as do `Canada/Pacific`, `Canada/Mountain`
+and `Canada/Central`, where 2026.1 turns their clocks back an hour every
+November and forward again every March: on 2.13.1 their schedules run an
+hour late each year from early November to mid-March. `America/Bogota`,
+`Asia/Tehran` and `Iran` differ only in 1992 and 1979, which no schedule
+reaches.
+
+The update (migration `m000090`) computes anew the next run of every
+schedule that is not yet due, as the update from 2.12.2 did: a next run
+that 2.13.1 stored an hour off moves to its time. An update in the hour
+after a run's time in the Canadian zones, where 2.13.1 has that run an
+hour later, does not lose the run: when its time came after the
+schedule's last run and its last change, the schedule's next run becomes
+the moment of the update, so the scheduler launches it as soon as the
+migrations have run, and the runs after it at their times. The same
+holds for a run that 2.13.1 stored after a run it launched an hour late,
+as 9:00 of `0 8,9 * * *` after 8:00. A change after that time (a save,
+enabling the schedule) counts as it does without the update: the
+schedule runs from the change on. A disabled schedule launches nothing,
+and enabling it computes its next run from then on.
+
+In `Africa/Casablanca` and `Africa/El_Aaiun` the run 2.13.1 launched an
+hour early was that of the hour after it, so a next run there never moves
+earlier, and one that is an hour early moves to its time, also when it is
+due: the schedule runs once, at its time. A schedule there whose runs are
+an hour apart, such as `0 8,9 * * *`, still runs 8:00 once more after
+2.13.1 launched it at 7:00, as it would without the update.
+
+Elsewhere a schedule that is due keeps its next run, which the scheduler
+launches at once, one run for all the runs that passed; a schedule whose
+next run cannot be computed, or that changed meanwhile, keeps its next run
+too. An update from 2.12.2 or older runs `m000089` first, which replaces
+the next run 2.12.2 stored: a run that passed in the hour before the
+update still comes, but not the second run of `0 8,9 * * *` after 2.12.2
+launched the first an hour late, and in Morocco a schedule whose run
+2.12.2 launched an hour early in the hour before the update runs again at
+that run's time. The migration prints how many next runs moved, and how
+many of them to the moment of the update, as in
+`Computed anew the next runs of the schedules that are not yet due, with time zone data 2026.5: 3 moved, 1 of them to now for a run that passed in the past hour.`
+Every other time Ansilume computes in these zones follows the new rules
+too. The time zone data of your PHP:
+
+```bash
+docker compose exec app php -r 'echo timezone_version_get(), PHP_EOL;'    # 2026.5 or later
+```
+
+PHP's 2026.5 is IANA's 2026e. IANA's 2026f (2026-10-27) keeps Cuba at
+UTC-4 from 2026-11-01, where 2026e turns its clocks back to UTC-5: from
+then on schedules in `America/Havana` (or `Cuba`) run an hour late, on
+2.13.1 too, until an Ansilume release brings a PHP with 2026f and
+computes their next runs anew. Until then a schedule in
+`America/Puerto_Rico`, at UTC-4 all year, runs at Cuba's times, also
+before 2026-11-01; change it back to `America/Havana` once that release
+runs. Changing a schedule's time zone makes the user who saves it the
+user it runs as, who then never approves its runs.
+
+**CSV exports use RFC 4180 quoting.** The analytics CSV exports, **Export CSV**
+on the analytics page and `GET /api/v1/analytics/{report}?format=csv`,
+would answer with a server error on PHP 8.4 and later, which deprecate how
+they called `fputcsv()`
+(`fputcsv(): the $escape parameter must be provided as its default value will change`).
+They quote fields as RFC 4180 says now, without an escape character: a
+quote inside a field is doubled, and a backslash is an ordinary character.
+Each line still ends with a line feed, where RFC 4180 ends a line with a
+carriage return and a line feed. Only fields with a backslash change:
+`C:\temp\x`, which 2.13.1 wrote as `"C:\temp\x"`, is written as it is,
+and `a\"b`, which 2.13.1 wrote as `"a\"b"` and spreadsheet tools and
+other RFC 4180 readers read as `a\b"`, is written as `"a\""b"`, which
+they read back as it was. A reader
+that relied on PHP's backslash escape, such as `fgetcsv()` and
+`str_getcsv()` with their default escape or Python's `csv` with
+`escapechar='\\'`, must read RFC 4180 now.
+`GET /api/v1/analytics/{report}?format=csv` answered `500` on every
+version (`Response content must not be an array.`); it answers `200` now,
+with `Content-Type: text/csv; charset=UTF-8` and
+`Content-Disposition: attachment; filename="analytics-approvalSummary-2026-10-26.csv"`,
+the report named as in the API's method, where the web export names it as
+its link does (`analytics-approval-summary-2026-10-26.csv`). A report
+without rows is an empty body, without a header row, as on the web.
+
+**A value that is no whole number is refused.** The API, the job triggers,
+the runner API and the web forms posted as JSON read an ID or another
+whole number of the request body as the integer rule of the model reads
+it: an integer, its digits as text, with a sign or leading zeros (`"+5"`,
+`"05"`), or a number without a fraction (`5.0`). The IDs of workflow
+steps and of the vault password assignment are read as up to 2.13.1: a
+step's `job_template_id` and `approval_rule_id` (`POST` and
+`PUT /api/v1/workflow-templates/{id}/steps`, and the `steps` of `POST`
+and `PUT /api/v1/workflow-templates`) and an entry of `job_template_ids`
+(`POST /api/v1/credentials/{id}/job-templates` and
+**Assign to job templates**) take an integer or its digits, also with a
+plus sign or with whitespace around them (`"+5"`, `" 5"`), and refuse a
+leading zero (`"05"`) and a number with a fraction or an exponent
+(`5.0`, `5e0`); a step's `on_success_step_id`, `on_failure_step_id` and
+`on_always_step_id`, also in the step form, and its `position` and
+`after_step_id`, also of
+`POST /api/v1/workflow-templates/{id}/steps/{stepId}/move`, take an
+integer or its digits, also with leading zeros (`"05"`), and refuse a
+sign, whitespace and a number with a fraction or an exponent (`"+5"`,
+`" 5"`, `5.0`). A fraction is refused
+however close it is to a whole number: `2.9999999999999996` is no 3,
+although PHP writes it as `3` with its 14 significant digits. Up to 2.13.1
+they cast it with PHP's `(int)`, which takes any value for some number:
+`5.5`, `"5.5"`, `"5e0"`, `" 5"` and `"5abc"` for 5, `2.9999999999999996`
+for 2, `"1e3"` for 1000, `"abc"`, `false`, `[]`, `{}` and
+`0.999999999999999` for 0, `true` and `[5]` for 1, and a JSON number
+beyond the 64-bit range, such as `1e30` or `9223372036854775808`, for an
+arbitrary one, `1e999` (infinity) for 0. So `{"forks": 5.5}` saved 5
+forks, `"project_id": 5.5` created an inventory in project 5,
+`"status": false` deactivated a user, and a runner's `"exit_code": 1e999`
+ended its job as succeeded. On PHP 8.5 the cast of a number beyond the
+range warns, which would answer with a server error. Such a value is
+refused now, before anything is written, as the endpoint refuses an
+invalid one (see **API contract change** and **Fixes that change
+behaviour**). An empty value (`null`, `""`) keeps its meaning, except a
+user's `status` (`null` and `""` answer `422`, where they deactivated the
+user), a project's `scm_credential_id` (`""` is no credential, where it
+answered `422`), the `verbosity` of a launch (`""` is the job template's,
+where it was 0; a list or an object, empty or not, as `verbosity` or
+`limit` answers `422`) and a number of a runner's report (`""` answers
+`422`, where it was 0). The query parameters `?page=`, the filters
+`template_id`, `launched_by` and `runner_group_id` of `GET /api/v1/jobs`,
+`group_id` of `GET /api/v1/runners` and `user_id` of
+`GET /api/v1/audit-logs` are text and still read with PHP's `(int)`:
+`?page=2.5` is page 2. What the web UI and the runners send holds whole
+numbers only, as before. See
+[An API call or a form refuses a number: it must be a whole number](troubleshooting.md#an-api-call-or-a-form-refuses-a-number-it-must-be-a-whole-number).
+
+**API contract change:**
+
+- `POST /api/v1/jobs`: a `verbosity` that is no whole number answers
+  `422` `Verbosity must be an integer.`, with the field in `error.fields`,
+  and a `job_template_id` or `template_id` that is no positive whole number
+  `422` `job_template_id is required.`, where `12.5` launched the job
+  template with ID 12. An empty `verbosity` (`""`) is the job template's,
+  where it was 0. A list or an object as the `verbosity` or the `limit` is
+  refused also when it is empty (`[]` or `{}`), with
+  `Verbosity must be an integer.` or `Limit must be a string.` in
+  `error.fields`, where 2.13.1 launched an empty one with the job
+  template's limit and at verbosity 0. The job triggers
+  (`POST /trigger/fire`, and the deprecated `/trigger/{token}`) answer
+  `422` `{"error": "Verbosity must be an integer."}` or
+  `{"error": "Limit must be a string."}`.
+- `POST` and `PUT /api/v1/job-templates`: a `project_id`, `inventory_id`,
+  `credential_id`, `runner_group_id`, `verbosity`, `forks`,
+  `timeout_minutes` or `approval_rule_id` that is no whole number answers
+  `422` with the field's message, such as `Forks must be an integer.`,
+  `Runner must be an integer.` or `Approval rule must be an integer.`; a
+  `project_id` that is no ID is refused before the access check of the
+  project it names and before the lock of a job template with an approval
+  rule, where `12.5` was taken for project 12. On `PUT` a caller who may
+  not change the stored job template gets `403` first, and on a job
+  template with an approval rule the lock's `403` comes before these
+  `422`s for a user without `approval-rule.update`, except for
+  `project_id`, and except when the body changes the fields the lock
+  guards (all but `name` and `description`) only to values that PHP's
+  `(int)` reads as the stored ones (`5.5`, `"5abc"` or `" 5"` where 5 is
+  stored, `true` where 1 is, `"abc"`, `false` or `0.5` where 0 is): the
+  lock compares the cast values, sees no change, and the field's `422`
+  comes. With any other change of such a field the lock's `403` comes. A
+  list or an object, also an empty one (`[]` or `{}`), is
+  no whole number either: in these fields but `approval_rule_id` it
+  answers `422` with the field's message as early as a `project_id` that
+  is no ID, before the lock too; as `approval_rule_id` it answers
+  `Approval rule must be an integer.` for an admin and is a change of the
+  rule (`403`) for everyone else. Up to 2.13.1 an empty one was 0:
+  `{"verbosity": []}` saved verbosity 0, `forks` and `timeout_minutes`
+  answered that they must be no less than 1, the IDs that the selected
+  project, inventory, credential or runner group does not exist, and an
+  admin's `"approval_rule_id": []` answered `500`. An entry of
+  `credential_ids` is read as an ID too: `2.9999999999999996` and `true`
+  answer `422` `credential_ids must contain positive integer credential IDs.`,
+  where they named credentials #3 and #1, `" 5"` and `"5 "` too, where
+  they were credential 5, and `"05"` is credential 5, where it was
+  refused. The lock of a job template with an approval rule reads an entry
+  the same way: for a user without `approval-rule.update` an entry that is
+  no ID is a change (`403`), and `"05"` for its credential 5 is none.
+- `POST` and `PUT /api/v1/inventories`: a `project_id` that is no whole
+  number answers `422` `Project Id must be an integer.` before the access
+  check of the project it names (on `PUT` a caller who may not change the
+  stored inventory gets `403` first), and an admin's `approval_rule_id`
+  that is no whole number `422`
+  `Approval rule must be an integer.`, also `5.5` or `"5abc"` for an
+  inventory whose rule is 5, which answered `200` and kept the rule.
+- `POST` and `PUT /api/v1/schedules`: a `job_template_id` that is no whole
+  number answers `422` `Job Template Id must be an integer.`, and `null`,
+  `""`, `[]` or `{}` `422` `Job Template Id cannot be blank.`, where they
+  answered `The selected job template does not exist.`
+- `POST` and `PUT /api/v1/projects`: an `scm_credential_id` that is no
+  whole number, a list or an object among them, also an empty one (`[]`
+  or `{}`), answers `422` `Scm Credential Id must be an integer.`, and
+  `""` means no credential, as `null` does, where `""`, `[]` and `{}`
+  answered `422` `Scm Credential Id is invalid.`
+- `POST` and `PUT /api/v1/approval-rules`: a `required_approvals` or
+  `timeout_minutes` that is a list or an object, also an empty one (`[]`
+  or `{}`), answers `422` `Required Approvals must be an integer.` or
+  `Timeout Minutes must be an integer.` and writes nothing; the approval
+  rule form posted as JSON shows the error. Up to 2.13.1 an empty one was
+  stored as 0: a rule that needs no approval, so that any vote, a
+  rejection too, approved the request, or one whose requests timed out at
+  once. The rules that hold 0 are listed by
+  `SELECT id, name FROM approval_rule WHERE required_approvals < 1 OR timeout_minutes < 1;`
+  in the database client of the `db` container
+  (`docker compose exec db sh -c 'mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"'`);
+  give each a valid value on its edit page.
+- `POST /api/v1/teams/{id}/members` and `POST /api/v1/teams/{id}/projects`:
+  a `user_id` or `project_id` that is no whole number answers `404`
+  `User #0 not found.` or `Project #0 not found.`, as a missing one does,
+  where `5.5` added #5.
+- `POST` and `PUT /api/v1/users`: a `status` that is no whole number
+  answers `422` `Status is invalid.` before anything is written, and before
+  the `403` of a change of the superadmin flag and the `422`s of the only
+  active superadmin. `false`, `null`, `""`, `[]`, `{}`, text such as
+  `"abc"` and a fraction below 1, such as `0.999999999999999`, deactivated
+  the user, and `10.5` kept them active: send `0` or `10`.
+- `POST /api/v1/runners/{id}/move`: a `target_group_id` that is no whole
+  number answers `404` `Target runner group not found.`, where `5.5`
+  moved the runner into group 5.
+- The runner API (`/api/runner/v1/jobs/{id}/...`) answers `422` with
+  `{"ok": false, "error": "<message>"}`, and writes nothing of the report,
+  for a number it cannot store:
+  `sequence must be a whole number from 0 to 4294967295.` for a log chunk
+  (`.../logs`),
+  `exit_code must be a whole number from -256 to 255.` for a completion
+  that did not time out (`.../complete`), and
+  `tasks[<key>].seq must be a whole number from -2147483648 to 2147483647.`,
+  the same for `duration_ms`, or `tasks[<key>] must be an object.` for
+  the task results (`.../tasks`), which are refused as a whole. Up to
+  2.13.1 such a number was cast, or answered `500` where the database
+  could not store it, and the tasks before it were saved. `""` is refused
+  like any other value that is no whole number, where 2.13.1 took it for
+  0, so that `"exit_code": ""` ended a job as succeeded; `null` or a
+  missing field is 0, as before. Runners send whole numbers in range
+  only, so they need no update; what a refused report leaves, see
+  [runners.md](runners.md#common-issues).
+- `GET /api/v1/analytics/{report}?format=csv` answers `200` with the CSV,
+  where it answered `500` (see **CSV exports use RFC 4180 quoting**).
+- The date filters of `GET /api/v1/jobs` and
+  `GET /api/v1/analytics/{report}` (see **Fixes that change behaviour**).
+- The lists (`GET /api/v1/projects`, `/jobs`, `/users` and every other
+  list that takes `?page=`) answer a page past the last with `200`, an
+  empty `data`, the requested page in `meta.page` and the list's `total`
+  and `pages`, so a client that pages until `data` is empty stops. Up to
+  2.13.1 they answered the items of the last page again, labelled with the
+  requested page, also for `?page=1e30` (`meta.page` 9223372036854775807).
+  The pages up to the last answer as before; a client that stops at
+  `meta.pages` needs no change.
+
+**Fixes that change behaviour:**
+
+- The web forms posted as JSON, with the CSRF header, answer as the API
+  does, where a number beyond the int range answered with a server error
+  on PHP 8.5 and other values were cast: the inventory and job template
+  forms show the field's error, such as `Project Id must be an integer.`,
+  before the access check of the project it names (a user who may not
+  change the stored inventory or job template gets `403` first), and show
+  a field that held such a number empty; adding a team member or a
+  project to a team answers `400`
+  `user_id required.` or `project_id required.`; registering or moving a
+  runner shows `Runner group not found.` or `Target runner group not found.`;
+  the quick launch of a workflow (`/workflow-template/launch`) answers
+  `404` `Workflow template #0 not found.`, moving one of its steps `404`
+  `Workflow template #5 has no step with ID 0.`, and removing one removes
+  nothing. A job template or workflow launched with an `id` that has more
+  than digits, such as `?id=5abc`, answers `404`, such as
+  `Job template #0 not found.`, where #5 was launched. The forms the
+  browser sends hold digits only and work as before.
+- In the job template, project and approval rule forms posted as JSON, a
+  list or an object, also an empty one (`[]` or `{}`), in an ID or number
+  field, and as an inventory's approval rule, shows the field's error,
+  such as `Credential Id must be an integer.`, and the field empty, where
+  an empty one was saved as 0 (a job template's verbosity, forks and
+  timeout, an approval rule's required approvals and timeout) or answered
+  with a server error (a job template's credential and approval rule, an
+  inventory's approval rule, a project's credential). Sent as the approval
+  rule by a user without `approval-rule.update`, it is a change of the
+  rule (`403`), and as an inventory's project it is no project, as the
+  form's empty choice.
+- The launch form refuses a list as the limit or the verbosity, such as a
+  crafted `overrides[verbosity][]=`, with
+  `Launch failed: Verbosity must be an integer.` or
+  `Launch failed: Limit must be a string.`, and launches nothing, as
+  `POST /api/v1/jobs` and the job triggers refuse it; up to 2.13.1 it
+  ignored the list and launched the job with the job template's limit and
+  verbosity. Posted as JSON, an empty list or object (`[]`, `{}`) is
+  refused the same way. The form the browser sends holds single values and
+  works as before.
+- An approver of an approval rule that is no ID, its `team_id` or an
+  entry of its `user_ids`, names nobody: the rule's page shows
+  `Team: none configured` or `Users: none configured`, and a launch the
+  rule gates, with no other approver who may decide, is refused as one
+  that could never be approved, with
+  `Approval rule "deploy-prod" needs 1 approval(s) from users other than the one who launches, but only 0 of its approvers may decide on this job. An admin can add approvers to the rule.`
+  Up to 2.13.1 `true` named user #1, and `"abc"` #0.
+- The required approvals of a `users` rule are compared with the users of
+  its `user_ids` who exist, active or not, each counted once, as its
+  approvers are read: an entry that is no ID (`"abc"`, `true`, `12.5`), a
+  user listed twice (also as `"07"` beside `7`) and a user who does not
+  exist, such as a deleted one, do not count. Up to 2.13.1 every entry
+  counted, so `POST` and `PUT /api/v1/approval-rules` and the approval
+  rule form saved a rule that requires more approvals than that, such as
+  2 approvals with `{"user_ids": [7, "abc"]}`, whose every launch is
+  refused as one that could never be approved. They refuse it now with
+  `Required approvals (2) exceeds eligible approvers (1).` (`422` from the
+  API) and write nothing. The check runs when a rule is saved, not at a
+  launch: a rule saved with such a list still gates its launches, and its
+  next save, also one that only renames it, is refused until the rule
+  lists enough users or requires fewer approvals. The form the browser
+  sends names each chosen user once, and only active users, so it is
+  checked as before.
+- An `approval_rule_id` written as a whole number in another form than an
+  integer or its digits, such as `"+3"`, `"03"`, `"3\n"`, `3.0` or `3e0`
+  for rule 3, is that rule wherever it is read: in `POST` and
+  `PUT /api/v1/job-templates`, `POST` and `PUT /api/v1/inventories`, and
+  the job template and inventory forms, also posted as JSON. The save
+  always stored it as rule 3, but up to 2.13.1 the check of who may assign
+  a rule, and the audit of a job template, read it as no rule ID. A user
+  without `approval-rule.update` who sent the stored rule again so, such
+  as with a new name, was refused with `403`
+  `Only admins may assign or remove an approval rule: that needs approval-rule.update.`;
+  that is no change now, and the rename is saved. An admin who gave a job
+  template a rule so got a template gated by it whose
+  `job-template.created` or `job-template.updated` entry recorded no
+  `approval_rule`, and one who changed the rule so, or sent the stored
+  rule again so, an entry with
+  `{"from": {"id": 2, "name": "deploy-test"}, "to": null}`, as if the rule
+  had been removed. These entries record the rule now, as
+  `{"from": ..., "to": {"id": 3, "name": "deploy-prod"}}`, and no
+  `approval_rule` when the rule stays as it is. Inventories recorded such
+  a rule correctly. A value that is no whole number, such as `" 3"`,
+  `"3.0"`, `"3e0"` or `3.5`, is refused as before: `403` for a user
+  without `approval-rule.update`, `422` `Approval rule must be an integer.`
+  for admins.
+- The date filters of the job list (`/job/index`, `GET /api/v1/jobs`) and
+  of the analytics reports (`/analytics`, `/analytics/export`,
+  `GET /api/v1/analytics/{report}`) ignore whitespace around a date, and a
+  date of only whitespace is an empty one: on 2.13.1 `?date_from=%20`
+  listed no job. On the job list an empty date is no filter; on the
+  analytics reports an empty `date_from` is no lower bound and an empty
+  `date_to` the end of today, where `GET /api/v1/analytics/{report}`
+  answered `422` `The format of Date From is invalid.`
+  (`The format of Date To is invalid.` for `date_to`) to a date of only
+  whitespace, the page showed that error without its reports, and the
+  export went back to it with `Invalid filter parameters.` A date with a
+  NUL byte answered `500` on every version: a NUL at either end is
+  dropped, and one inside answers `422` `Date From is invalid.` on the
+  analytics reports, while the job list ignores that error, as it ignores
+  the error of any date not in `YYYY-MM-DD` form, and applies the date as
+  PHP's `strtotime()` reads it.
+- With MySQL 8.0.24 or later as the database, PHP 8.4 and later report a
+  connection that the server closed after its `wait_timeout` or
+  `interactive_timeout` as driver error 4031, where PHP 8.3 reported 2006.
+  The application log names it with the driver's text, as it names 2006:
+  `yii\db\Exception (SQLSTATE HY000, driver error 4031): The client was disconnected by the server because of inactivity. See wait_timeout and interactive_timeout for configuring this behavior.`
+  MariaDB, the database of the compose files, still reports 2006 (see
+  [A page or an API call fails with a server error](troubleshooting.md#a-page-or-an-api-call-fails-with-a-server-error)).
+- The queue-worker runs each project sync on a database connection of its
+  own and closes it when the sync ends. Up to 2.13.1 it kept its
+  connection for its whole life: once the queue had sat idle longer than
+  the database's `wait_timeout` (28800 seconds, 8 hours, by default on
+  MariaDB and MySQL), as overnight, the database had closed it, and every
+  project sync of the server failed until the queue-worker restarted,
+  with
+  `[4] app\jobs\SyncProjectJob (attempt: 1, PID: 1) is finished with error: PDOException (SQLSTATE HY000, driver error 2006): MySQL server has gone away`
+  or 4031 in its log, while the project showed `syncing` until the
+  maintenance run gave up on the sync after 15 minutes. A `wait_timeout`
+  of your own needs to outlast a page or a project sync, not the time the
+  queue sits idle (see
+  [A page or an API call fails with a server error](troubleshooting.md#a-page-or-an-api-call-fails-with-a-server-error)).
+- A password survey answer sent as a JSON number, such as through
+  `POST /api/v1/jobs`, a job trigger or a schedule, is masked in the job
+  log and in task names in every form in which Ansible prints it. Up to
+  2.13.1 the runner masked a number that it reads as a float only in
+  PHP's text with 14 significant digits, such as `1.0E+20`, so such an
+  answer appeared in clear text wherever Python writes it otherwise: with
+  more digits (`0.12345678901234568`, `3.141592653589793`), with an
+  exponent (`1e+20`, `1.5e-07`, and `1.2345678901234569e+23` for
+  `123456789012345678901234`), and in YAML (`1.0e+20`), which the `yaml`
+  result format and the `to_yaml` and `to_nice_yaml` filters write;
+  `12345678901234.5` appeared as `********.5`. The launch form sends text
+  and was not affected. The runner masks the output, so a runner gets
+  this with its own update: a runner of 2.13.1 keeps the old masking with
+  the new server.
+
+**The web UI and the API log their errors again after an update.** On
+2.13.1 or older each new app container (each update of the prebuilt
+images) had a `runtime/logs/app.log` that root created when the
+migrations ran, and php-fpm's workers logged no error of the web UI and
+the API into it until the container restarted. The migrations and the
+health checks of the app and the queue-worker now run as `www-data`, and
+the entrypoints hand `runtime/logs` to `www-data` before the command
+starts. The health checks also fail now while `www-data` cannot write
+`runtime/logs/app.log`, and name the file and the fix (see
+[App or queue-worker container is unhealthy: the log file cannot be written](troubleshooting.md#app-or-queue-worker-container-is-unhealthy-the-log-file-cannot-be-written)).
+They need `gosu`, which the app image has since 2.2.12: an installation
+that pins `ANSILUME_IMAGE_TAG` to an older release keeps the compose file
+of that release. The log also gets each HTTP error that Yii's error
+handler answers, such as a `401` or a `404`, as an error with a stack
+trace (`[error][yii\web\HttpException:404]`): such a line needs no action.
+
+**Console commands run as `www-data`.** The documentation, the quickstart
+and `bin/diagnose` run console commands in the app container as
+`www-data`, the user of php-fpm's workers:
+`docker compose exec -u www-data app php yii …`. Run as root, a command
+that found no `runtime/logs/app.log` created it as root's, so the web
+UI's errors were lost; one that rotated a full log (10 MB) left copies
+that root owns, whose lines later rotations lose. Change your own scripts
+and cron entries the same way, such as the nightly `ldap/sync` of
+[ldap.md](ldap.md#console-commands):
+`docker compose exec -T -u www-data app php yii ldap/sync`.
+
+**The backup and the restore take the database container's credentials.**
+The backup of [Before you update](#before-you-update), the restore of
+[Rollback](#rollback) and the backup that the quickstart suggests when it
+updates passed `-p"$DB_PASSWORD"`, which your shell expands to nothing,
+as it does not read `.env`: the backup came out empty, with
+`Access denied for user 'ansilume'@'localhost' (using password: NO)`, and
+the restore read the first line of the dump as the password. They take
+the user, the password and the database from the database container now:
+`docker compose exec -T db sh -c 'mysqldump -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' > backup.sql`.
+Change scripts and cron entries that copied the old command, and check
+the backups they made.
+
+Going back to 2.13.1 needs nothing for the database: the next runs the
+update computed anew stay, and 2.13.1 launches them at those times, but it
+computes the runs after them with the time zone data of PHP 8.3 again.
+Pin its images, or run `git checkout v2.13.1` and step 3, see
+[Rollback](#rollback); a runner installed without Docker goes back as
+**Runners** above says. The prebuilt images of 2.13.1 bring the brotli
+flaw back, on the server and on every runner that runs them (see **The
+images of 2.13.1 carry a brotli flaw**): pin them only for as long as you
+must. To go back further than 2.13.1, first revert the
+migration of this release with this release,
+`docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`, which
+changes nothing: 2.13.1 does not have the migration, so its
+`migrate/down` cannot revert it, nor the migrations before it.
+
+Updating again after going back keeps the next runs that 2.13.1 computed
+meanwhile, as `m000090` ran already: one that 2.13.1 computed an hour off
+in the 11 time zones stays so until its schedule has run. Right after
+that update, run the migration once more, which computes them anew, while
+it is the newest one, as in 2.14.0: when
+`docker compose exec -u www-data app php yii migrate/history 1` names
+`m000090_000000_recompute_schedule_next_runs_for_time_zone_data`,
+`docker compose exec -u www-data app php yii migrate/redo 1 --interactive=0`
+reverts it, which changes nothing, and runs it again. `migrate/redo 1`
+redoes the newest migration, whichever it is.
 
 ---
 
@@ -327,7 +952,7 @@ expression a save refuses, with the reason, and exits with 65 when it lists
 one:
 
 ```bash
-docker compose exec app php yii schedule/check
+docker compose exec -u www-data app php yii schedule/check
 ```
 
 A line of its output reads
@@ -403,7 +1028,7 @@ Going back to 2.12.2 needs nothing for the database: the next runs the
 update computed anew stay, and 2.12.2 launches them at those times. Pin its
 images, or run `git checkout v2.12.2` and step 3, see [Rollback](#rollback).
 To go back further than 2.12.2, first revert the migration of this release
-with this release, `docker compose exec app php yii migrate/down 1 --interactive=0`,
+with this release, `docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`,
 which changes nothing: 2.12.2 does not have the migration, so its
 `migrate/down` cannot revert it, nor the migrations before it.
 
@@ -1412,7 +2037,7 @@ Running it again changes and prints nothing.
   means that the database schema the containers keep in their cache is
   from before the migration; it ends when the cached schema expires,
   within an hour, or at once with
-  `docker compose exec app php yii cache/flush-schema db --interactive=0`,
+  `docker compose exec -u www-data app php yii cache/flush-schema db --interactive=0`,
   which clears the schema cache only. Do not run
   `php yii cache/flush cache` instead: the cache shares its Redis database
   with the sessions and the queue, so that logs every user out and drops
@@ -1450,7 +2075,7 @@ So before you deploy 2.11.1, once such job templates have rules of their
 own, either remove the rules of the inventories in 2.12.0 (`— None —`
 under **Approval** on their edit forms, or `"approval_rule_id": null`), or
 revert the migration. To revert the migration, before you deploy 2.11.1:
-`docker compose exec app php yii migrate/down 1 --interactive=0`. It
+`docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`. It
 removes the approval rules of inventories and their foreign key, naming
 the inventories, such as
 `> Removed the approval rule of 1 inventory(ies): #3 (rule #5). Their job templates launch without approval unless they have a rule of their own.`,
@@ -1757,7 +2382,7 @@ To roll back to 2.11.0, deploy it as [Rollback](#rollback) describes.
 manage runners there either. To give the operator role
 `runner-group.create` and `runner-group.update` back, revert the migration
 before you deploy 2.11.0, which does not have it:
-`docker compose exec app php yii migrate/down 1 --interactive=0` reverts
+`docker compose exec -u www-data app php yii migrate/down 1 --interactive=0` reverts
 `m000087_000000_restrict_runner_management`. The direct grants it gave the
 admin role stay.
 
@@ -3122,7 +3747,7 @@ read as an option of git**). Update the other runners too:
   (`sudo systemctl restart ansilume-runner`).
 
 To roll back to 2.10.1, first drop the new column with
-`docker compose exec app php yii migrate/down 1 --interactive=0`, which
+`docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`, which
 reverts `m000086_000000_add_user_ldap_sync_disabled`, so that the next
 update fills it from the audit log again (2.10.1 ignores the column but
 does not keep its mark up to date), then deploy 2.10.1:
@@ -4903,7 +5528,7 @@ in this order:
 ```bash
 docker compose stop schedule-runner
 # restore the database, see Rollback below
-docker compose exec app php yii maintenance/reset-survey-secret-scrub
+docker compose exec -u www-data app php yii maintenance/reset-survey-secret-scrub
 docker compose start schedule-runner
 ```
 
@@ -6311,7 +6936,7 @@ If an update causes problems:
 4. **Restore your database** if a migration caused issues:
 
 ```bash
-docker compose exec -T db mariadb -uansilume -p"$DB_PASSWORD" ansilume < backup.sql
+docker compose exec -T db sh -c 'mariadb -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DATABASE"' < backup.sql
 ```
 
 A backup taken after the update to encrypted survey password answers
@@ -6348,6 +6973,17 @@ computes the next runs of schedules anew), see the end of
 [After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files):
 2.12.2 needs nothing, but to go back further, revert `m000089` first, with
 the release that has it; `migrate/down 2` there reverts `m000088` as well.
+
+To roll back from the update after 2.13.1 (migration `m000090`, which
+computes the next runs of schedules anew with the time zone data of PHP
+8.5), see the end of
+[After updating from 2.13.1 or older](#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers):
+2.13.1 needs nothing, but to go back further, revert `m000090` first, with
+the release that has it; `migrate/down 2` there reverts `m000089` as well.
+The images of 2.13.1 run PHP 8.3 and bring the brotli flaw back (see
+**The images of 2.13.1 carry a brotli flaw** there): pin them only for as
+long as you must. A runner installed without Docker that runs PHP 8.5
+goes back as that section says.
 
 ---
 

@@ -103,6 +103,64 @@ class SystemControllerActionTest extends WebControllerTestCase
         $this->assertSame([], $ctrl->capturedParams['topJobs']);
     }
 
+    /**
+     * The Global byte quota row shows how much of the quota the artifacts
+     * use, in whole percent and at most 100: 575 MB of 1000 MB is 57.5 %,
+     * shown as 58 %.
+     *
+     * Regression: since PHP 8.4 round() has no pre-rounding, and the share,
+     * computed as used / quota * 100 (57.49999999999999), showed 57 %
+     * (app\components\Percent).
+     *
+     * @return array<string, array{0: int, 1: int, 2: int}>
+     */
+    public static function quotaUseProvider(): array
+    {
+        return [
+            '575 MB of 1000 MB, an exact half' => [575000000, 1000000000, 58],
+            '145 MB of 1000 MB, an exact half' => [145000000, 1000000000, 15],
+            'a third' => [1, 3, 33],
+            'over the quota' => [1500, 1000, 100],
+        ];
+    }
+
+    /**
+     * @dataProvider quotaUseProvider
+     */
+    public function testRegressionTheQuotaUseRoundedAnExactHalfDown(int $used, int $quota, int $percent): void
+    {
+        $html = $this->renderedStats($used, $quota);
+
+        $this->assertStringContainsString('<div class="progress-bar" style="width:' . $percent . '%"></div>', $html);
+        $this->assertStringContainsString('<small class="text-muted">' . $percent . '% used</small>', $html);
+    }
+
+    public function testWithoutAQuotaTheRowShowsNoUse(): void
+    {
+        $html = $this->renderedStats(575000000, 0);
+
+        $this->assertStringNotContainsString('progress-bar', $html);
+        $this->assertStringNotContainsString('% used', $html);
+    }
+
+    /**
+     * The artifact storage page for $used bytes of artifacts and a global
+     * byte quota of $quota bytes (0: none).
+     */
+    private function renderedStats(int $used, int $quota): string
+    {
+        return \Yii::$app->view->renderFile('@app/views/system/artifact-stats.php', [
+            'stats' => ['total_bytes' => $used, 'artifact_count' => 3, 'job_count' => 1],
+            'topJobs' => [],
+            'retentionDays' => 0,
+            'maxFileSize' => 100000,
+            'maxArtifactsPerJob' => 7,
+            'maxJobsWithArtifacts' => 0,
+            'maxBytesPerJob' => 0,
+            'maxTotalBytes' => $quota,
+        ]);
+    }
+
     private function makeController(): SystemController
     {
         return new class ('system', \Yii::$app) extends SystemController {

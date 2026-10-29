@@ -622,7 +622,6 @@ class JobClaimServiceTest extends TestCase
         $job->method('attributes')->willReturn(['id', 'runner_payload', 'status']);
         $job->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($job, [
             'id'             => $id,
             'runner_payload' => empty($rawPayload) ? null : json_encode($rawPayload),

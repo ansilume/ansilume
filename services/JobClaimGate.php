@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\JobInventory;
+use app\components\SubmittedId;
 use app\models\ApprovalRequest;
 use app\models\Job;
 use yii\db\Transaction;
@@ -182,22 +183,23 @@ final class JobClaimGate
     }
 
     /**
-     * A record ID as stored: a positive number; null for anything else.
+     * A record ID as stored (an int or its digits, SubmittedId): a positive
+     * number; null for anything else.
      */
     private static function idOf(mixed $value): ?int
     {
-        $id = is_numeric($value) ? (int)$value : 0;
+        $id = SubmittedId::of($value) ?? 0;
 
         return $id > 0 ? $id : null;
     }
 
     /**
-     * An approval rule ID as stored: any number is a rule, as for
-     * JobTemplateGate (the foreign key keeps a used rule from being
-     * deleted); null for none.
+     * An approval rule ID as stored (an int or its digits, SubmittedId): any
+     * whole number is a rule, as for JobTemplateGate (the foreign key keeps
+     * a used rule from being deleted); null for none.
      */
     private static function ruleIdOf(mixed $value): ?int
     {
-        return is_numeric($value) ? (int)$value : null;
+        return SubmittedId::of($value);
     }
 }

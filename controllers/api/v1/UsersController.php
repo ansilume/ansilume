@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\SubmittedInteger;
 use app\models\AuditLog;
 use app\models\User;
 use app\models\UserForm;
@@ -57,6 +58,12 @@ use yii\web\NotFoundHttpException;
  * (ONLY_SUPERADMIN_DEMOTED) nor deactivates it (ONLY_SUPERADMIN_DEACTIVATED),
  * nor is deleted (ONLY_SUPERADMIN_DELETED). An inactive superadmin may be
  * demoted, deactivated or deleted.
+ *
+ * A "status" that is no whole number answers 422 (INVALID_STATUS) before
+ * anything is written: after the refusals of the user and of a role, and
+ * before the refusal of is_superadmin and the 422s of the only active
+ * superadmin and of the password (actionCreate() and actionUpdate() give
+ * the order, as web/openapi.yaml does).
  */
 class UsersController extends BaseApiController
 {
@@ -79,6 +86,13 @@ class UsersController extends BaseApiController
 
     /** The 422 of DELETE /api/v1/users/{id} of the only active superadmin. */
     public const ONLY_SUPERADMIN_DELETED = 'Cannot delete the only active superadmin.';
+
+    /**
+     * The 422 of POST and PUT for a "status" that is no whole number
+     * (SubmittedInteger), such as true, null, 10.5 or a JSON number beyond
+     * the int range: the model's own error for a status it does not know.
+     */
+    public const INVALID_STATUS = 'Status is invalid.';
 
     protected function apiAccessRules(): array
     {
@@ -106,7 +120,7 @@ class UsersController extends BaseApiController
         ]);
         $page = $this->requestedPage();
         /** @var list<User> $users */
-        $users = $dp->getModels();
+        $users = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
             $this->serializeAll($users),
@@ -128,10 +142,16 @@ class UsersController extends BaseApiController
     }
 
     /**
-     * Creates the user. A "role" that names no role of the instance answers
-     * 422 (INVALID_ROLE); a role the caller may not assign, or is_superadmin
-     * true from a caller who is no superadmin, answers 403 (RoleGrantPolicy).
-     * Each creates nothing.
+     * Creates the user. The answers come in the order web/openapi.yaml lists
+     * for POST /api/v1/users: 403 without user.create; 422 for an unknown
+     * auth_source or a "role" that names no role of the instance
+     * (INVALID_ROLE); 403 for a role the caller may not assign
+     * (RoleGrantPolicy::refusalOf()); 422 for a "status" that is no whole
+     * number (INVALID_STATUS, applyBody()); 403 for is_superadmin true from
+     * a caller who is no superadmin (RoleGrantPolicy::SUPERADMIN_REFUSED);
+     * 422 for a password (applyAuthSourceOnCreate()) or another field that
+     * is not valid, a status other than 0 and 10 included (the model's
+     * rules). Each creates nothing.
      *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
@@ -156,10 +176,9 @@ class UsersController extends BaseApiController
             return $err;
         }
 
-        $this->applyBody($model, $body);
         $model->generateAuthKey();
-
-        $err = $this->refuseSuperadminChange($grants, $model, false)
+        $err = $this->applyBody($model, $body)
+            ?? $this->refuseSuperadminChange($grants, $model, false)
             ?? $this->applyAuthSourceOnCreate($model, $body, $authSource);
         if ($err !== null) {
             return $err;
@@ -275,14 +294,22 @@ class UsersController extends BaseApiController
     }
 
     /**
-     * Updates the user. A user the caller may not change answers 403
-     * (UserChangePolicy::refusalOf()) first. A "role" that names no role of
-     * the instance (INVALID_ROLE), or taking the superadmin flag from the
-     * only active superadmin or deactivating them, answers 422; a role the
-     * user does not have and the caller may not assign
-     * (RoleGrantPolicy::refusalOf()), or an is_superadmin that would change
-     * the flag, from a caller who is no superadmin, answers 403. Each changes
-     * nothing: neither the user nor their roles.
+     * Updates the user. The answers come in the order web/openapi.yaml lists
+     * for PUT /api/v1/users/{id}: 403 without user.update; 404 for a user
+     * that does not exist; 403 for a user the caller may not change
+     * (UserChangePolicy::refusalOf(), before every other check: CLAUDE.md
+     * security rule 14); 422 for a change of auth_source or a "role" that
+     * names no role of the instance (INVALID_ROLE); 403 for a role the user
+     * does not have and the caller may not assign
+     * (RoleGrantPolicy::refusalOf()); 422 for a "status" that is no whole
+     * number (INVALID_STATUS, applyBody()); 403 for an is_superadmin that
+     * would change the flag, from a caller who is no superadmin
+     * (RoleGrantPolicy::SUPERADMIN_REFUSED); 422 for taking the superadmin
+     * flag from the only active superadmin or deactivating them
+     * (ONLY_SUPERADMIN_DEMOTED, ONLY_SUPERADMIN_DEACTIVATED); 422 for a
+     * password or another field that is not valid, a status other than 0
+     * and 10 included. Each changes nothing: neither the user nor their
+     * roles.
      *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
@@ -305,8 +332,8 @@ class UsersController extends BaseApiController
             return $err;
         }
 
-        $this->applyBody($model, $body);
-        $err = $this->refuseSuperadminChange($grants, $model, $before->superadmin)
+        $err = $this->applyBody($model, $body)
+            ?? $this->refuseSuperadminChange($grants, $model, $before->superadmin)
             ?? $this->refuseLosingTheOnlySuperadmin($model)
             ?? $this->applyPasswordOnUpdate($model, $body);
         if ($err !== null) {
@@ -468,9 +495,16 @@ class UsersController extends BaseApiController
     }
 
     /**
+     * Sets the fields $body holds. A "status" that is no whole number
+     * (SubmittedInteger) answers 422 (INVALID_STATUS), and nothing may be
+     * saved: the model's rule compares loosely and would take true for 10,
+     * and an (int) cast fails on PHP 8.5 for a JSON number beyond the int
+     * range. A whole number goes to the model's rule.
+     *
      * @param array<string, mixed> $body
+     * @return array{error: array{message: string}}|null
      */
-    private function applyBody(User $model, #[\SensitiveParameter] array $body): void
+    private function applyBody(User $model, #[\SensitiveParameter] array $body): ?array
     {
         foreach (['username', 'email'] as $field) {
             if (array_key_exists($field, $body)) {
@@ -478,11 +512,17 @@ class UsersController extends BaseApiController
             }
         }
         if (array_key_exists('status', $body)) {
-            $model->status = (int)$body['status'];
+            $status = SubmittedInteger::of($body['status']);
+            if ($status === null) {
+                return $this->error(self::INVALID_STATUS, 422);
+            }
+            $model->status = $status;
         }
         if (array_key_exists('is_superadmin', $body)) {
             $model->is_superadmin = (bool)$body['is_superadmin'];
         }
+
+        return null;
     }
 
     /**

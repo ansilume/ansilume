@@ -254,7 +254,6 @@ class RunnerCapabilityRecordingTest extends WebControllerTestCase
     private function capabilityChanges(Runner $runner): array
     {
         $method = new \ReflectionMethod(JobsController::class, 'capabilityChanges');
-        $method->setAccessible(true);
         /** @var array<string, string|null> $changes */
         $changes = $method->invoke(new JobsController('runner-api', \Yii::$app), $runner);
 

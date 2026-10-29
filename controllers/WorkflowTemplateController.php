@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers;
 
 use app\components\ErrorText;
+use app\components\SubmittedId;
 use app\components\WorkflowStepChange;
 use app\controllers\traits\TeamScopingTrait;
 use app\models\AuditLog;
@@ -239,10 +240,16 @@ class WorkflowTemplateController extends BaseController
      * logs it without its message. The success flash names the step the
      * new run waits at, when it waits for an approval or is paused
      * (Display::launchFlash()).
+     *
+     * The id comes from the query, or from the body (the dashboard's quick
+     * launch), read as the integer rule reads it (SubmittedId): a value that
+     * is no ID, such as a fraction, a boolean, a list or a JSON number beyond
+     * the int range, is looked up as a missing one is, as #0 (404).
      */
     public function actionLaunch(): Response
     {
-        $id = (int)(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0));
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $id = SubmittedId::of(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id')) ?? 0;
         $model = $this->findModel($id);
 
         /** @var \app\services\WorkflowExecutionService $service */
@@ -348,14 +355,17 @@ class WorkflowTemplateController extends BaseController
      * anywhere with Move to… (position=start|end|after:<step ID>), exactly
      * one of them. A move to where the step stands writes nothing, and says
      * so (an info flash). A refusal (409, 422) is a danger flash. The page
-     * shows the step (#step-<id>).
+     * shows the step (#step-<id>). A step_id that is no ID (SubmittedId),
+     * such as a JSON number beyond the int range, is looked up as a missing
+     * one is, as step 0 (404).
      */
     public function actionMoveStep(int $id): Response
     {
         $model = $this->findModel($id);
         $this->requireWorkflowOperate((int)$model->id);
         $request = \Yii::$app->request;
-        $stepId = (int)$request->post('step_id');
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $stepId = SubmittedId::of($request->post('step_id')) ?? 0;
         $moved = $this->changed(fn (WorkflowStepWriteService $writer): WorkflowStepChange => $writer->move(
             $model,
             $stepId,
@@ -372,14 +382,16 @@ class WorkflowTemplateController extends BaseController
     /**
      * Remove the step step_id. A refusal (409: a run is active, or other
      * steps route to it) is a danger flash; runs keep the history of a
-     * removed step; an unknown step is ignored. The page shows the steps
-     * (#workflow-steps).
+     * removed step; an unknown step is ignored, and so is a step_id that is
+     * no ID (SubmittedId), such as a JSON number beyond the int range. The
+     * page shows the steps (#workflow-steps).
      */
     public function actionRemoveStep(int $id): Response
     {
         $model = $this->findModel($id);
         $this->requireWorkflowOperate((int)$model->id);
-        $stepId = (int)\Yii::$app->request->post('step_id');
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $stepId = SubmittedId::of(\Yii::$app->request->post('step_id')) ?? 0;
         $removed = $this->changed(fn (WorkflowStepWriteService $writer): ?WorkflowStepChange => $writer->remove(
             $model,
             $stepId,

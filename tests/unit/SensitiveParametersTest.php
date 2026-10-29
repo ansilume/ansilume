@@ -107,6 +107,7 @@ class SensitiveParametersTest extends TestCase
         'app\components\JobInventory::ofPayloads($payloads)',
         'app\components\OutputMasker::__construct($answers)',
         'app\components\OutputMasker::feed($bytes)',
+        'app\components\OutputMasker::floatForms($answer)',
         'app\components\OutputMasker::forms($answer)',
         'app\components\OutputMasker::mask($text)',
         'app\components\OutputMasker::maskValues($record)',
@@ -119,6 +120,14 @@ class SensitiveParametersTest extends TestCase
         'app\components\PlaybookEnvironment::startupNotices($parentEnv)',
         'app\components\ProcessStarter::open($command)',
         'app\components\ProcessStarter::open($env)',
+        'app\components\PythonFloatText::finite($value)',
+        'app\components\PythonFloatText::fixed($digits)',
+        'app\components\PythonFloatText::json($value)',
+        'app\components\PythonFloatText::nonFinite($value)',
+        'app\components\PythonFloatText::repr($value)',
+        'app\components\PythonFloatText::scientific($digits)',
+        'app\components\PythonFloatText::shortest($value)',
+        'app\components\PythonFloatText::yaml($value)',
         'app\components\RedactingRedisConnection::isAuth($params)',
         'app\components\RedactingRedisConnection::redact($message)',
         'app\components\RedactingRedisConnection::sendIgnoringErrors($command)',
@@ -179,6 +188,7 @@ class SensitiveParametersTest extends TestCase
         'app\components\SecretCipher::encrypt($plaintext)',
         'app\components\SecretCipher::orFail($result)',
         'app\components\StoredScheduleAnswers::__construct($extraVars)',
+        'app\components\SubmittedInteger::refusesLists($values)',
         'app\components\SubprocessEnvironment::build($parentEnv)',
         'app\components\SubprocessEnvironment::isCgiRequestEnvironment($env)',
         'app\components\SurveySecretBackfill::backfillRow($row)',
@@ -284,6 +294,8 @@ class SensitiveParametersTest extends TestCase
         'app\services\CredentialWriteService::create($secretInput)',
         'app\services\CredentialWriteService::update($secretInput)',
         'app\services\GatedInventoryLock::changedAttributes($stored)',
+        'app\services\GatedInventoryLock::sameInteger($stored)',
+        'app\services\GatedInventoryLock::sameInteger($value)',
         'app\services\GatedInventoryLock::sameValue($stored)',
         'app\services\GatedInventoryLock::sameValue($value)',
         'app\services\GatedJobTemplateLock::changesColumns($stored)',
@@ -342,6 +354,7 @@ class SensitiveParametersTest extends TestCase
         'app\services\ProjectSyncProcessRunner::run($env)',
         'app\services\ProjectSyncProcessRunner::write($text)',
         'app\services\RelaunchService::extraVars($secrets)',
+        'app\services\RunnerReportNumbers::taskListRefusal($tasks)',
         'app\services\ScheduleRunAs::canonical($text)',
         'app\services\ScheduleRunAs::varsKey($text)',
         'app\services\ScheduleSecrets::answers($vars)',
@@ -416,6 +429,8 @@ class SensitiveParametersTest extends TestCase
         'app\components\RunnerSecretVars' => ['payload', 'json', 'content'],
         'app\components\RunnerHttpClient' => ['token', 'body', 'extraHeaders'],
         'app\components\OutputMasker' => ['answers', 'answer', 'bytes', 'text', 'record'],
+        // A float password answer, and its digits, on their way to the masker's needles.
+        'app\components\PythonFloatText' => ['value', 'digits'],
         // The runner's token, its bootstrap secret, and the environment with the runner's or the server's secrets.
         'app\components\RunnerTokenResolver' => ['bootstrapSecret', 'token', 'response'],
         'app\components\PlaybookEnvironment' => ['parentEnv'],
@@ -441,6 +456,8 @@ class SensitiveParametersTest extends TestCase
         'app\components\RunnerTransportClassifier' => ['server'],
         'app\components\ForwardedHeaders' => ['server'],
         'app\services\JobCompletionService' => ['content', 'tasks', 'data'],
+        // The task results a runner reports (job output), checked before they are saved.
+        'app\services\RunnerReportNumbers' => ['tasks'],
         // Launches: request data with answers, and the answers carried by a relaunch or a schedule.
         'app\components\WebLaunchOverrides' => ['overrides', 'survey'],
         'app\controllers\api\v1\JobsController' => ['body'],
@@ -534,6 +551,8 @@ class SensitiveParametersTest extends TestCase
         // A request body checked for lists and objects before it reaches the model, static inventory content among
         // its values.
         'app\components\ApiBodyValues' => ['body'],
+        // A request body or a form's posted fields, checked for lists where whole numbers belong.
+        'app\components\SubmittedInteger' => ['values'],
         'app\services\CredentialWriteService' => ['secretInput', 'provided'],
         'app\components\CredentialSecretPolicy' => ['input', 'provided'],
         // Notification channels: what carries their channel secrets (NotificationTemplate::SECRET_CONFIG_KEYS,

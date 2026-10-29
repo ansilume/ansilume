@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\SubmittedId;
 use app\components\SurveyDefinition;
 use app\components\SurveyField;
 use app\components\SurveySecrets;
@@ -334,17 +335,23 @@ class JobTemplate extends ActiveRecord
     }
 
     /**
-     * Non-secret description of the credentials, in precedence order.
+     * Non-secret description of the credentials, in precedence order. The
+     * primary is the credential credential_id names as the integer rule
+     * reads an ID (SubmittedId): a submitted value that is none, such as a
+     * JSON number beyond the int range, whose (int) cast warns on PHP 8.5,
+     * names no primary credential.
      *
      * @return list<array{id: int, name: string, credential_type: string, role: string}>
      */
     public function credentialSnapshot(): array
     {
-        return array_map(fn (Credential $credential): array => [
+        $primaryId = SubmittedId::of($this->credential_id);
+
+        return array_map(static fn (Credential $credential): array => [
             'id' => (int)$credential->id,
             'name' => (string)$credential->name,
             'credential_type' => (string)$credential->credential_type,
-            'role' => (int)$credential->id === (int)$this->credential_id ? Credential::ROLE_PRIMARY : Credential::ROLE_ADDITIONAL,
+            'role' => (int)$credential->id === $primaryId ? Credential::ROLE_PRIMARY : Credential::ROLE_ADDITIONAL,
         ], $this->orderedCredentials());
     }
 

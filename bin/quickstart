@@ -706,7 +706,9 @@ if [ "$INSTALL_MODE" = "update" ]; then
     # ── Backup hint ──
     info "Tip: back up your .env and database before major updates."
     info "  cp .env .env.backup"
-    info "  $COMPOSE_CMD exec db mysqldump -uansilume -p\$DB_PASSWORD ansilume > backup.sql"
+    # Single-quoted, so that the db container's shell expands the variables:
+    # the operator's shell does not read .env.
+    info "  $COMPOSE_CMD exec -T db sh -c 'mysqldump -u\"\$MYSQL_USER\" -p\"\$MYSQL_PASSWORD\" \"\$MYSQL_DATABASE\"' > backup.sql"
     printf "\n"
 
     # ── Source: git pull ──
@@ -1013,8 +1015,11 @@ section "Setup"
 
 debug "Creating admin user: $ADMIN_USER / $ADMIN_EMAIL"
 info "Creating admin user..."
+# As www-data, the user of php-fpm's workers: the command logs to
+# runtime/logs/app.log, and run as root, one that rotates a full log leaves
+# copies that www-data cannot write (tests/unit/YiiExecUserTest.php).
 ADMIN_EXIT=0
-ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app \
+ADMIN_OUT=$($COMPOSE_CMD $COMPOSE_ARGS exec -T -u www-data app \
     php yii setup/admin "$ADMIN_USER" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" < /dev/null 2>&1) || ADMIN_EXIT=$?
 debug "setup/admin exit=${ADMIN_EXIT} output: ${ADMIN_OUT}"
 case "$ADMIN_OUT" in
@@ -1035,7 +1040,7 @@ case "$ADMIN_OUT" in
         info "  - RBAC roles were not seeded correctly"
         info ""
         info "Try waiting a moment and running manually:"
-        info "  $COMPOSE_CMD $COMPOSE_ARGS exec app php yii setup/admin $ADMIN_USER $ADMIN_EMAIL <password>"
+        info "  $COMPOSE_CMD $COMPOSE_ARGS exec -u www-data app php yii setup/admin $ADMIN_USER $ADMIN_EMAIL <password>"
         info ""
         info "Run diagnostics:"
         info "  curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash"

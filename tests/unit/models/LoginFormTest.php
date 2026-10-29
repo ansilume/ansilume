@@ -67,7 +67,6 @@ class LoginFormTest extends TestCase
 
         // Inject the mock user via reflection
         $ref = new \ReflectionProperty(LoginForm::class, '_user');
-        $ref->setAccessible(true);
         $ref->setValue($form, $user);
 
         $form->validate();
@@ -92,7 +91,6 @@ class LoginFormTest extends TestCase
         $form->password = 'correctpassword';
 
         $ref = new \ReflectionProperty(LoginForm::class, '_user');
-        $ref->setAccessible(true);
         $ref->setValue($form, $user);
 
         $form->validate(['password']);

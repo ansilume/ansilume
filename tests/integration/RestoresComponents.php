@@ -18,6 +18,12 @@ namespace app\tests\integration;
  * So keep or swap a component right after parent::setUp(), before any
  * write, and call restoreComponents() first in tearDown(): it puts back
  * what was kept, and nothing else.
+ *
+ * Not db: it puts back definitions, from which Yii makes a new connection,
+ * while the authManager keeps writing through the one it was created with,
+ * outside the transaction of every later DbTestCase. A test that replaces
+ * db keeps the connection object and puts that back
+ * (WorkerJobDbConnectionTest).
  */
 trait RestoresComponents
 {
@@ -32,6 +38,9 @@ trait RestoresComponents
      */
     protected function keepComponent(string $id): void
     {
+        if ($id === 'db') {
+            throw new \LogicException('RestoresComponents puts back definitions: keep the db as its connection object, and put that back.');
+        }
         if (!array_key_exists($id, $this->keptComponents)) {
             $this->keptComponents[$id] = \Yii::$app->getComponents(true)[$id] ?? null;
         }

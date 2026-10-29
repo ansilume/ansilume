@@ -91,7 +91,6 @@ class WebhookServiceTest extends TestCase
             ->onlyMethods([])
             ->getMock();
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($job, array_merge([
             'id'              => $id,
             'status'          => $status,

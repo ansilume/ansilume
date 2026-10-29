@@ -246,10 +246,12 @@ jobs:
       # A fresh database has no users, and runner self-registration is
       # rejected with 503 until the first user exists. `up -d` has already
       # waited for app to become healthy (runner-1 depends on nginx, nginx
-      # on app), so exec works immediately.
+      # on app), so exec works immediately. As www-data, as the documentation
+      # and the quickstart create the first admin: the release proves that
+      # command on its images.
       - name: Create admin user (required for runner registration)
         run: |
-          docker compose -f docker-compose.prebuilt.yml exec -T app \
+          docker compose -f docker-compose.prebuilt.yml exec -T -u www-data app \
             php yii setup/admin smoke-admin smoke-admin@example.com "$(openssl rand -hex 16)"
 
       # runner-1 restart-loops until its first successful registration

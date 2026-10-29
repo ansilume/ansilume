@@ -367,7 +367,9 @@ class TriggerController extends Controller
 
     /**
      * The overrides of the JSON body that a job takes: extra_vars, limit and
-     * verbosity, as sent (JobLaunchInput checks limit and verbosity).
+     * verbosity, as sent. A limit and a verbosity go on whenever they are
+     * set, for JobLaunchInput to check, which refuses a list or an object
+     * also when it is empty ([] or {}, which json_decode() gives as []).
      *
      * @return array<string, mixed>
      */
@@ -382,7 +384,7 @@ class TriggerController extends Controller
                 if (!empty($body['extra_vars'])) {
                     $overrides['extra_vars'] = $body['extra_vars'];
                 }
-                if (!empty($body['limit'])) {
+                if (isset($body['limit'])) {
                     $overrides['limit'] = $body['limit'];
                 }
                 if (isset($body['verbosity'])) {

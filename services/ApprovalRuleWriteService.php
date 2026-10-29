@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\ApprovalRuleUsage;
+use app\components\SubmittedInteger;
 use app\components\SurveyDefinition;
 use app\models\ApprovalRule;
 use app\models\AuditLog;
@@ -42,6 +43,12 @@ use yii\db\Query;
  *   cannot run: their reference is cleared instead of blocking the delete.
  *   Inventories have no soft delete, so an inventory with the rule always
  *   blocks it. Resolved requests keep their history without the rule.
+ * - A list or an object as required_approvals or timeout_minutes, also an
+ *   empty one (a JSON [] or {}), is refused before validation with the
+ *   field's integer rule's error ("Required Approvals must be an integer.",
+ *   the API's 422): the rules take an empty list for empty, and the column
+ *   stored it as 0, a rule that needs no approval, so that a rejection
+ *   approved the request, or one whose requests time out at once.
  */
 class ApprovalRuleWriteService extends Component
 {
@@ -80,10 +87,13 @@ class ApprovalRuleWriteService extends Component
     /** The approver settings a create and a delete audit. */
     private const SETTINGS = ['approver_type', 'approver_config', 'required_approvals', 'timeout_minutes', 'timeout_action'];
 
+    /** The fields that hold a whole number: a list or an object is refused (refusesListValues()). */
+    private const WHOLE_NUMBER_FIELDS = ['required_approvals', 'timeout_minutes'];
+
     public function create(ApprovalRule $rule, int $createdBy, string $source): bool
     {
         $rule->created_by = $createdBy;
-        if (!$rule->save()) {
+        if (self::refusesListValues($rule) || !$rule->save()) {
             return false;
         }
         $this->audit(AuditLog::ACTION_APPROVAL_RULE_CREATED, (int)$rule->id, ['name' => $rule->name] + self::settings($rule) + ['source' => $source]);
@@ -93,7 +103,7 @@ class ApprovalRuleWriteService extends Component
 
     public function update(ApprovalRule $rule, string $source): bool
     {
-        if (!$rule->validate()) {
+        if (self::refusesListValues($rule) || !$rule->validate()) {
             return false;
         }
         // Before the save, which makes the new values the old ones.
@@ -234,6 +244,28 @@ class ApprovalRuleWriteService extends Component
     }
 
     /**
+     * Whether $rule holds a list or an object in one of WHOLE_NUMBER_FIELDS,
+     * as the API's body or the form posted it: each such field gets its
+     * integer rule's error (SubmittedInteger::refusesLists()) and is
+     * emptied, so that the form shows it empty with the error (a form makes
+     * text of a field's value, which fails for a list). Nothing is saved
+     * then.
+     */
+    private static function refusesListValues(ApprovalRule $rule): bool
+    {
+        if (!SubmittedInteger::refusesLists($rule, $rule->getAttributes(self::WHOLE_NUMBER_FIELDS), self::WHOLE_NUMBER_FIELDS)) {
+            return false;
+        }
+        foreach (self::WHOLE_NUMBER_FIELDS as $field) {
+            if ($rule->hasErrors($field)) {
+                $rule->setAttribute($field, null);
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * @return array<string, mixed> the approver settings as the audit records them
      */
     private static function settings(ApprovalRule $rule): array
@@ -277,8 +309,8 @@ class ApprovalRuleWriteService extends Component
             $decoded = json_decode($value, true);
             return is_array($decoded) ? $decoded : $value;
         }
-        if (($field === 'required_approvals' || $field === 'timeout_minutes') && is_numeric($value)) {
-            return (int)$value;
+        if ($field === 'required_approvals' || $field === 'timeout_minutes') {
+            return SubmittedInteger::orAsSubmitted($value);
         }
 
         return $value;

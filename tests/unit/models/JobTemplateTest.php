@@ -103,7 +103,6 @@ class JobTemplateTest extends TestCase
         ]);
         $tpl->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($tpl, array_merge([
             'id' => 1,
             'name' => 'Test Template',

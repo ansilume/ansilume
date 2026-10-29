@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\WholeNumberValidator;
 use app\models\JobTemplate;
 use app\models\WorkflowStep;
 use yii\db\ActiveQuery;
-use yii\validators\NumberValidator;
 
 /**
  * Gated job steps in SQL: job steps whose job template is gated, by its own
@@ -118,7 +118,7 @@ final class GatedJobSteps
      */
     private static function jobTemplateIdsOf(iterable $steps): array
     {
-        $integer = new NumberValidator(['integerOnly' => true]);
+        $integer = new WholeNumberValidator(['integerOnly' => true]);
         $ids = [];
         foreach ($steps as $step) {
             $id = $step->job_template_id;

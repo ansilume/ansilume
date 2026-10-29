@@ -38,7 +38,6 @@ class WorkflowJobStepTest extends TestCase
     {
         $model = $this->makeModel('pending');
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($model, array_merge($ref->getValue($model), ['output_vars' => null]));
 
         $this->assertSame([], $model->getParsedOutputVars());
@@ -48,7 +47,6 @@ class WorkflowJobStepTest extends TestCase
     {
         $model = $this->makeModel('succeeded');
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($model, array_merge($ref->getValue($model), ['output_vars' => '{"hosts": "web1"}']));
 
         $this->assertSame(['hosts' => 'web1'], $model->getParsedOutputVars());
@@ -104,7 +102,6 @@ class WorkflowJobStepTest extends TestCase
     {
         $model = $this->createPartialMock(WorkflowJobStep::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($model, ['status' => $status]);
         return $model;
     }

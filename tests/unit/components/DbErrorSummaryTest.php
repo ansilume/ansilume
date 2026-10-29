@@ -16,6 +16,10 @@ use yii\db\IntegrityException;
  */
 class DbErrorSummaryTest extends TestCase
 {
+    /** The driver's text of error 4031, as mysqlnd reports it since PHP 8.4. */
+    private const INACTIVITY = 'The client was disconnected by the server because of inactivity.'
+        . ' See wait_timeout and interactive_timeout for configuring this behavior.';
+
     /**
      * @return array<string, array{0: \Throwable, 1: array{0: string, 1: string, 2: string}}>
      */
@@ -132,6 +136,40 @@ class DbErrorSummaryTest extends TestCase
     public function testTheDriverTextIsKeptOnlyForAFailedOrLostConnection(\Throwable $error, ?string $expected): void
     {
         $this->assertSame($expected, DbErrorSummary::connectionFailure($error));
+    }
+
+    /**
+     * @return array<string, array{0: \Throwable}>
+     */
+    public static function inactivityDisconnectProvider(): array
+    {
+        $message = 'SQLSTATE[HY000]: General error: 4031 ' . self::INACTIVITY;
+        $sql = "\nThe SQL being executed was: SELECT * FROM `job` WHERE `name`='marker-4711'";
+        $errorInfo = ['HY000', 4031, self::INACTIVITY];
+
+        return [
+            'as Yii wraps it' => [new DbException($message . $sql, $errorInfo)],
+            'as a PDOException that escaped the wrapping, at BEGIN or COMMIT' => [
+                self::pdoException($message, 'HY000', $errorInfo),
+            ],
+        ];
+    }
+
+    /**
+     * Regression: since PHP 8.4, mysqlnd reports a connection that a MySQL
+     * server of 8.0.24 or later closed for inactivity (wait_timeout,
+     * interactive_timeout) as error 4031, not as 2006 (server gone away).
+     * 4031 counted as no connection failure, so the log line of such an
+     * error lost the driver's text, the part that says why. MariaDB still
+     * reports 2006.
+     *
+     * @dataProvider inactivityDisconnectProvider
+     */
+    public function testRegressionAnInactivityDisconnectOfMysqlKeepsTheDriverText(\Throwable $error): void
+    {
+        $this->assertSame(self::INACTIVITY, DbErrorSummary::connectionFailure($error));
+        $this->assertSame([$error::class, 'HY000', '4031'], DbErrorSummary::of($error));
+        $this->assertFalse(DbErrorSummary::isLockConflict($error), 'no lock conflict, which a new attempt gets past');
     }
 
     /**

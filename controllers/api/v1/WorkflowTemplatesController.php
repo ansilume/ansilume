@@ -130,7 +130,7 @@ class WorkflowTemplatesController extends BaseApiController
         $page = $this->requestedPage();
 
         /** @var WorkflowTemplate[] $workflows */
-        $workflows = $dp->getModels();
+        $workflows = $this->modelsOfPage($dp, $page);
         $changeable = $this->changeableIds(array_map(static fn (WorkflowTemplate $m): int => (int)$m->id, $workflows));
 
         return $this->paginated(

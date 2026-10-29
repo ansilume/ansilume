@@ -12,6 +12,7 @@ declare(strict_types=1);
 /** @var int $maxBytesPerJob */
 /** @var int $maxTotalBytes */
 
+use app\components\Percent;
 use yii\helpers\Html;
 use yii\helpers\Url;
 
@@ -106,7 +107,7 @@ $humanBytes = static function (int $bytes): string {
                     <td>
                         <?php if ($maxTotalBytes > 0) : ?>
                             <?= Html::encode($humanBytes($maxTotalBytes)) ?>
-                            <?php $pct = $maxTotalBytes > 0 ? min(100, (int)round(($stats['total_bytes'] / $maxTotalBytes) * 100)) : 0; ?>
+                            <?php $pct = Percent::ofQuota($stats['total_bytes'], $maxTotalBytes); ?>
                             <div class="progress mt-2" style="height:6px;max-width:300px">
                                 <div class="progress-bar" style="width:<?= $pct ?>%"></div>
                             </div>

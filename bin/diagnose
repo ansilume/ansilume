@@ -137,6 +137,12 @@ report_trusted_networks() {
 # into the app container, so DB_* must come from the bind-mounted .env; in
 # prebuilt images .env is absent and compose provides the environment —
 # safeLoad() makes that a no-op), then Yii and the console config.
+#
+# Every probe that runs Yii runs as www-data (docker exec -u www-data), the
+# user of php-fpm's workers: a console application logs to
+# runtime/logs/app.log, and as root a probe that rotated a full log left
+# copies that www-data cannot write, or created the file as root's, so that
+# the web UI's errors were lost (tests/unit/YiiExecUserTest.php).
 PHP_BOOT="
     require '/var/www/vendor/autoload.php';
     Dotenv\Dotenv::createUnsafeImmutable('/var/www')->safeLoad();
@@ -462,10 +468,11 @@ if [ -n "$app_container" ]; then
         fail "app image predates REDIS_PASSWORD — pull the current images: docker compose pull && docker compose up -d"
     fi
 
-    # Health check from inside app
+    # Health check from inside app, as www-data, as the container's health
+    # check runs it: its dirs line says what php-fpm's workers may write.
     info ""
     info "App health check:"
-    health_output=$(docker exec "$app_container" php /var/www/yii health/check 2>&1 || true)
+    health_output=$(docker exec -u www-data "$app_container" php /var/www/yii health/check 2>&1 || true)
     if [ -n "$health_output" ]; then
         echo "$health_output" | redact | while read -r line; do
             info "  ${line}"
@@ -526,7 +533,7 @@ if [ -n "$app_container" ]; then
     # NAMES (m000069_..._widen_inventory_parsed_error) and reported a healthy
     # schema as "Migration check failed".
     migration_rc=0
-    migration_output=$(docker exec "$app_container" php /var/www/yii migrate/history 10 2>&1) || migration_rc=$?
+    migration_output=$(docker exec -u www-data "$app_container" php /var/www/yii migrate/history 10 2>&1) || migration_rc=$?
     if [ "$migration_rc" -ne 0 ] || grep -qE '^(Exception|Error|PHP Fatal error|PHP Warning)' <<< "$migration_output"; then
         fail "Migration check failed"
         head -10 <<< "$migration_output" | redact | while read -r line; do
@@ -595,7 +602,7 @@ fi
 if [ -n "$app_container" ]; then
     section "Project Sync Status"
 
-    sync_output=$(docker exec "$app_container" php -r "
+    sync_output=$(docker exec -u www-data "$app_container" php -r "
         ${PHP_BOOT}
         \$projects = app\models\Project::find()->all();
         foreach (\$projects as \$p) {
@@ -647,7 +654,7 @@ fi
 if [ -n "$app_container" ]; then
     section "Runner Transport"
 
-    transport_output=$(docker exec "$app_container" php -r "
+    transport_output=$(docker exec -u www-data "$app_container" php -r "
         ${PHP_BOOT}
         ${RUNNER_TRANSPORT_LINE_PHP}
         \$now = time();
@@ -669,7 +676,7 @@ if [ -n "$app_container" ]; then
         info "No runners registered, or the runner table could not be queried"
     fi
 
-    trusted_output=$(docker exec "$app_container" php -r "
+    trusted_output=$(docker exec -u www-data "$app_container" php -r "
         ${PHP_BOOT}
         \$configured = (string)(\$app->params['runnerTrustedNetworks'] ?? '');
         echo implode(', ', app\components\RunnerTransportClassifier::networks(\$configured)), \"\n\";
@@ -699,20 +706,36 @@ if [ -n "$app_container" ]; then
         info "  Fix: docker compose exec app composer install"
     fi
 
-    # Runtime directories
+    # Runtime directories and the log file, as www-data, the user of
+    # php-fpm's workers: as root, test -w holds for each of them. Yii drops
+    # every line of a process that cannot append to its log file, the web
+    # UI's errors too. The log file's test exits 3 when www-data cannot
+    # write it, which docker exec passes on; another code says that the exec
+    # itself failed.
     dirs_ok=true
     for dir in /var/www/runtime /var/www/runtime/projects /var/www/runtime/artifacts /var/www/runtime/logs /var/www/web/assets; do
-        if ! docker exec "$app_container" test -w "$dir" 2>/dev/null; then
-            fail "Directory not writable: ${dir}"
+        if ! docker exec -u www-data "$app_container" test -w "$dir" 2>/dev/null; then
+            fail "Directory not writable for www-data: ${dir}"
             dirs_ok=false
         fi
     done
+    log_file=/var/www/runtime/logs/app.log
+    log_rc=0
+    docker exec -u www-data "$app_container" sh -c 'if [ -e "$1" ] && [ ! -w "$1" ]; then exit 3; fi' sh "$log_file" 2>/dev/null || log_rc=$?
+    if [ "$log_rc" -eq 3 ]; then
+        fail "Log file not writable for www-data: ${log_file} — the errors of the web UI and the API are lost"
+        info "  Fix: docker compose exec app chown -R www-data:www-data /var/www/runtime/logs, or restart the app container"
+        dirs_ok=false
+    elif [ "$log_rc" -ne 0 ]; then
+        warn "Could not check whether www-data can write ${log_file}"
+        dirs_ok=false
+    fi
     if [ "$dirs_ok" = true ]; then
-        ok "Runtime directories: all writable"
+        ok "Runtime directories and the log file: writable for www-data"
     fi
 
     # RBAC core roles
-    rbac_output=$(docker exec "$app_container" php -r "
+    rbac_output=$(docker exec -u www-data "$app_container" php -r "
         ${PHP_BOOT}
         \$auth = \$app->authManager;
         foreach (['admin', 'operator', 'viewer'] as \$r) {
@@ -731,14 +754,14 @@ if [ -n "$app_container" ]; then
         if [ "$rbac_ok" = true ]; then
             ok "RBAC roles: admin, operator, viewer present"
         else
-            info "  RBAC roles are created by migrations. Run: docker compose exec app php yii migrate"
+            info "  RBAC roles are created by migrations. Run: docker compose exec -u www-data app php yii migrate"
         fi
     else
         warn "Could not check RBAC roles"
     fi
 
     # Admin user exists
-    admin_output=$(docker exec "$app_container" php -r "
+    admin_output=$(docker exec -u www-data "$app_container" php -r "
         ${PHP_BOOT}
         \$total = (int)app\models\User::find()->count();
         \$admins = (int)app\models\User::find()->where(['is_superadmin' => true])->count();
@@ -750,7 +773,7 @@ if [ -n "$app_container" ]; then
         admin_count=$(echo "$admin_output" | cut -d'|' -f2)
         if [ "${user_total:-0}" -eq 0 ]; then
             fail "No users in database — login is impossible"
-            info "  Fix: docker compose exec app php yii setup/admin admin admin@example.com yourpassword"
+            info "  Fix: docker compose exec -u www-data app php yii setup/admin admin admin@example.com yourpassword"
         elif [ "${admin_count:-0}" -eq 0 ]; then
             warn "Users exist (${user_total}) but no superadmin — may not be able to manage the system"
         else
@@ -956,7 +979,7 @@ done
 # Application integrity in summary
 if [ -n "$app_container" ]; then
     # Re-check admin user for summary
-    summary_admin=$(docker exec "$app_container" php -r "
+    summary_admin=$(docker exec -u www-data "$app_container" php -r "
         ${PHP_BOOT}
         echo (int)app\models\User::find()->where(['is_superadmin' => true])->count();
     " 2>/dev/null || echo "0")

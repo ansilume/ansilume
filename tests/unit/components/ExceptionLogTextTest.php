@@ -129,6 +129,36 @@ class ExceptionLogTextTest extends TestCase
     }
 
     /**
+     * Regression: since PHP 8.4, mysqlnd reports a connection that a MySQL
+     * server of 8.0.24 or later closed for inactivity as error 4031, not as
+     * 2006 (server gone away), and such an error was logged without the
+     * driver's text, which says why. It keeps it now, as Yii raises the
+     * error (a yii\db\Exception that wraps the PDOException) and as a
+     * PDOException that escaped the wrapping; the statement stays out.
+     */
+    public function testRegressionAnInactivityDisconnectOfMysqlKeepsTheDriverText(): void
+    {
+        $text = 'The client was disconnected by the server because of inactivity.'
+            . ' See wait_timeout and interactive_timeout for configuring this behavior.';
+        $pdo = new \PDOException('SQLSTATE[HY000]: General error: 4031 ' . $text);
+        $pdo->errorInfo = ['HY000', 4031, $text];
+        $message = $pdo->getMessage()
+            . "\nThe SQL being executed was: SELECT * FROM `job` WHERE `name`='" . self::MARKER . "'";
+        $error = new DbException($message, $pdo->errorInfo, 'HY000', $pdo);
+        $pdoHead = 'PDOException (SQLSTATE HY000, driver error 4031): ' . $text;
+        $head = 'yii\db\Exception (SQLSTATE HY000, driver error 4031): ' . $text;
+
+        $log = ExceptionLogText::of($error);
+
+        $this->assertStringStartsWith($pdoHead . ' in ', $log);
+        $this->assertStringContainsString("\n\nNext " . $head . ' in ', $log);
+        $this->assertSame($head, ExceptionLogText::brief($error));
+        $this->assertSame($pdoHead, ExceptionLogText::brief($pdo));
+        $this->assertStringNotContainsString(self::MARKER, $log);
+        $this->assertStringNotContainsString('SQL being executed', $log);
+    }
+
+    /**
      * @return array<string, array{0: \Throwable, 1: string}>
      */
     public static function briefProvider(): array

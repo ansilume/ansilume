@@ -49,9 +49,11 @@ class CredentialsController extends BaseApiController
         ]);
 
         $page = $this->requestedPage();
+        /** @var list<Credential> $credentials */
+        $credentials = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn (Credential $c) => $this->serialize($c), $dp->getModels()),
+            array_map(fn (Credential $c) => $this->serialize($c), $credentials),
             (int)$dp->totalCount,
             $page,
             25

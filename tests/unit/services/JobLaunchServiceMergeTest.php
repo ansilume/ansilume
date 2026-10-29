@@ -101,7 +101,6 @@ class JobLaunchServiceMergeTest extends TestCase
         // Bypass Yii's __set magic (which needs DB for attribute validation)
         // and write directly into BaseActiveRecord's internal attributes array.
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($t, ['extra_vars' => $extraVars]);
         return $t;
     }

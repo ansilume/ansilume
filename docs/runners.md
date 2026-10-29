@@ -268,7 +268,9 @@ they reach the server. This is best effort:
 
 - answers shorter than 4 characters, `true`, `false`, `null`, lists and maps
   are not masked; text answers are also masked in their JSON-escaped forms,
-  numbers as their digits;
+  integers as their digits, and other numbers in every form in which
+  Ansible prints them: as Python writes them, such as `1e+20` and
+  `1.5e-07`, and in YAML, such as `1.0e+20`;
 - answers that Ansible prints in another form (hashed, encoded, split,
   quoted differently) stay visible;
 - the mask tells where the output equalled an answer: an answer that equals
@@ -388,7 +390,7 @@ If you prefer to run the runner directly on a host:
 
 ### Prerequisites
 
-- PHP 8.3+ with extensions: `pcntl`, `posix`, `zip`, `curl`, and `ffi` (recommended: without it,
+- PHP 8.5+ with extensions: `pcntl`, `posix`, `zip`, `curl`, and `ffi` (recommended: without it,
   playbooks running as the same user can read the runner's environment, see
   [What playbooks can see](#what-playbooks-can-see)). Without `posix` the
   runner cannot tell its own user, so its check at start removes no job
@@ -399,6 +401,7 @@ If you prefer to run the runner directly on a host:
   image sets it: PHP then leaves the arguments of calls out of the stack
   traces of errors, which could otherwise show the first 15 characters of a
   password, a token or a survey answer in the runner's logs
+- Composer 2, run with that PHP (see below)
 - Ansible 2.14+
 - `ansible-lint` (optional, for linting jobs)
 - OpenSSH client (for SSH-based connections)
@@ -420,29 +423,114 @@ A job whose `ansible-playbook` or `git` does not start fails and its log
 says why (see [Common issues](#common-issues)); the runner goes on with
 the next job.
 
-### Setup
+PHP 8.5 ships with Ubuntu 26.04, Fedora 44 and Alpine 3.24 or later,
+where `/usr/bin/php` and the `composer` package are PHP 8.5 (on Alpine,
+install `php85`, `php85-pcntl`, `php85-posix`, `php85-zip`, `php85-curl`
+and `php85-ffi`). On Alpine 3.23 `php85` installs only `/usr/bin/php85`,
+while `/usr/bin/php` and the `composer` package are PHP 8.4, which the
+check below shows. Debian 13 ships PHP 8.4 and Ubuntu 24.04 PHP 8.3:
+install PHP 8.5 from packages.sury.org (Debian) or `ppa:ondrej/php`
+(Ubuntu), the packages
+`php8.5-cli`, `php8.5-curl` and `php8.5-zip` (`pcntl`, `posix` and `ffi`
+come with `php8.5-cli`); `/usr/bin/php` then names PHP 8.5, unless its
+alternative was set by hand (`update-alternatives --display php`). On
+RHEL, AlmaLinux and Rocky Linux 8, 9 and 10, add EPEL and Remi's
+repository, enable Remi's module stream (`dnf module enable php:remi-8.5`)
+and install `php-cli`, `php-process`, `php-ffi` and `php-pecl-zip`. Check
+the PHP that the runner's service starts, and run `composer` with it:
 
 ```bash
-# Clone the repository
-git clone https://github.com/ansilume/ansilume.git /opt/ansilume-runner
-cd /opt/ansilume-runner
-
-# Install PHP dependencies (no dev)
-composer install --no-dev --optimize-autoloader
-
-# Create runtime directories
-mkdir -p runtime/projects runtime/artifacts runtime/logs
-
-# Set environment variables
-export API_URL="https://ansilume.example.com"
-export RUNNER_NAME="bare-runner-1"
-export RUNNER_BOOTSTRAP_SECRET="your-bootstrap-secret-here"
-
-# Start the runner
-php yii runner/start
+/usr/bin/php -v                                           # PHP 8.5
+/usr/bin/php -m | grep -x -E 'pcntl|posix|zip|curl|FFI'   # all five
 ```
 
-For production, use a process manager like systemd:
+On an older PHP, `composer install` refuses with
+`Root composer.json requires php >=8.5 but your php version (8.4.27) does not satisfy that requirement.`,
+and a runner whose dependencies were installed on PHP 8.5, but that an
+older PHP starts, exits at once with
+`Composer detected issues in your platform: Your Composer dependencies require a PHP version ">= 8.5.0". You are running 8.4.27.`
+
+Run Composer with PHP 8.5 as well. Take it from getcomposer.org, as
+below; the `composer` package of Alpine 3.24 or later works too. The
+`composer` package of Debian 12 does not: it installs its PHP extensions
+for PHP 8.4, the default of packages.sury.org, and on PHP 8.5 stops with
+`PHP Fatal error:  Uncaught Error: Class "Normalizer" not found`. On
+Debian and Ubuntu, once packages.sury.org or `ppa:ondrej/php` is set up:
+
+```bash
+sudo apt-get install php8.5-cli php8.5-curl php8.5-zip git ansible openssh-client
+curl -fsSLO https://getcomposer.org/download/latest-2.x/composer.phar
+curl -fsSLO https://getcomposer.org/download/latest-2.x/composer.phar.sha256sum
+sha256sum -c composer.phar.sha256sum                      # composer.phar: OK
+sudo install -m 0755 composer.phar /usr/local/bin/composer
+```
+
+### Setup
+
+The runner lives in `/var/www`, as in the runner image: in every job the
+server names paths there, the checkout of a git project
+(`/var/www/runtime/projects/<id>`) and the Selftest project
+(`/var/www/ansible/selftest`), and the runner keeps its token and the
+home directories of git and Ansible in `/var/www/runtime`. `/var/www`
+must be missing or empty. The code belongs to the account you install it
+with, so that playbooks, which run as the runner's user, cannot change
+it; only `runtime/` belongs to the runner's user, here `ansilume`:
+
+```bash
+# The runner's user, with a home: Ansible keeps the temp files of the
+# modules it runs on this host, as the Selftest does, in ~/.ansible/tmp
+sudo useradd --system --user-group --create-home --shell /usr/sbin/nologin ansilume
+
+# The code, in /var/www
+sudo install -d -o "$(id -un)" -g "$(id -gn)" /var/www
+git clone https://github.com/ansilume/ansilume.git /var/www
+cd /var/www
+
+# PHP dependencies (no dev), with Composer on PHP 8.5
+composer install --no-dev
+
+# The runtime directories, which only the runner's user may enter
+sudo install -d -o ansilume -g ansilume -m 0750 runtime runtime/projects \
+  runtime/artifacts runtime/logs runtime/ansible-home runtime/git-home
+
+# The settings, which only root and the runner's user may read
+sudo install -o root -g ansilume -m 0640 /dev/null .env
+sudo tee .env > /dev/null <<'EOF'
+API_URL=https://ansilume.example.com
+RUNNER_NAME=bare-runner-1
+RUNNER_BOOTSTRAP_SECRET=your-bootstrap-secret-here
+EOF
+
+# Start the runner as its user
+sudo -u ansilume php yii runner/start
+```
+
+The runner reads its settings (see
+[Environment Variables](#environment-variables)) from PHP's `$_ENV`, and
+`yii` loads `.env` of its directory into it. PHP fills `$_ENV` from the
+environment only when `variables_order` in its php.ini contains `E`, and
+the php.ini of the distributions' PHP packages, PHP's
+`php.ini-production`, sets `GPCS`: settings given with `export` or with
+`Environment=` in a systemd unit do not reach the runner, which exits
+with `ERROR: API_URL environment variable is required.` Keep the
+settings of `.env` out of the runner's environment, too: `yii` keeps a
+variable that the environment already has, even an empty one, and PHP
+hides that one as well. The runner's user can read `.env`, and so can
+every playbook, as playbooks run as that user: where not everyone who
+runs playbooks may hold the bootstrap secret, set `RUNNER_TOKEN` there
+instead (see [What playbooks can see](#what-playbooks-can-see)).
+
+Run `composer install` without `--optimize-autoloader`, now and at every
+update: with it, Composer reads every directory of `/var/www` and stops
+at `runtime/`, which only the runner's user may enter, with
+`RecursiveDirectoryIterator::__construct(/var/www/runtime): Failed to open directory: Permission denied`.
+To update the runner, run `git pull` and `composer install --no-dev` in
+`/var/www` as the account that owns the code, then restart the runner
+(`sudo systemctl restart ansilume-runner`); what a release needs besides
+is in [updating.md](updating.md).
+
+For production, use a process manager like systemd. The unit names none
+of the runner's settings: they are in `.env`.
 
 ```ini
 # /etc/systemd/system/ansilume-runner.service
@@ -454,10 +542,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ansilume
-WorkingDirectory=/opt/ansilume-runner
-Environment=API_URL=https://ansilume.example.com
-Environment=RUNNER_NAME=bare-runner-1
-Environment=RUNNER_BOOTSTRAP_SECRET=your-bootstrap-secret-here
+WorkingDirectory=/var/www
 ExecStart=/usr/bin/php yii runner/start
 Restart=always
 RestartSec=5
@@ -700,7 +785,7 @@ After starting a runner, verify it registered and is online:
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `ERROR: API_URL environment variable is required` | `API_URL` not set | Set the environment variable |
+| `ERROR: API_URL environment variable is required.` | The runner finds no `API_URL` in PHP's `$_ENV`: it is not set, or, without Docker, it is set in the runner's environment (`export`, `Environment=` of the unit), which the php.ini of the distributions hides from PHP (`variables_order = "GPCS"`), also when `.env` sets it as well | In the runner image: set it in the container's environment. Without Docker: set it only in `.env` of the runner's directory, see [Setup](#setup) |
 | `ERROR: Registration failed: Invalid bootstrap secret.` | Secret mismatch: the server answers `403` | Ensure `RUNNER_BOOTSTRAP_SECRET` matches the server |
 | `ERROR: Registration failed: Runner group "<name>" not found.` | `RUNNER_GROUP` names a runner group that does not exist: the server answers `400` and creates nothing | Fix `RUNNER_GROUP`, or have an admin create the group (**Runner Groups** → **New Group**); the runner exits and tries again when it restarts |
 | `Server is not ready for runner registration yet (...) — retrying in 5s` | Server answers 503 (no admin user yet) or 502 (app container still booting) | Normal during first boot. The runner retries 12 times at 5 s intervals (about one minute), then exits and lets the container restart policy try again. Finish the initial setup or check `docker compose logs app`. |
@@ -720,6 +805,8 @@ After starting a runner, verify it registered and is online:
 | `WARNING: Left <path> in place (the runner's user is unknown: the posix extension is missing). ...` at start | PHP has no `posix` extension, so the runner cannot tell whose a job directory is and removes none | Install the extension and restart the runner, or remove the directories by hand. See [Password survey answers](#password-survey-answers) |
 | `WARNING: Left <path> in place (a runner of 2.8.1 or older left it). ...` at start | A runner of 2.8.1 or older left a static inventory or task records in the temp directory | Remove the file once every runner on the host is updated; it can hold host passwords that every local user can read. See [Password survey answers](#password-survey-answers) |
 | Job log ends with `[ansilume] Verbosity was lowered from ... to 3` | The job has password answers and ran on a runner without `secret_extra_vars` | Update the runner image, see [Password survey answers](#password-survey-answers) |
+| The runner exits at start with `Composer detected issues in your platform: Your Composer dependencies require a PHP version ">= 8.5.0". You are running 8.4.27.` or `Error: Call to undefined function app\components\http_clear_last_response_headers()`, or `composer install` stops with `Root composer.json requires php >=8.5 but your php version (8.4.27) does not satisfy that requirement.` | The PHP that starts the runner, or that runs `composer`, is older than PHP 8.5, which Ansilume requires since its update from 2.13.1. When `composer install` refused the new lock or was not run, PHP 8.4 runs the new code with the dependencies of 2.13.1 without a message: the runner starts and runs jobs on them until a later release needs PHP 8.5. The second message comes when PHP 8.3 starts the new code with the dependencies of 2.13.1, because `composer install` refused the new lock or was not run | Install PHP 8.5 first, see [Prerequisites](#prerequisites), run `composer install --no-dev` with it, and name it in the unit's `ExecStart` |
+| A job stays **Running** after its playbook ended, or one whose playbook exited with 0 fails with `Job did not execute against any host.` and shows no task results | The server refused a report of the runner with `422`, such as `exit_code must be a whole number from -256 to 255.`, and wrote nothing of it: the report held a number the server cannot store, or `""` where a number belongs, which 2.13.1 took for 0. The runner does not send it again. Runners send whole numbers in range only; a client of your own, or a playbook that wrote to the task results file (`ANSILUME_CALLBACK_FILE`), can send others | Cancel a job that stays running: `php yii job/reclaim-stale` takes only the jobs of runners that are offline. See [troubleshooting.md](troubleshooting.md#a-job-stays-running-or-ends-without-task-results-the-server-refused-the-runners-report) |
 
 ---
 

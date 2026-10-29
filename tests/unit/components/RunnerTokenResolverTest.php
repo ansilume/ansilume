@@ -426,7 +426,6 @@ class RunnerTokenResolverTest extends TestCase
         $resolver = new RunnerTokenResolver($http, $controller);
 
         $ref = new \ReflectionMethod($resolver, 'tokenCacheFile');
-        $ref->setAccessible(true);
 
         $path = $ref->invoke($resolver, 'runner-1');
         $this->assertStringContainsString('runner-runner-1', $path);
@@ -440,7 +439,6 @@ class RunnerTokenResolverTest extends TestCase
         $resolver = new RunnerTokenResolver($http, $controller);
 
         $ref = new \ReflectionMethod($resolver, 'tokenCacheFile');
-        $ref->setAccessible(true);
 
         $path = $ref->invoke($resolver, 'runner/bad name!@#');
         $filename = basename($path);

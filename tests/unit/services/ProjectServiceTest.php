@@ -45,7 +45,6 @@ class ProjectServiceTest extends TestCase
     {
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'baseGitEnv');
-        $ref->setAccessible(true);
 
         /** @var array<string, string> $env */
         $env = $ref->invoke($service);
@@ -61,7 +60,6 @@ class ProjectServiceTest extends TestCase
     {
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
-        $ref->setAccessible(true);
 
         $script = $ref->invoke($service, 'myuser', 'mypass');
 
@@ -75,7 +73,6 @@ class ProjectServiceTest extends TestCase
     {
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
-        $ref->setAccessible(true);
 
         $script = $ref->invoke($service, 'bot', 'tok3n');
 
@@ -95,7 +92,6 @@ class ProjectServiceTest extends TestCase
     {
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
-        $ref->setAccessible(true);
 
         $script = $ref->invoke($service, 'user', 'p@ss$(rm -rf /)');
 
@@ -114,7 +110,6 @@ class ProjectServiceTest extends TestCase
     {
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'buildCredentialHelperScript');
-        $ref->setAccessible(true);
 
         $script = $ref->invoke($service, 'user"name', 'pass"word');
 
@@ -127,7 +122,6 @@ class ProjectServiceTest extends TestCase
     {
         $service = new ProjectService();
         $ref = new \ReflectionMethod(ProjectService::class, 'cleanupKeyFile');
-        $ref->setAccessible(true);
 
         // null does nothing
         $ref->invoke($service, null);
@@ -154,7 +148,6 @@ class ProjectServiceTest extends TestCase
         );
         $project->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($project, [
             'id' => $id,
             'name' => 'Test Project',

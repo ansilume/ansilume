@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubmittedId;
 use app\models\ApprovalRule;
 use app\models\Inventory;
 use app\models\JobTemplate;
@@ -114,12 +115,13 @@ final class GatedInventoryChoice
     }
 
     /**
-     * $number as an ID: a positive integer, or a text of one ("" and 0 are
-     * none), as the integer columns store it.
+     * $number as an ID: a positive whole number as the integer rule reads it
+     * (SubmittedId), as the integer columns store it; "", 0 and anything the
+     * rule refuses (a number beyond the int range included) are none.
      */
     private static function positiveId(mixed $number): ?int
     {
-        $id = is_numeric($number) ? (int)$number : 0;
+        $id = SubmittedId::of($number) ?? 0;
 
         return $id > 0 ? $id : null;
     }

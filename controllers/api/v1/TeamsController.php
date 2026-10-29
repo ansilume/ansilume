@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\SubmittedId;
 use app\models\AuditLog;
 use app\models\Team;
 use app\models\TeamMember;
@@ -26,9 +27,20 @@ use yii\web\NotFoundHttpException;
  * DELETE /api/v1/teams/{id}/members/{userId}
  * POST   /api/v1/teams/{id}/projects
  * DELETE /api/v1/teams/{id}/projects/{projectId}
+ *
+ * The user_id and project_id of the body are read as the models' integer
+ * rules read them (SubmittedId): a value that is no ID, such as a fraction,
+ * a boolean, a list or a JSON number beyond the int range, is looked up as
+ * a missing one is, as #0, which does not exist (404).
  */
 class TeamsController extends BaseApiController
 {
+    /** The 404 of POST /api/v1/teams/{id}/members; sprintf(): the user ID, 0 for a value that is no ID. */
+    public const USER_NOT_FOUND = 'User #%d not found.';
+
+    /** The 404 of POST /api/v1/teams/{id}/projects; sprintf(): the project ID, 0 for a value that is no ID. */
+    public const PROJECT_NOT_FOUND = 'Project #%d not found.';
+
     protected function apiAccessRules(): array
     {
         return [
@@ -58,9 +70,11 @@ class TeamsController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<Team> $teams */
+        $teams = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($t) => $this->serialize($t), $dp->getModels()),
+            array_map(fn ($t) => $this->serialize($t), $teams),
             (int)$dp->totalCount,
             $page,
             25
@@ -178,10 +192,11 @@ class TeamsController extends BaseApiController
 
         $team = $this->findModel($id);
         $body = (array)\Yii::$app->request->bodyParams;
-        $userId = (int)($body['user_id'] ?? 0);
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $userId = SubmittedId::of($body['user_id'] ?? null) ?? 0;
 
         if (User::findOne($userId) === null) {
-            return $this->error("User #{$userId} not found.", 404);
+            return $this->error(sprintf(self::USER_NOT_FOUND, $userId), 404);
         }
         if (TeamMember::find()->where(['team_id' => $id, 'user_id' => $userId])->exists()) {
             return $this->error('User is already a member of this team.', 422);
@@ -241,11 +256,12 @@ class TeamsController extends BaseApiController
 
         $team = $this->findModel($id);
         $body = (array)\Yii::$app->request->bodyParams;
-        $projectId = (int)($body['project_id'] ?? 0);
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $projectId = SubmittedId::of($body['project_id'] ?? null) ?? 0;
         $role = (string)($body['role'] ?? 'viewer');
 
         if (Project::findOne($projectId) === null) {
-            return $this->error("Project #{$projectId} not found.", 404);
+            return $this->error(sprintf(self::PROJECT_NOT_FOUND, $projectId), 404);
         }
         if (TeamProject::find()->where(['team_id' => $id, 'project_id' => $projectId])->exists()) {
             return $this->error('Project is already assigned to this team.', 422);

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers\api\v1;
 
+use app\components\SurveyDefinition;
 use app\controllers\api\v1\ApprovalRulesController;
 use app\models\ApiToken;
 use app\models\ApprovalRequest;
@@ -15,6 +16,9 @@ use app\models\JobTemplate;
 use app\models\User;
 use app\models\WorkflowStep;
 use app\services\ApprovalRuleWriteService;
+use app\services\ApproverEligibility;
+use app\services\JobTemplateGate;
+use app\tests\integration\ApproverListFixtures;
 use app\tests\integration\controllers\WebControllerTestCase;
 use app\tests\integration\TeamScopeFixtures;
 use yii\helpers\Json;
@@ -27,6 +31,7 @@ use yii\helpers\Json;
  */
 class ApprovalRulesControllerTest extends WebControllerTestCase
 {
+    use ApproverListFixtures;
     use TeamScopeFixtures;
 
     /** One test swaps in a write service that refuses; restore the real one. */
@@ -350,10 +355,6 @@ class ApprovalRulesControllerTest extends WebControllerTestCase
             'unknown approver type' => [['approver_type' => 'invalid'] + $valid, 'Approver Type is invalid.'],
             // Regression: the message named the column (Approver_config), not its label.
             'approver config is not JSON' => [['approver_config' => 'not-json'] + $valid, 'Approver Config must be valid JSON.'],
-            'more required approvals than listed users' => [
-                ['approver_type' => 'users', 'approver_config' => ['user_ids' => [1]], 'required_approvals' => 3] + $valid,
-                'Required approvals (3) exceeds eligible approvers (1).',
-            ],
         ];
     }
 
@@ -372,6 +373,109 @@ class ApprovalRulesControllerTest extends WebControllerTestCase
         $this->assertSame(['error' => ['message' => $message]], $result);
         $this->assertSame(422, \Yii::$app->response->statusCode);
         $this->assertSame($before, ApprovalRule::find()->count());
+    }
+
+    /**
+     * More required approvals than the users a users rule lists: 422 with
+     * the message the spec's example quotes, and nothing is written. The
+     * listed user exists: the count takes only users who do.
+     */
+    public function testMoreRequiredApprovalsThanTheListedUsersAre422(): void
+    {
+        $admin = $this->authenticateWithRoles(['admin']);
+        $before = ApprovalRule::find()->count();
+        $this->setBody([
+            'name' => 'api-invalid',
+            'approver_type' => ApprovalRule::APPROVER_TYPE_USERS,
+            'approver_config' => ['user_ids' => [(int)$admin->id]],
+            'required_approvals' => 3,
+        ]);
+
+        $result = $this->call('create');
+
+        $this->assertSame(['error' => ['message' => 'Required approvals (3) exceeds eligible approvers (1).']], $result);
+        $this->assertSame(['error' => ['message' => sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 3, 1)]], $result);
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $this->assertSame($before, ApprovalRule::find()->count());
+    }
+
+    /**
+     * Regression: POST and PUT saved a users rule that requires more
+     * approvals than the users its user_ids name (201, 200), as the count
+     * took every entry: also one that is no ID, the same user again or a
+     * user who does not exist. Every launch the rule gates was then refused
+     * as one that could never be approved. Both answer 422 now, and write
+     * neither the rule nor an audit entry.
+     *
+     * @dataProvider oneUserListedProvider
+     */
+    public function testRegressionAUsersRuleThatNeedsMoreApprovalsThanItsUsersIs422(string $list): void
+    {
+        $admin = $this->authenticateWithRoles(['admin']);
+        // As the request's JSON parser gives the object.
+        $config = json_decode($this->oneUserConfig($list), true);
+        $refusal = ['error' => ['message' => sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 2, 1)]];
+        $rule = $this->ruleOf($admin);
+        $stored = (string)$rule->approver_config;
+        $rules = ApprovalRule::find()->count();
+        $audits = $this->ruleAudits();
+
+        $this->setBody(['name' => 'one-approver-listed', 'approver_type' => 'users', 'approver_config' => $config, 'required_approvals' => 2]);
+        $this->assertSame($refusal, $this->call('create'));
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+
+        $this->setBody(['approver_config' => $config, 'required_approvals' => 2]);
+        $this->assertSame($refusal, $this->call('update', ['id' => $rule->id]));
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+
+        $this->assertSame($rules, ApprovalRule::find()->count(), 'nothing created');
+        $rule->refresh();
+        $this->assertSame($stored, (string)$rule->approver_config, 'the approvers stay');
+        $this->assertSame(1, (int)$rule->required_approvals);
+        $this->assertSame($audits, $this->ruleAudits(), 'no audit entry');
+    }
+
+    /**
+     * A users rule that an older version saved with such a list, here 2
+     * required approvals of one operator listed next to "abc", still gates
+     * the launches of its job template: the count is made when a rule is
+     * saved, and a launch is refused as one that could never be approved,
+     * as it was. Its next save, also a rename that leaves the approvers
+     * out, is refused until it requires fewer approvals or names more
+     * users.
+     */
+    public function testARuleStoredWithSuchAListGatesItsLaunchesAndItsNextSaveIsRefused(): void
+    {
+        $admin = $this->authenticateWithRoles(['admin']);
+        $approver = $this->createUserWithRole('rule-api-listed', 'operator');
+        $config = sprintf('{"user_ids": [%d, "abc"]}', $approver->id);
+        $rule = $this->createApprovalRule((int)$admin->id, ApprovalRule::APPROVER_TYPE_USERS, $config, 2);
+        $template = $this->templateOf($admin);
+        JobTemplate::updateAll(['approval_rule_id' => $rule->id], ['id' => $template->id]);
+        $gated = JobTemplate::findOne($template->id);
+        $this->assertNotNull($gated);
+        /** @var ApproverEligibility $eligibility */
+        $eligibility = \Yii::$app->get('approverEligibility');
+
+        $this->assertSame(
+            sprintf(ApproverEligibility::REFUSAL_JOB, SurveyDefinition::quote((string)$rule->name), 2, 1),
+            JobTemplateGate::of($gated)->refusal((int)$admin->id, $eligibility),
+            'the launch is refused'
+        );
+
+        $audits = $this->ruleAudits();
+        $this->setBody(['name' => 'renamed']);
+        $this->assertSame(
+            ['error' => ['message' => sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 2, 1)]],
+            $this->call('update', ['id' => $rule->id])
+        );
+        $this->assertSame(422, \Yii::$app->response->statusCode);
+        $rule->refresh();
+        $this->assertNotSame('renamed', $rule->name);
+        $this->assertSame($audits, $this->ruleAudits(), 'no audit entry');
+
+        $this->setBody(['name' => 'renamed', 'required_approvals' => 1]);
+        $this->assertSame('renamed', $this->dataOf($this->call('update', ['id' => $rule->id]))['name'], 'with 1 required approval');
     }
 
     /**
@@ -553,6 +657,14 @@ class ApprovalRulesControllerTest extends WebControllerTestCase
             }
         }
         $this->fail("Rule #{$id} is missing from the list.");
+    }
+
+    /**
+     * The audit entries of approval rules.
+     */
+    private function ruleAudits(): int
+    {
+        return (int)AuditLog::find()->where(['object_type' => 'approval_rule'])->count();
     }
 
     private function storedConfigOf(int $ruleId): string

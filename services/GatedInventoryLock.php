@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubmittedId;
+use app\components\SubmittedInteger;
 use app\models\Inventory;
 
 /**
@@ -24,9 +26,11 @@ use app\models\Inventory;
  *
  * Deny by default: every column but the open ones counts, also one added
  * later. A value sent as stored is no change: null and '' are the same, a
- * list or an object always differs and is never cast, and anything else is
- * compared after the column's type cast ("5" and 5 for an ID), or exactly
- * for a name that is no column.
+ * list or an object always differs and is never cast, an integer column
+ * holds the same whole number as the integer rule reads it ("5" and 5 for an
+ * ID; a value the rule refuses, such as a fraction or a JSON number beyond
+ * the int range, always differs), anything else is compared after the
+ * column's type cast, and a name that is no column exactly.
  *
  * InventoryWriteService asks under the inventory's row lock, once it took
  * the locked row as the inventory's stored state, so that a rule assigned or
@@ -68,9 +72,7 @@ final class GatedInventoryLock
      */
     public static function isGated(Inventory $inventory): bool
     {
-        $ruleId = $inventory->getOldAttribute('approval_rule_id');
-
-        return is_numeric($ruleId) && (int)$ruleId > 0;
+        return (SubmittedId::of($inventory->getOldAttribute('approval_rule_id')) ?? 0) > 0;
     }
 
     /**
@@ -132,8 +134,9 @@ final class GatedInventoryLock
     /**
      * Whether $value is the stored value $stored of the column $name: null
      * and '' are the same; a list or an object always differs and is never
-     * cast (a cast would read a list as a value); anything else is compared
-     * after the column's type cast, or exactly for a name that is no column.
+     * cast (a cast would read a list as a value); an integer column compares
+     * whole numbers (sameInteger()); anything else is compared after the
+     * column's type cast, or exactly for a name that is no column.
      */
     private static function sameValue(string $name, #[\SensitiveParameter] mixed $value, #[\SensitiveParameter] mixed $stored): bool
     {
@@ -143,8 +146,32 @@ final class GatedInventoryLock
         $value = $value === '' ? null : $value;
         $stored = $stored === '' ? null : $stored;
         $column = Inventory::getTableSchema()->getColumn($name);
+        if ($column === null) {
+            return $value === $stored;
+        }
 
-        return $column === null ? $value === $stored : $column->phpTypecast($value) === $column->phpTypecast($stored);
+        return $column->phpType === 'integer'
+            ? self::sameInteger($value, $stored)
+            : $column->phpTypecast($value) === $column->phpTypecast($stored);
+    }
+
+    /**
+     * Whether $value and $stored, values of an integer column, are both none
+     * (null) or the same whole number as the integer rule reads it
+     * (SubmittedInteger: "05" and 5.0 are 5). A value the rule refuses, such
+     * as a fraction, a text, a boolean or a JSON number beyond the int range
+     * (1e30, 1e999), is a change: the request submitted it, and no stored
+     * value is one. The column's type cast, an (int) cast, warns for such a
+     * float since PHP 8.5, and read "5abc" or 5.5 as the stored 5.
+     */
+    private static function sameInteger(#[\SensitiveParameter] mixed $value, #[\SensitiveParameter] mixed $stored): bool
+    {
+        if ($value === null || $stored === null) {
+            return $value === $stored;
+        }
+        $number = SubmittedInteger::of($value);
+
+        return $number !== null && $number === SubmittedInteger::of($stored);
     }
 
     private function policy(): ApprovalRuleAssignmentPolicy

@@ -7,15 +7,17 @@ namespace app\tests\unit\services;
 use app\models\Job;
 use app\models\Webhook;
 use app\services\WebhookService;
+use app\tests\unit\services\notification\HttpLoopbackServer;
 use PHPUnit\Framework\TestCase;
 use yii\db\BaseActiveRecord;
+use yii\log\Logger;
 
 /**
  * Tests for WebhookService delivery logic.
  *
  * The deliver() method is overridden to capture the request instead of making
  * real HTTP calls. Tests verify headers, HMAC signature, event filtering,
- * and error isolation.
+ * and error isolation. The real deliver() posts to HttpLoopbackServer.
  */
 class WebhookDeliveryTest extends TestCase
 {
@@ -30,7 +32,6 @@ class WebhookDeliveryTest extends TestCase
             ->onlyMethods([])
             ->getMock();
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($job, [
             'id'              => $id,
             'status'          => $status,
@@ -53,7 +54,6 @@ class WebhookDeliveryTest extends TestCase
             ['id', 'name', 'url', 'events', 'secret', 'enabled', 'created_by', 'created_at', 'updated_at']
         );
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($wh, [
             'id'         => 1,
             'name'       => 'test-webhook',
@@ -247,5 +247,167 @@ class WebhookDeliveryTest extends TestCase
                 substr($signature, strlen('sha256='))
             )
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // The real deliver(), against a loopback receiver
+    // -------------------------------------------------------------------------
+
+    /**
+     * @dataProvider takenStatuses
+     */
+    public function testADeliveryTheReceiverTookLogsNoWarning(int $status): void
+    {
+        $server = new HttpLoopbackServer();
+        $webhook = $this->makeWebhook($server->start($status, '') . '/hooks/ansilume', secret: 'whsec-test-4711');
+        $service = self::realService();
+        $job = $this->makeJob(7);
+        try {
+            $warnings = self::warningsWhile(fn () => $service->deliverNow($webhook, Webhook::EVENT_JOB_SUCCESS, $job));
+            $requests = $server->requests();
+        } finally {
+            $server->stop();
+        }
+
+        $this->assertSame([], $warnings);
+        $this->assertCount(1, $requests);
+        $this->assertSame('POST', $requests[0]['method']);
+        $this->assertSame('/hooks/ansilume', $requests[0]['path']);
+        $headers = $requests[0]['headers'];
+        $this->assertSame('application/json', $headers['Content-Type'] ?? null);
+        $this->assertSame(Webhook::EVENT_JOB_SUCCESS, $headers['X-Ansilume-Event'] ?? null);
+        $signature = 'sha256=' . hash_hmac('sha256', $requests[0]['body'], 'whsec-test-4711');
+        $this->assertSame($signature, $headers['X-Ansilume-Signature'] ?? null);
+        $this->assertSame(7, json_decode($requests[0]['body'], true)['job']['id'] ?? null);
+    }
+
+    /**
+     * @return array<string, array{0: int}>
+     */
+    public static function takenStatuses(): array
+    {
+        return [
+            'ok' => [200],
+            'created' => [201],
+            'no content' => [204],
+        ];
+    }
+
+    /**
+     * An answer outside 2xx is logged with its status line.
+     *
+     * @dataProvider refusedStatuses
+     */
+    public function testADeliveryTheReceiverRefusedLogsItsStatusLine(int $status, string $statusLine): void
+    {
+        $server = new HttpLoopbackServer();
+        $webhook = $this->makeWebhook($server->start($status, 'refused') . '/hooks/ansilume');
+        $service = self::realService();
+        $job = $this->makeJob(7);
+        try {
+            $warnings = self::warningsWhile(fn () => $service->deliverNow($webhook, Webhook::EVENT_JOB_FAILURE, $job));
+        } finally {
+            $server->stop();
+        }
+
+        $this->assertSame(["Webhook #1 non-success for event=job.failure job=7: {$statusLine}"], $warnings);
+    }
+
+    /**
+     * @return array<string, array{0: int, 1: string}>
+     */
+    public static function refusedStatuses(): array
+    {
+        return [
+            'not found' => [404, 'HTTP/1.1 404 Not Found'],
+            'server error' => [500, 'HTTP/1.1 500 Internal Server Error'],
+            'unavailable' => [503, 'HTTP/1.1 503 Service Unavailable'],
+        ];
+    }
+
+    /**
+     * Without an answer there is no status line: the warning names the
+     * network error instead.
+     */
+    public function testADeliveryThatGotNoAnswerLogsTheNetworkError(): void
+    {
+        $webhook = $this->makeWebhook('http://127.0.0.1:1/hooks/ansilume');
+        $service = self::realService();
+        $job = $this->makeJob(7);
+
+        $warnings = self::warningsWhile(fn () => $service->deliverNow($webhook, Webhook::EVENT_JOB_SUCCESS, $job));
+
+        $this->assertSame([
+            'Webhook #1 non-success for event=job.success job=7:  '
+            . '(file_get_contents(http://127.0.0.1:1/hooks/ansilume): Failed to open stream: Connection refused)',
+        ], $warnings);
+    }
+
+    /**
+     * A delivery without an HTTP answer is never taken for the one before
+     * it, which the receiver took. PHP 8.5 deprecates
+     * $http_response_header, the headers local to the call;
+     * http_get_last_response_headers(), which replaces it, keeps the headers
+     * of the last HTTP answer until the next HTTP request, so deliver()
+     * clears them before each delivery.
+     */
+    public function testADeliveryWithoutAnHttpAnswerIsNotTakenForTheOneBefore(): void
+    {
+        $server = new HttpLoopbackServer();
+        $taken = $this->makeWebhook($server->start(200, 'ok') . '/hooks/ansilume');
+        $file = (string)tempnam(sys_get_temp_dir(), 'webhook_delivery_');
+        $notHttp = $this->makeWebhook('file://' . $file);
+        $service = self::realService();
+        $jobs = [$this->makeJob(7), $this->makeJob(8)];
+        try {
+            $warnings = self::warningsWhile(function () use ($service, $taken, $notHttp, $jobs): void {
+                $service->deliverNow($taken, Webhook::EVENT_JOB_SUCCESS, $jobs[0]);
+                $service->deliverNow($notHttp, Webhook::EVENT_JOB_SUCCESS, $jobs[1]);
+            });
+        } finally {
+            $server->stop();
+            unlink($file);
+        }
+
+        $this->assertSame(['Webhook #1 non-success for event=job.success job=8: '], $warnings);
+    }
+
+    /**
+     * A WebhookService whose real deliver() a test can call.
+     */
+    private static function realService(): WebhookService
+    {
+        return new class () extends WebhookService {
+            public function deliverNow(Webhook $webhook, string $event, Job $job): void
+            {
+                $this->deliver($webhook, $event, $job);
+            }
+        };
+    }
+
+    /**
+     * The warnings WebhookService logs while $deliver runs.
+     *
+     * @return list<string>
+     */
+    private static function warningsWhile(callable $deliver): array
+    {
+        $logger = new Logger();
+        $logger->flushInterval = PHP_INT_MAX;
+        $previous = \Yii::getLogger();
+        \Yii::setLogger($logger);
+        try {
+            $deliver();
+        } finally {
+            \Yii::setLogger($previous);
+        }
+        $warnings = [];
+        foreach ($logger->messages as $message) {
+            if ($message[2] === WebhookService::class && $message[1] === Logger::LEVEL_WARNING) {
+                $warnings[] = (string)$message[0];
+            }
+        }
+
+        return $warnings;
     }
 }

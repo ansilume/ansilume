@@ -141,7 +141,6 @@ class ApprovalRequestTest extends TestCase
     {
         $request = $this->createPartialMock(ApprovalRequest::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($request, ['status' => $status]);
         return $request;
     }

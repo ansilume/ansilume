@@ -164,8 +164,6 @@ final class PermissionCatalog
      * permissions with their human-readable label.
      *
      * @return array<int, array{domain: string, label: string, permissions: array<int, array{name: string, label: string}>}>
-     *
-     * @SuppressWarnings(PHPMD.ExcessiveMethodLength)
      */
     public static function groups(): array
     {

@@ -137,7 +137,6 @@ class RunnerHeartbeatVersionTest extends DbTestCase
             // live in the private authenticateRunner() method; call it
             // directly via reflection.
             $ref = new \ReflectionMethod($controller, 'authenticateRunner');
-            $ref->setAccessible(true);
             $ref->invoke($controller);
         } finally {
             if ($originalRequest !== null) {

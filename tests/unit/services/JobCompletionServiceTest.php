@@ -399,7 +399,6 @@ class JobCompletionServiceTest extends TestCase
         );
         $job->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($job, [
             'id' => 1,
             'status' => Job::STATUS_RUNNING,

@@ -65,6 +65,13 @@ use yii\web\Request;
  * UserChangePolicy::ADMIN_ROLE_CHANGE_REFUSED now, whatever the teams, and
  * the spec says the team refusal comes where the roles allow the change.
  * Fails on the spec from before.
+ *
+ * Regression (PHP 8.5 move): POST and PUT answer 422
+ * UsersController::INVALID_STATUS for a status that is no whole number
+ * before the 403 of is_superadmin and the 422s of the only active
+ * superadmin, but their order lists named no status; and UserInput.status
+ * said that the API refuses every status but an integer or its digits,
+ * while it takes "+10" and "010" for 10. Fails on the spec from before.
  */
 class OpenApiUsersContractTest extends WebControllerTestCase
 {
@@ -74,6 +81,9 @@ class OpenApiUsersContractTest extends WebControllerTestCase
     private const USERS = '/api/v1/users';
 
     private const USER = '/api/v1/users/{id}';
+
+    /** How the description of an operation starts the order of its answers, its last sentence. */
+    private const ORDER = 'The answers come in this order: ';
 
     /**
      * regression: POST and PUT documented the generic 403 only.
@@ -345,7 +355,8 @@ class OpenApiUsersContractTest extends WebControllerTestCase
             . sprintf(RoleGrantPolicy::ADMIN_ROLE_REFUSED, 'admin') . '`';
         $this->assertStringContainsString($adminRule, $post);
         $this->assertStringContainsString(
-            'The answers come in this order: 403 `Forbidden.` without `user.create`; 422 for an unknown `auth_source` or `role`; 403 for a role the caller may not assign; 403 for `is_superadmin: true` from a caller who is no superadmin; 422 for a password or another field that is not valid.',
+            'The answers come in this order: 403 `Forbidden.` without `user.create`; 422 for an unknown `auth_source` or `role`; 403 for a role the caller may not assign; 422 `'
+                . UsersController::INVALID_STATUS . '` for a `status` that is no whole number; 403 for `is_superadmin: true` from a caller who is no superadmin; 422 for a password or another field that is not valid, such as a `status` other than 0 and 10.',
             $post
         );
         $put = $this->specText(['paths', self::USER, 'put', 'description']);
@@ -353,8 +364,9 @@ class OpenApiUsersContractTest extends WebControllerTestCase
         $this->assertStringContainsString('Only a superadmin changes `is_superadmin`: a value that would set or clear the flag answers 403 for anyone else, and the current value is accepted.', $put);
         $this->assertStringContainsString($adminRule, $put);
         $this->assertStringContainsString(
-            'The answers come in this order: 403 `Forbidden.` without `user.update`; 404 for an unknown user; 403 for a user the caller may not change, for their roles or their teams; 422 for a change of `auth_source` or an unknown `role`; 403 for a role the caller may not assign; 403 for a change of `is_superadmin` from a caller who is no superadmin; 422 `'
-                . UsersController::ONLY_SUPERADMIN_DEMOTED . '` or `' . UsersController::ONLY_SUPERADMIN_DEACTIVATED . '`; 422 for a password or another field that is not valid.',
+            'The answers come in this order: 403 `Forbidden.` without `user.update`; 404 for an unknown user; 403 for a user the caller may not change, for their roles or their teams; 422 for a change of `auth_source` or an unknown `role`; 403 for a role the caller may not assign; 422 `'
+                . UsersController::INVALID_STATUS . '` for a `status` that is no whole number; 403 for a change of `is_superadmin` from a caller who is no superadmin; 422 `'
+                . UsersController::ONLY_SUPERADMIN_DEMOTED . '` or `' . UsersController::ONLY_SUPERADMIN_DEACTIVATED . '`; 422 for a password or another field that is not valid, such as a `status` other than 0 and 10.',
             $put
         );
         $this->assertStringContainsString(
@@ -419,6 +431,105 @@ class OpenApiUsersContractTest extends WebControllerTestCase
             $this->specText(['components', 'schemas', 'UserInput', 'properties', 'is_superadmin', 'description'])
         );
         $this->assertSame('boolean', $this->specAt(['components', 'schemas', 'UserInput', 'properties', 'is_superadmin', 'type']));
+    }
+
+    /**
+     * regression (PHP 8.5 move): POST and PUT answer 422
+     * UsersController::INVALID_STATUS for a status that is no whole number
+     * (UsersController::applyBody()) after the 403 of a role the caller may
+     * not assign and before the 403 of is_superadmin and, for PUT, the 422s
+     * of the only active superadmin, but their order lists named no status
+     * and put those answers before every 422 of a field. Both lists name it
+     * between the two 403s, the 422s of POST and PUT name the status (the
+     * 422 of POST named only the password and the role), and the API answers
+     * so: the role refusal comes first, the status refusal before that of
+     * the flag; nothing is written. UsersControllerNumbersTest pins the other
+     * answers before and after it.
+     */
+    public function testRegressionTheOrderListsNameTheStatusRefusalWhereTheApiAnswersIt(): void
+    {
+        $status = '422 `' . UsersController::INVALID_STATUS . '` for a `status` that is no whole number';
+        $role = '403 for a role the caller may not assign';
+        $this->assertSame(
+            [$role, $status, '403 for `is_superadmin: true` from a caller who is no superadmin'],
+            $this->neighboursIn(self::USERS, 'post', $status)
+        );
+        $this->assertSame(
+            [$role, $status, '403 for a change of `is_superadmin` from a caller who is no superadmin'],
+            $this->neighboursIn(self::USER, 'put', $status)
+        );
+        foreach ([self::USERS => 'post', self::USER => 'put'] as $path => $method) {
+            $this->assertStringContainsString(
+                'a `status` that is no whole number or neither 0 nor 10 (`' . UsersController::INVALID_STATUS . '`)',
+                $this->specText(['paths', $path, $method, 'responses', '422', 'description']),
+                "The 422 of {$method} {$path} names the status."
+            );
+        }
+
+        $target = $this->createUser('spec-order-target');
+        $email = (string)$target->email;
+        $this->authenticate($this->userWithRole($this->customRole(['user.view', 'user.create', 'user.update'])));
+        $username = 'spec-order-created-' . uniqid();
+        $create = ['username' => $username, 'email' => $username . '@example.com', 'password' => 'securepassword', 'status' => 'abc'];
+        $update = ['email' => 'spec-order-' . uniqid('', true) . '@example.com', 'status' => 'abc'];
+        $answers = [
+            'the role first' => [['role' => 'admin'], 403, sprintf(RoleGrantPolicy::ROLE_REFUSED, 'admin')],
+            'the status before the flag' => [['is_superadmin' => true], 422, UsersController::INVALID_STATUS],
+        ];
+        foreach ($answers as $what => [$check, $code, $message]) {
+            $this->setBody($check + $create);
+            $this->assertSame(['error' => ['message' => $message]], $this->controller()->actionCreate(), "POST: {$what}");
+            $this->assertSame($code, \Yii::$app->response->statusCode, "POST: {$what}");
+            $this->setBody($check + $update);
+            $this->assertSame(['error' => ['message' => $message]], $this->controller()->actionUpdate((int)$target->id), "PUT: {$what}");
+            $this->assertSame($code, \Yii::$app->response->statusCode, "PUT: {$what}");
+        }
+        $this->assertFalse(User::find()->where(['username' => $username])->exists(), 'Nothing is created.');
+        $this->assertSame($email, (string)User::findOne($target->id)?->email, 'Nothing is written.');
+    }
+
+    /**
+     * regression (PHP 8.5 move): UserInput.status said the API takes a
+     * status "as an integer or its digits as text" and refuses anything
+     * else, but it takes 10.0, "+10" and "010" for 10. It names them now,
+     * and what it refuses with 422 UsersController::INVALID_STATUS, a
+     * fraction however close to 0 or 10 included, which the integer rule
+     * took for the whole number of its text of 14 digits until
+     * WholeNumberValidator, and a list or an object, also an empty one,
+     * which 2.13.1 took for 0; UsersControllerNumbersTest and
+     * ListsForWholeNumbersTest pin each value it names.
+     */
+    public function testRegressionTheStatusIsDescribedAsTheApiReadsIt(): void
+    {
+        $status = ['components', 'schemas', 'UserInput', 'properties', 'status'];
+        $this->assertSame([User::STATUS_INACTIVE, User::STATUS_ACTIVE], $this->specAt([...$status, 'enum']));
+        $this->assertSame('integer', $this->specAt([...$status, 'type']));
+        $this->assertSame(
+            '10 = active, 0 = inactive: an integer (10.0 included) or its digits as text, with an optional sign or leading zeros (`"+10"`, `"010"`).'
+                . ' Anything else, `true`, `false`, `null`, `""`, `5`, `10.5`, any other fraction however close to 0 or 10 (`0.999999999999999`,'
+                . ' `9.99999999999999`), a list or an object, also an empty one (`[]`, `{}`), and text such as `"abc"` included, answers 422 `'
+                . UsersController::INVALID_STATUS . '` before anything is written; releases up to 2.13.1 took `false`, `null`, `""`, `[]`, `{}`,'
+                . ' such text and a fraction below 1 for 0, which deactivated the user.',
+            $this->specText([...$status, 'description'])
+        );
+    }
+
+    /**
+     * The answer before $answer, $answer and the answer after it, in the
+     * order the description of $method $path gives its answers in (ORDER).
+     *
+     * @return list<string>
+     */
+    private function neighboursIn(string $path, string $method, string $answer): array
+    {
+        $description = $this->specText(['paths', $path, $method, 'description']);
+        $start = strpos($description, self::ORDER);
+        $this->assertNotFalse($start, "{$method} {$path} gives no order of its answers.");
+        $order = explode('; ', (string)preg_replace('/\.$/', '', substr($description, $start + strlen(self::ORDER))));
+        $at = array_search($answer, $order, true);
+        $this->assertIsInt($at, "{$method} {$path} names no {$answer} in the order of its answers: " . implode(' | ', $order));
+
+        return array_slice($order, max(0, $at - 1), 3);
     }
 
     private function controller(): UsersController

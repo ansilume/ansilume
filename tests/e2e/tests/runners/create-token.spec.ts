@@ -1,4 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { expectFlash } from '../../lib/helpers';
+import { GROUP_WITH_TEMPLATE, NO_RUNNERS_ADD_ONE, groupId } from '../../lib/runner-groups';
+import { forgePost } from '../../lib/scoping';
+import { RUNNER_TOKEN_CARD, runnerRow } from '../../lib/tokens';
+
+/** The runner a forged create names; e2e/seed removes e2e-ui-* runners. */
+const FRACTION_GROUP_RUNNER = 'e2e-ui-fraction-group-runner';
 
 test.describe('Runner Create + Token Regenerate', () => {
   async function gotoFirstRunnerGroup(page: import('@playwright/test').Page): Promise<boolean> {
@@ -60,5 +67,27 @@ test.describe('Runner Create + Token Regenerate', () => {
     await expect(tokenInput).toBeVisible({ timeout: 5_000 });
     const newToken = await tokenInput.inputValue();
     expect(newToken.length).toBeGreaterThan(10);
+  });
+
+  // Regression: create read group_id with an (int) cast, so a forged "<id>.5"
+  // registered the runner in the group <id> and showed its token (and on PHP
+  // 8.5 a JSON number beyond the int range answered 500). A group_id that is
+  // no ID finds no group (SubmittedId): the runner group list with the
+  // danger flash, and no runner. commands/E2eRunnerGroupGuardSeeder.php:
+  // e2e-group-with-template has no runners.
+  test('a forged create with a group ID that is no ID registers no runner', async ({ page }) => {
+    const group = await groupId(page, GROUP_WITH_TEMPLATE);
+    // A page without requests of its own: the dashboard's chart request can
+    // store its copy of the session after the post set the flash.
+    await page.goto('/team/index');
+
+    await forgePost(page, '/runner/create', { group_id: `${group}.5`, name: FRACTION_GROUP_RUNNER }, /\/runner-group\//);
+
+    await expect(page, 'the runner group list, not the page of the group').toHaveURL(/\/runner-group\/index$/);
+    await expectFlash(page, 'danger', 'Runner group not found.');
+    await expect(page.locator(RUNNER_TOKEN_CARD), 'no token').toHaveCount(0);
+    await page.goto(`/runner-group/view?id=${group}`);
+    await expect(runnerRow(page, FRACTION_GROUP_RUNNER)).toHaveCount(0);
+    await expect(page.getByTestId('runner-group-empty')).toHaveText(NO_RUNNERS_ADD_ONE);
   });
 });

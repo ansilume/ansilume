@@ -1,5 +1,7 @@
 import { test, expect, APIResponse, Browser, TestInfo } from '@playwright/test';
-import { LIMIT_TOO_LONG, VERBOSITY_TOO_HIGH } from '../../lib/job-templates';
+import { templateId } from '../../lib/helpers';
+import { LIMIT_NOT_A_STRING, LIMIT_TOO_LONG, VERBOSITY_NOT_INTEGER, VERBOSITY_TOO_HIGH } from '../../lib/job-templates';
+import { newestJobOf } from '../../lib/jobs';
 import { asUser, E2E_ADMIN } from '../../lib/session';
 import {
   PASSWORD_FIELD,
@@ -160,6 +162,23 @@ test.describe('Inbound triggers', () => {
     const limit = await request.post('/trigger/fire', { headers: { [TRIGGER_HEADER]: jobToken }, data: { limit: 'web:'.repeat(64) + 'x' } });
     expect(limit.status()).toBe(422);
     expect(await limit.json()).toEqual({ error: LIMIT_TOO_LONG });
+  });
+
+  // Regression: an empty list or object as the verbosity or the limit passed
+  // the check, which skipped it as the job record's rules skip every empty
+  // value, so the trigger answered 201 and the job ran with the template's
+  // limit (2.13.1 at verbosity 0), where a list with values is refused. It is
+  // refused now with the record's message for a list, the limit's first
+  // (services/JobLaunchInput.php), and nothing is launched.
+  test('an empty list or object as the verbosity and the limit answers 422 with both reasons, and launches nothing', async ({ request, browser }, testInfo) => {
+    const newestJob = () => asUser(browser, testInfo, E2E_ADMIN, async (admin) => newestJobOf(admin, await templateId(admin, SECRET_TEMPLATE)));
+    const before = await newestJob();
+
+    const response = await request.post('/trigger/fire', { headers: { [TRIGGER_HEADER]: jobToken }, data: { verbosity: [], limit: {} } });
+
+    expect(response.status(), await response.text()).toBe(422);
+    expect(await response.json()).toEqual({ error: `${LIMIT_NOT_A_STRING} ${VERBOSITY_NOT_INTEGER}` });
+    expect(await newestJob(), 'no job was launched').toBe(before);
   });
 
   test('a password answer sent to a trigger is stored encrypted', async ({ request, browser }, testInfo) => {

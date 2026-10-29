@@ -14,6 +14,15 @@ $config = [
     'name' => 'Ansilume',
     'basePath' => dirname(__DIR__),
     'bootstrap' => ['log'],
+    // Every 'integer', 'number' and 'double' rule is a WholeNumberValidator:
+    // Yii's NumberValidator reads a float as its text of 14 digits and took
+    // 2.9999999999999996 (text "3") for a whole number, which the column's
+    // typecast then cut to 2. config/console.php and config/test.php as well.
+    'container' => [
+        'definitions' => [
+            \yii\validators\NumberValidator::class => \app\components\WholeNumberValidator::class,
+        ],
+    ],
     'controllerMap' => [
         'api/v1/jobs' => 'app\controllers\api\v1\JobsController',
         'api/v1/job-templates' => 'app\controllers\api\v1\JobTemplatesController',
@@ -116,8 +125,10 @@ $config = [
                 'scheme' => ($_ENV['SMTP_ENCRYPTION'] ?? '') === 'ssl' ? 'smtps' : 'smtp',
                 'host' => $_ENV['SMTP_HOST'],
                 'port' => (int)($_ENV['SMTP_PORT'] ?? 587),
-                'username' => $_ENV['SMTP_USER'] ?: null,
-                'password' => $_ENV['SMTP_PASSWORD'] ?: null,
+                // Optional, as for a relay that takes mail without a password
+                // (tests/unit/config/OptionalVariablesConfigTest.php).
+                'username' => ($_ENV['SMTP_USER'] ?? '') ?: null,
+                'password' => ($_ENV['SMTP_PASSWORD'] ?? '') ?: null,
             ]),
         ],
         'log' => [

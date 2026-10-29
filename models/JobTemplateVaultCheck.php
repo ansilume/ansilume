@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\SubmittedInteger;
 use yii\db\ActiveRecord;
 use yii\db\Query;
 
@@ -116,9 +117,13 @@ class JobTemplateVaultCheck extends ActiveRecord
         return $ordered;
     }
 
+    /**
+     * A whole number of a row as stored (an int or its digits); null for
+     * none (SubmittedInteger).
+     */
     private static function intOrNull(mixed $value): ?int
     {
-        return is_numeric($value) ? (int)$value : null;
+        return SubmittedInteger::of($value);
     }
 
     public function getJobTemplate(): \yii\db\ActiveQuery

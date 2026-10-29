@@ -692,7 +692,6 @@ class RunnerControllerSecretVarsTest extends TestCase
     private function executeJob(RunnerController $controller, array $payload): void
     {
         $method = new \ReflectionMethod(RunnerController::class, 'executeJob');
-        $method->setAccessible(true);
         $method->invoke($controller, 7, $payload);
     }
 

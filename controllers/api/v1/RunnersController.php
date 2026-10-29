@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\SubmittedId;
 use app\models\AuditLog;
 use app\models\Job;
 use app\models\Runner;
@@ -54,7 +55,7 @@ class RunnersController extends BaseApiController
         $page = $this->requestedPage();
 
         /** @var Runner[] $runners */
-        $runners = $dp->getModels();
+        $runners = $this->modelsOfPage($dp, $page);
         $reregistrations = $this->reregistrations(array_map(static fn (Runner $r): int => (int)$r->id, $runners));
 
         return $this->paginated(
@@ -74,6 +75,10 @@ class RunnersController extends BaseApiController
     }
 
     /**
+     * A target_group_id that is no group ID (SubmittedId), such as a
+     * fraction, a boolean, a list or a JSON number beyond the int range,
+     * finds no group (404), as an unknown ID.
+     *
      * @return array{data: mixed}|array{error: array{message: string}}
      */
     public function actionMove(int $id): array
@@ -89,14 +94,15 @@ class RunnersController extends BaseApiController
         if (!isset($body['target_group_id'])) {
             return $this->error('target_group_id is required.', 422);
         }
-        $targetGroupId = (int)$body['target_group_id'];
+        // Never an (int) cast: it fails on PHP 8.5 for a JSON number beyond the int range.
+        $targetGroupId = SubmittedId::of($body['target_group_id']);
 
         if ($targetGroupId === $sourceGroupId) {
             return $this->error('Runner is already in that group.', 422);
         }
 
         /** @var RunnerGroup|null $targetGroup */
-        $targetGroup = RunnerGroup::findOne($targetGroupId);
+        $targetGroup = $targetGroupId === null ? null : RunnerGroup::findOne($targetGroupId);
         if ($targetGroup === null) {
             return $this->error('Target runner group not found.', 404);
         }

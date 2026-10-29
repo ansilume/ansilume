@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { expectFlash } from '../../lib/helpers';
+import { expectFlash, postWithPageCsrf } from '../../lib/helpers';
 import { openWorkflowTemplate } from '../../lib/triggers';
 import { EMPTY_WORKFLOW, SOLO_GATE_REFUSAL, SOLO_GATE_WORKFLOW, runCount } from '../../lib/workflows';
 
@@ -54,5 +54,21 @@ test.describe('Workflow Launch', () => {
     ]);
     await expectFlash(page, 'danger', `Launch failed: Workflow template #${id} has no steps.`);
     expect(await runCount(page, EMPTY_WORKFLOW), 'no run was written').toBe(before);
+  });
+
+  // Regression: the launch read its id with an (int) cast, so a post to
+  // /workflow-template/launch?id=<id>abc launched the workflow <id> (and on
+  // PHP 8.5 a JSON number beyond the int range answered 500). An id that is
+  // no ID is workflow template #0, which does not exist (SubmittedId): 404,
+  // and no run.
+  test('a launch of an id that is no ID answers 404 and starts no run', async ({ page }) => {
+    const before = await runCount(page, 'e2e-workflow');
+    const id = await openWorkflowTemplate(page, 'e2e-workflow');
+
+    const answer = await postWithPageCsrf(page, `/workflow-template/launch?id=${id}abc`);
+
+    expect(answer.status(), 'the forged launch').toBe(404);
+    expect(await answer.text()).toContain('Workflow template #0 not found.');
+    expect(await runCount(page, 'e2e-workflow'), 'no run was started').toBe(before);
   });
 });

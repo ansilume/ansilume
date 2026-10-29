@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\api;
 
+use app\components\CsvText;
 use app\models\AnalyticsQuery;
 use app\models\Job;
 use app\models\JobHostSummary;
@@ -205,24 +206,27 @@ class AnalyticsApiTest extends DbTestCase
         $this->assertFalse($q->validate());
     }
 
+    /**
+     * The summary as the CSV export writes it (CsvText): its keys as the
+     * header row, then its values.
+     *
+     * Regression: on PHP 8.4 and later the export, and this test, which
+     * wrote the CSV with fputcsv() itself, failed: fputcsv() without its
+     * escape argument is deprecated there.
+     */
     public function testCsvFormatForSummary(): void
     {
         $this->scaffoldWithJobs(1, 1);
         $result = [$this->service->summary($this->makeQuery())];
 
-        // Simulate CSV generation
-        $output = fopen('php://temp', 'r+');
-        $this->assertNotFalse($output);
+        $lines = explode("\n", CsvText::of($result));
 
-        fputcsv($output, array_keys($result[0]));
-        foreach ($result as $row) {
-            fputcsv($output, $row);
-        }
-        rewind($output);
-        $csv = (string)stream_get_contents($output);
-        fclose($output);
-
-        $this->assertStringContainsString('total_jobs', $csv);
-        $this->assertStringContainsString('success_rate', $csv);
+        $this->assertSame(
+            'total_jobs,succeeded,failed,success_rate,avg_duration_seconds,avg_failure_duration_seconds,mttr_seconds',
+            $lines[0]
+        );
+        $this->assertStringStartsWith('2,1,1,50,', $lines[1]);
+        $this->assertSame('', $lines[2], 'one row, each line ends with a line break');
+        $this->assertCount(3, $lines);
     }
 }

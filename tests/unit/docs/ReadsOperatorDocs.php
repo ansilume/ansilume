@@ -113,6 +113,29 @@ trait ReadsOperatorDocs
     }
 
     /**
+     * Asserts that docs/updating.md has the section $heading right after
+     * the section whose heading starts with $newer, the one of the release
+     * after it (null: there is none, $heading is the newest), and right
+     * before the section whose heading starts with $older. The test of each
+     * release's section names its neighbours only, so a new release
+     * section changes the test of the one that was the newest, and no
+     * other.
+     */
+    private function assertUpdateSectionBetween(?string $newer, string $heading, string $older): void
+    {
+        preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $matches);
+        $headings = $matches[0];
+        $position = array_search($heading, $headings, true);
+        $this->assertIsInt($position, "docs/updating.md has no section {$heading}");
+        if ($newer === null) {
+            $this->assertSame(0, $position, "The newest section is {$heading}.");
+        } else {
+            $this->assertStringStartsWith($newer, $headings[$position - 1] ?? '', "{$heading} follows {$newer}.");
+        }
+        $this->assertStringStartsWith($older, $headings[$position + 1] ?? '', "{$older} follows {$heading}.");
+    }
+
+    /**
      * The part of $text from $from up to $to.
      */
     private function between(string $text, string $from, string $to): string

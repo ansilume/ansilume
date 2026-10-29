@@ -18,7 +18,6 @@ class WorkflowTemplateTest extends TestCase
     {
         $model = $this->createPartialMock(WorkflowTemplate::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($model, ['deleted_at' => null]);
 
         $this->assertFalse($model->isDeleted());
@@ -28,7 +27,6 @@ class WorkflowTemplateTest extends TestCase
     {
         $model = $this->createPartialMock(WorkflowTemplate::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($model, ['deleted_at' => time()]);
 
         $this->assertTrue($model->isDeleted());

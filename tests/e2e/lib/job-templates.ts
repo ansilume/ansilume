@@ -1,5 +1,6 @@
 import { Locator, Page, expect } from '@playwright/test';
 import { quoted } from './inventories';
+import { optionValue } from './scoping';
 
 /** Helpers for job template pages (views/job-template/view.php). */
 
@@ -44,6 +45,95 @@ export function launchFailed(reason: string): string {
  */
 export const VERBOSITY_TOO_HIGH = 'Verbosity must be no greater than 5.';
 export const LIMIT_TOO_LONG = 'Limit should contain at most 255 characters.';
+
+/**
+ * A verbosity that is no whole number, such as 2.5 or 'abc', is refused the
+ * same way, with the message of the record's integer rule: the launch reads
+ * it as that rule does (SubmittedInteger), never with an (int) cast.
+ */
+export const VERBOSITY_NOT_INTEGER = 'Verbosity must be an integer.';
+
+/**
+ * A list or an object as the limit, also an empty one, is refused the same
+ * way, with the message of the record's string rule; such a verbosity gets
+ * VERBOSITY_NOT_INTEGER. Both messages together: the limit's first
+ * (JobLaunchInput::refusal()).
+ */
+export const LIMIT_NOT_A_STRING = 'Limit must be a string.';
+
+/**
+ * The fields of the launch form's Advanced Overrides that take one value,
+ * posted as a list, such as a crafted overrides[verbosity][]=, with the
+ * message that refuses each (services/JobLaunchInput.php).
+ */
+export const LIST_LAUNCH_FIELDS = [
+  ['overrides[verbosity][]', VERBOSITY_NOT_INTEGER],
+  ['overrides[limit][]', LIMIT_NOT_A_STRING],
+] as const;
+
+/**
+ * Numbers that are no whole numbers, but which PHP writes as one with its 14
+ * significant digits: "3" and "5". Yii's integer rule matched its pattern
+ * against that text, so it took them, and the column stored them cut to 2
+ * and 4; app\components\WholeNumberValidator refuses them. JSON number text,
+ * as a client that computes them sends them.
+ */
+export const NEARLY_THREE = '2.9999999999999996';
+export const NEARLY_FIVE = '4.999999999999999';
+
+/**
+ * The JSON number text of a float just above the ID `id` that PHP writes as
+ * that ID with its 14 significant digits: a 1 in its 15th digit.
+ */
+export function nearlyId(id: string): string {
+  expect(id, 'an ID').toMatch(/^\d{1,13}$/);
+  return `${id}.${'0'.repeat(14 - id.length)}1`;
+}
+
+/**
+ * JobTemplateCredentialService::INVALID_CREDENTIAL_IDS
+ * (services/JobTemplateCredentialService.php): the error under the
+ * additional credentials of the template form (credentialIdsError()) when an
+ * entry of credential_ids is no credential ID as the integer rule reads an
+ * ID, such as NEARLY_THREE, nearlyId() of a credential, true or an ID with a
+ * space. The form read such an entry with filter_var(), which took
+ * NEARLY_THREE for credential #3.
+ */
+export const INVALID_CREDENTIAL_IDS = 'credential_ids must contain positive integer credential IDs.';
+
+/** The error of the additional credentials of the template form on the open page (views/job-template/form.php). */
+export function credentialIdsError(page: Page): Locator {
+  return page.locator('#credential-ids-error');
+}
+
+/** The ID of the first credential the template form of the open page offers as an additional one. */
+export async function additionalCredentialId(page: Page): Promise<string> {
+  const id = await page.locator('#jt-form input[name="credential_ids[]"]').first().getAttribute('value');
+  expect(id, 'the form offers an additional credential').toMatch(/^\d+$/);
+  return id ?? '';
+}
+
+/**
+ * The fields of a new template that the template form of the open page
+ * accepts, as JSON members: e2e-project with site.yml, e2e-inventory and the
+ * first runner group (commands/E2eController.php).
+ */
+export async function newTemplateMembers(page: Page, name: string): Promise<string> {
+  const project = await optionValue(page, '#jobtemplate-project_id', 'e2e-project');
+  const inventory = await optionValue(page, '#jobtemplate-inventory_id', 'e2e-inventory');
+  const runnerGroup = await page.locator('#jobtemplate-runner_group_id option:not([value=""])').first().getAttribute('value');
+  expect(runnerGroup, 'a runner group').toMatch(/^\d+$/);
+  return `"name": "${name}", "project_id": ${project}, "playbook": "site.yml", "inventory_id": ${inventory}, "runner_group_id": ${runnerGroup}`;
+}
+
+/**
+ * controllers/JobTemplateController.php findModel(): the 404 of a job
+ * template that does not exist. An id that is no ID, such as '5abc', is
+ * template #0 (SubmittedId).
+ */
+export function templateNotFound(id: number): string {
+  return `Job template #${id} not found.`;
+}
 
 /** controllers/JobTemplateController.php FLASH_DELETED */
 export function templateDeleted(name: string, canceledJobs: number, disabledSchedules: number): string {

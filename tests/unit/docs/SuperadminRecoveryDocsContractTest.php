@@ -74,7 +74,7 @@ class SuperadminRecoveryDocsContractTest extends TestCase
                 . AuditLog::ACTION_LDAP_USER_REENABLED . '`), with the roles their groups map to.',
             'That holds while `user.' . LdapSyncDisabledBehavior::COLUMN . '` marks the account, as the migration of 2.11.0 does for an account whose latest status entry in the audit log is `'
                 . AuditLog::ACTION_LDAP_USER_DISABLED . '`; an account changed in Ansilume after that stays inactive whatever the directory says (see [An LDAP user cannot sign in: the account was deactivated in Ansilume](#an-ldap-user-cannot-sign-in-the-account-was-deactivated-in-ansilume)).',
-            'Otherwise, while no active superadmin exists, run ```bash docker compose exec app php yii setup/admin <username> <email> [password] ```',
+            'Otherwise, while no active superadmin exists, run ```bash docker compose exec -u www-data app php yii setup/admin <username> <email> [password] ```',
             'It creates an active superadmin with the `admin` role, and prints a generated password when none is given.',
             'Use a username and an email that no user has, not those of an old superadmin: a taken one fails with `Failed to create user: …` and creates nothing.',
             'The run is audited as `' . AuditLog::ACTION_USER_CREATED . '` with the source `console:setup/admin`, and leaves the seeded Selftest and Demo content alone.',

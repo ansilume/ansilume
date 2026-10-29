@@ -37,12 +37,15 @@ class OutputMaskerTest extends TestCase
 
     /**
      * Every needle, cut at every offset between two feed() calls, is masked
-     * and leaves no fragment.
+     * and leaves no fragment. The texts of a float answer begin alike
+     * (12345678901234 is PHP's, 12345678901234.5 Python's), and the longest
+     * wins wherever the chunks were cut.
      */
     public function testEveryNeedleCutAtEveryOffsetIsMasked(): void
     {
-        $answers = ['a' => self::ANSWER, 'b' => 'pa"ss\\word/é', 'c' => 987654321];
-        foreach (['example-db-answer-4711', 'pa"ss\\word/é', 'pa\\"ss\\\\word\\/\\u00e9', 'pa\\"ss\\\\word/é', '987654321'] as $needle) {
+        $answers = ['a' => self::ANSWER, 'b' => 'pa"ss\\word/é', 'c' => 987654321, 'd' => 12345678901234.5, 'e' => 1.5e-7];
+        $needles = ['example-db-answer-4711', 'pa"ss\\word/é', 'pa\\"ss\\\\word\\/\\u00e9', 'pa\\"ss\\\\word/é', '987654321'];
+        foreach ([...$needles, '12345678901234.5', '12345678901234', '1.5e-07', '1.5e-7', '1.5E-7'] as $needle) {
             for ($cut = 1; $cut < strlen($needle); $cut++) {
                 $masker = new OutputMasker($answers);
                 $out = $masker->feed('stdout', 'before ' . substr($needle, 0, $cut));
@@ -181,6 +184,30 @@ class OutputMaskerTest extends TestCase
             'negative integer' => [-4711, 'n=-4711', 'n=********'],
             'float' => [1234.5, 'f=1234.5', 'f=********'],
             'short float' => [1.5, 'f=1.5', 'f=1.5'],
+            // Regression (CLS-1): a float was masked only in PHP's own text,
+            // with 14 significant digits (1.0E+20), but Ansible prints it as
+            // Python writes it, so these appeared in clear text.
+            'float of 17 significant digits' => [0.12345678901234568, 'f=0.12345678901234568', 'f=********'],
+            'float of 16 significant digits' => [3.141592653589793, 'f=3.141592653589793', 'f=********'],
+            'float beyond the int range' => [1.2345678901234569e+23, 'f=1.2345678901234569e+23', 'f=********'],
+            'float with an exponent, as JSON and YAML results write it' => [1e20, 'json=1e+20 yaml=1.0e+20', 'json=******** yaml=********'],
+            'exponent with two digits' => [1.5e-7, 'f=1.5e-07', 'f=********'],
+            'negative float' => [-1.5e-7, 'f=-1.5e-07', 'f=********'],
+            'float below 0.0001, which Python writes with an exponent' => [0.00001, 'json=1e-05 yaml=1.0e-05', 'json=******** yaml=********'],
+            'float that was masked up to its 14th digit' => [12345678901234.5, 'f=12345678901234.5', 'f=********'],
+            // The answers file holds json_encode()'s text, 1000000000000000 for
+            // this float: Python reads it as an int and prints it so.
+            'whole float' => [1e15, 'int=1000000000000000 float=1000000000000000.0', 'int=******** float=********'],
+            'whole float of 4 digits' => [1234.0, 'int=1234 float=1234.0', 'int=******** float=********'],
+            'short whole float' => [2.0, 'f=2.0 n=2', 'f=2.0 n=2'],
+            'negative zero' => [-0.0, 'z=-0.0 z=-0 z=0', 'z=******** z=-0 z=0'],
+            // JSON has no number for these, so the runner fails such a job
+            // before Ansible starts (RunnerSecretVars::prepare()). Their
+            // texts are Python's only: PHP 8.5 warns when NAN becomes a
+            // string, and the error handler threw for NAN.
+            'infinity' => [INF, 'Infinity .inf inf INF', '******** ******** inf INF'],
+            'negative infinity' => [-INF, '-Infinity -.inf -inf -INF', '******** ******** ******** -INF'],
+            'not a number' => [NAN, 'NaN .nan nan NAN', 'NaN ******** nan NAN'],
             'boolean' => [true, 'true 1 True', 'true 1 True'],
             'null' => [null, 'null None', 'null None'],
             'list' => [['nested-value'], 'nested-value', 'nested-value'],
@@ -189,8 +216,9 @@ class OutputMaskerTest extends TestCase
     }
 
     /**
-     * Strings of at least 4 bytes and numbers of at least 4 characters are
-     * masked; booleans, null, lists and maps are not.
+     * Strings of at least 4 bytes, integers of at least 4 characters and
+     * every text of at least 4 characters in which Ansible prints a float
+     * are masked; booleans, null, lists and maps are not.
      *
      * @dataProvider needleProvider
      */

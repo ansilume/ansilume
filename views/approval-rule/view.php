@@ -9,6 +9,7 @@ declare(strict_types=1);
 /** @var bool $canDelete */
 
 use app\components\ApprovalRuleUsage;
+use app\components\ApproverConfigIds;
 use app\helpers\ConfirmHelper;
 use app\models\ApprovalRule;
 use yii\helpers\Html;
@@ -74,13 +75,19 @@ $this->title = $model->name;
                         echo 'Role: <strong>' . Html::encode((string)($cfg['role'] ?? '—')) . '</strong>';
                         break;
                     case ApprovalRule::APPROVER_TYPE_TEAM:
-                        $teamId = $cfg['team_id'] ?? null;
-                        $team = $teamId !== null ? \app\models\Team::findOne((int)$teamId) : null;
+                        // The team and the users as the integer rule reads an ID; a value that is none names nobody.
+                        $teamId = ApproverConfigIds::teamOf($cfg);
+                        if ($teamId === null) {
+                            echo 'Team: <em class="text-muted">none configured</em>';
+                            break;
+                        }
+                        // The team's name, or the ID of a team that no longer exists.
+                        $team = \app\models\Team::findOne($teamId);
                         echo 'Team: <strong>' . ($team !== null ? Html::encode($team->name) : '#' . Html::encode((string)$teamId)) . '</strong>';
                         break;
                     case ApprovalRule::APPROVER_TYPE_USERS:
-                        $userIds = $cfg['user_ids'] ?? [];
-                        if (is_array($userIds) && $userIds !== []) {
+                        $userIds = ApproverConfigIds::usersOf($cfg);
+                        if ($userIds !== []) {
                             $names = \app\models\User::find()
                                 ->where(['id' => $userIds])
                                 ->select('username')

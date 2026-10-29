@@ -72,10 +72,10 @@ class UnreadableFilesAndCronDocsContractTest extends TestCase
             sprintf(CronExpressionRules::LIST_ORDER, '18,6', 'hour', '6,18')
         );
 
-        $this->assertMentions('docker compose exec app php yii schedule/check', $notes, 'the update notes');
+        $this->assertMentions('docker compose exec -u www-data app php yii schedule/check', $notes, 'the update notes');
         $this->assertMentions('`' . $line . '`', $notes, 'the update notes');
         $this->assertStringNotContainsString('LIKE', $notes, 'no query that misses some kinds');
-        $this->assertMentions('docker compose exec app php yii schedule/check', $this->flat(self::TROUBLESHOOTING, self::CRON_SECTION), self::CRON_SECTION);
+        $this->assertMentions('docker compose exec -u www-data app php yii schedule/check', $this->flat(self::TROUBLESHOOTING, self::CRON_SECTION), self::CRON_SECTION);
     }
 
     public function testTheUpdateNotesQuoteTheProjectAndArtifactMessages(): void
@@ -157,7 +157,7 @@ class UnreadableFilesAndCronDocsContractTest extends TestCase
         $this->assertMentions('(troubleshooting.md#a-schedule-ran-twice-or-an-hour-early-on-the-night-the-clocks-went-back)', $notes, 'the update notes');
         $this->assertMentions('Going back to 2.12.2 needs nothing for the database: the next runs the update computed anew stay', $notes, 'the update notes');
         // Review finding: 2.12.2's migrate/down cannot load m000089, so it cannot revert m000088 either.
-        $this->assertMentions('To go back further than 2.12.2, first revert the migration of this release with this release, `docker compose exec app php yii migrate/down 1 --interactive=0`', $notes, 'the update notes');
+        $this->assertMentions('To go back further than 2.12.2, first revert the migration of this release with this release, `docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`', $notes, 'the update notes');
         $rollback = $this->flat(self::UPDATING, '## Rollback');
         $this->assertMentions('(migration `m000089`, which computes the next runs of schedules anew)', $rollback, '## Rollback');
         $this->assertMentions('revert `m000089` first, with the release that has it; `migrate/down 2` there reverts `m000088` as well.', $rollback, '## Rollback');

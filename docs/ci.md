@@ -53,14 +53,19 @@ gh api repos/actions/checkout/commits/v6.1.0 --jq .sha
 - Quote every step that contains `: ` (a colon followed by a space).
   Unquoted, YAML reads it as a mapping, and Scrutinizer aborts the whole
   inspection with `Config Error: Unrecognized option`.
-- `build.environment.php.version` is a release of the PHP line that
-  `composer.json` requires, `8.3.3` for `>=8.3`: the build's
-  `composer install` refuses an older PHP. Name a release, not the line:
-  builds of other projects with a plain `8.3` errored on Scrutinizer's
-  build image, while `8.3.3` builds there (for example for
-  thephpleague/oauth2-server).
-  `tests/unit/docker/PhpBaseImageTest.php` checks the version against
-  `composer.json` and the base images.
+- `build.image` is `default-jammy` and `build.environment.php.version` is a
+  release of the PHP line that `composer.json` requires, `8.5.8` for
+  `>=8.5`: the build's `composer install` refuses an older PHP. Name a
+  release, not the line: builds with a plain `8.5` errored, on every
+  image. The default image has no build of PHP 8.4 or 8.5: 8.5 releases
+  failed there with a 403 from Scrutinizer's own mirror, while
+  default-jammy builds 8.5.2, 8.5.6, 8.5.8 and 8.5.11 (for example for
+  OpenConext/Stepup-Middleware and spotweb). A new release appears there
+  some weeks after its release (8.5.10 was missing in September 2026), so
+  do not chase the newest one. `tests/unit/docker/PhpBaseImageTest.php`
+  checks the version against `composer.json`, and
+  `tests/unit/config/ScrutinizerConfigTest.php` pins the image and the
+  release.
 
 `tests/unit/config/ScrutinizerConfigTest.php` enforces these rules, so PHPUnit
 fails in GitHub Actions before a broken config reaches Scrutinizer. If you
@@ -114,6 +119,11 @@ gh run view <run id> --log-failed
 | PHPUnit: `Integration tests failed`, and the output ends with `Allowed memory size of 268435456 bytes exhausted` before any test failed | The coverage run keeps, for every covered line, the tests that ran it, so its memory grows with the number of tests; the 10444 tests of 2.11.0 outgrew the container's CLI `memory_limit` (256M) | `bin/tests-phpunit.sh` passes `-d memory_limit=1G` to every PHPUnit run (since 2.11.0). If the tests outgrow it, raise it there and in `PhpunitMemoryLimitTest` |
 | A check of `bin/tests-*.sh` fails with `echo: write error: Broken pipe` above it, although the tool's own output says OK (PHPUnit: `Integration tests failed` and `Code coverage (could not parse output)` after `OK, but some tests were skipped!`), only in CI | The script fed a captured output to a command that stops reading early, `echo "$OUT" \| grep -q`: grep stopped at its match while echo still wrote the rest (the coverage report behind the result), and under `pipefail` the failed write failed the check. GitHub's runners ignore SIGPIPE, so echo reports the write error; locally the race usually went the other way | The scripts pass a captured output to `grep -q`, `head` and awk with `exit` as a here-string, `grep -q … <<< "$OUT"` (since the CI run of v2.12.2). `PipefailCapturedOutputTest` keeps the shape out of `bin/` and the workflows, and `PhpunitSuiteLargeOutputTest` runs the PHPUnit script with a large coverage report |
 | A suite of `bin/tests-*.sh` fails without a summary and without saying why: its output stops after a section heading, the lint suite's after `Shell script checks` when a script has a ShellCheck warning (GitHub's runners have ShellCheck) or a syntax error | The check kept the output of a command that failed with a plain statement and tested `$?` after it, `sc_output=$(shellcheck …)` and then `if [[ $? -ne 0 ]]`: `set -e` ended the suite at the statement, before the check showed its finding, and no later check ran. A statement whose empty result a check handles after it, such as `x=$(grep … \| head -1)` without a match under `pipefail`, ended it the same way | The checks test such a command in a condition, `if ! out=$(cmd); then`, keep its status after `\|\|`, `rc=0; out=$(cmd) \|\| rc=$?`, or tolerate its failure in the substitution, `out=$(cmd \|\| true)` (after 2.13.0). A suite that `set -e` still ends early names the line and the command it ended at: `The suite ended early (exit N), before its summary, at tests-lint.sh:97: …`; for a pipeline the command is its last one, so look at that line. `ErrexitExitStatusTest` keeps a test of `$?` after a statement out of `bin/`, the entrypoints and the workflows; no test finds a plain capture whose empty result is tested after it. `LintSuiteFindingsTest`, `PhpunitSuiteSkipsTest` and `StyleSuiteFixerListTest` run the suites with such failures, and `SuiteEndedEarlyTest` the early-end report |
+| The lint suite fails `PHP syntax check` with `✘  N PHP file(s) fail the syntax check` and, under a file, `Deprecated: …`, such as `Implicitly marking parameter $x as nullable is deprecated` or `Non-canonical cast (integer) is deprecated` | A compile-time deprecation or warning: `php -l` exits with 0 for it, but Yii's error handler turns it into an exception when the file loads (one aborted the whole Integration suite on PHP 8.5) | Fix the code (`?int $x = null`, `(int)`). A file passes only when PHP prints nothing but `No syntax errors detected in <file>` (`LintSyntaxCheckTest`) |
+| PHPUnit fails `DeprecatedPhpCallsTest::testNoCode…ThatPhpDeprecates` with `<path>:<line>: Function/Method/Constant … is deprecated since …` | The running PHP deprecates something the code uses, and the error handler would throw at that line | Change the code as the message says |
+| PHPUnit fails `DeprecatedPhpCallsTest::testTheDeprecatedNamesThatUserlandDeclaresTooAreKnown` | A deprecated method or class constant name that userland declares too came or went (a new PHP line, a dependency update), so the scan cannot check its calls | Check the calls of that name by hand, then update `USERLAND_METHODS` or `USERLAND_CLASS_CONSTANTS` |
+| PHPUnit fails `ProductionClassesLoadTest::testEveryProductionClassLoadsWithoutAnError` with `<class>: E_DEPRECATED … (<file>:<line>)` | A dependency raises an error while its class loads, and the autoloader would throw it instead of declaring the class (yii2-redis 2.0.20 on PHP 8.4 and later) | Update that package to a release without it; otherwise stay on the PHP line until one exists |
+| The same test reports that the number of production classes that cannot load changed | A dependency update added or removed a class that needs a package Ansilume does not install | Set `CLASSES_THAT_CANNOT_LOAD` when every class it lists needs such a package |
 
 ## When Scrutinizer is red
 
@@ -122,8 +132,8 @@ gh run view <run id> --log-failed
 | `tests=failed` | PSR-12 violation | Run `bin/tests-style.sh` and fix what it reports |
 | `analysis=errored`, `Config Error` | Invalid `.scrutinizer.yml` (for example an unquoted `: `) | `ScrutinizerConfigTest` should have caught it; extend the test |
 | `analysis=errored` in `phpcs-run` | The `analysis` node is missing or was changed | Restore the `analysis` node |
-| `build=failed` in `composer install` with `Root composer.json requires php >=8.3 but your php version (…) does not satisfy that requirement` | `build.environment.php.version` is older than the PHP line `composer.json` requires | Set a release of that line, see the rules above |
-| `build=errored` after a change of `build.environment.php.version` | Scrutinizer's build image has no such PHP, as for a plain `8.3` in other projects | Name a release that builds there, such as `8.3.3` |
+| `build=failed` in `composer install` with `Root composer.json requires php >=8.5 but your php version (…) does not satisfy that requirement` | `build.environment.php.version` is older than the PHP line `composer.json` requires | Set a release of that line, see the rules above |
+| `build=errored` after a change of `build.environment.php.version` or `build.image` | Scrutinizer's image has no such PHP: a plain line such as `8.5`, a release its mirror does not have yet (403), or an 8.4 or 8.5 release on the default image | Use `default-jammy` and a release that builds there, such as `8.5.8` (if that errors, `8.5.11`, then `8.5.2`), and change `ScrutinizerConfigTest` with it |
 | Fails without any code reason | An outage at Scrutinizer | Retry the inspection in Scrutinizer's UI. Do not add services, tests or wait loops to work around it |
 
 Treat a red Scrutinizer build like a red GitHub Actions run: fix it before

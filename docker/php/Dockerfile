@@ -1,4 +1,4 @@
-FROM php:8.3-fpm
+FROM php:8.5-fpm
 
 ARG USER_ID=1000
 ARG GROUP_ID=1000
@@ -59,7 +59,8 @@ RUN pecl install redis && docker-php-ext-enable redis
 
 RUN pecl install pcov && docker-php-ext-enable pcov
 
-COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
+# Composer 2.6 printed dozens of deprecations on every install with PHP 8.5.
+COPY --from=composer:2.10 /usr/bin/composer /usr/bin/composer
 
 RUN if [ "${USER_ID}" != "0" ]; then \
         groupmod -g ${GROUP_ID} www-data && \

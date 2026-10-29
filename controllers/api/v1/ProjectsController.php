@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\components\GitSyncDiagnostics;
+use app\components\SubmittedInteger;
 use app\models\AuditLog;
 use app\models\Project;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
@@ -55,9 +56,11 @@ class ProjectsController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<Project> $projects */
+        $projects = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($p) => $this->serialize($p), $dp->getModels()),
+            array_map(fn ($p) => $this->serialize($p), $projects),
             (int)$dp->totalCount,
             $page,
             25
@@ -236,6 +239,16 @@ class ProjectsController extends BaseApiController
     }
 
     /**
+     * Sets the fields $body holds. scm_credential_id is read as the model's
+     * integer rule reads it (SubmittedInteger), never with an (int) cast,
+     * which fails on PHP 8.5 for a JSON number beyond the int range: a value
+     * that is no credential ID is set as sent, for the model's rules to
+     * report; null and "" are no credential, as the form's empty choice. A
+     * list or an object, also an empty one (a JSON [] or {}), which Yii's
+     * rules take for empty, is no credential ID: the model's integer rule
+     * takes only null and "" for empty (SubmittedInteger::isEmpty()) and
+     * answers 422 "Scm Credential Id must be an integer.".
+     *
      * @param array<string, mixed> $body The request body, credentials in the userinfo of its scm_url included.
      */
     private function applyBody(Project $model, #[\SensitiveParameter] array $body): void
@@ -252,7 +265,7 @@ class ProjectsController extends BaseApiController
             }
         }
         if (array_key_exists('scm_credential_id', $body)) {
-            $model->scm_credential_id = $body['scm_credential_id'] !== null ? (int)$body['scm_credential_id'] : null;
+            $model->setAttribute('scm_credential_id', SubmittedInteger::orAsSubmitted($body['scm_credential_id']));
         }
     }
 

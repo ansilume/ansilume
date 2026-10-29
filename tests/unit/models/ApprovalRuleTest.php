@@ -41,7 +41,6 @@ class ApprovalRuleTest extends TestCase
     {
         $rule = $this->createPartialMock(ApprovalRule::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($rule, ['approver_config' => null]);
 
         $this->assertSame([], $rule->getParsedConfig());
@@ -51,7 +50,6 @@ class ApprovalRuleTest extends TestCase
     {
         $rule = $this->createPartialMock(ApprovalRule::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($rule, ['approver_config' => '{"role": "admin"}']);
 
         $this->assertSame(['role' => 'admin'], $rule->getParsedConfig());
@@ -61,30 +59,33 @@ class ApprovalRuleTest extends TestCase
     {
         $rule = $this->createPartialMock(ApprovalRule::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($rule, ['approver_config' => 'not-json']);
 
         $this->assertSame([], $rule->getParsedConfig());
     }
 
-    public function testCountEligibleApproversForUsers(): void
+    /**
+     * Entries of user_ids that are no ID name no approver and count none,
+     * without a look at the users. Which IDs count, those of users who
+     * exist, each once, is tested against the database in
+     * tests/integration/models/ApprovalRuleTest.php.
+     */
+    public function testCountEligibleApproversForUsersCountsNoEntryThatIsNoId(): void
     {
         $rule = $this->createPartialMock(ApprovalRule::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($rule, [
             'approver_type' => ApprovalRule::APPROVER_TYPE_USERS,
-            'approver_config' => json_encode(['user_ids' => [1, 2, 3]]),
+            'approver_config' => json_encode(['user_ids' => ['abc', true, 12.5, null, [5]]]),
         ]);
 
-        $this->assertSame(3, $rule->countEligibleApprovers());
+        $this->assertSame(0, $rule->countEligibleApprovers());
     }
 
     public function testCountEligibleApproversForUsersEmpty(): void
     {
         $rule = $this->createPartialMock(ApprovalRule::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($rule, [
             'approver_type' => ApprovalRule::APPROVER_TYPE_USERS,
             'approver_config' => json_encode(['user_ids' => []]),
@@ -97,7 +98,6 @@ class ApprovalRuleTest extends TestCase
     {
         $rule = $this->createPartialMock(ApprovalRule::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($rule, [
             'approver_type' => 'unknown',
             'approver_config' => '{}',

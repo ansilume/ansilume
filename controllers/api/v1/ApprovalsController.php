@@ -93,7 +93,7 @@ class ApprovalsController extends BaseApiController
         ]);
         $page = $this->requestedPage();
         /** @var list<ApprovalRequest> $models */
-        $models = array_values($dp->getModels());
+        $models = array_values($this->modelsOfPage($dp, $page));
 
         return $this->paginated(
             $this->serializeAll($models),

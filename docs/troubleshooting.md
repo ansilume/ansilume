@@ -72,10 +72,10 @@ If migrations are stuck:
 
 ```bash
 # Check migration status
-docker compose exec app php yii migrate/history
+docker compose exec -u www-data app php yii migrate/history
 
 # Re-run manually
-docker compose exec app php yii migrate --interactive=0
+docker compose exec -u www-data app php yii migrate --interactive=0
 ```
 
 A migration that fails can print its database error with the message,
@@ -277,6 +277,37 @@ the log and changes nothing else: the job keeps its status, and no
 **Fix:** None for the job: its status is final. A playbook that ran on after
 the cancel may have changed the hosts; check them.
 
+## A job stays running, or ends without task results: the server refused the runner's report
+
+**Symptom:** A job stays **Running** after its playbook has ended, or a job
+whose playbook exited with 0 fails with `Job did not execute against any host.`
+and shows no tasks and no host summaries, or a part of its log is missing.
+The runner's output says nothing about it.
+
+**Cause:** The server refused a report of the runner with `422`, as it held
+a number the server cannot store, or `""` where a number belongs, and wrote
+nothing of the report: the exit code of a completion
+(`POST /api/runner/v1/jobs/{id}/complete`,
+`exit_code must be a whole number from -256 to 255.`), the task results
+(`.../tasks`, refused as a whole:
+`tasks[<key>].seq must be a whole number from -2147483648 to 2147483647.`,
+the same for `duration_ms`, or `tasks[<key>] must be an object.`), or the
+`sequence` of a log chunk (`.../logs`,
+`sequence must be a whole number from 0 to 4294967295.`). The runner does
+not send a refused report again. Runners of every version send whole
+numbers in these ranges only, so such a report comes from a client of your
+own or a broken one, or from a playbook that wrote to the file the task
+results are read from (`ANSILUME_CALLBACK_FILE`). Up to 2.13.1 such a
+number was cast: `"exit_code": 1e999` and `"exit_code": ""` ended a job as
+succeeded, and a number the database cannot store answered `500`, after
+the tasks before it had been saved. A `null` or missing number is 0, as
+before.
+
+**Fix:** Cancel a job that stays running: `php yii job/reclaim-stale` takes
+only the jobs of runners that are offline, and its runner reports nothing
+more. Launch it again once the client, or the playbook, sends whole
+numbers.
+
 ## Launch refused: password answer is the placeholder
 
 **Symptom:** A launch fails with
@@ -355,6 +386,54 @@ vars sent as JSON text that is not valid JSON are ignored. Before this
 release, such a launch ran the job with the template's extra vars only.
 
 **Fix:** Write the value as a string (`"1e999"`) or as a smaller number.
+
+## An API call or a form refuses a number: it must be a whole number
+
+**Symptom:** A request that worked up to 2.13.1 is refused, and nothing is
+written: `POST` or `PUT` of the API answers `422` with a field's message,
+such as `Forks must be an integer.`, `Project Id must be an integer.`,
+`Job Template Id must be an integer.`, `Scm Credential Id must be an integer.`,
+`Required Approvals must be an integer.`, `Status is invalid.` or, for an
+entry of a job template's `credential_ids`,
+`credential_ids must contain positive integer credential IDs.`; a launch
+answers `422` with `Verbosity must be an integer.` or
+`job_template_id is required.`; the API's `POST /api/v1/teams/{id}/members`
+and `/projects` answer `404` `User #0 not found.` or
+`Project #0 not found.`, and `POST /api/v1/runners/{id}/move` answers
+`404` `Target runner group not found.`; posted as JSON, the project,
+inventory, job template, schedule and approval rule forms show the
+field's error; adding a team member or a project on the team's page
+answers `400` `user_id required.` or `project_id required.`; registering
+or moving a runner shows `Runner group not found.` or
+`Target runner group not found.`; launching a workflow answers `404`
+`Workflow template #0 not found.`, and moving one of its steps answers
+`404` `Workflow template #5 has no step with ID 0.` for workflow 5.
+
+**Cause:** The value is no whole number: a fraction (`5.5`, `"5.5"`, also
+one as close to a whole number as `2.9999999999999996`, which a
+computation in a client can give where 3 was meant), text that is not
+only digits (`"abc"`, `"5abc"`, `" 5"`, `"5e0"`), `true` or `false`, a
+list or an object, also an empty one (`[]` or `{}`), or a JSON number
+beyond the 64-bit int range, such as `1e30`, `9223372036854775808` or
+`1e999`. Since the update to PHP 8.5 each ID and other whole number of a
+request is read as the model's integer rule reads it, except the IDs of
+workflow steps and of the vault password assignment, which are read as up
+to 2.13.1 (see **Fix**); up to 2.13.1 it was cast with PHP's `(int)`,
+which took `5.5` for 5, `"abc"` and `false` for 0 and `true` for 1, and on
+PHP 8.5 a number beyond the range answered with a server error. Every
+endpoint, and what it answered before, is listed in
+[updating.md](updating.md#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers).
+
+**Fix:** Send the number as a JSON integer or as its digits in a string:
+`5`, `"5"`, `"+5"`, `"05"` and `5.0` are all 5. A step's
+`job_template_id` and `approval_rule_id` and an entry of the
+`job_template_ids` of a vault password's assignment refuse `"05"` and
+`5.0`, and a step's `on_success_step_id`, `on_failure_step_id`,
+`on_always_step_id`, `position` and `after_step_id` refuse `"+5"`, `" 5"`
+and `5.0`: send `5` or `"5"` there. Round a number your client computes
+before you send it: `2.9999999999999996` is refused, `3` is taken. Send a
+user's `status` as `0` (inactive) or `10` (active); `false`, `null` and
+`""` no longer deactivate the user.
 
 ## Extra Vars editor: the form is not submitted, or YAML is not converted
 
@@ -469,7 +548,7 @@ that rule, and a launch is refused with these too:
   right after the update to 2.12.0, the containers read the database schema
   from a cache made before the migration added the rule of inventories; it
   ends when the cached schema expires, within an hour, or at once with
-  `docker compose exec app php yii cache/flush-schema db --interactive=0`,
+  `docker compose exec -u www-data app php yii cache/flush-schema db --interactive=0`,
   which clears the schema cache only. Do not run
   `php yii cache/flush cache` instead: the cache shares its Redis database
   with the sessions and the queue, so that logs every user out and drops
@@ -519,13 +598,23 @@ a job trigger answers `422` with `{"error": "Verbosity must be no greater than 5
 
 **Cause:** The job record does not take the launch's `limit` or
 `verbosity`: a limit longer than 255 characters, a verbosity below 0 or
-above 5, or a list or an object for either (the launch form drops a list).
-Before the update to approvals and workflows such a launch failed with a
-server error (`500`), and a list or an object as the verbosity was taken
-for a number.
+above 5, a verbosity that is no whole number (a fraction such as `2.5`,
+text such as `"abc"`, `true` or `false`, a number beyond the int range
+such as `1e30`), or a list or an object for either, also an empty one
+(`[]` or `{}`), which the launch form refuses too (a crafted
+`overrides[verbosity][]=`). Before the update to approvals and workflows
+such a launch failed with a server error (`500`), and a list or an object
+as the verbosity was taken for a number. Up to 2.13.1 a verbosity that is
+no whole number was cast: `2.5` ran at verbosity 2, `"abc"` and `false` at
+0, `true` at 1, and on PHP 8.5 a number beyond the int range answered
+`500`; an empty list or object launched the job with the job template's
+limit and at verbosity 0, and the launch form ignored a list and launched
+the job with the job template's limit and verbosity. An empty limit or
+verbosity (`""`) is the job template's.
 
 **Fix:** Send a limit of at most 255 characters as text and a verbosity
-from 0 to 5, or leave them out to use the job template's.
+from 0 to 5 as a whole number, or leave them out to use the job
+template's.
 
 ## Approve or Reject is refused, or missing
 
@@ -1217,7 +1306,9 @@ docker compose exec app grep -e 'Canceling ' -e 'was canceled, but' /var/www/run
 **Cause:** A database error. The lines name its class, its SQLSTATE and the
 driver's error code, never the statement, which can carry values: SQLSTATE
 `40001` with `1213` is a deadlock and `1205` a lock wait timeout, which
-usually pass; `HY000` with `2006` is a lost connection to the database.
+usually pass; `HY000` with `2006` is a lost connection to the database, and
+so is `4031`, which PHP 8.4 and later report when MySQL 8.0.24 or later
+closed a connection that was idle longer than its `wait_timeout`.
 
 - A timeout that failed is undone and tried again at the next run, a minute
   later, before the other expired requests. A request whose timeout keeps
@@ -1506,7 +1597,7 @@ to 28, or `L` for the last day of the month; and a day of the month that
 the months of the expression have. A schedule saved with such an
 expression before the update keeps it until it is saved again, and runs as
 before: `php yii schedule/check` lists them (in the app container:
-`docker compose exec app php yii schedule/check`), the schedules list marks
+`docker compose exec -u www-data app php yii schedule/check`), the schedules list marks
 each with **Change needed** (the reason in its tooltip), the schedule's page
 and its edit form say why, and the API gives the reason as
 `cron_expression_problem`. Every save of such a schedule, a rename too,
@@ -1792,6 +1883,70 @@ docker inspect --format '{{.State.Status}} {{.State.OOMKilled}}' $(docker compos
 journalctl -k | grep -i 'out of memory'
 ```
 
+## A container does not start after the update: composer install failed
+
+**Symptom:** In a source installation, after `git pull`, or with the
+deploy role after a build that failed, a container that starts again does
+not come up, and its log (`docker compose logs app`) shows
+`Root composer.json requires php >=8.5 but your php version (8.3.36) does not satisfy that requirement.`,
+then `[entrypoint] ERROR: composer install failed`; the line after it,
+`[entrypoint] Check disk space and network connectivity.`, does not apply
+here.
+
+**Cause:** The container still runs the image of the release before, on
+PHP 8.3, while the code it runs, from the install directory, requires PHP
+8.5: only a build replaces the image, and its `composer install` refuses
+the new `composer.lock`.
+
+**Fix:** Build the images and recreate the containers, steps 2 and 3 of
+[Manual update — source (git)](updating.md#manual-update--source-git);
+with the deploy role, fix why its build failed and run it again. To go
+back instead, see
+[After updating from 2.13.1 or older](updating.md#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers).
+
+## A runner installed without Docker does not start after the update
+
+**Symptom:** After its code was updated, a runner installed without Docker
+(see [runners.md](runners.md#running-without-docker)) exits at once, and
+systemd starts it again and again (`journalctl -u ansilume-runner`), with
+`Composer detected issues in your platform: Your Composer dependencies require a PHP version ">= 8.5.0". You are running 8.4.27.`
+or with
+`Error: Call to undefined function app\components\http_clear_last_response_headers()`.
+Or `composer install` stopped with
+`Root composer.json requires php >=8.5 but your php version (8.4.27) does not satisfy that requirement.`
+Or the runner exits with `ERROR: API_URL environment variable is required.`
+although its unit sets `API_URL`.
+
+**Cause:** The PHP that starts the runner, or that ran `composer install`,
+is older than PHP 8.5, which Ansilume requires since the update from
+2.13.1: Debian 13 ships PHP 8.4, Ubuntu 24.04 PHP 8.3, RHEL 9 at most 8.3.
+The first message comes when `composer install` ran on PHP 8.5 but the
+service starts another `php`, such as the one `/usr/bin/php` names. After
+the third one, or when `composer install` was not run, the dependencies of
+the release before stay in place, which the new code is not made for:
+their platform check lets PHP 8.3 start it, and the runner exits at its
+first request with the second message, as the new code calls a function of
+PHP 8.4 there. PHP 8.4 runs the new code with them without a message: the
+runner starts and runs jobs on the dependencies of the release before
+until a later release needs PHP 8.5.
+`ERROR: API_URL environment variable is required.` comes when the runner
+takes its settings from its environment, from `Environment=` lines of its
+unit: PHP hands the environment to the runner only when `variables_order`
+in its php.ini contains `E`, and PHP 8.5 brings a php.ini of its own,
+which sets `GPCS`, as the php.ini of the distributions do, where the
+php.ini of the old PHP may have set `EGPCS`.
+
+**Fix:** Install PHP 8.5 with `pcntl`, `posix`, `zip`, `curl` and `ffi`
+(where from: [runners.md](runners.md#prerequisites)), check the PHP the
+service starts (`ExecStart` of its unit), run
+`composer install --no-dev` with that PHP, and start the runner again
+(`sudo systemctl restart ansilume-runner`). Leave out
+`--optimize-autoloader` where `runtime/` belongs to the runner's user:
+with it, Composer stops at that directory with `Permission denied`. For
+`ERROR: API_URL environment variable is required.`, put the runner's
+settings in `.env` of its directory and remove them from the unit (see
+[runners.md](runners.md#setup)).
+
 ## Launch fails: "The database update has not finished; run the migrations."
 
 **Symptom:** Right after an update, a launch with password answers fails
@@ -1823,7 +1978,7 @@ again, and the background encryption keeps its position and done mark in
 Redis, which the restore did not touch.
 
 **Fix:** Make it start over:
-`docker compose exec app php yii maintenance/reset-survey-secret-scrub`. Its
+`docker compose exec -u www-data app php yii maintenance/reset-survey-secret-scrub`. Its
 next pass checks every finished job again, see
 [updating.md](updating.md#after-updating-from-281-or-older-encrypted-password-answers-trigger-tokens-in-a-header-logs-without-secrets).
 Do not flush the cache instead: that also logs every user out and drops
@@ -1942,8 +2097,8 @@ setting and keep the repository's vault settings for every project.
 
 **Fix:** Update the runner image (prebuilt: `docker compose pull && docker
 compose up -d`; external runners: the new `ansilume-runner` image; runners
-without Docker: `git pull`, `composer install --no-dev --optimize-autoloader`
-and restart the process; dev checkout: `docker compose up -d
+without Docker: `git pull`, `composer install --no-dev` and restart the
+process, see [runners.md](runners.md#setup); dev checkout: `docker compose up -d
 --force-recreate`, which also restarts the queue worker and lets `app` run the
 migrations). Without `runner-group.view` the card shows only how many runners
 are affected.
@@ -2165,7 +2320,7 @@ that stays inactive whatever the directory says (see
 Otherwise, while no active superadmin exists, run
 
 ```bash
-docker compose exec app php yii setup/admin <username> <email> [password]
+docker compose exec -u www-data app php yii setup/admin <username> <email> [password]
 ```
 
 It creates an active superadmin with the `admin` role, and prints a
@@ -2428,6 +2583,22 @@ with the prebuilt images, the log is inside each container, for example:
 docker compose exec app tail -n 200 /var/www/runtime/logs/app.log
 ```
 
+When the log has no line for the error, and none since the app container
+started, `www-data`, the user of php-fpm's workers, may not be able to
+write `app.log`: Yii drops every line of a process that cannot append to
+its log file. Check the owner:
+
+```bash
+docker compose exec app ls -l /var/www/runtime/logs/
+```
+
+`root root` for `app.log` is that state, in which every new app container
+of 2.13.1 or older started, as each update of the prebuilt images (and of
+the deploy role with `ansilume_use_prebuilt_images`) makes one: its
+entrypoint ran the migrations as root, which created the file before
+php-fpm started. How to hand the file back, see
+[App or queue-worker container is unhealthy: the log file cannot be written](#app-or-queue-worker-container-is-unhealthy-the-log-file-cannot-be-written).
+
 A database error is written without its message, which would carry the SQL
 statement with its values: by its class, SQLSTATE and driver error code,
 for example `yii\db\Exception (SQLSTATE 40001, driver error 1213)`, also
@@ -2435,6 +2606,12 @@ when another error wraps it; that one follows after `Next`, as its class
 and `(message withheld: it wraps a database error)`. A connection that
 failed or was lost also shows the driver's text, such as
 `yii\db\Exception (SQLSTATE HY000, driver error 2002): Connection refused`.
+A connection that a MySQL server of 8.0.24 or later closed after it was
+idle longer than its `wait_timeout` or `interactive_timeout` reads, since
+PHP 8.4,
+`yii\db\Exception (SQLSTATE HY000, driver error 4031): The client was disconnected by the server because of inactivity. See wait_timeout and interactive_timeout for configuring this behavior.`;
+PHP 8.3 reported it as `2006`, and MariaDB, the database of the compose
+files, still does.
 Without debug mode (`YII_DEBUG`), a console command prints such an error
 as one line, such as
 `Error: RuntimeException (message withheld: it wraps a database error); caused by yii\db\Exception (SQLSTATE 40001, driver error 1213)`;
@@ -2444,16 +2621,87 @@ in both modes. Before the update to approvals and workflows the log and
 the one line held the statement with its values (see
 [updating.md](updating.md#after-updating-from-290-or-older-approvals-and-workflows)).
 
+No process of Ansilume keeps a database connection while it waits: php-fpm
+opens one for each request, the schedule-runner one for each run of
+`schedule/run` and of `maintenance/run`, and the queue-worker one for each
+project sync, which it closes when the sync ends; the runners have none.
+Up to 2.13.1 the queue-worker kept its connection for its whole life:
+once the queue had sat idle longer than the database's `wait_timeout`
+(28800 seconds, 8 hours, by default on MariaDB and MySQL), as overnight,
+the database had closed it, and every project sync of the server failed
+until the queue-worker restarted, with
+`[4] app\jobs\SyncProjectJob (attempt: 1, PID: 1) is finished with error: PDOException (SQLSTATE HY000, driver error 2006): MySQL server has gone away`
+or `4031` in its log; the project showed `syncing` until the maintenance
+run gave up on the sync after 15 minutes.
+
 **Fix:** SQLSTATE `40001` with driver error `1213` is a deadlock and `1205`
-a lock wait timeout, which usually pass: try again. `HY000` with `2002` or
-`2006` is a database that cannot be reached or a lost connection: check the
-`db` container, or your external database, and the database settings. For
+a lock wait timeout, which usually pass: try again. `HY000` with `2002`,
+`2006` or `4031` is a database that cannot be reached or a lost connection:
+check the `db` container, or your external database, and the database
+settings. The next page, run or project sync opens a new connection, so no
+container, the queue-worker included, needs a restart for it. The
+`wait_timeout` and `interactive_timeout` of the database need to be longer
+than a page or a project sync takes (a git command of a sync may take 300
+seconds), not than the queue sits idle: keep their default of 28800
+seconds. For
 any other error, the class, the file and the line say where it struck; the
 stack trace shows the calls without their arguments. Debug mode
 (`YII_DEBUG`) shows the messages of errors on the error page, in the
 API's answers and in what console commands print, where they can hold
 values: never turn it on in production (see
 [installation.md](installation.md)).
+
+## App or queue-worker container is unhealthy: the log file cannot be written
+
+**Symptom:** `docker compose ps` shows the app or the queue-worker as
+`unhealthy`. Its health check prints the following line, in the
+container's health log (`docker inspect ansilume_app`, `State.Health.Log`),
+in `bin/diagnose` under **App health check**, and with
+`docker compose exec -u www-data app php yii health/check`:
+
+```
+[health] dirs: not writable — /var/www/runtime/logs/app.log (lines logged to it are lost; the next start of the container hands it back to www-data, or run in the container: chown -R www-data:www-data /var/www/runtime/logs)
+```
+
+`bin/diagnose` also reports, under **Application Integrity**,
+`Log file not writable for www-data: /var/www/runtime/logs/app.log — the errors of the web UI and the API are lost`.
+While the app is unhealthy, a `docker compose up -d` that has to create
+nginx anew does not start it
+(`dependency failed to start: container ansilume_app is unhealthy`).
+
+**Cause:** `www-data`, the user of php-fpm's workers and of the
+queue-worker, cannot append to `runtime/logs/app.log`. Yii drops every
+line of a process that cannot write its log file, so the errors of the web
+UI and the API are lost without a word. A process of another user, mostly
+root, created the file after the container started: a console command run
+without `-u www-data` that found no log, or the health check of a compose
+file of 2.13.1 or older, which runs as root. A root process that rotates a
+full log (10 MB) also leaves `app.log.1` to `app.log.5` as root's copies,
+whose lines the next rotations lose. The entrypoints run the migrations as
+`www-data` and hand `runtime/logs` to `www-data` before the command
+starts, and the health checks of the compose files of this release run as
+`www-data` and fail while it cannot write the log; before, nothing showed
+it.
+
+**Fix:** Hand the log directory back to `www-data`; the next check sees
+it:
+
+```bash
+docker compose exec app chown -R www-data:www-data /var/www/runtime/logs
+```
+
+With the prebuilt images the queue-worker keeps a log of its own:
+`docker compose exec queue-worker chown -R www-data:www-data /var/www/runtime/logs`.
+Or restart the container (`docker compose restart app`): its entrypoint
+does the same when it starts.
+
+Run console commands as `www-data`, as this documentation writes them
+(`docker compose exec -u www-data app php yii …`). Do the same in your own
+scripts and cron entries, such as the nightly `ldap/sync` of
+[ldap.md](ldap.md#console-commands). A compose file of 2.13.1 or older runs
+its health checks as root, which see no log that `www-data` cannot write:
+take the compose file of this release with the update (see
+[Manual update — prebuilt images](updating.md#manual-update--prebuilt-images)).
 
 ## Health endpoint reports unhealthy
 

@@ -49,7 +49,6 @@ class TeamProjectTest extends TestCase
         $tp->method('attributes')->willReturn(['team_id', 'project_id', 'role', 'created_at']);
         $tp->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($tp, ['team_id' => 1, 'project_id' => 1, 'role' => $role, 'created_at' => null]);
         return $tp;
     }

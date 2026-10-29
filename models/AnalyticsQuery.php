@@ -42,6 +42,13 @@ class AnalyticsQuery extends Model
     {
         return [
             [['project_id', 'template_id', 'user_id', 'runner_group_id'], 'default', 'value' => null],
+            // Trimmed first: a date of only whitespace is empty, as an empty
+            // one is, on every PHP version. The range check's strtotime() read
+            // " " as now on PHP 8.3 and as no date on PHP 8.4 and later.
+            [['date_from', 'date_to'], 'trim', 'skipOnEmpty' => true],
+            // Before the date rule, whose DateTime::createFromFormat() throws
+            // a ValueError for a NUL byte; the date rule skips such a date.
+            [['date_from', 'date_to'], 'match', 'pattern' => '/\x00/', 'not' => true],
             [['date_from', 'date_to'], 'date', 'format' => 'php:Y-m-d'],
             [['project_id', 'template_id', 'user_id', 'runner_group_id'], 'integer'],
             ['granularity', 'in', 'range' => [self::GRANULARITY_DAILY, self::GRANULARITY_WEEKLY]],

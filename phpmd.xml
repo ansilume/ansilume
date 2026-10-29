@@ -6,6 +6,13 @@
   Disabled rulesets: cleancode (StaticAccess noise with Yii2),
                      naming (ShortVariable $id/$db is fine),
                      design (too opinionated for framework code).
+
+  PHPMD 3 reports a value only when it is above `maximum`, while PHPMD 2
+  reported a value equal to most of its thresholds as well: each maximum
+  below is the highest value PHPMD 2 accepted (as `phpmd migrate` with its
+  preserve-behavior option proposes), so the same code is reported as
+  before. The parameter limit and the method names TooManyPublicMethods
+  leaves out keep PHPMD 2's defaults, which PHPMD 3 changed.
 -->
 <ruleset name="Ansilume"
          xmlns="http://pmd.sf.net/ruleset/1.0.0"
@@ -21,20 +28,22 @@
     <!-- ================================================================== -->
     <rule ref="rulesets/codesize.xml/CyclomaticComplexity">
         <properties>
-            <!-- Scrutinizer default is 10; we match that -->
-            <property name="reportLevel" value="10" />
+            <!-- Scrutinizer reports a complexity of 10 and more; we match that -->
+            <property name="maximum" value="9" />
         </properties>
     </rule>
 
     <rule ref="rulesets/codesize.xml/NPathComplexity">
         <properties>
-            <property name="minimum" value="200" />
+            <!-- An NPath complexity of 200 and more is reported -->
+            <property name="maximum" value="199" />
         </properties>
     </rule>
 
     <rule ref="rulesets/codesize.xml/ExcessiveMethodLength">
         <properties>
-            <property name="minimum" value="100" />
+            <!-- A method of 100 lines and more is reported -->
+            <property name="maximum" value="99" />
         </properties>
     </rule>
 
@@ -42,19 +51,29 @@
         <properties>
             <!-- Allow modest growth for cohesive aggregator services
                  (AnalyticsService has ~10 report methods, all sharing
-                 AnalyticsQuery — splitting would just add indirection). -->
-            <property name="minimum" value="600" />
+                 AnalyticsQuery — splitting would just add indirection).
+                 A class of 600 lines and more is reported. -->
+            <property name="maximum" value="599" />
         </properties>
     </rule>
 
     <rule ref="rulesets/codesize.xml/TooManyPublicMethods">
         <properties>
-            <!-- CLAUDE.md says ~15 methods max; allow a bit of headroom -->
-            <property name="maxmethods" value="15" />
+            <!-- CLAUDE.md says ~15 methods max; allow a bit of headroom:
+                 16 public methods and more are reported -->
+            <property name="maximum" value="15" />
+            <!-- PHPMD 2's pattern: PHPMD 3's leaves out test*() methods too -->
+            <property name="ignorepattern" value="(^(set|get|is|has|with))i" />
         </properties>
     </rule>
 
-    <rule ref="rulesets/codesize.xml/ExcessiveParameterList" />
+    <rule ref="rulesets/codesize.xml/ExcessiveParameterList">
+        <properties>
+            <!-- PHPMD 2's default: 10 parameters and more are reported
+                 (PHPMD 3's default reports 11 and more) -->
+            <property name="maximum" value="9" />
+        </properties>
+    </rule>
 
     <!-- ================================================================== -->
     <!-- Unused code: catch dead code before it rots                        -->

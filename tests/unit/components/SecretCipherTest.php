@@ -161,13 +161,24 @@ class SecretCipherTest extends TestCase
         }
     }
 
+    /**
+     * A value whose ciphertext was damaged: its block does not decrypt to
+     * valid padding. The key (self::KEY, set in setUp()), the IV and the
+     * block are fixed, so the outcome is deterministic: the block decrypts
+     * to a last byte of 0x6e, which is no padding.
+     *
+     * Regression: the test damaged a value that encrypt() had written with a
+     * random IV. About 1 in 256 random IVs decrypt the damaged block to a
+     * last byte of 0x01, which is valid padding, so the value decrypted and
+     * the test failed at random on every PHP version (12 of 3000 runs on
+     * PHP 8.5).
+     */
     public function testADamagedValueIsRejected(): void
     {
-        $raw = (string)base64_decode((new SecretCipher())->encrypt('abc'), true);
+        $iv = str_repeat("\x01", 16);
 
         $this->expectExceptionObject(new SecretCipherException('Decryption failed.', SecretCipherException::CIPHER_FAILED));
-        // A block that does not decrypt to valid padding.
-        (new SecretCipher())->decrypt(base64_encode(substr($raw, 0, 16) . str_repeat('x', 16)));
+        (new SecretCipher())->decrypt(base64_encode($iv . str_repeat('x', 16)));
     }
 
     /**

@@ -189,7 +189,6 @@ class RunnerJobsApiTest extends DbTestCase
             // authenticateRunner is private — invoke via reflection to
             // populate $currentRunner without running ContentNegotiator.
             $authRef = new \ReflectionMethod($controller, 'authenticateRunner');
-            $authRef->setAccessible(true);
             $authRef->invoke($controller);
             $controller->actionComplete($jobId);
         } finally {

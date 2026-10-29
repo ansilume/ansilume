@@ -59,7 +59,11 @@ section "Playwright E2E tests"
 if [[ $FAST -eq 1 ]] || [[ $SKIP_E2E -eq 1 ]]; then
     skip "Playwright E2E tests (skipped)"
 elif [[ $DOCKER_AVAILABLE -eq 1 ]]; then
-    # Seed E2E test data
+    # Seed E2E test data. As root, as dc runs both E2E data commands: the
+    # seed makes files and directories that php-fpm's user may not read
+    # (E2eUnreadableArtifactSeeder, E2eUnreadableProjectSeeder), which only
+    # root can make. They run only where YII_ENV is dev or test, never on an
+    # installation (tests/unit/YiiExecUserTest.php, AS_ROOT).
     SEED_OUT=$(dc php yii e2e/seed 2>&1 || true)
     if grep -q "complete\|already exists" <<< "$SEED_OUT"; then
         # Build the Playwright image only (the specs are baked in) and run it

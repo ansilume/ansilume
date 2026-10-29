@@ -165,17 +165,13 @@ class InventoryApprovalDocsContractTest extends TestCase
     }
 
     /**
-     * The section follows the newest ones, of the update to PHP 8.3 and of
-     * the update after 2.12.1, and its anchor is the one GitHub gives its
+     * The section follows the one of 2.12.2, the update after 2.12.1, the
+     * one of 2.11.1 follows it, and its anchor is the one GitHub gives its
      * heading, which the docs link to.
      */
-    public function testTheSectionFollowsTheNewest(): void
+    public function testTheSectionFollowsTheOneOf2122(): void
     {
-        preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(PhpUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.12.2 follows.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][2] ?? null, 'This section follows.');
-        $this->assertSame(RunnerManagementDocsContractTest::UPDATE_SECTION, $headings[0][3] ?? null, 'The section of 2.11.1 follows.');
+        $this->assertUpdateSectionBetween(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, self::UPDATE_SECTION, RunnerManagementDocsContractTest::UPDATE_SECTION);
         $this->assertSame(
             self::SECTION_ANCHOR,
             str_replace(' ', '-', (string)preg_replace('/[^a-z0-9 -]/', '', strtolower(substr(self::UPDATE_SECTION, 3)))),
@@ -287,7 +283,7 @@ class InventoryApprovalDocsContractTest extends TestCase
             $this->assertStringStartsWith('> ', $line);
             $this->assertMentions('`' . $line . '`', $deployment, 'Database and deployment');
         }
-        $this->assertMentions('`docker compose exec app php yii migrate/down 1 --interactive=0`', $deployment, 'Database and deployment');
+        $this->assertMentions('`docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`', $deployment, 'Database and deployment');
     }
 
     /**
@@ -543,7 +539,7 @@ class InventoryApprovalDocsContractTest extends TestCase
     public function testTheSchemaCacheFlushIsNamedWithItsWarning(): void
     {
         $this->assertTrue(method_exists(\yii\console\controllers\CacheController::class, 'actionFlushSchema'));
-        $command = '`docker compose exec app php yii cache/flush-schema db --interactive=0`';
+        $command = '`docker compose exec -u www-data app php yii cache/flush-schema db --interactive=0`';
         $warning = 'Do not run `php yii cache/flush cache` instead: the cache shares its Redis database with the sessions and the queue, so that logs every user out and drops queued work.';
         $units = array_values(array_filter(
             $this->units('docs/updating.md', self::UPDATE_SECTION),
@@ -574,7 +570,7 @@ class InventoryApprovalDocsContractTest extends TestCase
             '2.11.1 and older ignore the approval rules of inventories: job templates gated only through their inventory launch without approval, runners start every queued job',
             'Give such job templates a rule of their own first',
             '2.11.1 runs on the schema this release leaves, and records `job_template` for the requests of workflow approval steps, as before.',
-            'To revert the migration, before you deploy 2.11.1: `docker compose exec app php yii migrate/down 1 --interactive=0`.',
+            'To revert the migration, before you deploy 2.11.1: `docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`.',
         ];
         foreach ($expected as $phrase) {
             $this->assertMentions($phrase, $deployment, 'The rollback of the section');

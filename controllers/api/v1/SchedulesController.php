@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\controllers\api\v1;
 
+use app\components\SubmittedId;
+use app\components\SubmittedInteger;
 use app\models\AuditLog;
 use app\models\Schedule;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
@@ -58,9 +60,11 @@ class SchedulesController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<Schedule> $schedules */
+        $schedules = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($s) => $this->serialize($s), $dp->getModels()),
+            array_map(fn ($s) => $this->serialize($s), $schedules),
             (int)$dp->totalCount,
             $page,
             25
@@ -235,17 +239,21 @@ class SchedulesController extends BaseApiController
 
     /**
      * The error for a job template the caller may not schedule, or null. A
-     * body without job_template_id is left to the model's rules.
+     * body without job_template_id, or with one that is no template ID
+     * (SubmittedId), such as a fraction, a boolean or a JSON number beyond
+     * the int range, is left to the model's rules, as the web form leaves
+     * it.
      *
      * @return array{error: array{message: string}}|null
      */
     private function checkTemplate(Schedule $model, int $userId): ?array
     {
-        if ($model->job_template_id === null) {
+        $templateId = SubmittedId::of($model->getAttribute('job_template_id'));
+        if ($templateId === null) {
             return null;
         }
 
-        return match ($this->schedules()->templateAccess($userId, (int)$model->job_template_id)) {
+        return match ($this->schedules()->templateAccess($userId, $templateId)) {
             ScheduleService::TEMPLATE_MISSING => $this->error(ScheduleService::TEMPLATE_MISSING_MESSAGE, 422),
             ScheduleService::TEMPLATE_FORBIDDEN => $this->error('Forbidden.', 403),
             default => null,
@@ -253,6 +261,13 @@ class SchedulesController extends BaseApiController
     }
 
     /**
+     * Sets the fields $body holds. job_template_id is read as the model's
+     * integer rule reads it (SubmittedInteger), never with an (int) cast,
+     * which fails on PHP 8.5 for a JSON number beyond the int range: a value
+     * that is no template ID is set as sent, for the model's rules to report.
+     * An empty list (a JSON [] or {}) is empty to them, as null and "" are:
+     * the required rule refuses it ("Job Template Id cannot be blank.").
+     *
      * @param array<string, mixed> $body
      */
     private function applyBody(Schedule $model, #[\SensitiveParameter] array $body): void
@@ -269,7 +284,7 @@ class SchedulesController extends BaseApiController
             }
         }
         if (array_key_exists('job_template_id', $body)) {
-            $model->job_template_id = (int)$body['job_template_id'];
+            $model->setAttribute('job_template_id', SubmittedInteger::orAsSubmitted($body['job_template_id']));
         }
         if (array_key_exists('enabled', $body)) {
             $model->enabled = (bool)$body['enabled'];

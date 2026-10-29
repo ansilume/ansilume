@@ -23,7 +23,6 @@ class EmailChannelTest extends TestCase
         );
         $nt->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($nt, [
             'id' => 1,
             'name' => 'Test',

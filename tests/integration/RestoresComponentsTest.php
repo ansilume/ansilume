@@ -9,6 +9,7 @@ use app\tests\integration\commands\ApprovalControllerTest;
 use app\tests\integration\commands\LdapSyncLeavesAnsilumeDeactivationTest;
 use app\tests\integration\commands\ScheduleControllerTest;
 use app\tests\integration\commands\TeardownHelperDatabaseErrorTest;
+use app\tests\integration\commands\WorkerJobDbConnectionTest;
 use app\tests\integration\controllers\api\v1\ApprovalsGateFieldsApiTest;
 use app\tests\integration\controllers\api\v1\JobsControllerCancelTest;
 use app\tests\integration\controllers\api\v1\JobsInventoryApiTest;
@@ -48,6 +49,7 @@ use yii\base\Event;
 use yii\db\BaseActiveRecord;
 use yii\db\Connection;
 use yii\db\Exception as DbException;
+use yii\rbac\DbManager;
 
 /**
  * A test whose setUp() fails leaves the application's components as it
@@ -256,6 +258,68 @@ class RestoresComponentsTest extends TestCase
         } finally {
             \Yii::$app->set(self::UNREGISTERED, null);
         }
+    }
+
+    /**
+     * The db is not kept: put back as its definition, it would be a new
+     * connection, while the authManager writes through the old one.
+     */
+    public function testTheDbIsNotKept(): void
+    {
+        $db = \Yii::$app->getDb();
+        $keeper = $this->keeper();
+        $refusal = null;
+        try {
+            $keeper->swapComponent('db', new Connection(['dsn' => 'sqlite::memory:']));
+        } catch (\LogicException $e) {
+            $refusal = $e;
+        }
+        $keeper->restoreComponents();
+        $after = \Yii::$app->getDb();
+        // Whatever the keeper did, later tests get the connection of the authManager.
+        \Yii::$app->set('db', $db);
+
+        $this->assertNotNull($refusal, 'swapComponent() took the db');
+        $this->assertStringContainsString('connection object', $refusal->getMessage());
+        $this->assertSame($db, $after, 'the refused swap changed nothing');
+    }
+
+    /**
+     * Regression: WorkerJobDbConnectionTest swapped db with swapComponent(),
+     * which put back its definition. The next test got a new connection,
+     * while the authManager kept writing through the old one, outside the
+     * transaction of every later test: their roles and assignments stayed
+     * in the test database, and later RBAC tests read them (616 failures in
+     * one run). The test puts back the connection object now.
+     */
+    public function testRegressionTheWorkerTestPutsTheApplicationsConnectionBack(): void
+    {
+        $original = \Yii::$app->getDb();
+        $auth = \Yii::$app->getAuthManager();
+        $this->assertInstanceOf(DbManager::class, $auth);
+        $authDb = $auth->db;
+        // db as config/test.php registers it, a definition that Yii makes a
+        // connection of, and an authManager that writes through that one.
+        \Yii::$app->set('db', require dirname(__DIR__, 2) . '/config/db-test.php');
+        $db = \Yii::$app->getDb();
+        $auth->db = $db;
+        $case = new WorkerJobDbConnectionTest('testAJobRunsOnANewConnectionWhenTheOneOpenedBeforeItWasClosed');
+        try {
+            try {
+                (new \ReflectionMethod($case, 'setUp'))->invoke($case);
+                $this->assertNotSame($db, \Yii::$app->getDb(), 'the case runs its jobs on a connection of its own');
+            } finally {
+                (new \ReflectionMethod($case, 'tearDown'))->invoke($case);
+            }
+            $after = \Yii::$app->getDb();
+        } finally {
+            // Whatever the case left, later tests get the connections they had.
+            \Yii::$app->set('db', $original);
+            $auth->db = $authDb;
+            $db->close();
+        }
+
+        $this->assertSame($db, $after, 'the application has its connection back, as the same object');
     }
 
     /**

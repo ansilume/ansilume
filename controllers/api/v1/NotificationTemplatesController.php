@@ -55,9 +55,11 @@ class NotificationTemplatesController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<NotificationTemplate> $templates */
+        $templates = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($m) => $this->serialize($m), $dp->getModels()),
+            array_map(fn ($m) => $this->serialize($m), $templates),
             (int)$dp->totalCount,
             $page,
             25

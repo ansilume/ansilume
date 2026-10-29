@@ -13,6 +13,7 @@ use app\models\User;
 use app\models\WorkflowJob;
 use app\tests\integration\controllers\WebControllerTestCase;
 use app\tests\integration\TeamScopeFixtures;
+use yii\web\Response;
 
 /**
  * Analytics API under team scoping.
@@ -93,7 +94,132 @@ class AnalyticsControllerTest extends WebControllerTestCase
         $this->assertSame(2, $this->controller()->actionApprovalSummary()['data']['result']['total']);
     }
 
+    /**
+     * Regression: every CSV export of the API answered 500, with or without
+     * rows. The action returned ['data' => null] after it had put the CSV
+     * into the response, the application made that array the response's
+     * data, and a raw response refuses an array ("Response content must not
+     * be an array."). The other tests read the response's data before it
+     * was sent, so none of them saw it.
+     */
+    public function testRegressionTheCsvExportOfAReportWithoutRowsAnswered500(): void
+    {
+        $this->authenticate($this->superadmin());
+        $this->setQueryParams(['format' => 'csv', 'date_from' => '2001-01-01', 'date_to' => '2001-01-02']);
+
+        $body = $this->sentBody($this->controller()->runAction('job-trend'));
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertSame('text/csv; charset=UTF-8', \Yii::$app->response->headers->get('Content-Type'));
+        $this->assertSame('', $body);
+    }
+
+    /**
+     * A summary is one row: the export is its header row and that row.
+     */
+    public function testTheCsvExportOfASummaryIsItsHeaderRowAndOneRow(): void
+    {
+        $this->authenticate($this->superadmin());
+        $this->setQueryParams(['format' => 'csv', 'date_from' => '2001-01-01', 'date_to' => '2001-01-02']);
+
+        $body = $this->sentBody($this->controller()->runAction('approval-summary'));
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertSame(
+            "total,approved,rejected,timed_out,canceled,pending,approval_rate,avg_decision_seconds\n0,0,0,0,0,0,0,0\n",
+            $body
+        );
+    }
+
+    /**
+     * The CSV export quotes fields as RFC 4180 says (CsvText), each line
+     * ending with a line feed: a project name with a backslash in front of
+     * a quote reads back as it is, and a name without a backslash keeps the
+     * bytes of 2.13.1.
+     *
+     * Regression: on PHP 8.4 and later every CSV export with a row answered
+     * 500 ("fputcsv(): the $escape parameter must be provided as its default
+     * value will change").
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function csvProjectNameProvider(): array
+    {
+        return [
+            'a backslash and a backslash in front of a quote' => [
+                'Deploy "prod" C:\x\"y',
+                '"Deploy ""prod"" C:\x\""y"',
+            ],
+            'quotes without a backslash, as 2.13.1 wrote them' => ['Deploy "prod"', '"Deploy ""prod"""'],
+        ];
+    }
+
+    /**
+     * @dataProvider csvProjectNameProvider
+     */
+    public function testRegressionTheCsvExportAnswered500AndReadsBackEveryProjectName(
+        string $name,
+        string $written
+    ): void {
+        $owner = $this->superadmin();
+        $project = $this->createProject((int)$owner->id);
+        $project->name = $name;
+        $project->save(false);
+        $template = $this->createJobTemplate(
+            (int)$project->id,
+            (int)$this->createInventory((int)$owner->id)->id,
+            (int)$this->createRunnerGroup((int)$owner->id)->id,
+            (int)$owner->id
+        );
+        $this->createJob((int)$template->id, (int)$owner->id, Job::STATUS_SUCCEEDED);
+        $this->authenticate($owner);
+        $this->setQueryParams(['format' => 'csv', 'project_id' => (string)$project->id]);
+
+        $body = $this->sentBody($this->controller()->runAction('project-activity'));
+
+        $this->assertSame(200, \Yii::$app->response->statusCode);
+        $this->assertSame(
+            'attachment; filename="analytics-projectActivity-' . date('Y-m-d') . '.csv"',
+            \Yii::$app->response->headers->get('Content-Disposition')
+        );
+        $this->assertSame(
+            "project_id,project_name,total,succeeded,failed\n" . $project->id . ',' . $written . ",1,1,0\n",
+            $body
+        );
+        $row = explode("\n", $body)[1];
+        $this->assertSame([(string)$project->id, $name, '1', '1', '0'], str_getcsv($row, ',', '"', ''));
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /**
+     * The body a request gets for the action's result $result. The test
+     * application is a console application, so this does what
+     * yii\web\Application::handleRequest() does with the result (a Response
+     * is sent as it is, any other result but null becomes the data of the
+     * response), then prepares the response as Response::send() does.
+     */
+    private function sentBody(mixed $result): string
+    {
+        $response = \Yii::$app->response;
+        if ($result instanceof Response) {
+            $response = $result;
+        } elseif ($result !== null) {
+            $response->data = $result;
+        }
+        (new \ReflectionMethod($response, 'prepare'))->invoke($response);
+
+        return (string)$response->content;
+    }
+
+    private function superadmin(): User
+    {
+        $user = $this->createUser('analytics-api-csv');
+        $user->is_superadmin = true;
+        $user->save(false);
+
+        return $user;
+    }
 
     /**
      * teamScope() with one succeeded job per template, a run of a workflow

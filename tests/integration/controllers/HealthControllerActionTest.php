@@ -192,7 +192,6 @@ class HealthControllerActionTest extends WebControllerTestCase
         // re-calls getRunnerCounts — it catches Throwable so should be ok.
         // If it still propagates, invoke checkRunners directly via reflection.
         $ref = new \ReflectionMethod($ctrl, 'checkRunners');
-        $ref->setAccessible(true);
         /** @var array<string, mixed> $result */
         $result = $ref->invoke($ctrl);
         $this->assertFalse($result['ok']);

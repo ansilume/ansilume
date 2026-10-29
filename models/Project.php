@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\SubmittedInteger;
 use app\components\vault\AnsibleCfgVaultSettings;
 use yii\db\ActiveRecord;
 
@@ -157,7 +158,14 @@ class Project extends ActiveRecord
                 'when' => $gitProject,
                 'whenClient' => self::GIT_CHOSEN_IN_THE_FORM,
             ],
-            [['scm_credential_id'], 'integer', 'whenClient' => self::GIT_CHOSEN_IN_THE_FORM],
+            // An empty list (a JSON [] or {}) is no credential ID either: Yii takes it for empty, so
+            // the rule skipped it, and the column stored it as 0, which its foreign key refused with
+            // a server error. Only null and "" are none (SubmittedInteger::isEmpty()).
+            [
+                ['scm_credential_id'], 'integer',
+                'isEmpty' => [SubmittedInteger::class, 'isEmpty'],
+                'whenClient' => self::GIT_CHOSEN_IN_THE_FORM,
+            ],
             [['scm_credential_id'], 'exist', 'skipOnError' => true, 'targetClass' => Credential::class, 'targetAttribute' => ['scm_credential_id' => 'id']],
             [['scm_credential_id'], 'validateScmCredentialType', 'when' => $gitProject],
             [['status'], 'in', 'range' => [self::STATUS_NEW, self::STATUS_SYNCING, self::STATUS_SYNCED, self::STATUS_ERROR]],

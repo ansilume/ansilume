@@ -13,7 +13,13 @@ namespace app\components;
  * - answers that are strings of at least MIN_LENGTH bytes, and their
  *   JSON-escaped forms where those differ, because Ansible prints results
  *   as JSON;
- * - integers and floats whose string form has at least MIN_LENGTH characters.
+ * - integers whose string form has at least MIN_LENGTH characters;
+ * - floats in each text of at least MIN_LENGTH characters in which Ansible
+ *   may print them (floatForms()): as Python writes them
+ *   ({@see PythonFloatText}), 1e+20 in task names, templated text and JSON
+ *   results and 1.0e+20 in YAML; as the answers file holds them, whose
+ *   whole numbers, such as 1000000000000000, Python reads as integers; and
+ *   in PHP's own text (1.0E+20).
  * Booleans, null, lists and maps are not masked.
  *
  * Replacement follows strtr(): at each position the longest needle wins and
@@ -139,10 +145,13 @@ final class OutputMasker
      */
     private static function forms(#[\SensitiveParameter] mixed $answer): array
     {
-        if (is_int($answer) || is_float($answer)) {
+        if (is_int($answer)) {
             $text = (string)$answer;
 
             return strlen($text) >= self::MIN_LENGTH ? [$text] : [];
+        }
+        if (is_float($answer)) {
+            return self::floatForms($answer);
         }
         if (!is_string($answer) || strlen($answer) < self::MIN_LENGTH) {
             return [];
@@ -152,6 +161,35 @@ final class OutputMasker
             $json = json_encode($answer, $flags);
             if (is_string($json)) {
                 $forms[] = substr($json, 1, -1);
+            }
+        }
+
+        return $forms;
+    }
+
+    /**
+     * The needles of the float $answer: the texts of at least MIN_LENGTH
+     * characters in which Ansible may print it. They are Python's repr(),
+     * json.dumps() and PyYAML's; and for a finite one the text of the
+     * answers file, json_encode()'s (RunnerSecretVars::prepare()), whose
+     * whole numbers Python reads as integers and prints so, and PHP's own
+     * text, 14 significant digits. JSON has no number for INF and NAN, so
+     * the runner fails such a job before Ansible starts.
+     *
+     * @return list<string>
+     */
+    private static function floatForms(#[\SensitiveParameter] float $answer): array
+    {
+        $texts = [PythonFloatText::repr($answer), PythonFloatText::json($answer), PythonFloatText::yaml($answer)];
+        if (is_finite($answer)) {
+            // Not for INF and NAN, which Ansible never gets: PHP 8.5 also warns
+            // when NAN becomes a string, and the error handler throws for it.
+            array_push($texts, (string)json_encode($answer), (string)$answer);
+        }
+        $forms = [];
+        foreach ($texts as $text) {
+            if (strlen($text) >= self::MIN_LENGTH) {
+                $forms[] = $text;
             }
         }
 

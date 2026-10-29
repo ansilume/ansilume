@@ -128,6 +128,11 @@ class RunnerHttpClient
     /**
      * Execute file_get_contents with error handling and HTTP status extraction.
      *
+     * The status is the one of the first status line of the answer. PHP keeps
+     * the headers of the last HTTP answer for the whole process until the
+     * next HTTP request, so they are cleared first: a request that got no
+     * HTTP answer has status 0.
+     *
      * @param resource $context
      * @return string|false
      */
@@ -136,12 +141,14 @@ class RunnerHttpClient
         set_error_handler(function (): bool {
             return true;
         }, E_WARNING);
+        http_clear_last_response_headers();
         $raw = file_get_contents($url, false, $context);
         restore_error_handler();
 
         $this->lastHttpStatus = 0;
-        if (!empty($http_response_header)) {
-            preg_match('/HTTP\/\S+\s+(\d+)/', $http_response_header[0], $m);
+        $headers = http_get_last_response_headers();
+        if (!empty($headers)) {
+            preg_match('/HTTP\/\S+\s+(\d+)/', $headers[0], $m);
             $this->lastHttpStatus = (int)($m[1] ?? 0);
         }
 

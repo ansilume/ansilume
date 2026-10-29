@@ -60,18 +60,31 @@ fi
 section "PHPMD (complexity + unused code)"
 
 if dc php vendor/bin/phpmd --version >/dev/null 2>&1; then
+    # Every line PHPMD prints counts as a violation. PHPMD 3 takes the
+    # format and the ruleset as options: the positional form of PHPMD 2
+    # (phpmd <dir> text phpmd.xml) prints a deprecation, and without
+    # --no-progress its progress bar goes to stderr. It no longer splits
+    # --exclude vendor,tests at the comma. $(…) drops the last newline of a
+    # directory's output, which glued its last violation to the first of the
+    # next directory, so the outputs are joined with one
+    # (tests/unit/bin/StyleSuitePhpmdTest.php).
     PHPMD_OUT=""
     for phpmd_dir in controllers services commands jobs components helpers models; do
-        PHPMD_OUT+=$(dc php vendor/bin/phpmd \
-            "$phpmd_dir" text phpmd.xml \
+        PHPMD_DIR_OUT=$(dc php vendor/bin/phpmd analyze "$phpmd_dir" \
+            --format text \
+            --ruleset phpmd.xml \
             --suffixes php \
-            --exclude vendor,tests \
+            --exclude vendor --exclude tests \
+            --no-progress \
             2>&1 || true)
+        if [[ -n "$PHPMD_DIR_OUT" ]]; then
+            PHPMD_OUT+="${PHPMD_OUT:+$'\n'}${PHPMD_DIR_OUT}"
+        fi
     done
     if [[ -z "$PHPMD_OUT" ]]; then
         ok "PHPMD passed (no violations)"
     else
-        PHPMD_COUNT=$(echo "$PHPMD_OUT" | grep -c . || echo "0")
+        PHPMD_COUNT=$(grep -c . <<< "$PHPMD_OUT" || true)
         fail "PHPMD: ${PHPMD_COUNT} violation(s) found"
         head -20 <<< "$PHPMD_OUT" | sed 's/^/     /'
     fi

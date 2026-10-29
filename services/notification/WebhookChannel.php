@@ -72,7 +72,6 @@ class WebhookChannel implements ChannelInterface
         curl_setopt($ch, CURLOPT_TIMEOUT, 10);
         $result = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if ($code < 200 || $code >= 300) {
             throw new \RuntimeException("WebhookChannel: HTTP {$code} — " . substr((string)$result, 0, 200));

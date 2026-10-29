@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\StoredScheduleAnswers;
+use app\components\SubmittedId;
 use app\components\SurveyDefinition;
 use app\components\SurveySecretException;
 use app\components\SurveySecrets;
@@ -115,10 +116,15 @@ final class ScheduleSecrets
      * with the placeholder also for plain answers, under every password
      * field name of the template, usable or not. Submitted unchanged, they
      * keep every answer.
+     *
+     * The template is the one job_template_id names, read as the model's
+     * integer rule reads it (SubmittedId): none for a value that is no
+     * template ID, such as a JSON number beyond the int range that load()
+     * assigns as it comes, whose (int) cast fails on PHP 8.5.
      */
     public static function maskedExtraVars(Schedule $schedule): ?string
     {
-        $templateId = is_numeric($schedule->job_template_id) ? (int)$schedule->job_template_id : null;
+        $templateId = SubmittedId::of($schedule->getAttribute('job_template_id'));
         // A list loads the job templates with its schedules; a soft-deleted one is not among them.
         $loaded = $schedule->isRelationPopulated('jobTemplate') ? $schedule->jobTemplate : null;
         $names = $loaded instanceof JobTemplate && (int)$loaded->id === $templateId
@@ -330,9 +336,7 @@ final class ScheduleSecrets
      */
     private static function storedTemplateId(Schedule $schedule): ?int
     {
-        $stored = $schedule->getOldAttribute('job_template_id');
-
-        return is_numeric($stored) ? (int)$stored : null;
+        return SubmittedId::of($schedule->getOldAttribute('job_template_id'));
     }
 
     /**

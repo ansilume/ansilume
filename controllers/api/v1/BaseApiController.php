@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\models\ApiToken;
 use app\models\User;
+use yii\data\DataProviderInterface;
 use yii\filters\ContentNegotiator;
 use yii\web\Controller;
 use yii\web\Response;
@@ -27,6 +28,12 @@ abstract class BaseApiController extends Controller
      * one's own password.
      */
     public const AUTHENTICATED = '@';
+
+    /**
+     * What modelsOfPage() throws for a list whose data provider does not
+     * page: the list could not tell which rows a page holds.
+     */
+    public const UNPAGED_LIST = 'A list of the API pages its rows, but its data provider has no pagination.';
 
     public $enableCsrfValidation = false;
 
@@ -156,15 +163,50 @@ abstract class BaseApiController extends Controller
     }
 
     /**
-     * The ?page= query parameter as a page number; 1 when it is missing or
-     * not a positive integer. Query parameters are strings, and paginated()
-     * takes an int under strict_types.
+     * The ?page= query parameter as a page number: the (int) of its text, at
+     * least 1; 1 when it is missing or a list, as yii\data\Pagination reads
+     * it for the web lists. A list serves the rows of this page
+     * (modelsOfPage()) and names it in meta.page, also when it is past the
+     * last page and has no rows. A query parameter is text, never a float,
+     * so the cast cannot warn on PHP 8.5: ?page=1e30 is PHP_INT_MAX.
+     * paginated() takes an int under strict_types.
      */
     protected function requestedPage(): int
     {
-        $page = \Yii::$app->request->get('page', 1);
+        $page = \Yii::$app->request->get('page');
 
-        return is_numeric($page) ? max(1, (int)$page) : 1;
+        return is_string($page) ? max(1, (int)$page) : 1;
+    }
+
+    /**
+     * The models of page $page of a list, read in place of its data
+     * provider's getModels(): none for a page past the last, so that a
+     * client that pages until the data is empty stops. yii\data\Pagination
+     * moves such a page back to the last (validatePage), and up to 2.13.1
+     * the lists served the last page's rows again under the requested page.
+     * The total count decides it before any row is read, so a page up to
+     * PHP_INT_MAX never becomes an offset: multiplied by the page size it
+     * passes the int range, and the query builder leaves such a float
+     * offset out, which serves the first page. A page up to the last has
+     * the rows of that page, one below 1 those of the first, as paginated()
+     * names it. The web lists keep their pager, which shows the last page.
+     *
+     * @return array<mixed>
+     * @throws \LogicException for a data provider without pagination (UNPAGED_LIST)
+     */
+    protected function modelsOfPage(DataProviderInterface $provider, int $page): array
+    {
+        $pagination = $provider->getPagination();
+        if ($pagination === false) {
+            throw new \LogicException(self::UNPAGED_LIST);
+        }
+        $pagination->totalCount = $provider->getTotalCount();
+        if ($page > $pagination->getPageCount()) {
+            return [];
+        }
+        $pagination->setPage(max(1, $page) - 1);
+
+        return $provider->getModels();
     }
 
     /**

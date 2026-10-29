@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubmittedId;
 use app\models\JobTemplate;
 
 /**
@@ -34,7 +35,14 @@ use app\models\JobTemplate;
  * extra vars and the survey as JSON values (jsonKey(): whitespace and
  * escapes do not count; another value, another type, 1 and 1.0, {} and [],
  * or another order of keys does), and the credentials as the list the save
- * stores: the primary first, then the additional ones in their order.
+ * stores: the primary first, then the additional ones in their order. A
+ * float that no int holds in an integer column (a JSON body's 1e30 or
+ * 1e999) is a change: no stored value is one, and it has no type cast (on
+ * PHP 8.5 its (int) cast warns). The inventory and the primary credential
+ * are read as the integer rule reads an ID (SubmittedId), so the lock reads
+ * the ID the save stores; a value the rule refuses is none, and never saved.
+ * So are the additional credentials, where a value the rule refuses is a
+ * change (changesCredentials()).
  *
  * JobTemplateCredentialService asks for every save a user makes, twice:
  * before validation, so that a refused change gets this answer first, and
@@ -114,6 +122,9 @@ final class GatedJobTemplateLock
 
     /** Prefix of the comparison key of a text that is no JSON: only the same text has that key. */
     private const TEXT_KEY = "text\0";
+
+    /** The end of the int range as a float (2^63): no int holds a float at or beyond it, or below its negative. */
+    private const INT_RANGE_END = 2 ** 63;
 
     private const ROW_SQL = 'SELECT * FROM {{%job_template}} WHERE [[id]] = :id';
 
@@ -287,7 +298,8 @@ final class GatedJobTemplateLock
 
     /**
      * A column's value as the comparison sees it: the extra vars and the
-     * survey by jsonKey(), every other column after its type cast.
+     * survey by jsonKey(), every other column after its type cast; a float
+     * that no int holds, in an integer column, as it is (noInt()).
      */
     private static function comparable(string $name, #[\SensitiveParameter] mixed $value): mixed
     {
@@ -295,8 +307,23 @@ final class GatedJobTemplateLock
             return self::jsonKey(is_scalar($value) ? (string)$value : null);
         }
         $column = JobTemplate::getTableSchema()->getColumn($name);
+        if ($column === null || ($column->phpType === 'integer' && self::noInt($value))) {
+            return $value;
+        }
 
-        return $column === null ? $value : $column->phpTypecast($value);
+        return $column->phpTypecast($value);
+    }
+
+    /**
+     * Whether $number, an integer column's value, is a float that no int
+     * holds: one beyond the int range, or infinity, as a JSON body gives
+     * 1e30, 9223372036854775808 and 1e999. The column's type cast is an
+     * (int) cast, which warns on it since PHP 8.5; as it is, it differs from
+     * every value the column stores.
+     */
+    private static function noInt(mixed $number): bool
+    {
+        return is_float($number) && !($number >= -self::INT_RANGE_END && $number < self::INT_RANGE_END);
     }
 
     /**
@@ -328,8 +355,11 @@ final class GatedJobTemplateLock
     /**
      * Whether the credential list the save stores differs from the one
      * template #$templateId has: the primary first, then the additional
-     * ones in their order, each once. A submitted value that is no
-     * credential ID counts as a change.
+     * ones in their order, each once. Each additional one is read as the
+     * save reads it (positiveId(), as JobTemplateCredentialService does):
+     * the stored IDs written another way ("05") are no change, and a
+     * submitted value that is no credential ID, which the save refuses,
+     * counts as a change.
      *
      * @param list<mixed> $additionalIds
      */
@@ -338,8 +368,8 @@ final class GatedJobTemplateLock
         $primary = self::positiveId($template->credential_id);
         $submitted = $primary === null ? [] : [$primary];
         foreach ($additionalIds as $candidate) {
-            $id = filter_var($candidate, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-            if ($id === false) {
+            $id = self::positiveId($candidate);
+            if ($id === null) {
                 return true;
             }
             $submitted[] = $id;
@@ -353,12 +383,14 @@ final class GatedJobTemplateLock
     }
 
     /**
-     * $number as an ID: a positive integer, or a text of one ("" and 0 are
-     * none), as a template's integer columns store it.
+     * $number as an ID: a positive whole number as the integer rule reads it
+     * (SubmittedId), as a template's integer columns store it; "", 0 and
+     * anything the rule refuses (a number beyond the int range included) are
+     * none.
      */
     private static function positiveId(mixed $number): ?int
     {
-        $id = is_numeric($number) ? (int)$number : 0;
+        $id = SubmittedId::of($number) ?? 0;
 
         return $id > 0 ? $id : null;
     }

@@ -9,6 +9,7 @@ declare(strict_types=1);
 /** @var array<int, string> $users     id => username */
 /** @var array{roles: array<string, int>, teams: array<string, int>, users: list<int>} $approverCounts of each role and team the approvers who may decide, and the users who may (ApproverCounts::forRuleForm()) */
 
+use app\components\ApproverConfigIds;
 use app\models\ApprovalRule;
 use yii\helpers\Html;
 use yii\helpers\Json;
@@ -16,13 +17,11 @@ use yii\widgets\ActiveForm;
 
 $this->title = $model->isNewRecord ? 'New Approval Rule' : 'Edit: ' . $model->name;
 
-// Pre-populate selector values from existing approver_config JSON
+// Pre-populate selector values from existing approver_config JSON; an ID as the integer rule reads it.
 $config = $model->getParsedConfig();
 $selectedRole = (string)($config['role'] ?? '');
-$selectedTeam = isset($config['team_id']) ? (int)$config['team_id'] : null;
-$selectedUsers = isset($config['user_ids']) && is_array($config['user_ids'])
-    ? array_map('intval', $config['user_ids'])
-    : [];
+$selectedTeam = ApproverConfigIds::teamOf($config);
+$selectedUsers = ApproverConfigIds::usersOf($config);
 
 // Each user's option says whether the user may decide: the script counts only those.
 $eligibleUsers = array_fill_keys($approverCounts['users'], true);

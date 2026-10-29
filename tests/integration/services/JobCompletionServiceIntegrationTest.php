@@ -15,6 +15,7 @@ use app\models\WorkflowStep;
 use app\services\JobCancellationService;
 use app\services\JobCompletionService;
 use app\services\NotificationDispatcher;
+use app\services\RunnerReportNumbers;
 use app\services\WorkflowExecutionService;
 use app\tests\integration\DbTestCase;
 
@@ -620,6 +621,40 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $this->assertSame('web2', $records[1]->host);
         $this->assertSame('db1', $records[2]->host);
         $this->assertSame('unreachable', $records[2]->status);
+    }
+
+    public function testSaveTasksAnswersNullWhenItSavedTheTasks(): void
+    {
+        $job = $this->makeRunningJob();
+
+        $this->assertNull($this->service->saveTasks($job, [['seq' => 0, 'host' => 'web1', 'duration_ms' => 3]]));
+
+        $this->assertSame(1, (int)JobTask::find()->where(['job_id' => $job->id])->count());
+    }
+
+    /**
+     * Regression: a task with a JSON number beyond the int range failed
+     * saveTasks() with an ErrorException on PHP 8.5 ("The float INF is not
+     * representable as an int, cast occurred"), after the tasks before it
+     * were saved. Now the list is refused whole: the refusal is answered,
+     * and no task, host summary or has_changes is written.
+     */
+    public function testSaveTasksRefusesAListWithATaskItCannotSaveAndWritesNothing(): void
+    {
+        $job = $this->makeRunningJob();
+        $body = json_decode('{"tasks": [{"seq": 0, "host": "web1", "changed": true}, {"seq": 1, "host": "web1", "duration_ms": 1e999}]}', true);
+        $this->assertIsArray($body);
+        $this->assertIsArray($body['tasks']);
+
+        $this->assertSame(
+            sprintf(RunnerReportNumbers::TASK_NUMBER_REFUSED, 1, 'duration_ms'),
+            $this->service->saveTasks($job, $body['tasks'])
+        );
+
+        $this->assertSame(0, (int)JobTask::find()->where(['job_id' => $job->id])->count());
+        $this->assertSame(0, (int)JobHostSummary::find()->where(['job_id' => $job->id])->count());
+        $job->refresh();
+        $this->assertSame(0, (int)$job->has_changes);
     }
 
     public function testSaveTasksAppliesDefaultsForMissingFields(): void

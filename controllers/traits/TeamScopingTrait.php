@@ -9,6 +9,7 @@ use app\controllers\BaseController;
 use app\services\ProjectAccessChecker;
 use app\services\WorkflowAccessChecker;
 use yii\base\Model;
+use yii\db\BaseActiveRecord;
 use yii\web\ForbiddenHttpException;
 
 /**
@@ -18,6 +19,13 @@ use yii\web\ForbiddenHttpException;
  * schedules, jobs) that derive access from their parent project, and for
  * workflows, which belong to the projects of their job steps. A submitted
  * reference ID is checked as the int it is stored as (normalizeSubmittedId()).
+ *
+ * A project that a request submitted is checked as the save stores it
+ * (normalizeProjectId()). A value that is neither none nor a project ID,
+ * such as a fraction, a text or a JSON number beyond the int range, names no
+ * project that a check could clear: the checks refuse it, never taking it for
+ * no project, which every user may reach; a form asks
+ * refusesSubmittedProject() first, so that it shows the model's error for it.
  */
 trait TeamScopingTrait
 {
@@ -41,27 +49,46 @@ trait TeamScopingTrait
     }
 
     /**
-     * @param int|string|null $projectId
+     * 403 unless the current user may view a child resource of the project
+     * $projectId names, stored or submitted (normalizeProjectId()).
      */
-    protected function requireChildView($projectId): void
+    protected function requireChildView(mixed $projectId): void
     {
         $pid = $this->normalizeProjectId($projectId);
         $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canViewChildResource($userId, $pid)) {
+        if ($userId === null || $pid === false || !$this->checker()->canViewChildResource($userId, $pid)) {
             throw new ForbiddenHttpException('You do not have access to this resource.');
         }
     }
 
     /**
-     * @param int|string|null $projectId
+     * 403 unless the current user may operate a child resource of the
+     * project $projectId names, stored or submitted (normalizeProjectId()).
      */
-    protected function requireChildOperate($projectId): void
+    protected function requireChildOperate(mixed $projectId): void
     {
         $pid = $this->normalizeProjectId($projectId);
         $userId = $this->currentUserId();
-        if ($userId === null || !$this->checker()->canOperateChildResource($userId, $pid)) {
+        if ($userId === null || $pid === false || !$this->checker()->canOperateChildResource($userId, $pid)) {
             throw new ForbiddenHttpException(BaseController::MODIFY_FORBIDDEN);
         }
+    }
+
+    /**
+     * Whether the project that a request submitted into $model is refused
+     * before the access check reads it: a value that names no project the
+     * check could clear (normalizeProjectId()). Its rules then report it on
+     * $model, for the form to show; nothing was checked, and the caller
+     * saves nothing.
+     */
+    protected function refusesSubmittedProject(BaseActiveRecord $model): bool
+    {
+        if ($this->normalizeProjectId($model->getAttribute('project_id')) !== false) {
+            return false;
+        }
+        $model->validate(['project_id']);
+
+        return true;
     }
 
     /**
@@ -109,13 +136,20 @@ trait TeamScopingTrait
     }
 
     /**
-     * @param int|string|null $value
+     * The project $value names, read as the model's integer rule reads an
+     * ID, so that the check and the save use one value (SubmittedId: "05",
+     * "+5" and 5.0 are 5); null for no project: null, '' and '0', and [],
+     * which the rules take for none too. False for any other value, such as
+     * a fraction, a text or a JSON number beyond the int range (the (int)
+     * cast it had warns on PHP 8.5): it names no project a check could
+     * clear, and taken for none it would pass as one every user may reach.
      */
-    private function normalizeProjectId($value): ?int
+    private function normalizeProjectId(mixed $value): int|false|null
     {
-        if ($value === null || $value === '' || $value === '0') {
+        if ($value === null || $value === '' || $value === '0' || $value === []) {
             return null;
         }
-        return (int)$value;
+
+        return SubmittedId::of($value) ?? false;
     }
 }

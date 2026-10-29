@@ -200,7 +200,6 @@ class RunnerControllerJobDirectoryAnsibleTest extends TestCase
         };
 
         $method = new \ReflectionMethod(RunnerController::class, 'executeJob');
-        $method->setAccessible(true);
         $method->invoke($controller, (int)$payload['job_id'], $payload);
     }
 

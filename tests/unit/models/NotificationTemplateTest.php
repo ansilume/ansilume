@@ -22,7 +22,6 @@ class NotificationTemplateTest extends TestCase
         );
         $m->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($m, array_merge([
             'id' => 1,
             'name' => 'Test',

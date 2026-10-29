@@ -147,7 +147,7 @@ class PasswordResetRequestFormTest extends DbTestCase
                     {
                         return '';
                     }
-                    public function send(\yii\mail\MailerInterface $mailer = null): bool
+                    public function send(?\yii\mail\MailerInterface $mailer = null): bool
                     {
                         $m = $this->mailer;
                         /** @phpstan-ignore-next-line */
@@ -279,7 +279,6 @@ class PasswordResetRequestFormTest extends DbTestCase
         try {
             $form = new PasswordResetRequestForm();
             $ref = new \ReflectionMethod(PasswordResetRequestForm::class, 'buildResetUrl');
-            $ref->setAccessible(true);
             $url = (string)$ref->invoke($form, 'dummy-token');
 
             $this->assertStringStartsWith(
@@ -318,7 +317,6 @@ class PasswordResetRequestFormTest extends DbTestCase
         try {
             $form = new PasswordResetRequestForm();
             $ref = new \ReflectionMethod(PasswordResetRequestForm::class, 'buildResetUrl');
-            $ref->setAccessible(true);
             $url = (string)$ref->invoke($form, 'dummy-token');
 
             $this->assertStringStartsWith('https://from-request.example', $url);

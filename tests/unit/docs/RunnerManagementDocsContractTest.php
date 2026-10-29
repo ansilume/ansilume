@@ -78,20 +78,14 @@ class RunnerManagementDocsContractTest extends TestCase
     }
 
     /**
-     * The section follows the newest ones, of the update to PHP 8.3 and of
-     * the update after 2.12.1, and that of the update that gives
-     * inventories approval rules (2.12.0),
-     * and its anchor and that of
-     * runners.md's section are the ones GitHub gives their headings, which
-     * the docs link to.
+     * The section follows the one of the update that gives inventories
+     * approval rules (2.12.0), the one of 2.11.0 follows it, and its anchor
+     * and that of runners.md's section are the ones GitHub gives their
+     * headings, which the docs link to.
      */
-    public function testTheSectionFollowsTheNewest(): void
+    public function testTheSectionFollowsTheOneOf2120(): void
     {
-        preg_match_all('/^## After updating from .*$/m', $this->read('docs/updating.md'), $headings);
-        $this->assertSame(PhpUpdateDocsContractTest::UPDATE_SECTION, $headings[0][0] ?? null, 'The newest section comes first.');
-        $this->assertSame(DeployRoleUpdateDocsContractTest::UPDATE_SECTION, $headings[0][1] ?? null, 'The section of 2.12.2 follows.');
-        $this->assertSame(InventoryApprovalDocsContractTest::UPDATE_SECTION, $headings[0][2] ?? null, 'The section of 2.12.0 follows.');
-        $this->assertSame(self::UPDATE_SECTION, $headings[0][3] ?? null, 'This section follows.');
+        $this->assertUpdateSectionBetween(InventoryApprovalDocsContractTest::UPDATE_SECTION, self::UPDATE_SECTION, WorkflowStepsUpdateDocsContractTest::UPDATE_SECTION);
         foreach ([self::UPDATE_SECTION => self::SECTION_ANCHOR, self::RUNNERS_SECTION => self::RUNNERS_ANCHOR] as $heading => $anchor) {
             $this->assertSame(
                 $anchor,
@@ -285,7 +279,7 @@ class RunnerManagementDocsContractTest extends TestCase
         $deployment = $this->item('Database and deployment');
         $expected = [
             'To roll back to 2.11.0, deploy it as [Rollback](#rollback) describes. 2.11.0 runs with the roles as the migration left them, so operators do not manage runners there either.',
-            'revert the migration before you deploy 2.11.0, which does not have it: `docker compose exec app php yii migrate/down 1 --interactive=0` reverts `' . self::MIGRATION . '`.',
+            'revert the migration before you deploy 2.11.0, which does not have it: `docker compose exec -u www-data app php yii migrate/down 1 --interactive=0` reverts `' . self::MIGRATION . '`.',
             'The direct grants it gave the admin role stay.',
         ];
         foreach ($expected as $phrase) {

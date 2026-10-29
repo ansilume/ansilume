@@ -89,7 +89,6 @@ class WorkflowJobTest extends TestCase
     {
         $model = $this->createPartialMock(WorkflowJob::class, []);
         $ref = new \ReflectionProperty(\yii\db\BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($model, ['status' => $status]);
         return $model;
     }

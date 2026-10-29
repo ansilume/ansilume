@@ -8,10 +8,13 @@ use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\JobTemplate;
 use app\models\User;
+use app\tests\integration\ApproverListFixtures;
 use app\tests\integration\DbTestCase;
 
 class ApprovalRuleTest extends DbTestCase
 {
+    use ApproverListFixtures;
+
     public function testTableName(): void
     {
         $this->assertSame('{{%approval_rule}}', ApprovalRule::tableName());
@@ -305,14 +308,14 @@ class ApprovalRuleTest extends DbTestCase
         $rule = new ApprovalRule();
         $rule->name = 'test-count-validation';
         $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
-        $rule->approver_config = (string)json_encode(['user_ids' => [1, 2]]);
+        $rule->approver_config = (string)json_encode(['user_ids' => $this->userIds(2)]);
         $rule->required_approvals = 5;
         $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
         $rule->created_by = $user->id;
 
         $this->assertFalse($rule->validate());
-        $this->assertArrayHasKey('required_approvals', $rule->errors);
-        $this->assertStringContainsString('exceeds', $rule->errors['required_approvals'][0]);
+        $this->assertSame([sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 5, 2)], $rule->getErrors('required_approvals'));
+        $this->assertSame(['Required approvals (5) exceeds eligible approvers (2).'], $rule->getErrors('required_approvals'));
     }
 
     public function testValidateApproverCountAcceptsValidForUsers(): void
@@ -321,12 +324,78 @@ class ApprovalRuleTest extends DbTestCase
         $rule = new ApprovalRule();
         $rule->name = 'test-count-ok';
         $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
-        $rule->approver_config = (string)json_encode(['user_ids' => [1, 2, 3]]);
+        $rule->approver_config = (string)json_encode(['user_ids' => $this->userIds(3)]);
         $rule->required_approvals = 2;
         $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
         $rule->created_by = $user->id;
 
         $this->assertTrue($rule->validate());
+    }
+
+    /**
+     * Regression: the count of a users rule took every entry of user_ids,
+     * while its approvers are the users the entries name as
+     * ApproverConfigIds reads an ID. So 2 required approvals of a user
+     * listed next to a value that is no ID ("abc", true, 12.5), next to
+     * the same user again (also as "0" followed by the ID), or next to a
+     * user who does not exist passed the check, and every launch the rule
+     * gates was then refused as one that could never be approved. The
+     * count takes each user once, and only users who exist, as a role or a
+     * team rule does.
+     *
+     * @dataProvider oneUserListedProvider
+     */
+    public function testRegressionAnEntryThatAddsNoApproverWasCounted(string $list): void
+    {
+        $rule = $this->usersRule($this->oneUserConfig($list), 2);
+
+        $valid = $rule->validate();
+
+        $this->assertSame([sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 2, 1)], $rule->getErrors('required_approvals'));
+        $this->assertFalse($valid);
+        $this->assertSame(['required_approvals'], array_keys($rule->getErrors()), 'nothing else is wrong with the rule');
+        $this->assertSame(1, $rule->countEligibleApprovers());
+
+        $rule->required_approvals = 1;
+        $this->assertTrue($rule->validate(), 'one approval of the one user');
+    }
+
+    /**
+     * Users who exist count whatever their status, as the members of a
+     * team and the holders of a role do: an inactive user may be activated
+     * again. A deleted user no longer counts.
+     */
+    public function testEveryUserWhoExistsCountsOnceAnInactiveOneToo(): void
+    {
+        [$active, $inactive] = $this->userIds(2);
+        User::updateAll(['status' => User::STATUS_INACTIVE], ['id' => $inactive]);
+        $gone = $this->createUser('rule-count-gone');
+        $goneId = (int)$gone->id;
+        $config = sprintf('{"user_ids": [%1$d, %2$d, "%1$d", %3$d, "abc"]}', $active, $inactive, $goneId);
+        $rule = $this->usersRule($config, 2);
+
+        $this->assertSame(3, $rule->countEligibleApprovers(), 'before the delete');
+        $this->assertSame(1, $gone->delete());
+        $this->assertSame(2, $rule->countEligibleApprovers());
+        $this->assertTrue($rule->validate());
+        $rule->required_approvals = 3;
+        $this->assertFalse($rule->validate());
+        $this->assertSame([sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 3, 2)], $rule->getErrors('required_approvals'));
+    }
+
+    /**
+     * A users rule without an entry that is an ID counts no approver, also
+     * one that lists nothing.
+     */
+    public function testAUsersRuleWithoutAnIdCountsNoApprover(): void
+    {
+        foreach (['{"user_ids": []}', '{"user_ids": ["abc", true, 12.5]}', '{"user_ids": 7}', '{}'] as $config) {
+            $rule = $this->usersRule($config, 1);
+            $valid = $rule->validate();
+            $this->assertSame([sprintf(ApprovalRule::TOO_MANY_REQUIRED_APPROVALS, 1, 0)], $rule->getErrors('required_approvals'), $config);
+            $this->assertFalse($valid, $config);
+            $this->assertSame(0, $rule->countEligibleApprovers(), $config);
+        }
     }
 
     /**
@@ -370,7 +439,7 @@ class ApprovalRuleTest extends DbTestCase
         $rule = $this->createApprovalRule(
             $user->id,
             ApprovalRule::APPROVER_TYPE_USERS,
-            (string)json_encode(['user_ids' => [1, 2, 3]])
+            (string)json_encode(['user_ids' => $this->userIds(3)])
         );
         $this->assertSame(3, $rule->countEligibleApprovers());
     }
@@ -461,5 +530,37 @@ class ApprovalRuleTest extends DbTestCase
         $this->assertCount(1, $requests);
         $this->assertInstanceOf(ApprovalRequest::class, $requests[0]);
         $this->assertSame($request->id, $requests[0]->id);
+    }
+
+    /**
+     * A users rule with the approver config $config, not saved.
+     */
+    private function usersRule(string $config, int $requiredApprovals): ApprovalRule
+    {
+        $rule = new ApprovalRule();
+        $rule->name = 'test-count-' . uniqid('', true);
+        $rule->approver_type = ApprovalRule::APPROVER_TYPE_USERS;
+        $rule->approver_config = $config;
+        $rule->required_approvals = $requiredApprovals;
+        $rule->timeout_action = ApprovalRule::TIMEOUT_ACTION_REJECT;
+        $rule->created_by = (int)$this->createUser('rule-count-creator')->id;
+
+        return $rule;
+    }
+
+    /**
+     * The IDs of $count new users, who exist, as the count of a users rule
+     * takes only users who do.
+     *
+     * @return list<int>
+     */
+    private function userIds(int $count): array
+    {
+        $ids = [];
+        for ($i = 0; $i < $count; $i++) {
+            $ids[] = (int)$this->createUser('rule-count')->id;
+        }
+
+        return $ids;
     }
 }

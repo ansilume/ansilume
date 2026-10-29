@@ -43,10 +43,19 @@ abstract class DbTestCase extends TestCase
     /** The default password answer of createJobWithSealedSecrets(); a test value, not a secret. */
     protected const SURVEY_PASSWORD_ANSWER = 'example-db-answer-4711';
 
+    /** Why a test does not run whose authManager would write outside its transaction (DbTestCaseConnectionTest). */
+    public const AUTH_MANAGER_ON_ANOTHER_CONNECTION = 'The authManager writes through another database connection than Yii::$app->db, which holds the transaction of this test, so what it writes would stay in the test database: a test before this one replaced db and put back another connection object instead of the same one (RestoresComponents).';
+
     private \yii\db\Transaction $tx;
 
     protected function setUp(): void
     {
+        // An authManager made before db was replaced keeps the connection it
+        // was made with: its roles and assignments would leave the transaction.
+        $auth = \Yii::$app->getComponents(false)['authManager'] ?? null;
+        if ($auth instanceof \yii\rbac\DbManager) {
+            $this->assertSame(\Yii::$app->db, $auth->db, self::AUTH_MANAGER_ON_ANOTHER_CONNECTION);
+        }
         $this->tx = \Yii::$app->db->beginTransaction();
     }
 

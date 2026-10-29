@@ -43,7 +43,6 @@ class ControllerAccessRulesTest extends TestCase
             ->getMock();
 
         $ref = new \ReflectionMethod($ctrl, 'accessRules');
-        $ref->setAccessible(true);
         return $ref->invoke($ctrl);
     }
 
@@ -55,7 +54,6 @@ class ControllerAccessRulesTest extends TestCase
             ->getMock();
 
         $ref = new \ReflectionMethod($ctrl, 'verbRules');
-        $ref->setAccessible(true);
         return $ref->invoke($ctrl);
     }
 

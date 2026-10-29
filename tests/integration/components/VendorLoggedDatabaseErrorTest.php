@@ -212,7 +212,8 @@ class VendorLoggedDatabaseErrorTest extends DbTestCase
 
     /**
      * The only log target of config/$file, as the application builds it,
-     * writing to a temporary file instead of runtime/logs/app.log.
+     * writing to a temporary file instead of the file the config names
+     * (runtime/logs/app.log; runtime/logs/test.log for config/test.php).
      */
     private function configTarget(string $file): FileTarget
     {

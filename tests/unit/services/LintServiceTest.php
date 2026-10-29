@@ -69,11 +69,9 @@ class LintServiceTest extends TestCase
         $t->method('save')->willReturn(true);
 
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($t, $attributes);
 
         $relRef = new \ReflectionProperty(BaseActiveRecord::class, '_related');
-        $relRef->setAccessible(true);
         $relRef->setValue($t, ['project' => $project]);
 
         return $t;
@@ -88,7 +86,6 @@ class LintServiceTest extends TestCase
         $p->method('save')->willReturn(true);
 
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($p, ['scm_type' => $scmType, 'local_path' => $localPath]);
 
         return $p;

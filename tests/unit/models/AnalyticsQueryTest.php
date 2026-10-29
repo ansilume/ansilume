@@ -79,6 +79,103 @@ class AnalyticsQueryTest extends TestCase
         $this->assertTrue($q2->validate());
     }
 
+    /**
+     * Dates of only whitespace that trim() strips.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function whitespaceOnlyDateProvider(): array
+    {
+        return [
+            'a space' => [' '],
+            'a tab' => ["\t"],
+            'a line break' => ["\n"],
+            'a carriage return' => ["\r"],
+            'a vertical tab' => ["\v"],
+            'a NUL byte' => ["\0"],
+            'two spaces' => ['  '],
+            'all of them' => [" \t\n\r\v\0"],
+        ];
+    }
+
+    /**
+     * Regression: a date of only whitespace failed the date rule (422 from
+     * the API), and on PHP 8.3 the range check too, which read it as now
+     * with strtotime(); PHP 8.4 and later read it as no date. One with a
+     * NUL byte answered 500 on every version (see below). The dates are
+     * trimmed first: such a date is empty on every version, as an empty one
+     * is, which the controllers leave as it is (they apply the defaults
+     * before they validate): no lower bound, and the end of today.
+     *
+     * @dataProvider whitespaceOnlyDateProvider
+     */
+    public function testRegressionAWhitespaceOnlyDateIsEmpty(string $value): void
+    {
+        $q = new AnalyticsQuery();
+        $q->load(['date_from' => $value, 'date_to' => $value], '');
+        $q->applyDefaults();
+
+        $this->assertTrue($q->validate(), 'no error');
+        $this->assertSame('', $q->date_from);
+        $this->assertSame('', $q->date_to);
+        $this->assertSame(0, $q->dateFromTimestamp, 'no lower bound');
+        $this->assertSame((int)strtotime('23:59:59'), $q->dateToTimestamp, 'the end of today, as for an empty date');
+    }
+
+    /**
+     * Regression: on PHP 8.3 a date_from of only whitespace was now to the
+     * range check, so a date_to before today also failed it ("End date must
+     * be on or after start date."). The check reads the trimmed dates.
+     */
+    public function testRegressionTheRangeCheckReadsAWhitespaceOnlyDateFromAsNoDate(): void
+    {
+        $q = new AnalyticsQuery();
+        $q->date_from = ' ';
+        $q->date_to = '2020-01-01';
+
+        $this->assertTrue($q->validate());
+        $this->assertFalse($q->hasErrors('date_to'));
+    }
+
+    /**
+     * Whitespace around a date is trimmed, so the date is valid, and the
+     * range check reads the trimmed dates; a date that is not set stays
+     * null, so that no bound is set for it.
+     */
+    public function testTheDatesAreTrimmed(): void
+    {
+        $q = new AnalyticsQuery();
+        $q->load(['date_from' => " 2026-01-01\t", 'date_to' => "\n2026-01-31 "], '');
+        $reversed = new AnalyticsQuery();
+        $reversed->load(['date_from' => ' 2026-03-15', 'date_to' => '2026-03-01 '], '');
+        $unset = new AnalyticsQuery();
+
+        $this->assertTrue($q->validate());
+        $this->assertSame('2026-01-01', $q->date_from);
+        $this->assertSame('2026-01-31', $q->date_to);
+        $this->assertFalse($reversed->validate());
+        $this->assertSame('End date must be on or after start date.', $reversed->getFirstError('date_to'));
+        $this->assertTrue($unset->validate());
+        $this->assertNull($unset->date_from);
+        $this->assertNull($unset->date_to);
+    }
+
+    /**
+     * Regression: a date with a NUL byte answered 500 on every PHP version:
+     * the date rule's DateTime::createFromFormat() throws a ValueError for
+     * it. The trim strips one at either end, and a rule before the date rule
+     * refuses one inside, so the date rule skips that date.
+     */
+    public function testRegressionADateWithANulByteFailsValidationInsteadOfThrowing(): void
+    {
+        $q = new AnalyticsQuery();
+        $q->load(['date_from' => "2026-01\0-15", 'date_to' => "2026-01-31\0"], '');
+
+        $this->assertFalse($q->validate());
+        $this->assertSame(['date_from' => 'Date From is invalid.'], $q->getFirstErrors());
+        $this->assertSame('2026-01-31', $q->date_to);
+    }
+
     public function testApplyDefaultsSetsLast30Days(): void
     {
         $q = new AnalyticsQuery();

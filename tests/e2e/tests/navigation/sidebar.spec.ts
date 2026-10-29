@@ -28,11 +28,10 @@ test.describe('Sidebar Navigation', () => {
     await expect(page.locator('#page-content h2').first()).toHaveText('Approval Requests');
   });
 
+  // The link of the open section is marked active, and no other one
+  // (views/layouts/main.php). It counted active links and accepted none.
   test('active state highlights current page', async ({ page }) => {
     await page.goto('/project/index');
-    const sidebar = page.locator(SIDEBAR);
-    const activeLink = sidebar.locator('.active, [aria-current="page"]');
-    const count = await activeLink.count();
-    expect(count).toBeGreaterThanOrEqual(0);
+    await expect(page.locator(SIDEBAR).locator('.nav-link.active')).toHaveText(['Projects']);
   });
 });

@@ -7,11 +7,13 @@ test.describe('Audit Log', () => {
     await expect(page.locator(PAGE_TITLE)).toContainText(/audit/i);
   });
 
+  // A sign-in writes user.login, so the sign-ins of auth.setup.ts are listed,
+  // each row linking its entry; the empty state is a row without a link. It
+  // counted rows and accepted none.
   test('shows log entries', async ({ page }) => {
     await page.goto('/audit-log/index');
-    const rows = page.locator('table.table tbody tr');
-    const count = await rows.count();
-    expect(count).toBeGreaterThanOrEqual(0);
+    const entries = page.locator('#page-content table.table tbody tr td:first-child a');
+    expect(await entries.count(), 'audit log entries, not the empty state').toBeGreaterThan(0);
   });
 
   test('view detail', async ({ page }) => {

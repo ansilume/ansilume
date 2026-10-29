@@ -11,11 +11,14 @@
 # code. Read docs/ci.md before changing this file;
 # tests/unit/config/ScrutinizerConfigTest.php enforces these rules.
 build:
+  # The default image has no build of PHP 8.4 or 8.5, default-jammy has:
+  # see docs/ci.md.
+  image: default-jammy
   environment:
     php:
-      # A release of the line composer.json requires, not the line itself:
-      # see docs/ci.md.
-      version: "8.3.3"
+      # A release of the line composer.json requires, not the line itself,
+      # and one that builds on the image: see docs/ci.md.
+      version: "8.5.8"
   dependencies:
     override:
       - composer self-update --2

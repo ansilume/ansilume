@@ -126,7 +126,7 @@ class ScrutinizerConfigTest extends TestCase
         $build = $this->config()['build'];
 
         $this->assertArrayNotHasKey('services', $build);
-        $this->assertSame(['php' => ['version' => '8.3.3']], $build['environment'], 'no PECL extensions, databases or Redis');
+        $this->assertSame(['php' => ['version' => '8.5.8']], $build['environment'], 'no PECL extensions, databases or Redis');
         $commands = self::commands($build['dependencies']['override']);
         foreach ($build['nodes'] as $name => $node) {
             $this->assertSame(['override'], array_keys($node['tests']), "{$name}: no setup steps before or after the checks");
@@ -140,6 +140,24 @@ class ScrutinizerConfigTest extends TestCase
             $this->assertDoesNotMatchRegularExpression('/phpunit|\byii\b|\.env\b|mysql|mariadb|redis|\bdocker\s/i', $command);
         }
         $this->assertCount(1, $build['nodes']['tests']['tests']['override'], 'the tests node runs PSR-12 only');
+    }
+
+    /**
+     * Review finding: with composer.json at PHP 8.5, the build's composer
+     * install refuses the 8.3.3 the build ran on, and Scrutinizer's default
+     * image has no build of PHP 8.4 or 8.5: builds of other projects on it
+     * failed with a 403 from Scrutinizer's own mirror for 8.5 releases, and
+     * a plain 8.5 errored on every image, while default-jammy builds 8.5.2,
+     * 8.5.6, 8.5.8 and 8.5.11 (for example for OpenConext/Stepup-Middleware
+     * and spotweb). testScrutinizerRunsNoTestSuiteAndStartsNoServices pins
+     * the release, PhpBaseImageTest checks it against composer.json.
+     */
+    public function testTheBuildRunsOnAnImageWithAPhp85Build(): void
+    {
+        $build = $this->config()['build'];
+        $this->assertIsArray($build);
+
+        $this->assertSame('default-jammy', $build['image'] ?? null, 'the default image has no PHP 8.5 build (docs/ci.md)');
     }
 
     public function testTheConfigPointsToTheCiDocumentation(): void

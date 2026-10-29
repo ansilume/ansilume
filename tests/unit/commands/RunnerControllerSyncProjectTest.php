@@ -54,7 +54,6 @@ class RunnerControllerSyncProjectTest extends TestCase
             public function callBuildGitEnv(string $scmUrl, ?array $scmCredential, ?string &$sshKeyFile = null): array
             {
                 $reflection = new \ReflectionMethod(RunnerProjectSync::class, 'buildGitEnv');
-                $reflection->setAccessible(true);
                 /** @var array<string, string> $env */
                 $env = $reflection->invokeArgs(new RunnerProjectSync($this), [$scmUrl, $scmCredential, &$sshKeyFile]);
                 return $env;

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\services;
 
 use app\components\CredentialAttachmentDiff;
+use app\components\SubmittedId;
 use app\components\VaultCredentialRule;
 use app\models\AuditLog;
 use app\models\Credential;
@@ -59,6 +60,12 @@ use yii\base\Component;
  */
 class JobTemplateCredentialService extends Component
 {
+    /** The error of credential_ids (422, or the form's error) when one of its entries is no positive ID. */
+    public const INVALID_CREDENTIAL_IDS = 'credential_ids must contain positive integer credential IDs.';
+
+    /** The error of credential_ids when one of its entries names no credential; sprintf(): the ID. */
+    public const CREDENTIAL_NOT_FOUND = 'Credential #%d does not exist.';
+
     /**
      * @param list<mixed>|null $additionalIds additional credential ids in
      *        precedence order; null keeps the current additional credentials
@@ -290,8 +297,11 @@ class JobTemplateCredentialService extends Component
     }
 
     /**
-     * Validates submitted additional ids: positive integers of existing
-     * credentials. Adds an error to the template and returns null otherwise.
+     * Validates submitted additional ids: positive IDs of existing
+     * credentials, each read as the integer rule reads an ID (SubmittedId:
+     * "05" is 5; a fraction however close to a whole number, a boolean and
+     * text with a space are none), as GatedJobTemplateLock reads them.
+     * Adds an error to the template and returns null otherwise.
      *
      * @param list<mixed> $submitted
      * @return list<int>|null
@@ -300,9 +310,9 @@ class JobTemplateCredentialService extends Component
     {
         $ids = [];
         foreach ($submitted as $value) {
-            $id = filter_var($value, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
-            if ($id === false) {
-                $template->addError('credential_ids', 'credential_ids must contain positive integer credential IDs.');
+            $id = SubmittedId::of($value);
+            if ($id === null || $id < 1) {
+                $template->addError('credential_ids', self::INVALID_CREDENTIAL_IDS);
                 return null;
             }
             if ($id !== $primary && !in_array($id, $ids, true)) {
@@ -312,7 +322,7 @@ class JobTemplateCredentialService extends Component
         $existing = array_map('intval', Credential::find()->select('id')->where(['id' => $ids])->column());
         foreach ($ids as $id) {
             if (!in_array($id, $existing, true)) {
-                $template->addError('credential_ids', "Credential #{$id} does not exist.");
+                $template->addError('credential_ids', sprintf(self::CREDENTIAL_NOT_FOUND, $id));
                 return null;
             }
         }
@@ -369,9 +379,16 @@ class JobTemplateCredentialService extends Component
         \Yii::$app->get('auditService')->log($action, 'job_template', (int)$template->id, null, $entry);
     }
 
+    /**
+     * A credential ID as stored or assigned: a positive whole number as the
+     * integer rule reads it (SubmittedId), as the column stores it and as
+     * GatedJobTemplateLock reads the primary; null for anything else, a
+     * number beyond the int range included (a JSON body's 1e30 or 1e999,
+     * whose (int) cast warns since PHP 8.5), which the rule refuses.
+     */
     private static function positiveIntOrNull(mixed $value): ?int
     {
-        $int = is_numeric($value) ? (int)$value : 0;
+        $int = SubmittedId::of($value) ?? 0;
 
         return $int > 0 ? $int : null;
     }

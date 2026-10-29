@@ -16,7 +16,9 @@ use app\models\Inventory;
  * (ApprovalRuleAssignmentPolicy, as for job templates): any change by another
  * user is refused before anything is saved, also setting a rule on a new
  * inventory and removing one. Not submitting the field, or submitting the
- * rule the inventory has, is no change.
+ * rule the inventory has, is no change, in any spelling of its ID that the
+ * integer rule reads as it: "+5", "5\n" and 5.0 are 5
+ * (ApprovalRuleAssignmentPolicy::normalizeRuleId()).
  *
  * approval_rule_id is no safe attribute of Inventory, so a form or a JSON
  * body never sets it on its own: only apply() does, after the check, and it
@@ -102,9 +104,7 @@ final class InventoryRuleAssignment
      */
     public static function storedRuleId(Inventory $inventory): ?int
     {
-        $stored = $inventory->getOldAttribute(self::FIELD);
-
-        return is_numeric($stored) ? (int)$stored : null;
+        return SubmittedId::of($inventory->getOldAttribute(self::FIELD));
     }
 
     /**

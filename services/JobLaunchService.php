@@ -6,6 +6,8 @@ namespace app\services;
 
 use app\components\DbErrorSummary;
 use app\components\ErrorText;
+use app\components\SubmittedId;
+use app\components\SubmittedInteger;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
 use app\models\Job;
@@ -333,8 +335,8 @@ class JobLaunchService extends Component
         if ($row === false || $row['deleted_at'] !== null) {
             throw new JobLaunchRejectedException(sprintf(self::TEMPLATE_DELETED, $templateId));
         }
-        // An approval rule ID as JobTemplateGate reads one: any numeric value is an ID.
-        $storedRuleId = is_numeric($row['approval_rule_id']) ? (int)$row['approval_rule_id'] : null;
+        // An approval rule ID as JobTemplateGate reads one: any whole number is an ID (SubmittedId).
+        $storedRuleId = SubmittedId::of($row['approval_rule_id']);
         if ($storedRuleId !== $gate->templateRuleId) {
             throw new JobLaunchRejectedException(sprintf(self::TEMPLATE_CHANGED, $templateId));
         }
@@ -407,8 +409,15 @@ class JobLaunchService extends Component
             $job->limit = (string)$overrides['limit'];
         }
 
-        if (isset($overrides['verbosity'])) {
-            $job->verbosity = (int)$overrides['verbosity'];
+        // As the record's integer rule reads it, never cast (JobLaunchInput
+        // checked it): a whole number as an int, anything else for the rule
+        // to refuse. An empty one, which the rule skips, is none: the
+        // template's applies, as for an empty limit. JobLaunchInput refuses
+        // an empty list before the launch of a request; a caller that does
+        // not check gets none for it, as for an empty limit list.
+        $verbosity = SubmittedInteger::orAsSubmitted($overrides['verbosity'] ?? null);
+        if (!in_array($verbosity, [null, '', []], true)) {
+            $job->setAttribute('verbosity', $verbosity);
         }
 
         if (!empty($overrides['check_mode'])) {

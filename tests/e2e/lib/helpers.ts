@@ -1,4 +1,4 @@
-import { APIResponse, expect, Page } from '@playwright/test';
+import { APIResponse, expect, Locator, Page } from '@playwright/test';
 import { idWhere, indexRows } from './scoping';
 import { FLASH_SUCCESS, FLASH_DANGER, FORM_SUBMIT } from './selectors';
 
@@ -86,6 +86,42 @@ export async function postWithPageCsrf(page: Page, path: string, fields: Record<
   }));
   expect(csrf.token, 'the page has a CSRF token').not.toBe('');
   return page.request.post(path, { form: { [csrf.param]: csrf.token, ...fields }, maxRedirects: 0 });
+}
+
+/**
+ * POSTs the JSON text `json` to `path` with the session of the open page and
+ * its CSRF token in the X-CSRF-Token header, as a script sends a web form as
+ * JSON (the request's JSON parser serves the web forms too), and returns the
+ * response, redirects followed. A text, not an object: it carries a number as
+ * a client writes it, such as 1e30, which the parser reads as a float.
+ */
+export async function postJsonWithPageCsrf(page: Page, path: string, json: string): Promise<APIResponse> {
+  const token = (await page.locator('meta[name="csrf-token"]').getAttribute('content')) ?? '';
+  expect(token, 'the page has a CSRF token').not.toBe('');
+  return page.request.post(path, { headers: { 'X-CSRF-Token': token, 'Content-Type': 'application/json' }, data: json });
+}
+
+/**
+ * Shows the HTML of `response` in the open page, which keeps its URL, so
+ * that locators find what the answer shows.
+ */
+export async function showAnswer(page: Page, response: APIResponse): Promise<void> {
+  await page.setContent(await response.text());
+}
+
+/**
+ * The message of a model's integer rule (Yii's IntegerValidator), which a
+ * form shows for a value that is no whole number, such as a JSON number
+ * beyond the int range or a fraction: `label` is the field's label, such as
+ * 'Forks' or 'Project Id'.
+ */
+export function notAnInteger(label: string): string {
+  return `${label} must be an integer.`;
+}
+
+/** The error of the field `attribute` of the Yii form model `model` (lower case, as in its ids) on the open page. */
+export function fieldError(page: Page, model: string, attribute: string): Locator {
+  return page.locator(`.field-${model}-${attribute} .help-block`);
 }
 
 /** The id of a job template, from the template filter of the job list. */

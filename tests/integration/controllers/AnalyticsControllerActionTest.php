@@ -160,6 +160,96 @@ class AnalyticsControllerActionTest extends WebControllerTestCase
     }
 
     /**
+     * The CSV export quotes fields as RFC 4180 says (CsvText), each line
+     * ending with a line feed: a template name with a backslash in front of
+     * a quote reads back as it is, and a name without a backslash keeps the
+     * bytes of 2.13.1.
+     *
+     * Regression: on PHP 8.4 and later every CSV export with a row answered
+     * 500 ("fputcsv(): the $escape parameter must be provided as its default
+     * value will change"). Before, the default escape wrote a quote after a
+     * backslash undoubled, and spreadsheet tools read such a name wrong.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function csvTemplateNameProvider(): array
+    {
+        return [
+            'a backslash and a backslash in front of a quote' => [
+                'Deploy "prod" C:\x\"y',
+                '"Deploy ""prod"" C:\x\""y"',
+            ],
+            'quotes without a backslash, as 2.13.1 wrote them' => ['Deploy "prod"', '"Deploy ""prod"""'],
+        ];
+    }
+
+    /**
+     * @dataProvider csvTemplateNameProvider
+     */
+    public function testRegressionTheCsvExportAnswered500AndReadsBackEveryTemplateName(
+        string $name,
+        string $written
+    ): void {
+        $user = $this->createUser('analytics-csv');
+        $user->is_superadmin = true;
+        $user->save(false);
+        $template = $this->createJobTemplate(
+            (int)$this->createProject((int)$user->id)->id,
+            (int)$this->createInventory((int)$user->id)->id,
+            (int)$this->createRunnerGroup((int)$user->id)->id,
+            (int)$user->id
+        );
+        $template->name = $name;
+        $template->save(false);
+        $job = $this->createJob((int)$template->id, (int)$user->id, Job::STATUS_SUCCEEDED);
+        $job->finished_at = time();
+        $job->started_at = $job->finished_at - 60;
+        $job->save(false);
+        $this->loginAs($user);
+        $this->setQueryParams([
+            'report' => 'template-reliability',
+            'format' => 'csv',
+            'template_id' => (string)$template->id,
+        ]);
+
+        $response = $this->makeController()->actionExport();
+
+        $this->assertSame(Response::FORMAT_RAW, $response->format);
+        $this->assertSame('text/csv; charset=UTF-8', $response->headers->get('Content-Type'));
+        $this->assertSame(
+            'attachment; filename="analytics-template-reliability-' . date('Y-m-d') . '.csv"',
+            $response->headers->get('Content-Disposition')
+        );
+        $this->assertSame(
+            "template_id,template_name,total,succeeded,failed,success_rate,avg_duration_seconds\n"
+            . $template->id . ',' . $written . ",1,1,0,100,60\n",
+            $response->data
+        );
+        $row = explode("\n", (string)$response->data)[1];
+        $this->assertSame([(string)$template->id, $name, '1', '1', '0', '100', '60'], str_getcsv($row, ',', '"', ''));
+    }
+
+    /**
+     * A report without rows exports an empty CSV: there is no row to take
+     * the header row's column names from.
+     */
+    public function testTheCsvExportOfAReportWithoutRowsIsEmpty(): void
+    {
+        $this->loginAs($this->createUser('analytics-csv-empty'));
+        $this->setQueryParams([
+            'report' => 'job-trend',
+            'format' => 'csv',
+            'date_from' => '2001-01-01',
+            'date_to' => '2001-01-02',
+        ]);
+
+        $response = $this->makeController()->actionExport();
+
+        $this->assertSame('text/csv; charset=UTF-8', $response->headers->get('Content-Type'));
+        $this->assertSame('', $response->data);
+    }
+
+    /**
      * The Approvals tab shows the canceled requests the user may see in a
      * card of their own, and the Avg Decision Time card says that canceled
      * requests are not counted: here 60 s and 120 s average to 90 s,

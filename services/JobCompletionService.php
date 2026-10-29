@@ -303,13 +303,23 @@ class JobCompletionService extends Component
     }
 
     /**
-     * @param array<int, array<string, mixed>> $tasks
+     * Saves the task results a runner reports, with a host summary per host
+     * they name, unless one of them cannot be saved as it is
+     * (RunnerReportNumbers::taskListRefusal()): then none is saved.
+     *
+     * @param array<mixed> $tasks the task results as the runner reports them
+     * @return string|null why the tasks were refused, null when they were saved
      */
-    public function saveTasks(Job $job, #[\SensitiveParameter] array $tasks): void
+    public function saveTasks(Job $job, #[\SensitiveParameter] array $tasks): ?string
     {
+        $refusal = RunnerReportNumbers::taskListRefusal($tasks);
+        if ($refusal !== null) {
+            return $refusal;
+        }
         $hasChanges = false;
         $hostBuckets = [];
 
+        /** @var array<string, mixed> $data taskListRefusal() refuses any other */
         foreach ($tasks as $data) {
             $task = $this->persistTask($job, $data);
 
@@ -326,22 +336,24 @@ class JobCompletionService extends Component
             $job->has_changes = 1;
             $job->save(false);
         }
+
+        return null;
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param array<string, mixed> $data a task result that taskListRefusal() accepted
      */
     private function persistTask(Job $job, #[\SensitiveParameter] array $data): JobTask
     {
         $task = new JobTask();
         $task->job_id = $job->id;
-        $task->sequence = isset($data['seq']) ? (int)$data['seq'] : 0;
+        $task->sequence = RunnerReportNumbers::taskNumber($data['seq'] ?? null) ?? 0;
         $task->task_name = isset($data['name']) ? (string)$data['name'] : '';
         $task->task_action = isset($data['action']) ? (string)$data['action'] : '';
         $task->host = isset($data['host']) ? (string)$data['host'] : '';
         $task->status = isset($data['status']) ? (string)$data['status'] : 'ok';
         $task->changed = !empty($data['changed']) ? 1 : 0;
-        $task->duration_ms = isset($data['duration_ms']) ? (int)$data['duration_ms'] : 0;
+        $task->duration_ms = RunnerReportNumbers::taskNumber($data['duration_ms'] ?? null) ?? 0;
         $task->created_at = time();
         $task->save(false);
 

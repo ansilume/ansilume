@@ -1,7 +1,15 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden } from '../../lib/helpers';
 import { forgePost, idWhere, indexRows } from '../../lib/scoping';
-import { APPROVAL_RULE, GATED_TEMPLATE } from '../../lib/approvals';
+import {
+  APPROVAL_RULE,
+  BEYOND_INT_TEAM_RULE,
+  BEYOND_INT_USERS_RULE,
+  GATED_TEMPLATE,
+  NO_TEAM_CONFIGURED,
+  NO_USERS_CONFIGURED,
+  approverCell,
+} from '../../lib/approvals';
 import { HOST_INVENTORY, HOST_RULE } from '../../lib/inventories';
 
 /**
@@ -105,6 +113,27 @@ test.describe('Approval Rules RBAC', () => {
       await expect(page).toHaveURL(/\/inventory\/view\?id=\d+$/);
       await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
       await expect(page.locator('#inventory-approval-rule')).toContainText(HOST_RULE);
+    });
+  }
+
+  // Regression: on PHP 8.5 the page of a rule whose approver config names its
+  // team by a JSON number beyond the int range answered 500 for every role
+  // that may see rules ("The float 1.0E+30 is not representable as an int,
+  // cast occurred"), and that of such a users rule named no user without
+  // saying so. Fixtures: commands/E2eApproverConfigSeeder.php.
+  for (const role of ['viewer', 'operator']) {
+    test(`${role} sees no approver on the rules whose approvers are numbers beyond the int range, and may not edit them`, async ({ page }) => {
+      const rows = await indexRows(page, '/approval-rule/index');
+      for (const [name, approver] of [[BEYOND_INT_TEAM_RULE, NO_TEAM_CONFIGURED], [BEYOND_INT_USERS_RULE, NO_USERS_CONFIGURED]]) {
+        const id = idWhere(rows, 0, name);
+        const shown = await page.goto(`/approval-rule/view?id=${id}`);
+        expect(shown?.status(), `the page of ${name}`).toBe(200);
+        await expect(approverCell(page)).toHaveText(approver);
+        await expect(page.locator('#approval-rule-edit')).toHaveCount(0);
+
+        const form = await page.goto(`/approval-rule/update?id=${id}`);
+        expect(form?.status(), `the edit form of ${name}`).toBe(403);
+      }
     });
   }
 });

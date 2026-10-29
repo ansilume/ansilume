@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\models;
 
+use app\components\ApproverConfigIds;
 use yii\db\ActiveQuery;
 use yii\db\ActiveRecord;
 
@@ -66,6 +67,13 @@ class ApprovalRule extends ActiveRecord
     public const TEAM_HINT = 'Approvers are the members of this team. Those of them who are active, hold approval.decide '
         . '(or are superadmins) and may see the job can approve, never the user who launched it.';
 
+    /**
+     * Validation message of a users rule that requires more approvals than
+     * the users it names (countEligibleApprovers()); sprintf(): the
+     * required approvals, the users.
+     */
+    public const TOO_MANY_REQUIRED_APPROVALS = 'Required approvals (%d) exceeds eligible approvers (%d).';
+
     /** Validation message of an approver config that is no valid JSON; sprintf(): the attribute's label. */
     public const INVALID_JSON = '%s must be valid JSON.';
 
@@ -120,16 +128,24 @@ class ApprovalRule extends ActiveRecord
         }
         $count = $this->countEligibleApprovers();
         if ($count !== null && $this->$attribute > $count) {
-            $this->addError($attribute, sprintf(
-                'Required approvals (%d) exceeds eligible approvers (%d).',
-                $this->$attribute,
-                $count
-            ));
+            $this->addError($attribute, sprintf(self::TOO_MANY_REQUIRED_APPROVALS, $this->$attribute, $count));
         }
     }
 
     /**
      * Count eligible approvers based on current config, or null if indeterminate.
+     *
+     * A users rule counts the users its user_ids name as its approvers read
+     * them (resolveUserIds()), each once, and only those who exist, as a
+     * role or a team rule counts only users who exist: a deleted user's
+     * roles are revoked (UserDeletionService) and their team memberships
+     * deleted with them (the foreign key cascades), while user_ids keeps
+     * the ID. So a value that is no ID ("abc", true, 12.5), the same user
+     * again (5 and "05") and a user who does not exist count nothing; an
+     * inactive user counts, as in a role or a team, as they may be
+     * activated again. Regression: every entry counted, so a rule that
+     * requires more approvals than that was saved, and every launch it
+     * gates was then refused as one that could never be approved.
      */
     public function countEligibleApprovers(): ?int
     {
@@ -137,8 +153,7 @@ class ApprovalRule extends ActiveRecord
 
         switch ($this->approver_type) {
             case self::APPROVER_TYPE_USERS:
-                $ids = $config['user_ids'] ?? [];
-                return is_array($ids) ? count($ids) : 0;
+                return $this->countListedUsers($config);
             case self::APPROVER_TYPE_ROLE:
                 return count($this->resolveRoleIds($config));
             case self::APPROVER_TYPE_TEAM:
@@ -244,15 +259,30 @@ class ApprovalRule extends ActiveRecord
     }
 
     /**
+     * The users the config lists, as ApproverConfigIds reads an ID.
+     *
      * @param array<string, mixed> $config
      * @return int[]
      */
     private function resolveUserIds(array $config): array
     {
-        if (!isset($config['user_ids']) || !is_array($config['user_ids'])) {
-            return [];
+        return ApproverConfigIds::usersOf($config);
+    }
+
+    /**
+     * How many users who exist the config lists, each once
+     * (countEligibleApprovers()).
+     *
+     * @param array<string, mixed> $config
+     */
+    private function countListedUsers(array $config): int
+    {
+        $ids = array_unique($this->resolveUserIds($config));
+        if ($ids === []) {
+            return 0;
         }
-        return array_map('intval', $config['user_ids']);
+
+        return (int)User::find()->where(['id' => $ids])->count();
     }
 
     /**
@@ -279,7 +309,7 @@ class ApprovalRule extends ActiveRecord
      */
     private function resolveTeamIds(array $config): array
     {
-        $teamId = $config['team_id'] ?? null;
+        $teamId = ApproverConfigIds::teamOf($config);
         if ($teamId === null) {
             return [];
         }
@@ -287,7 +317,7 @@ class ApprovalRule extends ActiveRecord
         $rows = (new \yii\db\Query())
             ->select('user_id')
             ->from('{{%team_member}}')
-            ->where(['team_id' => (int)$teamId])
+            ->where(['team_id' => $teamId])
             ->all();
         return array_map(fn (array $row): int => (int)$row['user_id'], $rows);
     }

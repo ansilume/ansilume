@@ -113,3 +113,15 @@ export async function forgePost(page: Page, action: string, fields: Record<strin
 export async function optionLabels(page: Page, selector: string): Promise<string[]> {
   return page.locator(selector).locator('option').evaluateAll((options) => options.map((o) => (o.textContent ?? '').trim()));
 }
+
+/** The value of the only option of a select whose label, trimmed, is exactly `label`. */
+export async function optionValue(page: Page, selector: string, label: string): Promise<string> {
+  const values = await page.locator(selector).locator('option').evaluateAll(
+    (options, wanted) => options
+      .filter((option) => (option.textContent ?? '').trim() === wanted)
+      .map((option) => (option as HTMLOptionElement).value),
+    label,
+  );
+  expect(values, `exactly one option ${label} in ${selector}`).toHaveLength(1);
+  return values[0];
+}

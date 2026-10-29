@@ -55,9 +55,11 @@ class ApprovalRulesController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<ApprovalRule> $rules */
+        $rules = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($m) => $this->serialize($m), $dp->getModels()),
+            array_map(fn ($m) => $this->serialize($m), $rules),
             (int)$dp->totalCount,
             $page,
             25

@@ -12,6 +12,16 @@ test.describe('Artifact Storage', () => {
     expect(count).toBeGreaterThanOrEqual(3);
   });
 
+  // The Global byte quota row shows how much of the quota the artifacts use,
+  // in whole percent and at most 100 (app\components\Percent::ofQuota():
+  // 575 MB of 1000 MB is 58 %; since PHP 8.4 used / quota * 100 rounded
+  // that exact half down to 57). Only tests/integration/controllers/
+  // SystemControllerActionTest.php covers it
+  // (testRegressionTheQuotaUseRoundedAnExactHalfDown,
+  // testWithoutAQuotaTheRowShowsNoUse): the row shows a use only with
+  // ARTIFACT_MAX_TOTAL_BYTES set, which config/services.php reads when the
+  // app starts, and the E2E stack sets none; a spec cannot set it without
+  // restarting the app container.
   test('configuration table is visible', async ({ page }) => {
     await page.goto('/system/artifact-stats');
     await expect(page.locator('text=Configuration').first()).toBeVisible();

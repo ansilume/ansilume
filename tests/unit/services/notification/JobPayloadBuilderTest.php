@@ -31,7 +31,6 @@ class JobPayloadBuilderTest extends TestCase
             ->getMock();
 
         $attr = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $attr->setAccessible(true);
         $attr->setValue($job, [
             'id' => $id,
             'status' => 'successful',
@@ -44,7 +43,6 @@ class JobPayloadBuilderTest extends TestCase
         // short-circuit to our null values without invoking the typed
         // getJobTemplate()/getLauncher() relations (which can't return null).
         $rel = new \ReflectionProperty(BaseActiveRecord::class, '_related');
-        $rel->setAccessible(true);
         $rel->setValue($job, ['jobTemplate' => null, 'launcher' => null]);
 
         return $job;

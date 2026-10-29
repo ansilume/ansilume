@@ -79,13 +79,14 @@ class WorkflowJobsController extends BaseApiController
             'query' => $search->apply($query),
             'pagination' => ['pageSize' => 25],
         ]);
+        $page = $this->requestedPage();
         /** @var list<WorkflowJob> $models */
-        $models = array_values($runs->getModels());
+        $models = array_values($this->modelsOfPage($runs, $page));
 
         return $this->paginated(
             $this->serializeAll($models),
             (int)$runs->totalCount,
-            $this->requestedPage(),
+            $page,
             25
         );
     }

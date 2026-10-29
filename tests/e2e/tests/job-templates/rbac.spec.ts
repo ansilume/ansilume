@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
-import { expectForbidden, templateId } from '../../lib/helpers';
-import { asAdmin, forgePost, idWhere, indexRows, optionLabels } from '../../lib/scoping';
+import { expectForbidden, fieldError, notAnInteger, postJsonWithPageCsrf, showAnswer, templateId } from '../../lib/helpers';
+import { newestJobOf } from '../../lib/jobs';
+import { asAdmin, forgePost, idWhere, indexRows, optionLabels, optionValue } from '../../lib/scoping';
 import { PLACEHOLDER, expectNotInPage } from '../../lib/survey-secrets';
 import { generateTriggerToken, revokeTriggerTokenIfPresent } from '../../lib/triggers';
 import { jobIdsOfTemplate } from '../../lib/schedules';
@@ -27,12 +28,17 @@ import {
   GATED_INVENTORY_LOCK_NOTICE,
   GATED_INVENTORY_REFUSED,
   GATED_LOCK_NOTICE,
+  INVALID_CREDENTIAL_IDS,
   LAUNCH_NOTE_INVENTORY,
+  LIST_LAUNCH_FIELDS,
   LOCKED_INPUTS,
   LOCKED_PLAYBOOK,
   LOCKED_RENAMED,
   LOCKED_TEMPLATE,
+  NEARLY_THREE,
+  VERBOSITY_NOT_INTEGER,
   approverRefusal,
+  credentialIdsError,
   deleteOpenTemplate,
   expectLockedForm,
   gatedInventoryOption,
@@ -40,6 +46,8 @@ import {
   launchFailed,
   launchRefusal,
   lockedNotice,
+  nearlyId,
+  newTemplateMembers,
   runsWhat,
   surveyOf,
 } from '../../lib/job-templates';
@@ -185,6 +193,144 @@ test.describe('Job Templates RBAC', () => {
     await openTemplate(page, 'e2e-alpha-tmpl');
     await expect(page.locator('body')).toContainText('e2e-alpha-proj');
     await expect(page.locator('body')).not.toContainText('e2e-alpha-viewed-proj');
+  });
+
+  // Regression: the access check read a forged project that is no project
+  // ID, such as a fraction of the ID of a project the operator's team only
+  // views, as that project: a 403. Its error comes first now, before the
+  // access check (TeamScopingTrait::refusesSubmittedProject()), and nothing
+  // is created.
+  test('operator gets the form error, not a 403, for a project that is no project ID, and no template is created', async ({ page }) => {
+    const name = 'e2e-fraction-project-template';
+    await page.goto('/job-template/create');
+    const viewed = await optionValue(page, '#jobtemplate-project_id', 'e2e-alpha-viewed-proj');
+    await page.goto('/job-template/index');
+
+    await forgePost(page, '/job-template/create', {
+      'JobTemplate[name]': name,
+      'JobTemplate[project_id]': `${viewed}.5`,
+      'JobTemplate[playbook]': 'site.yml',
+    }, /\/job-template\/create$/);
+
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+    await expect(fieldError(page, 'jobtemplate', 'project_id')).toHaveText(notAnInteger('Project Id'));
+    await page.goto('/job-template/index?sort=-id');
+    await expect(page.locator('#template-table tbody')).not.toContainText(name);
+  });
+
+  // Regression: the launch read a forged verbosity with an (int) cast, so an
+  // operator's launch of e2e-template, whose project e2e-team operates
+  // (commands/E2eController.php), ran at verbosity 2 for 2.5. It is refused
+  // before the launch with the job record's message (services/JobLaunchInput.php).
+  test('operator gets the field message for a forged launch with the verbosity 2.5, and nothing is launched', async ({ page }) => {
+    const id = await templateId(page, 'e2e-template');
+    const newest = await newestJobOf(page, id);
+    await page.goto(`/job-template/view?id=${id}`);
+
+    await forgePost(page, `/job-template/launch?id=${id}`, { 'overrides[verbosity]': '2.5' }, new RegExp(`/job-template/launch\\?id=${id}$`));
+
+    await expect(flash(page, 'danger')).toHaveText(launchFailed(VERBOSITY_NOT_INTEGER));
+    await expect(page.locator('#launch-form'), 'the launch form, to correct the input').toBeVisible();
+    expect(await newestJobOf(page, id), 'no job was launched').toBe(newest);
+  });
+
+  // Regression: the launch form dropped a list as the verbosity or the limit,
+  // also one of an empty value (a forged overrides[verbosity][]=), and an
+  // operator's launch of e2e-template ran with the template's verbosity and
+  // limit, where POST /api/v1/jobs and the job trigger refuse a list. It is
+  // refused before the launch with the job record's message for a list
+  // (components/WebLaunchOverrides.php, services/JobLaunchInput.php).
+  for (const [field, message] of LIST_LAUNCH_FIELDS) {
+    test(`operator gets the field message for a forged launch with a list as ${field}, and nothing is launched`, async ({ page }) => {
+      const id = await templateId(page, 'e2e-template');
+      const newest = await newestJobOf(page, id);
+      await page.goto(`/job-template/view?id=${id}`);
+
+      await forgePost(page, `/job-template/launch?id=${id}`, { [field]: '' }, new RegExp(`/job-template/launch\\?id=${id}$`));
+
+      await expect(flash(page, 'danger')).toHaveText(launchFailed(message));
+      await expect(page.locator('#launch-form'), 'the launch form, to correct the input').toBeVisible();
+      expect(await newestJobOf(page, id), 'no job was launched').toBe(newest);
+    });
+  }
+
+  // Regression: the template form posted as JSON by an operator, in a
+  // project their team operates (e2e-project), answered 500 for an empty
+  // list as the credential (its foreign key refused the 0 the column
+  // stored), saved an empty list as the verbosity as verbosity 0, and saved
+  // 2.9999999999999996 forks as 2: PHP writes that number as "3" with its 14
+  // significant digits, which the integer rule took for a whole number. Now
+  // the form is shown again with the field's integer error, and nothing is
+  // created (JobTemplateFormPost::refusesLists(), WholeNumberValidator).
+  for (const [attribute, value, label, slug] of [
+    ['credential_id', '[]', 'Credential Id', 'credential-list'],
+    ['verbosity', '[]', 'Verbosity', 'verbosity-list'],
+    ['forks', NEARLY_THREE, 'Forks', 'forks-nearly-three'],
+  ] as const) {
+    test(`operator gets the field error for a template posted as JSON with ${attribute} ${value}, and none is created`, async ({ page }) => {
+      const name = `e2e-json-operator-${slug}-template`;
+      await page.goto('/job-template/create');
+      const members = await newTemplateMembers(page, name);
+
+      const answer = await postJsonWithPageCsrf(page, '/job-template/create', `{"JobTemplate": {${members}, "${attribute}": ${value}}}`);
+
+      expect(answer.status(), 'the form again, not a server error').toBe(200);
+      await showAnswer(page, answer);
+      await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+      await expect(fieldError(page, 'jobtemplate', attribute)).toHaveText(notAnInteger(label));
+      await page.goto('/job-template/index?sort=-id');
+      await expect(page.locator('#template-table tbody')).not.toContainText(name);
+    });
+  }
+
+  // Regression: the template form posted as JSON by an operator took the
+  // additional credential 2.9999999999999996 for credential #3: the form read
+  // it with filter_var(), which reads a float by its text of 14 significant
+  // digits. Now the form is shown again with the error under the additional
+  // credentials, and nothing is created.
+  test(`operator gets the credentials' error for a template posted as JSON with credential_ids [${NEARLY_THREE}], and none is created`, async ({ page }) => {
+    const name = 'e2e-json-operator-credentials-nearly-three-template';
+    await page.goto('/job-template/create');
+    const members = await newTemplateMembers(page, name);
+
+    const answer = await postJsonWithPageCsrf(page, '/job-template/create', `{"JobTemplate": {${members}}, "credential_ids": [${NEARLY_THREE}]}`);
+
+    expect(answer.status(), 'the form again, not a server error').toBe(200);
+    await showAnswer(page, answer);
+    await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+    await expect(credentialIdsError(page)).toHaveText(INVALID_CREDENTIAL_IDS);
+    await page.goto('/job-template/index?sort=-id');
+    await expect(page.locator('#template-table tbody')).not.toContainText(name);
+  });
+
+  // Regression: the lock of a gated template read its additional credential
+  // sent as the credential's ID followed by a fraction in its 15th digit as
+  // the stored one, no change, and the form saved it; it read the ID with a
+  // leading zero as no ID, a change, and refused it with 403. The lock reads
+  // an entry as the save does now: the first is a change, refused with 403,
+  // and the second is the stored credential, saved without changing what
+  // the template runs.
+  test('operator gets 403 for a gated template posted as JSON with its credential as a nearly whole number, and saves it written with a leading zero', async ({ page }) => {
+    const id = await templateId(page, LOCKED_TEMPLATE);
+    await page.goto(`/job-template/view?id=${id}`);
+    const before = await runsWhat(page);
+    const additional = page.locator('#template-credentials li[data-role="additional"]');
+    await expect(additional, 'one additional credential').toHaveCount(1);
+    const credential = (await additional.getAttribute('data-credential-id')) ?? '';
+    await page.goto(`/job-template/update?id=${id}`);
+
+    const refused = await postJsonWithPageCsrf(page, `/job-template/update?id=${id}`, `{"JobTemplate": {"name": "${LOCKED_TEMPLATE}"}, "credential_ids": [${nearlyId(credential)}]}`);
+
+    expect(refused.status(), 'the lock refuses a change of the credentials').toBe(403);
+    await showAnswer(page, refused);
+    await expect(page.locator('body')).toContainText(GATED_CHANGE_REFUSED);
+
+    await page.goto(`/job-template/update?id=${id}`);
+    const saved = await postJsonWithPageCsrf(page, `/job-template/update?id=${id}`, `{"JobTemplate": {"name": "${LOCKED_TEMPLATE}"}, "credential_ids": ["0${credential}"]}`);
+
+    expect(saved.url(), 'saved: the template page, not a 403').toMatch(/\/job-template\/view\?id=\d+$/);
+    await page.goto(`/job-template/view?id=${id}`);
+    expect(await runsWhat(page), 'what the template runs stays as stored').toEqual(before);
   });
 
   // Fixtures from commands/E2eVaultAssignmentSeeder.php and E2eInventoryProjectSeeder.php (open projects)

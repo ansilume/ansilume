@@ -101,7 +101,9 @@ if [ "$1" = "php-fpm" ]; then
     echo "[entrypoint] database is reachable"
 
     echo "[entrypoint] running migrations..."
-    if ! flock /var/www/.migrate.lock php /var/www/yii migrate --interactive=0; then
+    # As www-data, the user of php-fpm's workers: a log file that the
+    # migrations create belongs to those who append to it.
+    if ! flock /var/www/.migrate.lock gosu www-data php /var/www/yii migrate --interactive=0; then
         echo "[entrypoint] ERROR: database migrations failed" >&2
         echo "[entrypoint] Check the migration output above for details." >&2
         echo "[entrypoint] Common causes: schema conflicts, insufficient permissions, or a stuck lock." >&2
@@ -109,6 +111,19 @@ if [ "$1" = "php-fpm" ]; then
     fi
     echo "[entrypoint] migrations complete"
 fi
+
+# The log directory and its files belong to www-data when the command
+# starts. php-fpm's workers, the queue-worker and the schedule-runner run as
+# www-data, and Yii silently drops every log line of a process that cannot
+# append to its log file, the errors of the web UI and the API included.
+# Root may have created or rotated a log file since the loop above, such as
+# the health check of a compose file of 2.13.1 or older (php yii
+# health/check as root). app.log is created as www-data, so that a root
+# process that logs later, such as `docker compose exec app php yii ...`,
+# appends to it instead of creating it
+# (tests/unit/docker/EntrypointLogOwnershipTest.php).
+chown -R www-data:www-data /var/www/runtime/logs
+gosu www-data touch /var/www/runtime/logs/app.log
 
 # php-fpm needs root for the master process — pool config drops workers
 # to www-data automatically. Every other command (queue-worker,

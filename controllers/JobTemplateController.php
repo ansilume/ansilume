@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\JobTemplateFormPost;
 use app\components\JobTemplateWarnings;
+use app\components\SubmittedId;
+use app\components\SubmittedInteger;
 use app\components\WebLaunchOverrides;
 use app\models\Credential;
 use app\models\Inventory;
@@ -206,12 +209,18 @@ class JobTemplateController extends BaseController
             $model->playbook = $playbook;
         }
         if ($model->load((array)\Yii::$app->request->post())) {
+            // A list, and a value that is no project ID, get their errors before the access check.
+            if (JobTemplateFormPost::refusesLists($model, (array)\Yii::$app->request->post()) || $this->refusesSubmittedProject($model)) {
+                return $this->renderRejected($model, $this->postedCredentialIds());
+            }
             $this->requireChildOperate($model->project_id);
             $this->restrictInventories($model);
             $model->created_by = (int)(\Yii::$app->user->id ?? 0);
             $ruleAudit = $this->applySubmittedRule($model, null);
             $credentialIds = $this->postedCredentialIds();
-            if ($this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId())) {
+            $saved = !$model->hasErrors(JobTemplateRuleAssignment::FIELD)
+                && $this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId());
+            if ($saved) {
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
                 $lintService->runForTemplate($model);
@@ -219,7 +228,7 @@ class JobTemplateController extends BaseController
                 return $this->redirect(['view', 'id' => $model->id]);
             }
             $this->refuseLockedSave($model);
-            return $this->render('form', $this->formData($model, $credentialIds));
+            return $this->renderRejected($model, $credentialIds);
         }
         return $this->render('form', $this->formData($model));
     }
@@ -230,19 +239,32 @@ class JobTemplateController extends BaseController
      * change of the rule (ApprovalRuleAssignmentPolicy::ASSIGN_REFUSED) or
      * of a gated template's columns other than name and description, or of
      * its credential list, or giving it an inventory with a rule, is a 403
-     * (GatedJobTemplateLock::refusalOf()), and nothing is saved.
+     * (GatedJobTemplateLock::refusalOf()), and nothing is saved. A project
+     * that is no project ID, such as 5.5 or 1e30, gets its error after the
+     * 403 of the stored project's access check, before the check of the one
+     * it names and the lock (TeamScopingTrait::refusesSubmittedProject()),
+     * as on a create. A list or an object, also an empty one, in another ID
+     * or number field gets its error at the same point
+     * (JobTemplateFormPost::refusesLists());
+     * as the approval rule, once the rule check let it through
+     * (applySubmittedRule()).
      */
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
         if ($model->load((array)\Yii::$app->request->post())) {
+            if (JobTemplateFormPost::refusesLists($model, (array)\Yii::$app->request->post()) || $this->refusesSubmittedProject($model)) {
+                return $this->renderRejected($model, $this->postedCredentialIds());
+            }
             // The project it moves to as well, not only the one it comes from.
             $this->requireChildOperate($model->project_id);
             $this->restrictInventories($model);
             $ruleAudit = $this->applySubmittedRule($model, ApprovalRuleAssignmentPolicy::storedRuleId($model));
             $credentialIds = $this->postedCredentialIds();
-            if ($this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId())) {
+            $saved = !$model->hasErrors(JobTemplateRuleAssignment::FIELD)
+                && $this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId());
+            if ($saved) {
                 /** @var \app\services\LintService $lintService */
                 $lintService = \Yii::$app->get('lintService');
                 $lintService->runForTemplate($model);
@@ -250,9 +272,23 @@ class JobTemplateController extends BaseController
                 return $this->redirect(['view', 'id' => $model->id]);
             }
             $this->refuseLockedSave($model);
-            return $this->render('form', $this->formData($model, $credentialIds));
+            return $this->renderRejected($model, $credentialIds);
         }
         return $this->render('form', $this->formData($model));
+    }
+
+    /**
+     * The form again, with the errors of the rejected submission $model; a
+     * value the form cannot show is shown as an empty field with its error
+     * (JobTemplateFormPost::showable()).
+     *
+     * @param list<mixed>|null $credentialIds the submitted additional credentials
+     */
+    private function renderRejected(JobTemplate $model, ?array $credentialIds): string
+    {
+        JobTemplateFormPost::showable($model);
+
+        return $this->render('form', $this->formData($model, $credentialIds));
     }
 
     /**
@@ -272,19 +308,22 @@ class JobTemplateController extends BaseController
      * Apply the submitted approval rule (JobTemplate[approval_rule_id]) to
      * $model, when the form submitted one: only users who may assign rules
      * (approval-rule.update) may change it, also on a new template.
-     * $baseline is the rule the template has (null for a new one).
+     * $baseline is the rule the template has (null for a new one). A list
+     * or an object that passed the check gets the rule's error instead
+     * (SubmittedInteger::refusesLists()), and the action saves nothing.
      *
      * @return array<string, mixed> the audit context of the rule change, if any
      * @throws ForbiddenHttpException with the refusal, before anything is saved
      */
     private function applySubmittedRule(JobTemplate $model, ?int $baseline): array
     {
-        $posted = \Yii::$app->request->post($model->formName(), []);
+        $posted = JobTemplateFormPost::fields($model, (array)\Yii::$app->request->post());
         $assignment = new JobTemplateRuleAssignment();
-        $refusal = $assignment->apply($model, is_array($posted) ? $posted : [], (int)$this->currentUserId(), $baseline);
+        $refusal = $assignment->apply($model, $posted, (int)$this->currentUserId(), $baseline);
         if ($refusal !== null) {
             throw new ForbiddenHttpException($refusal);
         }
+        SubmittedInteger::refusesLists($model, $posted, [JobTemplateRuleAssignment::FIELD]);
 
         return $assignment->auditContext($model, $baseline);
     }
@@ -454,11 +493,12 @@ class JobTemplateController extends BaseController
      * launch (JobLaunchRejectedException, such as too few eligible
      * approvers or a template deleted meanwhile, or a limit or verbosity
      * the job record would refuse, JobLaunchInput) shows the form again
-     * with the reason.
+     * with the reason. An id that is no ID (a text, a JSON number beyond the
+     * int range) is template #0, which does not exist: 404.
      */
     public function actionLaunch(): Response|string
     {
-        $id = (int)(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0));
+        $id = SubmittedId::of(\Yii::$app->request->get('id') ?? \Yii::$app->request->post('id', 0)) ?? 0;
         $template = $this->findModel($id);
         $this->requireChildOperate($template->project_id);
         // Only the form's fields: server-only launch data cannot be posted.
@@ -565,8 +605,9 @@ class JobTemplateController extends BaseController
             'model' => $model,
             'projects' => $projectQuery->all(),
             'credentials' => Credential::find()->orderBy('name')->all(),
+            // A submitted value that is no ID (a JSON number beyond the int range among them) checks no box.
             'selectedCredentialIds' => $selectedCredentialIds !== null
-                ? array_map(static fn (mixed $id): int => is_numeric($id) ? (int)$id : 0, $selectedCredentialIds)
+                ? array_map(static fn (mixed $id): int => SubmittedId::of($id) ?? 0, $selectedCredentialIds)
                 : ($model->isNewRecord ? [] : $this->credentialService()->additionalIds($model)),
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
             // From the stored template, not from a rejected submission.

@@ -43,9 +43,11 @@ class RunnerGroupsController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<RunnerGroup> $groups */
+        $groups = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($g) => $this->serialize($g), $dp->getModels()),
+            array_map(fn ($g) => $this->serialize($g), $groups),
             (int)$dp->totalCount,
             $page,
             25

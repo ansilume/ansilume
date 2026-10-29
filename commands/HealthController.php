@@ -31,6 +31,44 @@ class HealthController extends Controller
      */
     public const CHECK_ERROR = "[health] %s: error — %s\n";
 
+    /** The line of the runtime directories and the log file when the user who runs the check can write them. */
+    public const DIRS_OK = "[health] dirs: ok\n";
+
+    /**
+     * The line of the runtime directories and the log file when the user
+     * who runs the check cannot write some of them. sprintf(): the
+     * directories, then the log file (LOG_FILE_NOT_WRITABLE), comma-separated.
+     */
+    public const DIRS_NOT_WRITABLE = "[health] dirs: not writable — %s\n";
+
+    /**
+     * How DIRS_NOT_WRITABLE names a log file that exists and that the user
+     * who runs the check cannot append to: Yii drops every line of a process
+     * that cannot append to its log file, so the errors of the web UI and
+     * the API are lost. The health checks of the app and the queue-worker
+     * run as www-data, as php-fpm's workers and the workers do. A root
+     * process leaves the file so when it creates it, such as the root health
+     * check of a compose file of 2.13.1 or older or a console command run as
+     * root, until the entrypoint hands runtime/logs back to www-data at the
+     * next start of the container. sprintf(): the log file, then its
+     * directory, whose chown -R also hands back the copies of a rotation
+     * that root made.
+     */
+    public const LOG_FILE_NOT_WRITABLE = '%s (lines logged to it are lost; the next start of the container hands it back'
+        . ' to www-data, or run in the container: chown -R www-data:www-data %s)';
+
+    /** The directories the app and the workers write, as the entrypoints create them. */
+    private const RUNTIME_DIRS = [
+        '/var/www/runtime',
+        '/var/www/runtime/projects',
+        '/var/www/runtime/artifacts',
+        '/var/www/runtime/logs',
+        '/var/www/web/assets',
+    ];
+
+    /** The log file of config/web.php and config/console.php (FileTarget's @runtime/logs/app.log). */
+    private const LOG_FILE = '/var/www/runtime/logs/app.log';
+
     public function actionCheck(): int
     {
         $healthy = true;
@@ -125,21 +163,66 @@ class HealthController extends Controller
         }
     }
 
+    /**
+     * The directories the check requires to be writable.
+     *
+     * @return list<string>
+     */
+    protected function runtimeDirs(): array
+    {
+        return self::RUNTIME_DIRS;
+    }
+
+    /**
+     * The log file the check requires to be writable when it exists.
+     */
+    protected function logFile(): string
+    {
+        return self::LOG_FILE;
+    }
+
+    /**
+     * The runtime directories, and the log file when it exists, must be
+     * writable for the user who runs the check. A missing log file is
+     * created by the first process that logs, in runtime/logs.
+     */
     private function checkRuntimeDirs(bool &$healthy): void
     {
-        $dirs = ['/var/www/runtime', '/var/www/runtime/projects', '/var/www/runtime/artifacts', '/var/www/runtime/logs', '/var/www/web/assets'];
         $notWritable = [];
-        foreach ($dirs as $dir) {
+        foreach ($this->runtimeDirs() as $dir) {
             if (!is_writable($dir)) {
                 $notWritable[] = $dir;
             }
         }
-        if (!empty($notWritable)) {
-            $this->stderr("[health] dirs: not writable — " . implode(', ', $notWritable) . "\n");
+        $logFile = $this->logFile();
+        if (file_exists($logFile) && !self::canAppendTo($logFile)) {
+            $notWritable[] = sprintf(self::LOG_FILE_NOT_WRITABLE, $logFile, dirname($logFile));
+        }
+        if ($notWritable !== []) {
+            $this->stderr(sprintf(self::DIRS_NOT_WRITABLE, implode(', ', $notWritable)));
             $healthy = false;
         } else {
-            $this->stdout("[health] dirs: ok\n");
+            $this->stdout(self::DIRS_OK);
         }
+    }
+
+    /**
+     * Whether the user who runs the check can append to $file, an existing
+     * file: it opens the file for appending, as Yii's FileTarget does, and
+     * writes nothing. The open asks the effective user, as the write of a
+     * log line does; is_writable() asks the real one. SplFileObject throws
+     * instead of the warning of fopen(), which the error handler would turn
+     * into an exception.
+     */
+    private static function canAppendTo(string $file): bool
+    {
+        try {
+            new \SplFileObject($file, 'a');
+        } catch (\RuntimeException | \LogicException) {
+            return false;
+        }
+
+        return true;
     }
 
     private function checkAdminUser(bool &$healthy): void

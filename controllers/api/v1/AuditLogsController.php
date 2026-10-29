@@ -58,9 +58,11 @@ class AuditLogsController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<AuditLog> $logs */
+        $logs = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn ($l) => $this->serialize($l), $dp->getModels()),
+            array_map(fn ($l) => $this->serialize($l), $logs),
             (int)$dp->totalCount,
             $page,
             25

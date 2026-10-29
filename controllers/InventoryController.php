@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\controllers;
 
+use app\components\SubmittedInteger;
 use app\models\Inventory;
 use app\models\Project;
 use app\models\User;
@@ -26,7 +27,15 @@ use yii\web\Response;
  * message (the team scope checked again under the inventory's row lock in the
  * words of this page's own check, MODIFY_FORBIDDEN), a 404 a
  * NotFoundHttpException, and a delete of an inventory in use (409) a danger
- * flash on the inventory's page.
+ * flash on the inventory's page. A submitted project that is no project ID,
+ * such as a fraction, a text or a JSON number beyond the int range, is shown
+ * with the model's error before the access check
+ * (TeamScopingTrait::refusesSubmittedProject()), and nothing is saved; so is
+ * an admin's approval rule that is a list or an object, also an empty one (a
+ * JSON [] or {}), with "Approval rule must be an integer."
+ * (refusesListValues()); from anyone else it is a rule change, refused with
+ * 403. An empty list as the project is no project, as the form's empty
+ * choice.
  *
  * A gated inventory (one with an approval rule) is for admins to change
  * (GatedInventoryLock): users who may not assign approval rules see its
@@ -116,7 +125,8 @@ class InventoryController extends BaseController
         if ($project_id !== null) {
             $model->project_id = $project_id;
         }
-        if (!$model->load((array)\Yii::$app->request->post())) {
+        $loaded = $model->load((array)\Yii::$app->request->post());
+        if (!$loaded || $this->refusesListValues($model) || $this->refusesSubmittedProject($model)) {
             return $this->renderForm($model);
         }
         $this->requireChildOperate($model->project_id);
@@ -136,7 +146,8 @@ class InventoryController extends BaseController
     {
         $model = $this->findModel($id);
         $this->requireChildOperate($model->project_id);
-        if (!$model->load((array)\Yii::$app->request->post())) {
+        $loaded = $model->load((array)\Yii::$app->request->post());
+        if (!$loaded || $this->refusesListValues($model) || $this->refusesSubmittedProject($model)) {
             return $this->renderForm($model);
         }
         // The project it moves to as well, not only the one it comes from.
@@ -220,6 +231,22 @@ class InventoryController extends BaseController
                 ? GatedInventoryLock::REPOSITORY_HOSTS_NOTE
                 : null,
         ]);
+    }
+
+    /**
+     * Whether an admin posted the approval rule as a list or an object: its
+     * integer rule's error (SubmittedInteger::refusesLists()), before
+     * anything reads it, and nothing is saved. The rules take an empty list
+     * for empty, and the column stored it as rule 0, which its foreign key
+     * refused with a server error. From a user who may not assign rules it
+     * is a rule change, which the write service refuses (403). The form does
+     * not load the rule; the write service reads it from the post
+     * (submitted()).
+     */
+    private function refusesListValues(Inventory $model): bool
+    {
+        return (new InventoryRuleAssignment())->mayAssign((int)$this->currentUserId())
+            && SubmittedInteger::refusesLists($model, $this->submitted(), [InventoryRuleAssignment::FIELD]);
     }
 
     /**

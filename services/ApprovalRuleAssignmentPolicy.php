@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\SubmittedId;
+use app\components\SubmittedInteger;
 use app\models\JobTemplate;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
@@ -18,9 +20,11 @@ use yii\base\Component;
  *
  * - Job templates: any change of approval_rule_id needs the permission,
  *   also setting one on a new template and removing one. Sending the stored
- *   value again, or not sending the field, is no change. A clone keeps its
- *   source's rule for everyone: copying is not assigning, and dropping the
- *   rule would create an ungated twin.
+ *   value again, in any spelling of its ID ("+5" and 5.0 are 5,
+ *   normalizeRuleId()), or not sending the field, is no change. A clone
+ *   keeps its source's rule for everyone: copying is not assigning, and
+ *   dropping the rule would create an ungated twin. Inventories share the
+ *   check (InventoryRuleAssignment).
  * - Workflows: a gated step is an approval step, or a job step whose job
  *   template is gated, by an approval rule of its own or by the rule of its
  *   inventory (a gated job step, GatedJobSteps). Adding one needs the
@@ -67,39 +71,45 @@ class ApprovalRuleAssignmentPolicy extends Component
 
     /**
      * The rule a submitted approval_rule_id stands for: null for no rule (''
-     * from a form, null from JSON), the ID for an integer or a string of
-     * digits. Anything else is no rule ID and comes back as it is, so that
-     * the template's validation refuses it.
+     * from a form, null from JSON); the ID for a whole number, read as the
+     * integer rule of the template or the inventory reads it, which is the
+     * ID the column stores (SubmittedInteger: "05", "+5", "5\n" and 5.0 are
+     * 5). Anything else is no rule ID and comes back as it is, so that the
+     * validation refuses it: a fraction, a text such as " 5" or "5e0", a
+     * boolean, a list, a float beyond the int range (1e30, 1e999).
+     *
+     * The check of who may assign a rule, the save and the audit read this
+     * one value. Read as only an int or a text of digits, an admin's "+5"
+     * gated a job template by rule 5 while its audit named no rule, and a
+     * user without approval-rule.update who sent the stored rule so was
+     * refused.
      */
     public static function normalizeRuleId(mixed $submitted): mixed
     {
         if ($submitted === null || $submitted === '') {
             return null;
         }
-        if (is_string($submitted) && ctype_digit($submitted)) {
-            return (int)$submitted;
-        }
 
-        return $submitted;
+        return SubmittedInteger::orAsSubmitted($submitted);
     }
 
     /**
-     * The rule a job template has now: the stored one, null for a template
-     * not saved yet. The baseline of an update; a clone passes its source's
-     * rule instead.
+     * The rule a job template has now: the stored one, read as an ID
+     * (SubmittedId, as InventoryRuleAssignment::storedRuleId() reads an
+     * inventory's); null for a template not saved yet. The baseline of an
+     * update; a clone passes its source's rule instead.
      */
     public static function storedRuleId(JobTemplate $template): ?int
     {
-        $stored = $template->getOldAttribute('approval_rule_id');
-
-        return $stored === null ? null : (int)$stored;
+        return SubmittedId::of($template->getOldAttribute('approval_rule_id'));
     }
 
     /**
-     * Why $userId may not set a job template's rule to $submitted, or null
-     * when they may: the same rule as $baseline is no change, and a change
-     * needs approval-rule.update. A value that is no rule ID counts as a
-     * change.
+     * Why $userId may not set a job template's or an inventory's rule to
+     * $submitted, or null when they may: the same rule as $baseline, in any
+     * spelling that normalizeRuleId() reads as its ID, is no change, and a
+     * change needs approval-rule.update. A value that is no rule ID counts
+     * as a change.
      */
     public function templateRuleRefusal(int $userId, mixed $submitted, ?int $baseline): ?string
     {

@@ -138,7 +138,6 @@ class ProjectTest extends TestCase
         );
         $p->method('save')->willReturn(true);
         $ref = new \ReflectionProperty(BaseActiveRecord::class, '_attributes');
-        $ref->setAccessible(true);
         $ref->setValue($p, array_merge([
             'scm_type' => Project::SCM_TYPE_GIT,
             'scm_url'  => '',

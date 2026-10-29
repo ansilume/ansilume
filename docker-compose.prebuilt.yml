@@ -7,7 +7,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/.env.prod.example         -o .env
 #   # edit .env — set secrets and passwords
 #   docker compose up -d
-#   docker compose exec app php yii setup/admin admin admin@example.com yourpassword
+#   docker compose exec -u www-data app php yii setup/admin admin admin@example.com yourpassword
 #
 # Troubleshooting:
 #   curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
@@ -28,7 +28,9 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "php", "/var/www/yii", "health/check"]
+      # As www-data, as php-fpm's workers: run as root, the check created or
+      # rotated runtime/logs/app.log as root, which they cannot append to.
+      test: ["CMD", "gosu", "www-data", "php", "/var/www/yii", "health/check"]
       interval: 15s
       timeout: 10s
       retries: 6
@@ -72,7 +74,8 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "php", "/var/www/yii", "health/check"]
+      # As www-data, the user of the worker (see app).
+      test: ["CMD", "gosu", "www-data", "php", "/var/www/yii", "health/check"]
       interval: 30s
       timeout: 10s
       retries: 3

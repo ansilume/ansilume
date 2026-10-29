@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\components\ApiBodyValues;
 use app\components\SubmittedId;
+use app\components\SubmittedInteger;
 use app\models\ApprovalRule;
 use app\models\Inventory;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
@@ -32,13 +33,19 @@ use yii\web\NotFoundHttpException;
  * (InventoryUsageService::forInventory()).
  *
  * Writes go through InventoryWriteService. A field of BODY_FIELDS that holds
- * a list or an object answers 422 (ApiBodyValues::NOT_A_VALUE) before the
- * body reaches the model. Only admins (approval-rule.update) assign or remove
- * approval_rule_id, change the hosts of an inventory with a rule, or delete
- * it (403); an inventory that job templates use is not deleted (409 with
- * used_by); a validation error answers 422 with the first error. A body that
- * sends "" for a field that may be empty means null, as the form's empty
- * field does: no description, content, source path or project.
+ * a list or an object, also an empty one (a JSON [] or {}), answers 422
+ * (ApiBodyValues::NOT_A_VALUE) before the body reaches the model. Only
+ * admins (approval-rule.update) assign or remove approval_rule_id, change
+ * the hosts of an inventory with a rule, or delete it (403); an inventory
+ * that job templates use is not deleted (409 with used_by); a validation
+ * error answers 422 with the first error. A body that sends "" for a field
+ * that may be empty means null, as the form's empty field does: no
+ * description, content, source path or project. A project_id that is no
+ * project ID, such as a fraction, a boolean or a JSON number beyond the int
+ * range, answers 422 with the model's error before the access check of the
+ * project it names. On PUT the stored inventory's access check comes before
+ * both 422s: a caller who may not change the inventory gets 403, whatever
+ * the body holds.
  */
 class InventoriesController extends BaseApiController
 {
@@ -88,9 +95,11 @@ class InventoriesController extends BaseApiController
             'pagination' => ['pageSize' => 25],
         ]);
         $page = $this->requestedPage();
+        /** @var list<Inventory> $inventories */
+        $inventories = $this->modelsOfPage($dp, $page);
 
         return $this->paginated(
-            array_map(fn (Inventory $inv): array => $this->listItem($inv), $dp->getModels()),
+            array_map(fn (Inventory $inv): array => $this->listItem($inv), $inventories),
             (int)$dp->totalCount,
             $page,
             25
@@ -129,6 +138,9 @@ class InventoriesController extends BaseApiController
 
         $model = new Inventory();
         $this->applyBody($model, $body);
+        if ($this->refusesSubmittedProject($model)) {
+            return $this->error($this->firstError($model), 422);
+        }
         $userId = $this->currentUserId();
         if ($userId === null || !$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
@@ -161,6 +173,9 @@ class InventoriesController extends BaseApiController
             return $this->error($listValue, 422);
         }
         $this->applyBody($model, $body);
+        if ($this->refusesSubmittedProject($model)) {
+            return $this->error($this->firstError($model), 422);
+        }
         // The project it moves to as well, not only the one it comes from.
         if (!$this->checker()->canOperateChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
@@ -219,7 +234,11 @@ class InventoriesController extends BaseApiController
     /**
      * Sets the MODEL_FIELDS that $body holds, cast to the model's types; null
      * or "" for a NULLABLE_FIELDS field is null, so that "" is no project
-     * rather than project 0, and the same as a stored null.
+     * rather than project 0, and the same as a stored null. project_id is
+     * read as the model's integer rule reads it (SubmittedInteger), never
+     * with an (int) cast, which fails on PHP 8.5 for a JSON number beyond the
+     * int range: a value that is no project ID is set as sent, for
+     * refusesSubmittedProject() to report.
      *
      * @param array<array-key, mixed> $body
      */
@@ -233,7 +252,7 @@ class InventoriesController extends BaseApiController
             if (($value === null || $value === '') && in_array($field, self::NULLABLE_FIELDS, true)) {
                 $model->$field = null;
             } elseif ($field === 'project_id') {
-                $model->project_id = (int)$value;
+                $model->setAttribute('project_id', SubmittedInteger::orAsSubmitted($value));
             } else {
                 $model->$field = (string)$value;
             }

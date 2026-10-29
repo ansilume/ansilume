@@ -10,6 +10,7 @@ use app\models\Runner;
 use app\models\RunnerGroup;
 use app\services\JobClaimService;
 use app\services\JobCompletionService;
+use app\services\RunnerReportNumbers;
 use yii\web\NotFoundHttpException;
 use yii\web\ServerErrorHttpException;
 use yii\web\Response;
@@ -78,6 +79,10 @@ class JobsController extends BaseRunnerApiController
      * POST /api/runner/v1/jobs/<id>/logs
      * Body: { stream: "stdout"|"stderr", content: "...", sequence: N }
      *
+     * A chunk without content writes nothing. The sequence (none: 0) must be
+     * a whole number the job log takes; any other value is answered with 422
+     * (RunnerReportNumbers::SEQUENCE_REFUSED), and the chunk is not written.
+     *
      * @return array<string, mixed>
      */
     public function actionLogs(int $id): array
@@ -89,10 +94,13 @@ class JobsController extends BaseRunnerApiController
             ? $body['stream']
             : JobLog::STREAM_STDOUT;
         $content = (string)($body['content'] ?? '');
-        $sequence = (int)($body['sequence'] ?? 0);
 
         if ($content === '') {
             return $this->ok();
+        }
+        $sequence = RunnerReportNumbers::sequence($body['sequence'] ?? 0);
+        if ($sequence === null) {
+            return $this->err(RunnerReportNumbers::SEQUENCE_REFUSED, 422);
         }
 
         /** @var JobCompletionService $svc */
@@ -112,15 +120,23 @@ class JobsController extends BaseRunnerApiController
      * only see exit_code=-1 and map it to STATUS_FAILED, indistinguishable
      * from a real failure and invisible to the "timed out" filter.
      *
+     * Otherwise the exit code (none: 0) must be a whole number the job
+     * record takes; any other value is answered with 422
+     * (RunnerReportNumbers::EXIT_CODE_REFUSED), and the job keeps running.
+     *
      * @return array<string, mixed>
      */
     public function actionComplete(int $id): array
     {
         $job = $this->findOwnedJob($id);
         $body = (array)\Yii::$app->request->bodyParams;
-        $exitCode = (int)($body['exit_code'] ?? 0);
         $hasChanges = !empty($body['has_changes']);
         $timedOut = !empty($body['timed_out']);
+        // completeTimedOut() writes -1, whatever exit code the report carries.
+        $exitCode = $timedOut ? -1 : RunnerReportNumbers::exitCode($body['exit_code'] ?? 0);
+        if ($exitCode === null) {
+            return $this->err(RunnerReportNumbers::EXIT_CODE_REFUSED, 422);
+        }
 
         /** @var JobCompletionService $svc */
         $svc = \Yii::$app->get('jobCompletionService');
@@ -137,6 +153,10 @@ class JobsController extends BaseRunnerApiController
      * POST /api/runner/v1/jobs/<id>/tasks
      * Body: { tasks: [ {seq, name, action, host, status, changed, duration_ms}, ... ] }
      *
+     * A list with a task that is no object, or whose seq or duration_ms is
+     * no whole number the task list takes, is answered with 422
+     * (RunnerReportNumbers::taskListRefusal()), and no task of it is saved.
+     *
      * @return array<string, mixed>
      */
     public function actionTasks(int $id): array
@@ -151,7 +171,10 @@ class JobsController extends BaseRunnerApiController
 
         /** @var JobCompletionService $svc */
         $svc = \Yii::$app->get('jobCompletionService');
-        $svc->saveTasks($job, $tasks);
+        $refusal = $svc->saveTasks($job, $tasks);
+        if ($refusal !== null) {
+            return $this->err($refusal, 422);
+        }
 
         return $this->ok(['saved' => count($tasks)]);
     }

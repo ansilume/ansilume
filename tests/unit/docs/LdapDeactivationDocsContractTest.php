@@ -144,7 +144,7 @@ class LdapDeactivationDocsContractTest extends TestCase
             'Database and deployment of updating.md'
         );
         $this->assertMentions(
-            'To roll back to 2.10.1, first drop the new column with `docker compose exec app php yii migrate/down 1 --interactive=0`, which reverts `' . self::MIGRATION
+            'To roll back to 2.10.1, first drop the new column with `docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`, which reverts `' . self::MIGRATION
                 . '`, so that the next update fills it from the audit log again (2.10.1 ignores the column but does not keep its mark up to date), then deploy 2.10.1:',
             $deployment,
             'Database and deployment of updating.md'

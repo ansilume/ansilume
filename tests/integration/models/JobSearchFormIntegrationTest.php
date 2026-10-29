@@ -180,6 +180,85 @@ class JobSearchFormIntegrationTest extends DbTestCase
         $this->assertInstanceOf(ActiveDataProvider::class, $result);
     }
 
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function whitespaceOnlyDateProvider(): array
+    {
+        return [
+            'a space' => [' '],
+            'a tab' => ["\t"],
+            'a line break' => ["\n"],
+            'two spaces' => ['  '],
+            'a NUL byte' => ["\0"],
+            'whitespace and a NUL byte' => [" \t\n\r\v\0"],
+            // trim() keeps the form feed, which strtotime() reads as no date on every version.
+            'a form feed and a space' => ["\f "],
+        ];
+    }
+
+    /**
+     * Regression: a date_from of only whitespace emptied the job list on
+     * PHP 8.3, where strtotime() read " ", "\t", "\n", "  " and "\f " as now
+     * (created_at >= now), and was no filter on PHP 8.4 and later; with a
+     * NUL byte the date rule threw a ValueError (500) on every version. It
+     * is no filter on every version now: the job created a minute ago is
+     * listed. On PHP 8.5, which the suites run, only the two sets with a NUL
+     * byte fail on the unfixed code; the sets of whitespace pin the bug of
+     * PHP 8.3, which the unfixed code has on PHP 8.3 only.
+     *
+     * @dataProvider whitespaceOnlyDateProvider
+     */
+    public function testRegressionAWhitespaceOnlyDateFromIsNoFilter(string $value): void
+    {
+        [$template, $user] = $this->makeFixtures();
+        $job = $this->createJob($template->id, $user->id);
+        $job->created_at = time() - 60;
+        $job->save(false);
+
+        $provider = (new JobSearchForm())->search(['date_from' => $value, 'launched_by' => (string)$user->id]);
+
+        $this->assertSame([$job->id], array_column($provider->getModels(), 'id'));
+    }
+
+    /**
+     * A date_to of only whitespace is no filter either: it was the end of
+     * today (strtotime() of the whitespace and " 23:59:59"), on every
+     * version. A job created tomorrow is listed.
+     */
+    public function testAWhitespaceOnlyDateToIsNoFilter(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+        $job = $this->createJob($template->id, $user->id);
+        $job->created_at = (int)strtotime('tomorrow 12:00');
+        $job->save(false);
+
+        foreach ([' ', "\t", "\0"] as $value) {
+            $provider = (new JobSearchForm())->search(['date_to' => $value, 'launched_by' => (string)$user->id]);
+
+            $this->assertSame([$job->id], array_column($provider->getModels(), 'id'), (string)json_encode($value));
+        }
+    }
+
+    /**
+     * Regression: a date with a NUL byte inside threw a ValueError from the
+     * date rule (500). It fails validation now, which the search ignores, and
+     * is applied as strtotime() reads it, as any date in another form is:
+     * "2020-01-01\0x" from 2020-01-01, so the job created a minute ago is
+     * listed.
+     */
+    public function testRegressionADateWithANulByteInsideNoLongerThrows(): void
+    {
+        [$template, $user] = $this->makeFixtures();
+        $job = $this->createJob($template->id, $user->id);
+        $job->created_at = time() - 60;
+        $job->save(false);
+
+        $provider = (new JobSearchForm())->search(['date_from' => "2020-01-01\0x", 'launched_by' => (string)$user->id]);
+
+        $this->assertSame([$job->id], array_column($provider->getModels(), 'id'));
+    }
+
     // -------------------------------------------------------------------------
 
     /**

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace app\components;
 
 use yii\base\Model;
-use yii\validators\NumberValidator;
 
 /**
  * A reference ID that a request submits (a job template, an approval rule),
@@ -24,16 +23,12 @@ final class SubmittedId
     /**
      * The ID $value stands for: an int, a float or a string that the integer
      * rule accepts, as an int ("05" and "+5" are 5); null for anything else,
-     * an empty value included, which the model's rules then report.
+     * an empty value and a number beyond the int range included, which the
+     * model's rules then report (SubmittedInteger).
      */
     public static function of(mixed $value): ?int
     {
-        if (!(is_int($value) || is_float($value) || is_string($value))) {
-            return null;
-        }
-        $integerRule = new NumberValidator(['integerOnly' => true]);
-
-        return $integerRule->validate($value) ? (int)$value : null;
+        return SubmittedInteger::of($value);
     }
 
     /**

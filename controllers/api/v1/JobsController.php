@@ -6,6 +6,7 @@ namespace app\controllers\api\v1;
 
 use app\components\JobInventory;
 use app\components\JobTemplateWarnings;
+use app\components\SubmittedId;
 use app\models\AuditLog;
 use app\models\Job;
 use app\models\JobArtifact;
@@ -86,9 +87,10 @@ class JobsController extends BaseApiController
         $search = new JobSearchForm();
         $search->teamFilter = $this->checker()->buildJobFilter($this->currentUserId());
         $dp = $search->search(\Yii::$app->request->queryParams);
+        $page = $this->requestedPage();
 
         /** @var list<Job> $jobs */
-        $jobs = $dp->getModels();
+        $jobs = $this->modelsOfPage($dp, $page);
         $artifactCounts = array_map('intval', array_column(
             JobArtifact::find()
                 ->select(['job_id', 'artifacts' => 'COUNT(*)'])
@@ -106,7 +108,6 @@ class JobsController extends BaseApiController
         }
         $inventories = JobInventory::ofPayloads($payloads);
         $total = $dp->totalCount;
-        $page = $this->requestedPage();
         $per = 25;
 
         return $this->paginated(
@@ -137,10 +138,12 @@ class JobsController extends BaseApiController
     }
 
     /**
-     * Launch input the job record would refuse (a verbosity outside 0-5, a
-     * limit longer than 255 characters, a list where a value belongs)
-     * answers 422 before the launch, with the record's message for each
-     * field under "fields" (JobLaunchInput).
+     * Launch input the job record would refuse (a verbosity outside 0-5 or
+     * that is no whole number, a limit longer than 255 characters, a list
+     * where a value belongs) answers 422 before the launch, with the
+     * record's message for each field under "fields" (JobLaunchInput). A job
+     * template ID that is no positive whole number answers 422 as a missing
+     * one (templateIdFrom()).
      *
      * @return array{data: mixed, warnings: list<array{code: string, message: string, credential_ids: list<int>}>}|array{error: array<string, mixed>}
      */
@@ -379,8 +382,10 @@ class JobsController extends BaseApiController
      * The launch overrides of the request body. extra_vars goes to the launch
      * as sent, a JSON object (decoded) or a JSON string: the launch refuses
      * values JSON cannot hold (422) in either form. limit and verbosity go as
-     * sent too, for JobLaunchInput to check: the launch makes text and a
-     * number of them.
+     * sent too, whenever they are set, for JobLaunchInput to check, which
+     * refuses a list or an object also when it is empty ([] or {}): the
+     * launch makes text of the limit and reads the verbosity as the job
+     * record's integer rule does, and takes an empty one ("") for none.
      *
      * @param array<string, mixed> $body
      * @return array<string, mixed>
@@ -391,7 +396,7 @@ class JobsController extends BaseApiController
         if (!empty($body['extra_vars'])) {
             $overrides['extra_vars'] = $body['extra_vars'];
         }
-        if (!empty($body['limit'])) {
+        if (isset($body['limit'])) {
             $overrides['limit'] = $body['limit'];
         }
         if (isset($body['verbosity'])) {
@@ -405,17 +410,19 @@ class JobsController extends BaseApiController
 
     /**
      * job_template_id, as in the Job response; template_id is the older name.
+     * Read as the integer rule reads an ID (SubmittedId), never cast: null,
+     * as for a missing ID, for anything but a positive whole number, such as
+     * 12.5 or "12.5", which the cast cut to 12, and a JSON number beyond the
+     * int range (1e30, 9223372036854775808, 1e999), a float whose cast warns
+     * on PHP 8.5 and answered 500.
      *
      * @param array<string, mixed> $body
      */
     private function templateIdFrom(#[\SensitiveParameter] array $body): ?int
     {
-        $raw = $body['job_template_id'] ?? $body['template_id'] ?? null;
-        if (!is_numeric($raw) || (int)$raw <= 0) {
-            return null;
-        }
+        $id = SubmittedId::of($body['job_template_id'] ?? $body['template_id'] ?? null);
 
-        return (int)$raw;
+        return $id !== null && $id > 0 ? $id : null;
     }
 
     /**
