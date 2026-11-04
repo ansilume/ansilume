@@ -1,6 +1,7 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectFlash, expectForbidden, fieldError, postJsonWithPageCsrf, showAnswer } from '../../lib/helpers';
-import { NOT_A_CREDENTIAL_ID, gitProjectWithCredential } from '../../lib/projects';
+import { LINT_QUEUED, LINT_RAN, expectLintResult, lintQueuedFlash, lintStatus, openProject } from '../../lib/lint';
+import { NOT_A_CREDENTIAL_ID, gitProjectWithCredential, projectId } from '../../lib/projects';
 import { asAdmin, forgePost } from '../../lib/scoping';
 import { BTN_CREATE } from '../../lib/selectors';
 
@@ -241,5 +242,40 @@ test.describe('Projects RBAC', () => {
     } finally {
       await asAdmin(browser, testInfo, (admin) => deleteProject(admin, id));
     }
+  });
+
+  // Run Lint queues a run of the project, which the queue-worker makes
+  // (LintService::queueForProject()); e2e-operator's team operates e2e-project.
+  test('operator runs lint on a project their team operates: it is queued, then the result shows', async ({ page }) => {
+    test.setTimeout(150_000);
+    await openProject(page, 'e2e-project');
+
+    await page.getByRole('button', { name: /run\s*lint/i }).click();
+
+    await expectFlash(page, 'success', lintQueuedFlash('e2e-project'));
+    await expect(page.getByTestId('lint-queued')).toHaveText(LINT_QUEUED);
+    await expectLintResult(page);
+    await expect(page.getByTestId('lint-badge')).toHaveText(LINT_RAN);
+  });
+
+  test('viewer sees the lint card of a project, but no Run Lint', async ({ page }) => {
+    await openVaultProject(page);
+
+    await expect(page.getByTestId('lint-badge')).toBeVisible();
+    await expect(page.getByRole('button', { name: /run\s*lint/i })).toHaveCount(0);
+  });
+
+  // The poll of the lint card answers whoever may view the project, as the page:
+  // e2e-viewer's team has e2e-beta-proj, e2e-operator's e2e-alpha-proj.
+  test('viewer polls the lint state of their team\'s project and is refused it for one they cannot see', async ({ page, browser }, testInfo) => {
+    const [own, hidden] = await asAdmin(browser, testInfo, async (admin) => [
+      await projectId(admin, 'e2e-beta-proj'),
+      await projectId(admin, 'e2e-alpha-proj'),
+    ]);
+
+    const answer = await lintStatus(page, 'project', own);
+    expect(answer.status()).toBe(200);
+    expect(Object.keys(await answer.json()).sort()).toEqual(['lint_at', 'queued']);
+    expect((await lintStatus(page, 'project', hidden)).status()).toBe(403);
   });
 });

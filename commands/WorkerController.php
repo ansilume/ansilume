@@ -8,16 +8,29 @@ use app\components\WorkerHeartbeat;
 use app\models\Job;
 use yii\base\Event;
 use yii\console\Controller;
+use yii\console\Exception as ConsoleException;
 use yii\console\ExitCode;
 use yii\queue\cli\Queue as CliQueue;
 use yii\queue\Queue as BaseQueue;
+use yii\queue\redis\Queue as RedisQueue;
+use yii\rbac\DbManager;
 
 /**
  * Worker management commands.
  *
  * Usage:
  *   php yii worker/start       Start queue listener with heartbeat (use instead of queue/listen)
+ *   php yii worker/start --queue=notificationQueue
+ *                              The same for the notification queue: the notification-worker
  *   php yii worker/status      Show active workers and queue depth
+ *
+ * Queues:
+ * A worker runs the queue component that --queue names (QUEUES): the queue
+ * of project syncs (queue, the default, the queue-worker) or the notification
+ * queue (notificationQueue, the notification-worker), so that a notification
+ * never waits behind a project sync. Each beats under the key prefix of its
+ * queue: the project page's sync worker and the queue-starvation sweep read
+ * the queue-worker's only.
  *
  * Graceful shutdown:
  * On SIGTERM / SIGINT / SIGQUIT / SIGHUP, yii2-queue's built-in {@see \yii\queue\cli\SignalLoop}
@@ -34,6 +47,13 @@ use yii\queue\Queue as BaseQueue;
  * database closes a connection that sat idle longer than its wait_timeout.
  * The worker closes it before and after each job instead
  * ({@see attachWorkerEvents()}).
+ *
+ * Roles:
+ * yii\rbac\DbManager keeps the role assignments of each user it checked for
+ * the life of the process. The worker makes it forget them before each
+ * job, so that a job decides with the roles the users hold when it runs: a
+ * role that the web UI took from a user or gave them counts from the next
+ * job on ({@see attachWorkerEvents()}).
  */
 class WorkerController extends Controller
 {
@@ -47,12 +67,59 @@ class WorkerController extends Controller
     public const STALE_LOOP_THRESHOLD_SECONDS = 60;
 
     /**
+     * The queue components a worker runs (--queue), each with the key prefix
+     * of its worker's heartbeat: the queue of project syncs, the default, and
+     * the notification queue.
+     */
+    public const QUEUES = [
+        'queue' => WorkerHeartbeat::KEY_PREFIX,
+        'notificationQueue' => WorkerHeartbeat::NOTIFICATION_KEY_PREFIX,
+    ];
+
+    /**
+     * Why worker/start refused a --queue that names no queue of QUEUES.
+     * sprintf(): the --queue given, then the queues of QUEUES.
+     */
+    public const UNKNOWN_QUEUE = '--queue=%s names no queue that a worker runs: name one of %s.';
+
+    /**
+     * Why worker/start refused a queue of QUEUES whose component is no Redis
+     * queue, as a configuration of one's own could make it. sprintf(): the
+     * component.
+     */
+    public const NOT_A_REDIS_QUEUE = 'The component %s is no Redis queue: a worker runs only a yii\queue\redis\Queue.';
+
+    /** What worker/start prints once it runs. sprintf(): its PID, its host, its queue. */
+    public const STARTED = "[worker] started. PID=%d Host=%s Queue=%s\n";
+
+    /**
+     * The queue component this worker runs (--queue): a key of QUEUES.
+     */
+    public string $queue = 'queue';
+
+    /**
      * In-process timestamp of the last EVENT_WORKER_LOOP firing. Updated
      * from inside the worker loop, read by the SIGALRM-driven self-check.
      * Static so the alarm callback (a closure) can reach it from outside
      * the action method's scope.
      */
     private static int $lastLoopAt = 0;
+
+    /**
+     * worker/start takes --queue.
+     *
+     * @param string $actionID
+     * @return string[]
+     */
+    public function options($actionID): array
+    {
+        $options = parent::options($actionID);
+        if ($actionID === 'start') {
+            $options[] = 'queue';
+        }
+
+        return $options;
+    }
 
     /**
      * Start the queue listener with heartbeat registration.
@@ -62,10 +129,11 @@ class WorkerController extends Controller
      */
     public function actionStart(): int
     {
-        $heartbeat = new WorkerHeartbeat();
+        $queue = $this->queueComponent();
+        $heartbeat = new WorkerHeartbeat(self::QUEUES[$this->queue]);
         $heartbeat->register();
 
-        $this->stdout('[worker] started. PID=' . getmypid() . ' Host=' . gethostname() . PHP_EOL);
+        $this->stdout(sprintf(self::STARTED, getmypid(), gethostname(), $this->queue));
 
         self::$lastLoopAt = time();
         $this->installHeartbeatRefresh($heartbeat);
@@ -78,14 +146,32 @@ class WorkerController extends Controller
         // Delegate to Yii2 queue listener (loop=true, timeout=3 → blocking brpop with 3s timeout).
         // SignalLoop (registered by the queue itself) handles SIGTERM/INT/QUIT/HUP cooperatively:
         // current job finishes, then the loop returns here for clean teardown.
-        /** @var \yii\queue\redis\Queue $queue */
-        $queue = \Yii::$app->queue;
         $queue->run(true, 3);
 
         $heartbeat->deregister();
         $this->stdout('[worker] stopped cleanly.' . PHP_EOL);
 
         return ExitCode::OK;
+    }
+
+    /**
+     * The queue component that --queue names, which worker/start runs.
+     *
+     * @throws ConsoleException when --queue names no queue of QUEUES, or its
+     *     component is no Redis queue: the command stops with the reason
+     *     before the worker starts.
+     */
+    public function queueComponent(): RedisQueue
+    {
+        if (!array_key_exists($this->queue, self::QUEUES)) {
+            throw new ConsoleException(sprintf(self::UNKNOWN_QUEUE, $this->queue, implode(', ', array_keys(self::QUEUES))));
+        }
+        $queue = \Yii::$app->get($this->queue);
+        if (!$queue instanceof RedisQueue) {
+            throw new ConsoleException(sprintf(self::NOT_A_REDIS_QUEUE, $this->queue));
+        }
+
+        return $queue;
     }
 
     /**
@@ -196,11 +282,13 @@ class WorkerController extends Controller
      * Attach lifecycle hooks to the queue worker so graceful shutdowns are
      * visible in operator logs and the heartbeat is deregistered as soon as
      * the loop exits — even before the surrounding actionStart() can clean up,
-     * and so that each job runs on a database connection of its own.
+     * so that each job runs on a database connection of its own, and so that
+     * each job reads the users' role assignments anew.
      *
      * Public for testability: tests trigger {@see CliQueue::EVENT_WORKER_STOP}
      * directly to verify the cleanup hook runs without spawning a real signal,
-     * and run jobs through a queue with these hooks (WorkerJobDbConnectionTest).
+     * and run jobs through a queue with these hooks (WorkerJobDbConnectionTest,
+     * WorkerJobRoleAssignmentsTest).
      */
     public function attachWorkerEvents(WorkerHeartbeat $heartbeat): void
     {
@@ -217,6 +305,21 @@ class WorkerController extends Controller
         foreach ([BaseQueue::EVENT_BEFORE_EXEC, BaseQueue::EVENT_AFTER_EXEC, BaseQueue::EVENT_AFTER_ERROR] as $event) {
             Event::on(BaseQueue::class, $event, $closeDbConnection);
         }
+        // Before each job the worker forgets the role assignments that the
+        // authManager read: yii\rbac\DbManager keeps those of every user it
+        // checked for the life of the process, and only an assign() or
+        // revoke() of the same process makes it read them again, never one
+        // of the web UI. The notifications check the roles of the user a
+        // template delivers as when a project sync dispatches its event and
+        // when a delivery is sent: without this, a role taken or given in
+        // the web UI reached neither check until the worker restarted
+        // (WorkerJobRoleAssignmentsTest).
+        Event::on(BaseQueue::class, BaseQueue::EVENT_BEFORE_EXEC, static function (): void {
+            $auth = \Yii::$app->getAuthManager();
+            if ($auth instanceof DbManager) {
+                $auth->invalidateCache();
+            }
+        });
         Event::on(CliQueue::class, CliQueue::EVENT_WORKER_START, function (): void {
             \Yii::info('Worker entered listening loop.', __CLASS__);
         });

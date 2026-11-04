@@ -407,7 +407,9 @@ class InventoryApprovalDocsContractTest extends TestCase
         foreach (['{{ approval.required_by }}', '{{ job.inventory_id }}', '{{ job.inventory_name }}'] as $variable) {
             $this->assertMentions('`' . $variable . '`', $item, 'updating.md');
         }
-        $form = $this->source('views/notification-template/form.php');
+        // The form shows the hint of NotificationTemplateFormView, which lists the variables.
+        $this->assertStringContainsString('NotificationTemplateFormView::VARIABLES_HINT', $this->source('views/notification-template/form.php'), 'The form shows the hint.');
+        $form = $this->source('services/notification/NotificationTemplateFormView.php');
         foreach (['{{ approval.required_by }}', '{{ job.inventory_name }}'] as $variable) {
             $this->assertStringContainsString($variable, $form, 'The form lists the variable.');
         }

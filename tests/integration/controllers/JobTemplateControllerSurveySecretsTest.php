@@ -308,8 +308,9 @@ class JobTemplateControllerSurveySecretsTest extends WebControllerTestCase
     {
         $this->swap('jobLaunchService', new JobLaunchService());
         $this->swap('lintService', new class () extends \app\services\LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
     }

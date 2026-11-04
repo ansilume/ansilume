@@ -47,7 +47,7 @@ class OpenApiGatedTemplateContractTest extends WebControllerTestCase
     private const NOTIFICATION_TEST = '/api/v1/notification-templates/{id}/test';
 
     /** What a webhook endpoint that answers 404 makes the webhook channel throw. */
-    private const CHANNEL_ERROR = 'WebhookChannel: HTTP 404 — Not Found';
+    private const CHANNEL_ERROR = 'WebhookChannel: HTTP 404.';
 
     /**
      * Regression (decision 5): an operator's change of what a gated job

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services\notification;
 
+use app\models\Job;
 use app\models\NotificationTemplate;
 
 /**
@@ -50,38 +51,34 @@ class TeamsChannel implements ChannelInterface
         $this->post($url, $payload, ['Content-Type: application/json']);
     }
 
+    /**
+     * The colour of the card for the job's status (Job::statuses()): green
+     * for a success, red for a failure, blue while it runs, grey otherwise.
+     * Up to 2.14.0 green went with "successful", a status no job has.
+     */
     private function themeColor(string $status): string
     {
         return match ($status) {
-            'successful' => '2DC72D',
-            'failed', 'error', 'timed_out' => 'FF0000',
-            'running' => '0078D7',
+            Job::STATUS_SUCCEEDED => '2DC72D',
+            Job::STATUS_FAILED, Job::STATUS_TIMED_OUT => 'FF0000',
+            Job::STATUS_RUNNING => '0078D7',
             default => '808080',
         };
     }
 
     /**
+     * POSTs $payload to the webhook through the outbound HTTP client
+     * (ChannelHttp): http and https only, no redirect, and an error that
+     * names the status, never the URL or the answer.
+     *
      * @param string[] $headers
+     * @throws \app\components\OutboundHttpException when the webhook did not take it
      */
     protected function post(#[\SensitiveParameter] string $url, string $payload, array $headers): string
     {
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new \RuntimeException('TeamsChannel: failed to init curl');
-        }
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        $result = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $response = ChannelHttp::post('TeamsChannel', $url, $payload, $headers);
 
-        if ($code < 200 || $code >= 300) {
-            throw new \RuntimeException("TeamsChannel: HTTP {$code} — " . substr((string)$result, 0, 200));
-        }
-
-        \Yii::info("TeamsChannel: sent to webhook — {$code}", __CLASS__);
-        return (string)$result;
+        \Yii::info("TeamsChannel: sent to webhook — {$response->status}", __CLASS__);
+        return $response->body;
     }
 }

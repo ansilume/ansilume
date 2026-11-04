@@ -106,6 +106,7 @@ class NotificationTemplatesApiTest extends DbTestCase
             $nt->channel = $channel;
             $nt->events = 'job.failed';
             $nt->created_by = $user->id;
+            $nt->delivers_as = $user->id;
             $nt->created_at = time();
             $nt->updated_at = time();
 

@@ -3,6 +3,8 @@
 /web/assets/
 /web/index-test.php
 /.env
+# The notification channels of the installation's own (docs/notifications.md)
+/config/notification-channels.php
 *.swp
 *.swo
 .DS_Store

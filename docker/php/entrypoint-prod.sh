@@ -70,9 +70,10 @@ if [ "$1" = "php-fpm" ]; then
 fi
 
 # The log directory and its files belong to www-data when the command
-# starts. php-fpm's workers, the queue-worker and the schedule-runner run as
-# www-data, and Yii silently drops every log line of a process that cannot
-# append to its log file, the errors of the web UI and the API included.
+# starts. php-fpm's workers, the queue-worker, the notification-worker and the
+# schedule-runner run as www-data, and Yii silently drops every log line of a
+# process that cannot append to its log file, the errors of the web UI and the
+# API included.
 # Root may have created or rotated a log file since the loop above, such as
 # the health check of a compose file of 2.13.1 or older (php yii
 # health/check as root). app.log is created as www-data, so that a root
@@ -84,8 +85,8 @@ gosu www-data touch /var/www/runtime/logs/app.log
 
 # php-fpm needs root for the master process — pool config drops workers
 # to www-data automatically. Every other command (queue-worker,
-# schedule-runner, one-off `php yii ...` calls) must drop privileges
-# up front, otherwise files written by the worker (git clones, .ansible
+# notification-worker, schedule-runner, one-off `php yii ...` calls) must drop
+# privileges up front, otherwise files written by the worker (git clones, .ansible
 # cache dirs, artifacts) end up root-owned and the www-data web process
 # can't touch them later. The symptom is a "Permission denied" error
 # when clicking "Run Lint" on a freshly synced SCM project.

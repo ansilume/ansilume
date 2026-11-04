@@ -32,6 +32,12 @@ use PHPUnit\Framework\TestCase;
  * Regression: each directory's output was appended without its last
  * newline, which $(…) drops, so the last violation of one directory was
  * glued to the first of the next and the count was one short.
+ *
+ * Regression: a ruleset PHPMD cannot find ends it with a fatal error (exit
+ * 255), which this container's php.ini logs without showing it, so PHPMD
+ * printed nothing and the check, which fails on every line PHPMD prints,
+ * passed. The check now judges PHPMD by its exit code, and PHP shows the
+ * error (StyleSuiteExitStatusTest).
  */
 class StyleSuitePhpmdTest extends TestCase
 {
@@ -121,6 +127,23 @@ class StyleSuitePhpmdTest extends TestCase
         }
     }
 
+    public function testRegressionARulesetPhpmdCannotFindFailsTheCheckWithItsMessage(): void
+    {
+        unlink($this->dir . '/phpmd.xml');
+
+        [$status, $output] = $this->runCheck();
+
+        $this->assertSame(0, $status, $output);
+        $this->assertStringStartsWith("  ✘  PHPMD did not complete for controllers/ (exit 255)\n", $output);
+        $this->assertStringContainsString(
+            'Cannot find specified rule-set "phpmd.xml"',
+            $output,
+            "PHPMD's own message, which the container's php.ini would only log"
+        );
+        $this->assertStringNotContainsString('did not complete for services/', $output, 'the check stops at the first directory');
+        $this->assertStringNotContainsString('PHPMD passed', $output);
+    }
+
     /** The commands of the section "PHPMD (complexity + unused code)" of bin/tests-style.sh. */
     private function phpmdSection(): string
     {
@@ -128,6 +151,15 @@ class StyleSuitePhpmdTest extends TestCase
         $this->assertSame(1, preg_match('/^section "PHPMD [^"]*"\n(.*?)^section /ms', $script, $m));
 
         return $m[1] ?? '';
+    }
+
+    /** show_output_tail() of bin/tests-common.sh, which the section calls when PHPMD did not complete. */
+    private function outputTailHelper(): string
+    {
+        $common = (string)file_get_contents(dirname(__DIR__, 3) . '/bin/tests-common.sh');
+        $this->assertSame(1, preg_match('/^show_output_tail\(\) \{\n.*?^\}\n/ms', $common, $m));
+
+        return $m[0] ?? '';
     }
 
     /**
@@ -143,6 +175,7 @@ class StyleSuitePhpmdTest extends TestCase
             . 'fail() { echo "  ✘  $1"; }' . "\n"
             . 'skip() { echo "  –  $1 (skipped)"; }' . "\n"
             . 'dc() { "$@"; }' . "\n"
+            . $this->outputTailHelper()
             . $this->phpmdSection();
         $process = proc_open(
             ['bash', '-c', 'set -euo pipefail' . "\n" . $harness],

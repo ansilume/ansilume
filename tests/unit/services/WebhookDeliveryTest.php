@@ -294,11 +294,12 @@ class WebhookDeliveryTest extends TestCase
     }
 
     /**
-     * An answer outside 2xx is logged with its status line.
+     * An answer outside 2xx is logged with its status, never with the
+     * answer.
      *
      * @dataProvider refusedStatuses
      */
-    public function testADeliveryTheReceiverRefusedLogsItsStatusLine(int $status, string $statusLine): void
+    public function testADeliveryTheReceiverRefusedLogsItsStatus(int $status, string $statusLine): void
     {
         $server = new HttpLoopbackServer();
         $webhook = $this->makeWebhook($server->start($status, 'refused') . '/hooks/ansilume');
@@ -319,15 +320,15 @@ class WebhookDeliveryTest extends TestCase
     public static function refusedStatuses(): array
     {
         return [
-            'not found' => [404, 'HTTP/1.1 404 Not Found'],
-            'server error' => [500, 'HTTP/1.1 500 Internal Server Error'],
-            'unavailable' => [503, 'HTTP/1.1 503 Service Unavailable'],
+            'not found' => [404, 'HTTP 404.'],
+            'server error' => [500, 'HTTP 500.'],
+            'unavailable' => [503, 'HTTP 503.'],
         ];
     }
 
     /**
-     * Without an answer there is no status line: the warning names the
-     * network error instead.
+     * Without an answer the warning names curl's error, never the URL,
+     * which PHP's warning text held before.
      */
     public function testADeliveryThatGotNoAnswerLogsTheNetworkError(): void
     {
@@ -337,19 +338,14 @@ class WebhookDeliveryTest extends TestCase
 
         $warnings = self::warningsWhile(fn () => $service->deliverNow($webhook, Webhook::EVENT_JOB_SUCCESS, $job));
 
-        $this->assertSame([
-            'Webhook #1 non-success for event=job.success job=7:  '
-            . '(file_get_contents(http://127.0.0.1:1/hooks/ansilume): Failed to open stream: Connection refused)',
-        ], $warnings);
+        $this->assertSame(['Webhook #1 non-success for event=job.success job=7: Could not connect (curl error 7).'], $warnings);
     }
 
     /**
      * A delivery without an HTTP answer is never taken for the one before
-     * it, which the receiver took. PHP 8.5 deprecates
-     * $http_response_header, the headers local to the call;
-     * http_get_last_response_headers(), which replaces it, keeps the headers
-     * of the last HTTP answer until the next HTTP request, so deliver()
-     * clears them before each delivery.
+     * it, which the receiver took: each delivery is a request of its own.
+     * A stored URL of another scheme than http or https is refused, not
+     * read.
      */
     public function testADeliveryWithoutAnHttpAnswerIsNotTakenForTheOneBefore(): void
     {
@@ -369,7 +365,7 @@ class WebhookDeliveryTest extends TestCase
             unlink($file);
         }
 
-        $this->assertSame(['Webhook #1 non-success for event=job.success job=8: '], $warnings);
+        $this->assertSame(['Webhook #1 non-success for event=job.success job=8: The URL must use http or https.'], $warnings);
     }
 
     /**

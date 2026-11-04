@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace app\models;
 
 use app\components\NotificationConfigSecrets;
+use app\services\notification\ChannelDefinition;
+use app\services\notification\ChannelRegistry;
+use app\services\notification\NotificationWorkflowFilter;
 use yii\db\ActiveQuery;
 use yii\db\ActiveRecord;
 
@@ -12,17 +15,33 @@ use yii\db\ActiveRecord;
  * @property int         $id
  * @property string      $name
  * @property string|null $description
- * @property string      $channel          email, slack, teams, webhook, telegram, pagerduty
- * @property string|null $config           JSON channel config; pages and the API show its secrets
- *                                         (SECRET_CONFIG_KEYS, SECRET_CONFIG_MAPS) only as SurveySecrets::PLACEHOLDER
+ * @property string      $channel          a channel of the installation (ChannelRegistry): email, slack, teams,
+ *                                         webhook, telegram, pagerduty, mattermost, or one of its own
+ * @property string|null $config           JSON channel config, as its channel's definition says
+ *                                         (ChannelDefinition); pages and the API show its secrets (secretKeys,
+ *                                         secretMaps) only as SurveySecrets::PLACEHOLDER; its URLs (urlSchemes)
+ *                                         are http or https URLs
  * @property string|null $subject_template
  * @property string|null $body_template
+ * @property string|null $channel_state    JSON the server keeps for the channel; no rule assigns it
  * @property string      $events           Comma-separated event names
- * @property int         $created_by
+ * @property string|null $level            LEVEL_ALL or LEVEL_ESSENTIAL: which workflow events it delivers
+ *                                         (isWithinLevel()); stored NOT NULL, default all
+ * @property string|null $workflow_scope   WORKFLOW_SCOPE_ALL, or WORKFLOW_SCOPE_SELECTED: only the runs of the
+ *                                         workflow templates of its workflow filter (isForWorkflowTemplate());
+ *                                         stored NOT NULL, default all
+ * @property int         $created_by       the user who created it: set by the create actions, never taken
+ *                                         from a form or a request body
+ * @property int         $delivers_as      the user whose access decides what it delivers: who last changed what
+ *                                         or where it delivers (NotificationIdentity); set by the server, never
+ *                                         taken from a form or a request body
  * @property int         $created_at
  * @property int         $updated_at
  *
  * @property User $creator
+ * @property User|null $deliversAsUser
+ * @property WorkflowTemplate[] $workflowTemplates the live workflow templates of its workflow filter
+ * @property NotificationDelivery[] $deliveries
  */
 class NotificationTemplate extends ActiveRecord
 {
@@ -33,6 +52,7 @@ class NotificationTemplate extends ActiveRecord
     public const CHANNEL_WEBHOOK = 'webhook';
     public const CHANNEL_TELEGRAM = 'telegram';
     public const CHANNEL_PAGERDUTY = 'pagerduty';
+    public const CHANNEL_MATTERMOST = 'mattermost';
 
     // -- Event catalog ---------------------------------------------------------
     // Jobs
@@ -47,6 +67,10 @@ class NotificationTemplate extends ActiveRecord
     public const EVENT_WORKFLOW_FAILED = 'workflow.failed';
     public const EVENT_WORKFLOW_CANCELED = 'workflow.canceled';
     public const EVENT_WORKFLOW_STEP_FAILED = 'workflow.step_failed';
+    public const EVENT_WORKFLOW_STEP_STARTED = 'workflow.step_started';
+    public const EVENT_WORKFLOW_STEP_SUCCEEDED = 'workflow.step_succeeded';
+    /** A run waits for a person: an approval or a resume (WorkflowRunEvents). */
+    public const EVENT_WORKFLOW_WAITING = 'workflow.waiting';
 
     // Approvals
     public const EVENT_APPROVAL_REQUESTED = 'approval.requested';
@@ -67,33 +91,55 @@ class NotificationTemplate extends ActiveRecord
     // Webhooks
     public const EVENT_WEBHOOK_INVALID_TOKEN = 'webhook.invalid_token';
 
-    // -- Channel secrets -------------------------------------------------------
+    // -- Level and workflow filter ---------------------------------------------
 
-    /**
-     * The keys of a channel's config whose values are secrets, as the channels
-     * of services/notification/ read them. The template page, the edit form
-     * and the API show SurveySecrets::PLACEHOLDER instead; a config submitted
-     * with the placeholder keeps the stored value (NotificationConfigSecrets).
-     * A key that is a secret for one channel is redacted in every config.
-     */
-    public const SECRET_CONFIG_KEYS = [
-        self::CHANNEL_EMAIL => [],
-        self::CHANNEL_SLACK => ['webhook_url'],
-        self::CHANNEL_TEAMS => ['webhook_url'],
-        self::CHANNEL_WEBHOOK => ['url'],
-        self::CHANNEL_TELEGRAM => ['bot_token'],
-        self::CHANNEL_PAGERDUTY => ['routing_key'],
+    /** Every workflow event the template listens to. */
+    public const LEVEL_ALL = 'all';
+
+    /** Of the workflow events, only ESSENTIAL_WORKFLOW_EVENTS. */
+    public const LEVEL_ESSENTIAL = 'essential';
+
+    public const LEVELS = [self::LEVEL_ALL, self::LEVEL_ESSENTIAL];
+
+    /** How the form and the page name each level. */
+    public const LEVEL_LABELS = [
+        self::LEVEL_ALL => 'Everything',
+        self::LEVEL_ESSENTIAL => 'Only failures, waits and the end',
     ];
 
-    /**
-     * The keys of a channel's config whose every value is a secret: the
-     * webhook channel's custom headers (WebhookChannel sends them, so they
-     * carry authorization tokens). Their names are shown. A header keeps its
-     * stored value only while the channel's secret keys (the url) keep theirs.
-     */
-    public const SECRET_CONFIG_MAPS = [
-        self::CHANNEL_WEBHOOK => ['headers'],
+    /** The workflow events that level essential lets through: a failed step, a wait for a person and the run's end. */
+    public const ESSENTIAL_WORKFLOW_EVENTS = [
+        self::EVENT_WORKFLOW_STEP_FAILED,
+        self::EVENT_WORKFLOW_WAITING,
+        self::EVENT_WORKFLOW_SUCCEEDED,
+        self::EVENT_WORKFLOW_FAILED,
+        self::EVENT_WORKFLOW_CANCELED,
     ];
+
+    /** The runs of every workflow template. */
+    public const WORKFLOW_SCOPE_ALL = 'all';
+
+    /** Only the runs of the workflow templates of the workflow filter: none while it holds none. */
+    public const WORKFLOW_SCOPE_SELECTED = 'selected';
+
+    public const WORKFLOW_SCOPES = [self::WORKFLOW_SCOPE_ALL, self::WORKFLOW_SCOPE_SELECTED];
+
+    /** How the form and the page name each workflow scope. */
+    public const WORKFLOW_SCOPE_LABELS = [
+        self::WORKFLOW_SCOPE_ALL => 'All workflows',
+        self::WORKFLOW_SCOPE_SELECTED => 'Only these workflows',
+    ];
+
+    /** The workflow filter: a workflow template per row (NotificationWorkflowFilter). */
+    public const WORKFLOW_FILTER_TABLE = '{{%notification_template_workflow_template}}';
+
+    // -- Channel URLs ------------------------------------------------------------
+
+    /** A URL of the config that is no http or https URL; sprintf(): its key, such as webhook_url. */
+    public const URL_SCHEME_REFUSED = '%s must be an http or https URL.';
+
+    /** A URL of the config whose key allows https only, which it does not use; sprintf(): its key. */
+    public const HTTPS_REQUIRED = '%s must be an https URL.';
 
     public static function tableName(): string
     {
@@ -121,7 +167,14 @@ class NotificationTemplate extends ActiveRecord
             [['subject_template'], 'string', 'max' => 512],
             [['events'], 'string', 'max' => 1024],
             [['events'], 'validateEvents'],
-            [['created_by'], 'integer'],
+            [['level'], 'default', 'value' => self::LEVEL_ALL],
+            [['level'], 'in', 'range' => self::LEVELS, 'strict' => true],
+            [['workflow_scope'], 'default', 'value' => self::WORKFLOW_SCOPE_ALL],
+            [['workflow_scope'], 'in', 'range' => self::WORKFLOW_SCOPES, 'strict' => true],
+            // Unsafe: the create actions set both, NotificationIdentity changes
+            // delivers_as; neither the form nor the API may. channel_state has
+            // no rule: only the server writes it.
+            [['!created_by', '!delivers_as'], 'integer'],
         ];
     }
 
@@ -165,54 +218,30 @@ class NotificationTemplate extends ActiveRecord
     }
 
     /**
-     * Validate that channel-specific required config fields are present.
+     * The checks of the channel's definition (ChannelDefinition::refusals()):
+     * its required keys hold a value, its URLs use a scheme their key allows
+     * (a stored template with another scheme is refused too, until its URL
+     * is changed), and its config rules. A channel the installation does not
+     * have is refused by the channel's own rule.
      */
     public function validateChannelConfig(string $attribute): void
     {
-        $cfg = $this->getParsedConfig();
-        $missing = $this->missingChannelConfigFields($cfg);
-        foreach ($missing as $field) {
-            $this->addError($attribute, "{$field} is required for {$this->channelLabel($this->channel)}.");
+        $definition = ChannelRegistry::definitionOf(is_string($this->channel) ? $this->channel : null);
+        foreach ($definition?->refusals($this->getParsedConfig()) ?? [] as $error) {
+            $this->addError($attribute, $error);
         }
     }
 
     /**
-     * @param array<string, mixed> $cfg
-     * @return string[]
-     */
-    private function missingChannelConfigFields(array $cfg): array
-    {
-        $required = match ($this->channel) {
-            self::CHANNEL_TELEGRAM => ['bot_token', 'chat_id'],
-            self::CHANNEL_SLACK => ['webhook_url'],
-            self::CHANNEL_TEAMS => ['webhook_url'],
-            self::CHANNEL_WEBHOOK => ['url'],
-            self::CHANNEL_PAGERDUTY => ['routing_key'],
-            self::CHANNEL_EMAIL => ['emails'],
-            default => [],
-        };
-        $missing = [];
-        foreach ($required as $field) {
-            if (empty($cfg[$field])) {
-                $missing[] = $field;
-            }
-        }
-        return $missing;
-    }
-
-    /**
+     * The channels of the installation by name, each with its label
+     * (ChannelRegistry): the built-in ones in the form's order, then those
+     * of its own.
+     *
      * @return array<string, string>
      */
     public static function channelLabels(): array
     {
-        return [
-            self::CHANNEL_EMAIL => 'Email',
-            self::CHANNEL_SLACK => 'Slack',
-            self::CHANNEL_TEAMS => 'Microsoft Teams',
-            self::CHANNEL_WEBHOOK => 'Webhook',
-            self::CHANNEL_TELEGRAM => 'Telegram',
-            self::CHANNEL_PAGERDUTY => 'PagerDuty',
-        ];
+        return array_map(static fn (ChannelDefinition $definition): string => $definition->label, ChannelRegistry::installed());
     }
 
     public static function channelLabel(string $channel): string
@@ -260,7 +289,10 @@ class NotificationTemplate extends ActiveRecord
                     self::EVENT_WORKFLOW_SUCCEEDED => 'Workflow succeeded',
                     self::EVENT_WORKFLOW_FAILED => 'Workflow failed',
                     self::EVENT_WORKFLOW_CANCELED => 'Workflow canceled',
+                    self::EVENT_WORKFLOW_STEP_STARTED => 'Workflow step started',
+                    self::EVENT_WORKFLOW_STEP_SUCCEEDED => 'Workflow step succeeded',
                     self::EVENT_WORKFLOW_STEP_FAILED => 'Workflow step failed',
+                    self::EVENT_WORKFLOW_WAITING => 'Workflow waiting for someone',
                 ],
             ],
             'approvals' => [
@@ -355,10 +387,84 @@ class NotificationTemplate extends ActiveRecord
             self::EVENT_APPROVAL_REJECTED,
             self::EVENT_WEBHOOK_INVALID_TOKEN => 'error',
 
-            self::EVENT_APPROVAL_REQUESTED => 'warning',
+            self::EVENT_APPROVAL_REQUESTED,
+            self::EVENT_WORKFLOW_WAITING => 'warning',
 
             default => 'info',
         };
+    }
+
+    /**
+     * Whether $event is a workflow event: one of the workflows group of
+     * eventGroups().
+     */
+    public static function isWorkflowEvent(string $event): bool
+    {
+        return array_key_exists($event, self::eventGroups()['workflows']['events']);
+    }
+
+    /**
+     * Whether the template's level lets $event through: every event at level
+     * all (the default of a level not set); at level essential, every event
+     * that is no workflow event, and of the workflow events only
+     * ESSENTIAL_WORKFLOW_EVENTS. Another level counts as essential.
+     */
+    public function isWithinLevel(string $event): bool
+    {
+        return ($this->level ?? self::LEVEL_ALL) === self::LEVEL_ALL
+            || !self::isWorkflowEvent($event)
+            || in_array($event, self::ESSENTIAL_WORKFLOW_EVENTS, true);
+    }
+
+    /**
+     * Whether the workflow filter lets the events of a run of workflow
+     * template $workflowTemplateId through: every run with workflow scope
+     * all (the default of a scope not set); with another scope, only the
+     * runs of a workflow template of the filter, so a filter whose workflow
+     * templates were all deleted lets none through. Events that belong to
+     * no run do not ask.
+     */
+    public function isForWorkflowTemplate(int $workflowTemplateId): bool
+    {
+        return ($this->workflow_scope ?? self::WORKFLOW_SCOPE_ALL) === self::WORKFLOW_SCOPE_ALL
+            || in_array($workflowTemplateId, $this->getWorkflowTemplateIds(), true);
+    }
+
+    /**
+     * The IDs of the workflow templates of the workflow filter as stored,
+     * ascending, deleted ones included; [] for a template not saved yet.
+     *
+     * @return list<int>
+     */
+    public function getWorkflowTemplateIds(): array
+    {
+        return NotificationWorkflowFilter::idsOf($this);
+    }
+
+    /**
+     * Writes the workflow filter as the editor $editorId sets it to $ids
+     * (NotificationWorkflowFilter::write()): of the stored workflow
+     * templates, only those the editor may see are replaced; the others
+     * stay. The template must be saved; call it before
+     * NotificationIdentity::changesIdentity(), in the transaction of the
+     * template's save.
+     *
+     * @param array<int|string, int> $ids workflow template IDs, read with SubmittedId
+     * @return list<int> the IDs of $ids the editor may not see (unknown, deleted, or of another team), which
+     *     are not added
+     */
+    public function setWorkflowTemplateIds(array $ids, int $editorId): array
+    {
+        return NotificationWorkflowFilter::write($this, $ids, $editorId);
+    }
+
+    /**
+     * Whether the user the template delivers as is no active account: a
+     * deactivated user, or nobody yet. Such a template delivers nothing.
+     */
+    public function isDeliveringAsInactive(): bool
+    {
+        return !User::find()->where(['id' => (int)$this->delivers_as, 'status' => User::STATUS_ACTIVE])->exists();
     }
 
     /**
@@ -417,5 +523,25 @@ class NotificationTemplate extends ActiveRecord
     public function getCreator(): ActiveQuery
     {
         return $this->hasOne(User::class, ['id' => 'created_by']);
+    }
+
+    public function getDeliversAsUser(): ActiveQuery
+    {
+        return $this->hasOne(User::class, ['id' => 'delivers_as']);
+    }
+
+    /**
+     * The live workflow templates of the workflow filter; getWorkflowTemplateIds()
+     * holds the deleted ones too.
+     */
+    public function getWorkflowTemplates(): ActiveQuery
+    {
+        return $this->hasMany(WorkflowTemplate::class, ['id' => 'workflow_template_id'])
+            ->viaTable(self::WORKFLOW_FILTER_TABLE, ['notification_template_id' => 'id']);
+    }
+
+    public function getDeliveries(): ActiveQuery
+    {
+        return $this->hasMany(NotificationDelivery::class, ['notification_template_id' => 'id']);
     }
 }

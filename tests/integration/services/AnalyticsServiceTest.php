@@ -262,6 +262,39 @@ class AnalyticsServiceTest extends DbTestCase
         );
     }
 
+    /**
+     * MTTR follows the rule of the dashboard (RecoveredFailures): a dry run
+     * checks and changes nothing, so it recovers nothing, and neither does
+     * a success that started before the failure finished. MTTR runs to the
+     * job that RecoveredFailures names. Up to 2.14.0 a succeeded dry run
+     * counted as the recovery.
+     */
+    public function testMttrIgnoresDryRuns(): void
+    {
+        [$user, $tpl] = $this->scaffold();
+        $now = time();
+        $at = function (string $status, int $startedAgo, int $finishedAgo, bool $dryRun = false) use ($tpl, $user, $now): Job {
+            $job = $this->createJob($tpl->id, $user->id);
+            $job->status = $status;
+            $job->check_mode = $dryRun ? 1 : 0;
+            $job->started_at = $now - $startedAgo;
+            $job->finished_at = $now - $finishedAgo;
+            $job->save(false);
+            return $job;
+        };
+
+        $failure = $at('failed', 400, 300);
+        $at('succeeded', 350, 320);
+        $at('succeeded', 250, 240, true);
+
+        $this->assertSame(0.0, $this->service->summary($this->makeQuery())['mttr_seconds'], 'a dry run and an overlapping success recover nothing');
+
+        $recovery = $at('succeeded', 100, 80);
+
+        $this->assertEqualsWithDelta(200.0, $this->service->summary($this->makeQuery())['mttr_seconds'], 0.5, 'up to the real success');
+        $this->assertSame([(int)$failure->id => (int)$recovery->id], \app\services\RecoveredFailures::recoveredBy([$failure]));
+    }
+
     // ─── templateReliability ────────────────────────────────────────────
 
     public function testTemplateReliabilityGroupsByTemplate(): void

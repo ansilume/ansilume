@@ -89,11 +89,14 @@ class RedisConfigTest extends TestCase
         }
     }
 
-    public function testWebUsesRedisForCacheSessionAndQueue(): void
+    /**
+     * The web pushes to both queues, project syncs and notifications.
+     */
+    public function testWebUsesRedisForCacheSessionAndTheQueues(): void
     {
         $config = require dirname(__DIR__, 3) . '/config/web.php';
 
-        foreach (['cache', 'session', 'queue'] as $id) {
+        foreach (['cache', 'session', 'queue', 'notificationQueue'] as $id) {
             $this->assertSame(RedactingRedisConnection::class, $config['components'][$id]['redis']['class'] ?? null, $id);
         }
     }

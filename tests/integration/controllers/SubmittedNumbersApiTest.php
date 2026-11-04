@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\integration\controllers;
 
 use app\services\JobTemplateCredentialService;
+use app\services\notification\NotificationTemplateBody;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 /**
@@ -181,6 +182,15 @@ class SubmittedNumbersApiTest extends WebControllerTestCase
                 'status' => ['valid' => '0', 'refused' => '422 Status is invalid.'],
             ],
         ],
+        'POST /api/v1/notification-templates' => [
+            'body' => ['name' => 'numbers-guard-notification', 'channel' => 'email', 'events' => 'workflow.failed', 'config' => ['emails' => ['ops@example.com']]],
+            'fields' => self::NOTIFICATION_TEMPLATE_FIELDS,
+        ],
+        'PUT /api/v1/notification-templates/{id}' => [
+            'path' => ['id' => '{notificationTemplate}'],
+            'body' => ['name' => 'numbers-guard-renamed'],
+            'fields' => self::NOTIFICATION_TEMPLATE_FIELDS,
+        ],
         'POST /api/v1/approval-rules' => [
             'body' => ['name' => 'numbers-guard-rule', 'approver_type' => 'role', 'approver_config' => ['role' => 'operator']],
             'fields' => self::APPROVAL_RULE_FIELDS,
@@ -246,6 +256,12 @@ class SubmittedNumbersApiTest extends WebControllerTestCase
         'timeout_minutes' => ['valid' => '60', 'refused' => '422 Timeout Minutes must be an integer.'],
         'runner_group_id' => ['valid' => '{group}', 'refused' => '422 Runner must be an integer.'],
         'approval_rule_id' => ['valid' => '{rule}', 'refused' => '422 Approval rule must be an integer.'],
+    ];
+
+    /** The workflow filter of a notification template, created or changed: a list of IDs and each of its IDs. */
+    private const NOTIFICATION_TEMPLATE_FIELDS = [
+        'workflow_template_ids' => ['valid' => '[{workflow}]', 'refused' => '422 ' . NotificationTemplateBody::WORKFLOW_TEMPLATE_IDS_FORM],
+        'workflow_template_ids[]' => ['valid' => '{workflow}', 'refused' => '422 ' . NotificationTemplateBody::WORKFLOW_TEMPLATE_IDS_FORM],
     ];
 
     /** The fields of an approval rule, created or changed. */

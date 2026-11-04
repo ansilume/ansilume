@@ -92,7 +92,7 @@ class ExceptionIgnoreArgsTest extends TestCase
      */
     public static function composeProvider(): array
     {
-        $servers = ['app', 'queue-worker', 'schedule-runner'];
+        $servers = ['app', 'queue-worker', 'notification-worker', 'schedule-runner'];
         $runners = ['runner-1', 'runner-2'];
         $mounted = array_fill_keys($servers, self::FROM_MOUNT);
         $images = array_fill_keys($servers, self::FROM_SERVER_IMAGE);

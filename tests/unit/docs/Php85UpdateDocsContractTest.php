@@ -175,18 +175,25 @@ class Php85UpdateDocsContractTest extends TestCase
     private const TIMEOUTS_ENTRY = '## Approval timeouts or the deleted-template sweep keep failing';
 
     /**
-     * The section is the newest, the one of the update to PHP 8.3 follows,
-     * and the manual source update and the rollback link to it under the
-     * anchor GitHub gives its heading.
+     * The section follows the one of the update to Redis 8.10, the one of
+     * the update to PHP 8.3 follows it, and the manual source update and the
+     * rollback link to it under the anchor GitHub gives its heading. A failed
+     * build of the manual source update goes back to the release it updated
+     * from, which `git describe` names after a `git pull` (checked in a
+     * clone): an update from 2.13.1 goes back to 2.13.1, as the containers of
+     * 2.13.1 cannot run the code of 2.14.0 on PHP 8.3. Review finding: it
+     * named only the release before the newest one.
      */
-    public function testTheSectionIsTheNewest(): void
+    public function testTheSectionFollowsTheUpdateToRedis810(): void
     {
-        $this->assertUpdateSectionBetween(null, self::UPDATE_SECTION, PhpUpdateDocsContractTest::UPDATE_SECTION);
+        $this->assertUpdateSectionBetween(Redis810UpdateDocsContractTest::UPDATE_SECTION, self::UPDATE_SECTION, PhpUpdateDocsContractTest::UPDATE_SECTION);
         $this->assertSame(self::SECTION_ANCHOR, self::anchor(self::UPDATE_SECTION), 'The anchor GitHub gives the heading.');
 
         $update = $this->flat(self::UPDATING, '## Manual update — source (git)');
         $this->assertMentions('(#' . self::SECTION_ANCHOR . ')', $update, 'the manual source update');
-        $this->assertMentions('`git checkout v2.13.1`', $update, 'the manual source update');
+        $this->assertMentions('go back to the release you updated from until a build gets through', $update, 'the manual source update');
+        $this->assertMentions('`git checkout v2.13.1` from 2.13.1', $update, 'the manual source update: the release this section updates from');
+        $this->assertMentions('right after `git pull`, `git describe --tags ORIG_HEAD` names it', $update, 'the manual source update');
         $this->assertMentions('(#' . self::SECTION_ANCHOR . ')', $this->flat(self::UPDATING, '## Rollback'), 'the rollback');
     }
 

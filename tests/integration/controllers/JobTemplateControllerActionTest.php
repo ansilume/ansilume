@@ -28,7 +28,8 @@ use yii\web\View;
 /**
  * Exercises JobTemplateController actions.
  *
- * Stubs LintService (no shell-out) and JobLaunchService (no runner dispatch).
+ * Stubs LintService (no lint run, no queue) and JobLaunchService (no runner
+ * dispatch).
  */
 class JobTemplateControllerActionTest extends WebControllerTestCase
 {
@@ -41,9 +42,15 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
 
         $this->swapService('lintService', new class extends LintService {
             public int $runCalls = 0;
-            public function runForTemplate(JobTemplate $template): void
+            public int $queueCalls = 0;
+            public function runForTemplate(JobTemplate $template, ?int $requestedAt = null): void
             {
                 $this->runCalls++;
+            }
+            public function queueForTemplate(JobTemplate $template): bool
+            {
+                $this->queueCalls++;
+                return true;
             }
         });
 
@@ -489,9 +496,11 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertNotNull($stored);
         $this->assertSame($user->id, (int)$stored->created_by);
 
-        /** @var object{runCalls: int} $lint */
+        // Lint is queued for the queue-worker, never run in the request.
+        /** @var object{runCalls: int, queueCalls: int} $lint */
         $lint = \Yii::$app->get('lintService');
-        $this->assertSame(1, $lint->runCalls);
+        $this->assertSame(0, $lint->runCalls);
+        $this->assertSame(1, $lint->queueCalls);
 
         $this->assertNotNull(AuditLog::findOne([
             'action' => AuditLog::ACTION_TEMPLATE_CREATED,
@@ -778,9 +787,10 @@ class JobTemplateControllerActionTest extends WebControllerTestCase
         $this->assertSame($template->name, $stored->name);
         $this->assertSame([(int)$vaultA->id], array_column($stored->credentialSnapshot(), 'id'));
         $this->assertSame($updatesBefore, $this->auditCount(AuditLog::ACTION_TEMPLATE_UPDATED, (int)$template->id));
-        /** @var object{runCalls: int} $lint */
+        /** @var object{runCalls: int, queueCalls: int} $lint */
         $lint = \Yii::$app->get('lintService');
         $this->assertSame(0, $lint->runCalls);
+        $this->assertSame(0, $lint->queueCalls, 'a rejected save queues no lint run');
     }
 
     // ── actionDelete() ───────────────────────────────────────────────────────

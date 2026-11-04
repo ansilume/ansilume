@@ -1,6 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { expectFlash } from '../../lib/helpers';
 
+/**
+ * commands/E2eExtraVarsEditorSeeder.php REFUSAL_TEMPLATE: in the runner group
+ * of E2eSurveySecretSeeder, which no runner serves, so its queued job stays
+ * queued until the spec cancels it. Regression: the spec queued a job of
+ * e2e-template, whose group the dev stack's runners serve, and a runner
+ * claimed it before the Cancel click now and then (1 of 5 runs failed).
+ */
+const NO_RUNNER_TEMPLATE = 'e2e-extra-vars-refusal-template';
+
 test.describe('Job Cancel/Relaunch', () => {
   test('job detail shows action buttons for admin', async ({ page }) => {
     await page.goto('/job/index');
@@ -22,7 +31,7 @@ test.describe('Job Cancel/Relaunch', () => {
     page.on('dialog', (d) => d.accept());
 
     const response = await request.post(`${baseURL}/e2e/create-cancelable-job`, {
-      params: { template: 'e2e-template' },
+      params: { template: NO_RUNNER_TEMPLATE },
     });
     expect(response.status()).toBe(200);
     const { job_id: jobId } = (await response.json()) as { job_id: number };
@@ -30,7 +39,8 @@ test.describe('Job Cancel/Relaunch', () => {
 
     await page.goto(`/job/view?id=${jobId}`);
     const badge = page.locator('#status-badge');
-    await expect(badge).toContainText(/queued|pending|running/i);
+    // No runner serves its group: it waits for one until it is canceled.
+    await expect(badge).toContainText(/queued/i);
 
     const cancelBtn = page.locator('form[action*="/cancel"] button[type="submit"]').first();
     await expect(cancelBtn).toBeVisible();

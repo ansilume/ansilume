@@ -1,10 +1,13 @@
 import { test, expect, Page } from '@playwright/test';
+import { expectFlash } from '../../lib/helpers';
+import { expectLintResult, lintQueuedFlash } from '../../lib/lint';
 
-// Regression: when ansible-lint cannot start, here because the web server's
+// Regression: when ansible-lint cannot start, here because the server's
 // user may list but not enter the project directory (PHP 8.3,
 // ProcessStarter), lint stores "Lint did not run: …" with the exit code -1,
 // which was badged "issues found". Fixture:
-// commands/E2eLintLockedProjectSeeder.php.
+// commands/E2eLintLockedProjectSeeder.php, in the runtime directory, which
+// the queue-worker, where the run that Run Lint queues runs, sees too.
 const PROJECT = 'e2e-lint-locked-project';
 
 /** Opens the project page, paging through the list (newest first); false when it is not seeded. */
@@ -31,8 +34,11 @@ test.describe('Lint that cannot start', () => {
 
     await page.locator('button:has-text("Run Lint")').click();
 
-    // The output first: the seed leaves no lint result, whose badge says "not run" too.
-    await expect(page.locator('#lint-output')).toContainText('Lint did not run: ansible-lint could not be started in ', { timeout: 90_000 });
+    // The queue-worker runs it; the page reloads itself with the result. The
+    // output first: the seed leaves no lint result, whose badge says "not run" too.
+    await expectFlash(page, 'success', lintQueuedFlash(PROJECT));
+    await expectLintResult(page);
+    await expect(page.locator('#lint-output')).toContainText('Lint did not run: ansible-lint could not be started in ');
     await expect(page.locator('#lint-output')).toContainText('posix_spawn() failed: Permission denied');
     await expect(page.getByTestId('lint-badge')).toHaveText('not run');
   });

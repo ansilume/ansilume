@@ -7,7 +7,9 @@ declare(strict_types=1);
 /** @var array $statusCounts Status => count for last 7 days */
 /** @var app\models\Job[] $recentJobs */
 /** @var app\models\Job[] $runningJobs */
-/** @var app\models\Job[] $failedJobs */
+/** @var app\models\Job[] $failedJobs the newest failures of the last 24 hours that no later run of their job template recovered */
+/** @var int $recoveredFailures24h the failures of the last 24 hours that a later run of their job template recovered */
+/** @var int $recoveredFailuresSince when those 24 hours began, Unix seconds: the link to their list passes it (finished_since) */
 /** @var app\models\JobTemplate[] $templates */
 /** @var app\models\WorkflowTemplate[] $workflowTemplates */
 /** @var int $onlineRunners */
@@ -25,6 +27,8 @@ declare(strict_types=1);
 
 use app\helpers\TimeHelper;
 use app\models\Job;
+use app\models\JobSearchForm;
+use app\services\RecoveredFailures;
 use app\services\runstate\Texts;
 use yii\helpers\Html;
 use yii\helpers\Json;
@@ -302,9 +306,9 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
     ]) ?>
 <?php endif; ?>
 
-<!-- Failed Jobs (last 24h) -->
+<!-- Failed Jobs (last 24h): only those that no later run of their job template recovered -->
 <?php if (!empty($failedJobs)) : ?>
-<div class="card mb-3 border-danger">
+<div class="card mb-3 border-danger" id="dashboard-failed-jobs">
     <div class="card-header text-bg-danger d-flex justify-content-between align-items-center">
         <strong>Failed Jobs (last 24h)</strong>
         <?= Html::a('All Failed', Url::to(['/job/index', 'status' => Job::STATUS_FAILED]), ['class' => 'btn btn-sm btn-outline-light']) ?>
@@ -328,6 +332,14 @@ if ($hasSchedules && $totalRunners > 0 && $onlineRunners === 0) {
         </table>
     </div>
 </div>
+<?php endif; ?>
+<?php if ($recoveredFailures24h > 0) : ?>
+<p class="small text-body-secondary mb-3" id="dashboard-recovered-failures">
+    <?= Html::encode($recoveredFailures24h === 1
+        ? RecoveredFailures::DASHBOARD_LINE_ONE
+        : sprintf(RecoveredFailures::DASHBOARD_LINE_MANY, $recoveredFailures24h)) ?>
+    <?= Html::a(Html::encode(RecoveredFailures::DASHBOARD_LINK), Url::to(['/job/index', 'recovered' => JobSearchForm::RECOVERED_YES, 'finished_since' => $recoveredFailuresSince])) ?>
+</p>
 <?php endif; ?>
 
 <!-- Upcoming Schedules -->

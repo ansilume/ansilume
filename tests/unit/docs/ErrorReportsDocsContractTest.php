@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\tests\unit\docs;
 
 use app\components\ErrorText;
+use app\components\OutboundHttpException;
 use app\components\WorkflowRunOperationFailure;
 use app\controllers\api\v1\NotificationTemplatesController;
 use app\controllers\NotificationTemplateController;
@@ -16,6 +17,13 @@ use app\services\ApprovalSettlement;
 use app\services\AuditService;
 use app\services\JobCancellationService;
 use app\services\NotificationDispatcher;
+use app\services\notification\MattermostApi;
+use app\services\notification\MattermostApiException;
+use app\services\notification\MattermostConfig;
+use app\services\notification\NotificationDeliveryService;
+use app\services\notification\NotificationTemplatePage;
+use app\services\notification\PagerDutyChannel;
+use app\services\notification\ThreadedSend;
 use app\services\runstate\Texts;
 use app\services\ScheduleService;
 use app\services\StrandedJobSweep;
@@ -124,11 +132,203 @@ class ErrorReportsDocsContractTest extends TestCase
             'troubleshooting.md'
         );
         $this->assertMentions('`502` with `Test failed: ` and the channel\'s error when the channel did not take the test message, and `500`', $updating, 'updating.md');
-        // The channel's error as the docs show it: the HTTP status, 0 when nothing answered.
-        $channel = (string)file_get_contents(dirname(__DIR__, 3) . '/services/notification/WebhookChannel.php');
-        $this->assertStringContainsString('"WebhookChannel: HTTP {$code} — "', $channel, 'The webhook channel words its error as the docs show it.');
-        $this->assertMentions('`WebhookChannel: HTTP 404 — ...`', $entry, 'troubleshooting.md');
-        $this->assertMentions('`WebhookChannel: HTTP 0 — ` when nothing answered', $entry, 'troubleshooting.md');
+        // The channel's error as the docs show it: the outbound HTTP client's
+        // error named after the channel, the HTTP status or why nothing
+        // answered. Regression (outbound HTTP security fix): the error held
+        // the start of the endpoint's answer, and the docs said so.
+        $answered = sprintf(OutboundHttpException::FROM, 'WebhookChannel', sprintf(OutboundHttpException::HTTP_STATUS, 404));
+        $unanswered = sprintf(OutboundHttpException::FROM, 'WebhookChannel', sprintf(OutboundHttpException::CONNECT_FAILED, 7));
+        $this->assertMentions('`' . $answered . '` when the endpoint answered 404', $entry, 'troubleshooting.md');
+        $this->assertMentions('`' . $unanswered . '` when nothing answered', $entry, 'troubleshooting.md');
+        $this->assertMentions('The error never holds the endpoint\'s answer, its URL or a header.', $entry, 'troubleshooting.md');
+        $this->assertStringNotContainsString('start of the endpoint\'s answer', $entry, 'troubleshooting.md quotes the old error.');
+        // A channel that sends nothing for an event (SelectiveChannelInterface):
+        // no delivery of it, and a test of none of its events fails with why.
+        $this->assertMentions('or when its channel sends nothing for the event, as PagerDuty for `' . implode('` and `', PagerDutyChannel::NEVER_TRIGGERED) . '`', $entry, 'troubleshooting.md');
+        $this->assertMentions('`' . sprintf(NotificationDispatcher::SENDS_NOTHING, NotificationTemplate::CHANNEL_PAGERDUTY, PagerDutyChannel::NEVER_TRIGGERED[0]) . '`', $entry, 'troubleshooting.md');
+    }
+
+    /**
+     * Regression (workflow notifications plan, Task 7): the entry said that
+     * the container that caused an event sends its notification, and that a
+     * notification that failed is not sent again. The notification-worker
+     * sends every delivery and tries a transient error again; the entry says
+     * so, with the worker's log line, its retry steps, which failures are
+     * final, and when a template gets no delivery at all.
+     */
+    public function testTheNotificationEntrySaysTheWorkerSendsAndRetries(): void
+    {
+        $entry = $this->flat('docs/troubleshooting.md', self::NOTIFICATIONS_ENTRY);
+        $service = new NotificationDeliveryService();
+        $error = sprintf(OutboundHttpException::FROM, 'WebhookChannel', sprintf(OutboundHttpException::HTTP_STATUS, 404));
+
+        $this->assertMentions('the notification-worker sends it', $entry, 'troubleshooting.md');
+        $this->assertMentions('`docker compose logs notification-worker`', $entry, 'troubleshooting.md');
+        $this->assertMentions('`' . sprintf(NotificationDeliveryService::FAILED, 41, 3, 'webhook', 'job.failed', 1, $error) . '`', $entry, 'troubleshooting.md');
+        $this->assertSame(8, $service->maxAttempts);
+        $this->assertSame([30, 120, 600, 1800, 3600, 7200, 14400], $service->backoffSeconds, 'the steps the entry names');
+        $this->assertMentions('up to 8 attempts, after 30 seconds, 2, 10 and 30 minutes, then 1, 2 and 4 hours', $entry, 'troubleshooting.md');
+        $this->assertSame(3600, NotificationDeliveryService::RETRY_AFTER_MAX_SECONDS);
+        $this->assertMentions('with `Retry-After`, up to an hour', $entry, 'troubleshooting.md');
+        $this->assertMentions('the answer `408`, `425`, `429` or `5xx`', $entry, 'troubleshooting.md');
+        $this->assertMentions('such as `400`, `401`, `403`, `404` or `413`, fails it at once', $entry, 'troubleshooting.md');
+        $this->assertMentions(
+            '`' . AuditLog::ACTION_NOTIFICATION_DISPATCHED . '`, `' . AuditLog::ACTION_NOTIFICATION_FAILED . '` with the `error` of the channel',
+            $entry,
+            'troubleshooting.md'
+        );
+        $this->assertMentions('`' . AuditLog::ACTION_NOTIFICATION_SKIPPED . '` with the reason', $entry, 'troubleshooting.md');
+        $this->assertMentions('may not see the event in Ansilume or is inactive', $entry, 'troubleshooting.md');
+        $this->assertMentions('`docker compose ps notification-worker`', $entry, 'troubleshooting.md');
+        $this->assertStringNotContainsString('A notification that failed is not sent again.', $entry, 'troubleshooting.md says what 2.14 did');
+        $this->assertStringNotContainsString('The application log of the container that sent it', $entry, 'troubleshooting.md says what 2.14 did');
+        // Regression (plan Task 14): the entry sent operators to `docker
+        // compose logs notification-worker` for the error, which shows only
+        // the worker's start: the console application logs to
+        // runtime/logs/app.log alone, the prebuilt notification-worker to its
+        // own inside its container.
+        $this->assertSame([\app\components\RedactingFileTarget::class], self::consoleLogTargets(), 'The console application logs to a file only.');
+        $this->assertMentions('The application log of the notification-worker has the same error', $entry, 'troubleshooting.md');
+        $this->assertMentions('`docker compose exec notification-worker tail -n 200 /var/www/runtime/logs/app.log`', $entry, 'troubleshooting.md');
+        $this->assertMentions('`docker compose logs notification-worker` shows only that it started', $entry, 'troubleshooting.md');
+        $this->assertStringNotContainsString('(`docker compose logs notification-worker`) has the same error', $entry, 'troubleshooting.md: docker logs never have it');
+    }
+
+    /**
+     * The entry of a delivery that waits for its next attempt quotes what
+     * the deliveries and the worker's log show, and the retry steps.
+     */
+    public function testTheRetryEntryQuotesWhatTheDeliveriesAndTheLogShow(): void
+    {
+        $entry = $this->flat('docs/troubleshooting.md', '## A notification waits for its next attempt, or failed after 8 attempts');
+        $error = sprintf(OutboundHttpException::FROM, 'WebhookChannel', sprintf(OutboundHttpException::HTTP_STATUS, 503));
+
+        $this->assertMentions('`' . rtrim(self::prefix(NotificationTemplatePage::NEXT_ATTEMPT)) . '` and when', $entry, 'troubleshooting.md, on the next attempt');
+        $this->assertMentions('`' . sprintf(NotificationDeliveryService::RETRYING, 41, 3, 'webhook', 'job.failed', 3, 8, 600, $error) . '`', $entry, 'troubleshooting.md');
+        $this->assertMentions('after 30 seconds, 2, 10 and 30 minutes, then 1, 2 and 4 hours, at most 8 attempts', $entry, 'troubleshooting.md');
+        $this->assertMentions('`GET /api/v1/notification-templates/{id}/deliveries`', $entry, 'troubleshooting.md');
+        $this->assertMentions('A delivery that failed for good is not sent again; the next event is.', $entry, 'troubleshooting.md');
+        $this->assertMentions('The later deliveries of the same workflow run to the same template wait behind it', $entry, 'troubleshooting.md');
+    }
+
+    /**
+     * Without the notification-worker nothing is sent: the entry quotes
+     * what bin/diagnose says, what a worker of an older image prints, and
+     * says that the deliveries wait in the database.
+     */
+    public function testTheWorkerEntrySaysWhatHappensWithoutTheNotificationWorker(): void
+    {
+        $entry = $this->flat('docs/troubleshooting.md', '## Notifications are not sent: the notification-worker does not run');
+
+        $this->assertMentions('`notification-worker: not running`', $entry, 'troubleshooting.md');
+        // Review finding: a worker that restarts without end has a container, for which bin/diagnose prints its state.
+        $this->assertMentions('`notification-worker: stopped (state=restarting)`', $entry, 'troubleshooting.md');
+        $this->assertStringContainsString('fail "${svc}: stopped (state=${state})"', $this->read('bin/diagnose'), 'The line bin/diagnose prints for a container that does not run.');
+        $this->assertMentions(
+            '`notification-worker: not in the compose file — the app image queues the notifications for it, and no container sends them: take the compose file of this release`',
+            $entry,
+            'troubleshooting.md'
+        );
+        $this->assertStringContainsString(
+            'fail "notification-worker: not in the compose file — the app image queues the notifications for it, and no container sends them: take the compose file of this release"',
+            $this->read('bin/diagnose'),
+            'The line bin/diagnose prints.'
+        );
+        $this->assertMentions('`Error: Unknown option: --queue`', $entry, 'troubleshooting.md');
+        $this->assertMentions('docker compose up -d notification-worker', $entry, 'troubleshooting.md');
+        $this->assertMentions('The deliveries wait in the database: none is lost.', $entry, 'troubleshooting.md');
+        $this->assertMentions('`docker compose rm -sf notification-worker`', $entry, 'troubleshooting.md');
+    }
+
+    /**
+     * A template whose user is inactive: the entry quotes the page, the API,
+     * bin/diagnose and the skip, and says how to fix it.
+     */
+    public function testTheInactiveUserEntryQuotesWhereItShowsAndHowToFixIt(): void
+    {
+        $entry = $this->flat('docs/troubleshooting.md', '## A notification template delivers nothing: the user it delivers as is inactive');
+
+        $this->assertMentions('`' . sprintf(NotificationTemplatePage::DELIVERS_AS_INACTIVE, 'alice') . '`', $entry, 'troubleshooting.md');
+        $this->assertMentions('`"delivers_as_inactive": true`', $entry, 'troubleshooting.md');
+        $this->assertMentions('`' . sprintf(NotificationDeliveryService::INACTIVE_IDENTITY, 12) . '`', $entry, 'troubleshooting.md');
+        $this->assertMentions('any save of such a template makes you the user it delivers as', $entry, 'troubleshooting.md');
+        $this->assertMentions("-d '{}' https://ansilume.example.com/api/v1/notification-templates/3", $entry, 'troubleshooting.md');
+    }
+
+    /**
+     * The entry of a refused URL scheme names Mattermost's https too.
+     */
+    public function testTheUrlSchemeEntryNamesTheHttpsOfMattermost(): void
+    {
+        $entry = $this->flat('docs/troubleshooting.md', '## Saving a notification template: `webhook_url must be an http or https URL.`');
+
+        $this->assertMentions('`' . sprintf(NotificationTemplate::URL_SCHEME_REFUSED, 'webhook_url') . '`', $entry, 'troubleshooting.md');
+        $this->assertMentions('`' . sprintf(NotificationTemplate::HTTPS_REQUIRED, 'server_url') . '`', $entry, 'troubleshooting.md');
+        $this->assertSame(['server_url' => ['https']], MattermostConfig::URL_KEYS);
+    }
+
+    /**
+     * The Mattermost errors as the channel reports them: each message of
+     * MattermostApiException with the detail of an answer (its status, the
+     * error id and the request ID), those of the status post and its
+     * thread (ThreadedSend), and a failure that can pass, as the
+     * troubleshooting entry quotes them.
+     */
+    public function testTheMattermostErrorsAreQuotedAsTheChannelReportsThem(): void
+    {
+        $entry = $this->flat('docs/troubleshooting.md', '## A Mattermost notification fails');
+        $channel = 'h8kc6rz1ytgq3mbxd9wfs5ea4n';
+        $names = 'ops/deployments';
+        $detail = static fn (int $status, string $errorId): string => implode(', ', array_filter([
+            sprintf(MattermostApiException::DETAIL_STATUS, $status),
+            $errorId === '' ? '' : sprintf(MattermostApiException::DETAIL_ERROR_ID, $errorId),
+            sprintf(MattermostApiException::DETAIL_REQUEST_ID, '7q1ba8jxifgk7ghx9xnj1p4yhe'),
+        ]));
+        $quoted = [
+            sprintf(MattermostApiException::TOKEN_REFUSED, $detail(401, 'api.context.session_expired.app_error')),
+            MattermostApiException::PERSONAL_TOKEN,
+            sprintf(MattermostApiException::CHANNEL_NOT_FOUND, $names, $detail(404, 'app.channel.get_by_name.missing.app_error')),
+            sprintf(MattermostApiException::NOT_A_MEMBER, $channel, $detail(404, 'app.channel.get_member.missing.app_error')),
+            sprintf(MattermostApiException::POST_REFUSED, $channel, $detail(403, 'api.context.permissions.app_error')),
+            sprintf(MattermostApiException::CHANNEL_ARCHIVED, $channel, $detail(400, 'api.post.create_post.can_not_post_to_deleted.error')),
+            sprintf(MattermostApiException::ARCHIVED, $names),
+            sprintf(MattermostApiException::UNEXPECTED_ANSWER, MattermostApi::OP_ME, 200),
+            sprintf(MattermostApiException::CONFIG_UNUSABLE, sprintf(NotificationTemplate::HTTPS_REQUIRED, 'server_url')),
+            sprintf(MattermostApiException::TOO_MANY_REQUESTS, MattermostApi::MAX_REQUESTS),
+            // Review finding: a server whose permission scheme takes Edit Posts from members got a new status post on
+            // every change of a run; the bot now looks the post up and fails with what to allow.
+            sprintf(MattermostApiException::EDIT_NOT_ALLOWED, '1q8ytn3ixjbkzmd5cpf7rk4w1r', $detail(403, 'api.context.permissions.app_error')),
+            sprintf(MattermostApiException::FAILED, MattermostApi::OP_LOOKUP, $detail(403, 'api.context.permissions.app_error')),
+            sprintf(MattermostApiException::FAILED, MattermostApi::OP_POST, $detail(503, '')),
+            sprintf(MattermostApiException::FAILED, MattermostApi::OP_ME, rtrim(sprintf(OutboundHttpException::CONNECT_FAILED, 7), '.')),
+            ThreadedSend::NO_STATUS_POST,
+            ThreadedSend::RUN_GONE,
+            ThreadedSend::THREAD_NOT_SAVED,
+        ];
+        foreach ($quoted as $message) {
+            $this->assertMentions('`' . $message . '`', $entry, 'troubleshooting.md, on Mattermost');
+        }
+        // The archived channel is refused as its own error id says.
+        $this->assertStringContainsString('can_not_post_to_deleted', 'api.post.create_post.can_not_post_to_deleted.error');
+        $this->assertMentions('`Test notification failed: `', $entry, 'troubleshooting.md, on Mattermost');
+        $this->assertMentions('(`ServiceSettings.PostEditTimeLimit`)', $entry, 'troubleshooting.md, on Mattermost');
+    }
+
+    /**
+     * The targets of the console application's log, as config/console.php
+     * defines them.
+     *
+     * @return list<string>
+     */
+    private static function consoleLogTargets(): array
+    {
+        $config = require dirname(__DIR__, 3) . '/config/console.php';
+        $targets = [];
+        foreach ((array)($config['components']['log']['targets'] ?? []) as $target) {
+            $targets[] = (string)(is_array($target) ? ($target['class'] ?? '') : '');
+        }
+
+        return $targets;
     }
 
     /**

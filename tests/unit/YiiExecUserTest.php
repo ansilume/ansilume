@@ -73,6 +73,7 @@ final class YiiExecUserTest extends TestCase
     private const AS_ROOT = [
         ['file' => 'bin/tests-e2e.sh', 'exec' => 'dc php yii e2e/', 'reason' => self::E2E],
         ['file' => 'docs/superpowers/plans/2026-04-17-e2e-tranche1.md', 'exec' => 'php yii e2e/seed', 'reason' => self::E2E],
+        ['file' => 'docs/superpowers/plans/2026-11-03-workflow-notifications-mattermost.md', 'exec' => 'php yii e2e/', 'reason' => self::E2E],
         [
             'file' => 'docs/superpowers/plans/2026-04-17-e2e-tranche2-rbac.md',
             'exec' => 'php -r "require \"/var/www/yii\"; exit;"',
@@ -306,6 +307,17 @@ final class YiiExecUserTest extends TestCase
                     '2 root: docker compose exec schedule-runner php yii b',
                     '3 root: docker compose exec runner-2 php yii c',
                     '4 root: docker exec ansilume_queue_worker php yii d',
+                ],
+            ],
+            'the notification-worker, by its service and its container' => [
+                "docker compose exec notification-worker php yii a\ndocker exec ansilume_notification_worker php yii b\n"
+                    . "docker compose exec -u www-data notification-worker php yii c\n",
+                false,
+                [],
+                [
+                    '1 root: docker compose exec notification-worker php yii a',
+                    '2 root: docker exec ansilume_notification_worker php yii b',
+                    '3 www-data: docker compose exec -u www-data notification-worker php yii c',
                 ],
             ],
             'not the app image, not Yii, Yii after the exec, no exec' => [

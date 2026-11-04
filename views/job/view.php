@@ -11,11 +11,13 @@ declare(strict_types=1);
 /** @var list<array{id: int, name: string|null, credential_type: string|null, role: string, deleted: bool}> $jobCredentials  as launched, primary first */
 /** @var app\components\JobInventory $jobInventory the inventory the job was launched with, as its runner payload records it */
 /** @var app\services\runstate\JobContext $context the workflow run and step the job was created for, and its approval request, as the viewer may see them */
+/** @var int|null $recoveredBy the later run of the same job template that recovered this failure (RecoveredFailures); null otherwise */
 
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobLog;
 use app\models\JobTask;
+use app\services\RecoveredFailures;
 use app\services\runstate\Banner;
 use app\services\runstate\Texts;
 use yii\helpers\Html;
@@ -83,6 +85,12 @@ $placeholderOrigin = $context->placeholder ? $origin : null;
     <?php if ($approval->linkable) : ?>
         <?= Html::a(Html::encode(Banner::REVIEW_LINK), Banner::requestUrl($approval->requestId), ['id' => 'job-approval-review', 'class' => 'btn btn-sm btn-primary mt-2']) ?>
     <?php endif; ?>
+</div>
+<?php endif; ?>
+
+<?php if ($recoveredBy !== null) : ?>
+<div class="alert alert-secondary py-2" id="job-recovered-note">
+    <?= sprintf(Html::encode(RecoveredFailures::JOB_PAGE_NOTE), Html::a('#' . (int)$recoveredBy, ['view', 'id' => (int)$recoveredBy])) ?>
 </div>
 <?php endif; ?>
 

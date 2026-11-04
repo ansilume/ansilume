@@ -13,7 +13,9 @@ use yii\queue\JobInterface;
  * timeout it first gives that connection one, so that the server closes it
  * once it sat idle that long, as a database closes an idle connection after
  * its wait_timeout. With $fail it throws after its query, as a job that
- * fails does.
+ * fails does. With $recordFile it also appends the answer to that file, a
+ * line each, for a test whose worker runs in a process of its own
+ * (NotificationWorkerProcessTest).
  */
 final class ConnectionProbeJob extends BaseObject implements JobInterface
 {
@@ -28,13 +30,20 @@ final class ConnectionProbeJob extends BaseObject implements JobInterface
 
     public bool $fail = false;
 
+    /** A file that gets the connection's ID as a line; '' for none. */
+    public string $recordFile = '';
+
     public function execute($queue): void
     {
         $db = \Yii::$app->getDb();
         if ($this->sessionWaitTimeout > 0) {
             $db->createCommand('SET SESSION wait_timeout = ' . $this->sessionWaitTimeout)->execute();
         }
-        self::$connectionIds[] = (int)$db->createCommand('SELECT CONNECTION_ID()')->queryScalar();
+        $connectionId = (int)$db->createCommand('SELECT CONNECTION_ID()')->queryScalar();
+        self::$connectionIds[] = $connectionId;
+        if ($this->recordFile !== '') {
+            file_put_contents($this->recordFile, $connectionId . "\n", FILE_APPEND | LOCK_EX);
+        }
         if ($this->fail) {
             throw new \RuntimeException(self::FAILED);
         }

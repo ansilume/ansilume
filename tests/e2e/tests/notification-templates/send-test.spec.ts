@@ -12,11 +12,22 @@ function testFailed(error: string): string {
 
 /**
  * commands/E2eFailingNotificationSeeder.php: a webhook to a port nothing
- * listens on, so every delivery fails at once. services/notification/
- * WebhookChannel.php reports a connection that got no answer as HTTP 0.
+ * listens on, so every delivery fails at once. The channel's error is the
+ * outbound HTTP client's (components/OutboundHttpException.php
+ * CONNECT_FAILED, curl error 7: the connection was refused), named after the
+ * channel; it never holds the URL or an answer.
  */
 const FAILING_NOTIFICATION = 'e2e-failing-notification';
-const FAILING_CHANNEL_ERROR = 'WebhookChannel: HTTP 0 — ';
+const FAILING_CHANNEL_ERROR = 'WebhookChannel: Could not connect (curl error 7).';
+
+/**
+ * commands/E2eSilentNotificationSeeder.php: a PagerDuty template that listens
+ * only to workflow.step_started and workflow.step_succeeded, which never
+ * trigger an incident, so PagerDuty sends nothing for them. Send Test says so
+ * (services/NotificationDispatcher.php SENDS_NOTHING) and sends nothing.
+ */
+const SILENT_NOTIFICATION = 'e2e-silent-notification';
+const SILENT_CHANNEL_ERROR = 'The pagerduty channel sends nothing for workflow.step_started.';
 
 /** Opens the page of the notification template `name` (column 0 of the list: Name). */
 async function openNotificationTemplate(page: Page, name: string): Promise<void> {
@@ -73,5 +84,14 @@ test.describe('Notification Template Send-Test', () => {
     await expect(flash(page, 'success')).toHaveCount(0);
     // The flash type is "danger": "error" rendered as the unstyled class alert-error.
     await expect(page.locator('#page-content > .alert-error')).toHaveCount(0);
+  });
+
+  // Regression: a test notification of events its channel sends nothing for was reported as sent.
+  test('a test notification of events its channel sends nothing for says so, and no success', async ({ page }) => {
+    await openNotificationTemplate(page, SILENT_NOTIFICATION);
+    await sendTest(page);
+
+    await expect(flash(page, 'danger')).toHaveText(testFailed(SILENT_CHANNEL_ERROR));
+    await expect(flash(page, 'success')).toHaveCount(0);
   });
 });

@@ -113,11 +113,14 @@ class ApprovalService extends Component
 
     /**
      * The approval.requested audit entry and notification of a request
-     * openRequest() created, once its transaction committed.
+     * openRequest() created, once its transaction committed. $workflowJobId
+     * names the run of the workflow step whose job $job is, for a caller
+     * that announces it before the step records the job (the launch of a
+     * gated job step).
      */
-    public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule): void
+    public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule, ?int $workflowJobId = null): void
     {
-        $this->effects()->requested($request, $job, $rule);
+        $this->effects()->requested($request, $job, $rule, $workflowJobId);
     }
 
     /**

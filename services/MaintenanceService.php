@@ -8,6 +8,7 @@ use app\components\PendingMigrations;
 use app\components\SurveySecretBackfill;
 use app\models\Project;
 use app\models\ProjectSyncLog;
+use app\services\notification\NotificationDeliveryService;
 use yii\base\Component;
 use yii\caching\CacheInterface;
 
@@ -35,21 +36,25 @@ use yii\caching\CacheInterface;
  * deleted job templates, whose schedules are disabled
  * ({@see JobTemplateDeletionService::sweep()}); new periodic tasks should
  * follow it too (config-driven interval, separate cache key, structured
- * result). Three tasks run on every tick instead: the stale-sync sweep; the
+ * result). Four tasks run on every tick instead: the stale-sync sweep; the
  * approval timeouts, which apply each expired approval request's timeout
- * action ({@see ApprovalService::processTimeouts()}); and the encryption of
+ * action ({@see ApprovalService::processTimeouts()}); the sweep of the
+ * notification outbox, which pushes again the deliveries whose queue
+ * message was lost, gives back those whose notification worker stopped,
+ * and deletes those that finished 30 days ago
+ * ({@see NotificationDeliveryService::sweep()}); and the encryption of
  * survey password answers that finished jobs stored in plaintext before
  * 2.9, which works through the job history a few seconds per tick until it
  * is done ({@see SurveySecretBackfill}).
  *
  * The approval timeouts and the deleted-template sweep change jobs, approval
- * requests and workflow runs, so they wait while database migrations are
- * pending: in the prebuilt setup the schedule runner starts while the app
+ * requests and workflow runs, and the notification sweep the outbox, so
+ * they wait while database migrations are pending: in the prebuilt setup the schedule runner starts while the app
  * container still migrates, and a bind-mounted checkout runs new code right
  * after `git pull`. They share one time budget per tick
- * ({@see $jobTaskBudgetSeconds}): what they change sends notifications,
- * synchronously, and a timeout can move a workflow run on to its next
- * steps. An error in either is logged (its class, never its message, which
+ * ({@see $jobTaskBudgetSeconds}): what they change queues notifications,
+ * which the notification-worker sends, and a timeout can move a workflow
+ * run on to its next steps. An error in either is logged (its class, never its message, which
  * can carry SQL with values). The approval timeouts are retried on the next
  * tick; the sweep is retried when its interval
  * ({@see $deletedTemplateSweepIntervalSeconds}) has passed, because its
@@ -69,6 +74,7 @@ class MaintenanceService extends Component
 
     public const TASK_APPROVAL_TIMEOUTS = 'approval-timeouts';
     public const TASK_DELETED_TEMPLATE_SWEEP = 'deleted-template-sweep';
+    public const TASK_NOTIFICATION_SWEEP = 'notification-sweep';
 
     /** Skip reasons of the two tasks above (besides 'disabled' and 'cooldown'). */
     public const SKIP_MIGRATIONS_PENDING = 'migrations-pending';
@@ -85,6 +91,9 @@ class MaintenanceService extends Component
 
     /** Logged when a task fails; sprintf(): what failed, the exception class. */
     public const TASK_FAILED = 'MaintenanceService: %s stopped after an error (%s); the next run retries.';
+
+    /** The sync error of a project whose sync the sweep gave up on: seconds since the sync started, threshold. */
+    public const STALE_SYNC_RECOVERED = 'Sweeper recovered stuck sync after %d seconds (threshold=%d).';
 
     /**
      * Interval in seconds between artifact-cleanup runs. 0 disables the
@@ -127,14 +136,15 @@ class MaintenanceService extends Component
      * lets its cooldown go. 0 (or less) removes the bound.
      *
      * The batch sizes bound the memory and the work of a tick; this bounds
-     * its time, which notification endpoints stretch: notifications are sent
-     * synchronously, and an HTTP channel waits up to 10 seconds for an
-     * endpoint that does not answer. The schedule-runner loop sleeps 60
-     * seconds between ticks, and its health check fails once the loop has
-     * not come round for 150 seconds: the default leaves 45 seconds of that
-     * window for the rest of the loop, such as schedule/run, the survey
-     * password scrub (5 seconds) and the item that was running when the
-     * budget ran out.
+     * its time, which the work of each item stretches: a timeout can move a
+     * workflow run on to steps that launch jobs, and the webhooks of a job
+     * that ends wait for their endpoints (notifications only queue a
+     * delivery, which the notification-worker sends). The schedule-runner
+     * loop sleeps 60 seconds between ticks, and its health check fails once
+     * the loop has not come round for 150 seconds: the default leaves 45
+     * seconds of that window for the rest of the loop, such as schedule/run,
+     * the survey password scrub (5 seconds) and the item that was running
+     * when the budget ran out.
      */
     public float $jobTaskBudgetSeconds = 45.0;
 
@@ -178,6 +188,7 @@ class MaintenanceService extends Component
         $deadline = $this->jobTaskBudgetSeconds > 0 ? microtime(true) + $this->jobTaskBudgetSeconds : null;
         $report = self::withTask($report, self::TASK_APPROVAL_TIMEOUTS, $this->runApprovalTimeouts($blocked, $deadline));
         $report = self::withTask($report, self::TASK_DELETED_TEMPLATE_SWEEP, $this->maybeRunDeletedTemplateSweep($blocked, $deadline));
+        $report = self::withTask($report, self::TASK_NOTIFICATION_SWEEP, $this->runNotificationSweep($blocked, $deadline));
 
         $scrub = $this->maybeRunSurveySecretScrub();
         if ($scrub['ran']) {
@@ -318,6 +329,36 @@ class MaintenanceService extends Component
             : ['ran' => false, 'reason' => self::SKIP_NONE_FOUND, 'result' => []];
     }
 
+    /**
+     * Sweep the notification outbox (NotificationDeliveryService::sweep()):
+     * on every tick, as a delivery whose message was lost waits for it; its
+     * further batches only until $deadline. It reports as run when it pushed
+     * again, gave back or deleted a delivery.
+     *
+     * @param string|null $blocked migrationBlock()
+     * @param float|null $deadline the tick's deadline (microtime(true)); null: no bound
+     * @return array{ran: bool, reason: string, result: array<string, int>}
+     */
+    private function runNotificationSweep(?string $blocked, ?float $deadline): array
+    {
+        if ($blocked !== null) {
+            return ['ran' => false, 'reason' => $blocked, 'result' => []];
+        }
+        try {
+            /** @var NotificationDeliveryService $deliveries */
+            $deliveries = \Yii::$app->get('notificationDeliveryService');
+            $result = $deliveries->sweep(time(), $deadline);
+        } catch (\Throwable $e) {
+            self::logFailure('the sweep of notification deliveries', $e);
+
+            return ['ran' => false, 'reason' => self::SKIP_ERROR, 'result' => []];
+        }
+
+        return array_sum($result) > 0
+            ? ['ran' => true, 'reason' => 'due', 'result' => $result]
+            : ['ran' => false, 'reason' => self::SKIP_NONE_FOUND, 'result' => []];
+    }
+
     private static function logFailure(string $what, \Throwable $e): void
     {
         \Yii::warning(sprintf(self::TASK_FAILED, $what, get_class($e)), __CLASS__);
@@ -438,11 +479,7 @@ class MaintenanceService extends Component
         foreach ($stale as $project) {
             /** @var Project $project */
             $startedAt = (int)$project->sync_started_at;
-            $message = sprintf(
-                'Sweeper recovered stuck sync after %d seconds (threshold=%d).',
-                time() - $startedAt,
-                $threshold,
-            );
+            $message = sprintf(self::STALE_SYNC_RECOVERED, time() - $startedAt, $threshold);
 
             $project->status = Project::STATUS_ERROR;
             $project->last_sync_error = $message;

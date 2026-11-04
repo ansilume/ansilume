@@ -81,6 +81,7 @@ class NotificationTemplateTest extends DbTestCase
             'webhook' => [NotificationTemplate::CHANNEL_WEBHOOK],
             'telegram' => [NotificationTemplate::CHANNEL_TELEGRAM],
             'pagerduty' => [NotificationTemplate::CHANNEL_PAGERDUTY],
+            'mattermost' => [NotificationTemplate::CHANNEL_MATTERMOST],
         ];
     }
 
@@ -139,6 +140,31 @@ class NotificationTemplateTest extends DbTestCase
         $this->assertTrue($nt->validate(['events']));
     }
 
+    /**
+     * The step events of a run are in the workflows group: a template may
+     * listen to them, and the form offers them with the other workflow
+     * events.
+     */
+    public function testATemplateMayListenToTheStepEventsOfARun(): void
+    {
+        $nt = new NotificationTemplate();
+        $nt->name = 'test';
+        $nt->channel = NotificationTemplate::CHANNEL_EMAIL;
+        $nt->events = 'workflow.step_started,workflow.step_succeeded,workflow.waiting';
+
+        $this->assertTrue($nt->validate(['events']), (string)json_encode($nt->errors));
+        $this->assertSame(
+            ['workflow.step_started' => 'Workflow step started', 'workflow.step_succeeded' => 'Workflow step succeeded', 'workflow.waiting' => 'Workflow waiting for someone'],
+            array_intersect_key(
+                NotificationTemplate::eventGroups()['workflows']['events'],
+                ['workflow.step_started' => 0, 'workflow.step_succeeded' => 0, 'workflow.waiting' => 0]
+            )
+        );
+        foreach (['workflow.step_started', 'workflow.step_succeeded', 'workflow.waiting'] as $event) {
+            $this->assertTrue(NotificationTemplate::isWorkflowEvent($event), $event);
+        }
+    }
+
     public function testValidateEventsFailsWithUnknownEvent(): void
     {
         $nt = new NotificationTemplate();
@@ -180,7 +206,8 @@ class NotificationTemplateTest extends DbTestCase
         $this->assertArrayHasKey('webhook', $labels);
         $this->assertArrayHasKey('telegram', $labels);
         $this->assertArrayHasKey('pagerduty', $labels);
-        $this->assertCount(6, $labels);
+        $this->assertArrayHasKey('mattermost', $labels);
+        $this->assertCount(7, $labels);
     }
 
     public function testChannelLabelReturnsHumanLabelForKnownChannel(): void
@@ -274,6 +301,18 @@ class NotificationTemplateTest extends DbTestCase
     public function testEventSeverityWarningForApprovalRequested(): void
     {
         $this->assertSame('warning', NotificationTemplate::eventSeverity('approval.requested'));
+    }
+
+    /**
+     * A run that waits for a person is a warning, as an approval request
+     * is; a step that started or succeeded is info, which PagerDuty never
+     * triggers an incident for.
+     */
+    public function testEventSeverityOfTheStepEventsOfARun(): void
+    {
+        $this->assertSame('warning', NotificationTemplate::eventSeverity('workflow.waiting'));
+        $this->assertSame('info', NotificationTemplate::eventSeverity('workflow.step_started'));
+        $this->assertSame('info', NotificationTemplate::eventSeverity('workflow.step_succeeded'));
     }
 
     public function testEventSeverityInfoForSuccessAndDefault(): void

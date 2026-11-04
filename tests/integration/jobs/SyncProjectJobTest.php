@@ -313,6 +313,52 @@ class SyncProjectJobTest extends DbTestCase
         );
     }
 
+    /**
+     * Every run of the lint phase serves the lint requests up to the
+     * phase's start, read before it reads the templates: a template saved
+     * during the phase keeps its mark, which its own queued run clears, and
+     * is never marked done by the run of the copy read before the save.
+     */
+    public function testEveryLintRunOfThePhaseServesTheRequestsUpToThePhasesStart(): void
+    {
+        $project = $this->createProject((int)$this->createUser()->id);
+        $first = $this->templateOf($project);
+        $second = $this->templateOf($project);
+        $this->replaceComponent('projectService', new class () extends \yii\base\Component {
+            public function sync(Project $project): void
+            {
+            }
+        });
+        $runs = new \ArrayObject();
+        $this->replaceComponent('lintService', new class ($runs) extends \yii\base\Component {
+            /** @param \ArrayObject<int, array{0: string, 1: int|null}> $runs */
+            public function __construct(private \ArrayObject $runs)
+            {
+                parent::__construct();
+            }
+
+            public function runForProject(Project $project, ?int $requestedAt = null): void
+            {
+                $this->runs[] = ['project', $requestedAt];
+            }
+
+            public function runForTemplate(JobTemplate $template, ?int $requestedAt = null): void
+            {
+                $this->runs[] = ['template:' . $template->id, $requestedAt];
+            }
+        });
+        $before = time();
+
+        (new SyncProjectJob(['projectId' => $project->id]))->execute(null);
+
+        $runs = $runs->getArrayCopy();
+        $this->assertSame(['project', 'template:' . $first->id, 'template:' . $second->id], array_column($runs, 0));
+        $times = array_unique(array_column($runs, 1));
+        $this->assertCount(1, $times, 'one time for the whole phase');
+        $this->assertGreaterThanOrEqual($before, $times[0]);
+        $this->assertLessThanOrEqual(time(), $times[0]);
+    }
+
     public function testAFailedSyncRunsNeitherTheVaultScanNorLint(): void
     {
         $project = $this->createProject((int)$this->createUser()->id);

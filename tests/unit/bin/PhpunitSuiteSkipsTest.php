@@ -36,7 +36,7 @@ class PhpunitSuiteSkipsTest extends TestCase
         case "$*" in
             */ansilume_migrate_*.php" setup "*) echo "error: SQLSTATE[HY000] [2002] Connection refused"; exit 1 ;;
             "yii migrate --interactive=0") echo "No new migrations found. Your system is up-to-date." ;;
-            *"--testsuite=Unit,Integration "*) cat "$STUB_COVERAGE_RUN" ;;
+            *"--testsuite=Unit,Integration "*) cat "$STUB_COVERAGE_RUN"; exit "$STUB_COVERAGE_RC" ;;
             *"--testsuite=Unit "*) echo "OK (1 test, 1 assertion)" ;;
             *) echo "unexpected: php $*" >&2; exit 1 ;;
         esac
@@ -104,12 +104,12 @@ class PhpunitSuiteSkipsTest extends TestCase
             . "ERRORS!\nTests: 2, Assertions: 1, Errors: 1.\n"
             . "PHP Fatal error:  Allowed memory size of 1073741824 bytes exhausted (tried to allocate 20480 bytes)\n";
 
-        [$status, $output] = $this->runSuite([], $died);
+        [$status, $output] = $this->runSuite([], $died, 255);
 
-        $this->assertStringContainsString("✘  Integration tests failed\n", $output);
+        $this->assertStringContainsString("✘  Integration tests failed (exit 255)\n", $output);
         $this->assertStringContainsString("–  Code coverage (could not parse output) (skipped)\n", $output);
         $this->assertStringContainsString(
-            "Failed checks:\n  ✘  Integration tests failed\n",
+            "Failed checks:\n  ✘  Integration tests failed (exit 255)\n",
             $output,
             'the suite reaches its summary'
         );
@@ -126,12 +126,14 @@ class PhpunitSuiteSkipsTest extends TestCase
 
     /**
      * Runs the copy of bin/tests-phpunit.sh with the stand-ins and $env, its
-     * coverage run printing $coverageRun.
+     * coverage run printing $coverageRun and exiting with $coverageExit, as
+     * PHPUnit does: 0 when no test failed and it raised no PHPUnit warning,
+     * 255 after a fatal error (PhpunitSuiteExitStatusTest).
      *
      * @param array<string, string> $env
      * @return array{0: int, 1: string} exit code, output without colours
      */
-    private function runSuite(array $env, string $coverageRun): array
+    private function runSuite(array $env, string $coverageRun, int $coverageExit = 0): array
     {
         file_put_contents($this->directory . '/coverage-run.txt', $coverageRun);
         $process = proc_open(
@@ -143,6 +145,7 @@ class PhpunitSuiteSkipsTest extends TestCase
                 'PATH' => $this->directory . '/stubs:' . (string)getenv('PATH'),
                 'HOME' => $this->directory,
                 'STUB_COVERAGE_RUN' => $this->directory . '/coverage-run.txt',
+                'STUB_COVERAGE_RC' => (string)$coverageExit,
             ] + $env
         );
         $this->assertIsResource($process);

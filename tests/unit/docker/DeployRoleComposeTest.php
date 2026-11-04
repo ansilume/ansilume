@@ -163,6 +163,7 @@ class DeployRoleComposeTest extends TestCase
             'nginx' => 'ghcr.io/ansilume/ansilume-nginx:' . $tag,
             'schedule-runner' => 'ghcr.io/ansilume/ansilume:' . $tag,
             'queue-worker' => 'ghcr.io/ansilume/ansilume:' . $tag,
+            'notification-worker' => 'ghcr.io/ansilume/ansilume:' . $tag,
             'runner-1' => 'ghcr.io/ansilume/ansilume-runner:' . $tag,
             'runner-2' => 'ghcr.io/ansilume/ansilume-runner:' . $tag,
         ], $images);
@@ -210,7 +211,8 @@ class DeployRoleComposeTest extends TestCase
     /**
      * Regression: with an external database and an external Redis, app,
      * schedule-runner and queue-worker got an empty depends_on, which
-     * Compose refuses ("services.app.depends_on must be a array").
+     * Compose refuses ("services.app.depends_on must be a array"). The
+     * notification-worker waits for the same services.
      *
      * @dataProvider backendProvider
      */
@@ -219,7 +221,8 @@ class DeployRoleComposeTest extends TestCase
         $services = $this->renderDeployTemplate($prebuilt, ['ansilume_db_local' => $db, 'ansilume_redis_local' => $redis])['services'];
 
         $expected = array_keys(array_filter(['db' => $db, 'redis' => $redis]));
-        foreach (['app', 'schedule-runner', 'queue-worker'] as $name) {
+        foreach (['app', 'schedule-runner', 'queue-worker', 'notification-worker'] as $name) {
+            $this->assertArrayHasKey($name, $services);
             $this->assertSame($expected, array_keys((array)($services[$name]['depends_on'] ?? [])), $name);
             if ($expected === []) {
                 $this->assertArrayNotHasKey('depends_on', $services[$name], $name);

@@ -15,6 +15,7 @@ use app\models\User;
 use app\models\WorkflowJob;
 use app\models\WorkflowStep;
 use app\models\WorkflowTemplate;
+use app\services\notification\NotificationOutbox;
 use app\tests\integration\services\RecordingNotificationDispatcher;
 use app\tests\integration\TeamScopeFixtures;
 use yii\web\BadRequestHttpException;
@@ -220,6 +221,12 @@ class TriggerControllerTokenTransportTest extends WebControllerTestCase
         $this->assertSame('abcdef', $trigger['token_prefix'] ?? null);
         $this->assertSame($action === 'fire' ? null : 'workflow', $trigger['kind'] ?? null);
         $this->assertStringNotContainsString($unknown, (string)json_encode($notified));
+        $this->assertSame(
+            sprintf(NotificationOutbox::THROTTLE_NOTE, 5),
+            $trigger['note'] ?? null,
+            'the message says that a template gets it once in 5 minutes, and where the further calls are'
+        );
+        $this->assertSame([[]], $this->dispatcher->refsOf(NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN), 'it names no object');
     }
 
     // ── Regressions through Yii's own dispatch ─────────────────────────────

@@ -30,6 +30,8 @@ class LintServiceTest extends TestCase
         return new class ($available, $execOutput, $execExit) extends LintService {
             public array $stored         = [];
             public array $storedProjects = [];
+            /** @var list<int> the times up to which runs that stored nothing ended the requests */
+            public array $cleared = [];
 
             public function __construct(
                 private readonly bool $available,
@@ -48,14 +50,19 @@ class LintServiceTest extends TestCase
                 return [$this->execOutput, $this->execExit];
             }
 
-            protected function store(JobTemplate $template, ?int $exitCode, string $output): void
+            protected function store(JobTemplate $template, ?int $exitCode, string $output, int $servedUpTo): void
             {
-                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output];
+                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
             }
 
-            protected function storeProject(Project $project, ?int $exitCode, string $output): void
+            protected function storeProject(Project $project, ?int $exitCode, string $output, int $servedUpTo): void
             {
-                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output];
+                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
+            }
+
+            protected function clearQueued(JobTemplate|Project $record, int $servedUpTo): void
+            {
+                $this->cleared[] = $servedUpTo;
             }
         };
     }
@@ -104,7 +111,7 @@ class LintServiceTest extends TestCase
 
         $this->assertCount(1, $svc->stored);
         $this->assertNull($svc->stored[0]['exitCode']);
-        $this->assertStringContainsString('No project', $svc->stored[0]['output']);
+        $this->assertSame(LintService::NO_PROJECT, $svc->stored[0]['output']);
     }
 
     public function testRunForTemplateStoresErrorWhenManualProjectHasNoLocalPath(): void
@@ -117,7 +124,7 @@ class LintServiceTest extends TestCase
 
         $this->assertCount(1, $svc->stored);
         $this->assertNull($svc->stored[0]['exitCode']);
-        $this->assertStringContainsString('No local path', $svc->stored[0]['output']);
+        $this->assertSame(LintService::NO_LOCAL_PATH, $svc->stored[0]['output']);
     }
 
     public function testRunForTemplateStoresErrorWhenManualProjectPathNotFound(): void
@@ -130,7 +137,7 @@ class LintServiceTest extends TestCase
 
         $this->assertCount(1, $svc->stored);
         $this->assertNull($svc->stored[0]['exitCode']);
-        $this->assertStringContainsString('Project path not found', $svc->stored[0]['output']);
+        $this->assertSame(sprintf(LintService::PATH_NOT_FOUND, '/tmp/ansilume_test_nonexistent_path_xyz'), $svc->stored[0]['output']);
     }
 
     public function testRunForTemplateStoresErrorWhenPlaybookNotFound(): void
@@ -147,7 +154,7 @@ class LintServiceTest extends TestCase
 
             $this->assertCount(1, $svc->stored);
             $this->assertNull($svc->stored[0]['exitCode']);
-            $this->assertStringContainsString('Playbook not found', $svc->stored[0]['output']);
+            $this->assertSame(sprintf(LintService::PLAYBOOK_NOT_FOUND, 'missing_playbook.yml'), $svc->stored[0]['output']);
         } finally {
             rmdir($dir);
         }
@@ -164,10 +171,11 @@ class LintServiceTest extends TestCase
             $project  = $this->makeProject(Project::SCM_TYPE_MANUAL, $dir);
             $template = $this->makeTemplate(['playbook' => 'site.yml'], $project);
 
-            $svc->runForTemplate($template);
+            $svc->runForTemplate($template, 1700000000);
 
-            // Nothing stored — silent skip
+            // Nothing stored — silent skip; the requests up to 1700000000 end all the same.
             $this->assertCount(0, $svc->stored);
+            $this->assertSame([1700000000], $svc->cleared);
         } finally {
             unlink($dir . '/site.yml');
             rmdir($dir);
@@ -218,6 +226,42 @@ class LintServiceTest extends TestCase
         }
     }
 
+    /**
+     * A run serves the requests up to the time it is given, the mark of the
+     * request whose job it is; the early paths too.
+     */
+    public function testARunServesTheRequestsUpToTheTimeItIsGiven(): void
+    {
+        $svc = $this->makeService();
+
+        $svc->runForTemplate($this->makeTemplate(['playbook' => 'site.yml'], null), 1700000000);
+        $svc->runForProject($this->makeProject(Project::SCM_TYPE_MANUAL, '/tmp/ansilume_test_no_such_dir_' . uniqid('', true)), 1700000001);
+
+        $this->assertSame(1700000000, $svc->stored[0]['servedUpTo']);
+        $this->assertSame(1700000001, $svc->storedProjects[0]['servedUpTo']);
+        $this->assertSame([], $svc->cleared);
+    }
+
+    /**
+     * Without a time, as in the lint phase of a sync, a run serves the
+     * requests up to the time it started.
+     */
+    public function testARunWithoutATimeServesTheRequestsUpToItsStart(): void
+    {
+        $svc = $this->makeService(available: false);
+        $before = time();
+
+        $svc->runForTemplate($this->makeTemplate(['playbook' => 'site.yml'], null));
+        $svc->runForProject($this->makeProject(Project::SCM_TYPE_MANUAL, null));
+
+        $after = time();
+        $this->assertGreaterThanOrEqual($before, $svc->stored[0]['servedUpTo']);
+        $this->assertLessThanOrEqual($after, $svc->stored[0]['servedUpTo']);
+        $this->assertCount(1, $svc->cleared);
+        $this->assertGreaterThanOrEqual($before, $svc->cleared[0]);
+        $this->assertLessThanOrEqual($after, $svc->cleared[0]);
+    }
+
     // -------------------------------------------------------------------------
     // runForProject — guard clauses
     // -------------------------------------------------------------------------
@@ -227,9 +271,10 @@ class LintServiceTest extends TestCase
         $svc     = $this->makeService();
         $project = $this->makeProject(Project::SCM_TYPE_MANUAL, null);
 
-        $svc->runForProject($project);
+        $svc->runForProject($project, 1700000000);
 
         $this->assertCount(0, $svc->storedProjects);
+        $this->assertSame([1700000000], $svc->cleared, 'the requests end although nothing is stored');
     }
 
     public function testRunForProjectSkipsEarlyWhenManualProjectHasEmptyPath(): void
@@ -237,9 +282,10 @@ class LintServiceTest extends TestCase
         $svc     = $this->makeService();
         $project = $this->makeProject(Project::SCM_TYPE_MANUAL, '');
 
-        $svc->runForProject($project);
+        $svc->runForProject($project, 1700000000);
 
         $this->assertCount(0, $svc->storedProjects);
+        $this->assertSame([1700000000], $svc->cleared);
     }
 
     public function testRunForProjectStoresErrorWhenPathNotFound(): void
@@ -251,7 +297,7 @@ class LintServiceTest extends TestCase
 
         $this->assertCount(1, $svc->storedProjects);
         $this->assertNull($svc->storedProjects[0]['exitCode']);
-        $this->assertStringContainsString('Project path not found', $svc->storedProjects[0]['output']);
+        $this->assertSame(sprintf(LintService::PATH_NOT_FOUND, '/tmp/ansilume_test_no_such_dir_xyz'), $svc->storedProjects[0]['output']);
     }
 
     public function testRunForProjectSkipsWhenAnsibleLintNotAvailable(): void
@@ -263,9 +309,10 @@ class LintServiceTest extends TestCase
             $svc     = $this->makeService(available: false);
             $project = $this->makeProject(Project::SCM_TYPE_MANUAL, $dir);
 
-            $svc->runForProject($project);
+            $svc->runForProject($project, 1700000000);
 
             $this->assertCount(0, $svc->storedProjects);
+            $this->assertSame([1700000000], $svc->cleared);
         } finally {
             rmdir($dir);
         }
@@ -317,14 +364,14 @@ class LintServiceTest extends TestCase
                 return '/tmp/ansilume_nonexistent_workspace_' . uniqid('', true);
             }
 
-            protected function store(JobTemplate $template, ?int $exitCode, string $output): void
+            protected function store(JobTemplate $template, ?int $exitCode, string $output, int $servedUpTo): void
             {
-                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output];
+                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
             }
 
-            protected function storeProject(Project $project, ?int $exitCode, string $output): void
+            protected function storeProject(Project $project, ?int $exitCode, string $output, int $servedUpTo): void
             {
-                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output];
+                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
             }
         };
 
@@ -333,7 +380,7 @@ class LintServiceTest extends TestCase
 
         $this->assertCount(1, $svc->storedProjects);
         $this->assertNull($svc->storedProjects[0]['exitCode']);
-        $this->assertStringContainsString('sync the project first', $svc->storedProjects[0]['output']);
+        $this->assertSame(LintService::WORKSPACE_NOT_FOUND, $svc->storedProjects[0]['output']);
     }
 
     // -------------------------------------------------------------------------
@@ -443,14 +490,14 @@ class LintServiceTest extends TestCase
                     return $this->execute($playbook, $cwd);
                 }
 
-                protected function store(JobTemplate $template, ?int $exitCode, string $output): void
+                protected function store(JobTemplate $template, ?int $exitCode, string $output, int $servedUpTo): void
                 {
-                    $this->stored[] = ['exitCode' => $exitCode, 'output' => $output];
+                    $this->stored[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
                 }
 
-                protected function storeProject(Project $project, ?int $exitCode, string $output): void
+                protected function storeProject(Project $project, ?int $exitCode, string $output, int $servedUpTo): void
                 {
-                    $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output];
+                    $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
                 }
             };
 
@@ -494,14 +541,14 @@ class LintServiceTest extends TestCase
                 return '/tmp/ansilume_nonexistent_ws_' . uniqid('', true);
             }
 
-            protected function store(JobTemplate $template, ?int $exitCode, string $output): void
+            protected function store(JobTemplate $template, ?int $exitCode, string $output, int $servedUpTo): void
             {
-                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output];
+                $this->stored[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
             }
 
-            protected function storeProject(Project $project, ?int $exitCode, string $output): void
+            protected function storeProject(Project $project, ?int $exitCode, string $output, int $servedUpTo): void
             {
-                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output];
+                $this->storedProjects[] = ['exitCode' => $exitCode, 'output' => $output, 'servedUpTo' => $servedUpTo];
             }
         };
 
@@ -512,7 +559,7 @@ class LintServiceTest extends TestCase
 
         $this->assertCount(1, $svc->stored);
         $this->assertNull($svc->stored[0]['exitCode']);
-        $this->assertStringContainsString('sync the project first', $svc->stored[0]['output']);
+        $this->assertSame(LintService::WORKSPACE_NOT_FOUND, $svc->stored[0]['output']);
     }
 
     // -------------------------------------------------------------------------

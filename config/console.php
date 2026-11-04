@@ -14,7 +14,11 @@ return [
     'basePath' => dirname(__DIR__),
     // ProcessHardeningBootstrap marks console workers non-dumpable so child
     // processes running repository code cannot read their environment.
-    'bootstrap' => ['log', 'queue', \app\components\ProcessHardeningBootstrap::class],
+    // notificationDispatcher: the channels of notification templates are
+    // checked when a command starts (config/services.php), so a wrong
+    // definition stops every command before it runs: the migrations of the
+    // entrypoint, the workers, the schedule-runner and the health check.
+    'bootstrap' => ['log', 'queue', \app\components\ProcessHardeningBootstrap::class, 'notificationDispatcher'],
     // As config/web.php: every 'integer', 'number' and 'double' rule is a
     // WholeNumberValidator, which refuses a float that is no whole number
     // also when its text of 14 digits reads as one (2.9999999999999996).
@@ -101,6 +105,23 @@ return [
             'ttr' => 3600,
             // yii2-queue's LogBehavior, except that a job's database error is
             // logged without its message (the SQL statement with its values).
+            'as log' => \app\components\QueueLogBehavior::class,
+        ],
+        // The notification queue: the deliveries of notification templates, on
+        // a channel of their own, so that none waits behind a project sync. The
+        // notification-worker runs it (worker/start --queue=notificationQueue).
+        // A delivery makes at most MattermostApi::MAX_REQUESTS requests of the
+        // outbound HTTP client, each within the client's timeout; the TTR
+        // outlasts them (NotificationQueueConfigTest), after which Redis hands
+        // the message out again.
+        'notificationQueue' => [
+            'class' => 'yii\queue\redis\Queue',
+            // Only Ansilume's own job classes may be unserialized from Redis.
+            'serializer' => \app\components\AllowlistQueueSerializer::class,
+            'redis' => $redis,
+            'channel' => 'ansilume-notifications',
+            'ttr' => 120,
+            // As the queue's: a job's database error is logged without its message.
             'as log' => \app\components\QueueLogBehavior::class,
         ],
     ],

@@ -32,6 +32,14 @@ ansilume_app_env: prod
 ansilume_yii_env: prod
 ansilume_yii_debug: false
 
+# APP_URL: the address your users open Ansilume at, such as
+# https://ansilume.example.com. Every link that leaves Ansilume is made from
+# it: those of notifications (the Mattermost status posts and webhook
+# payloads among them) and of password-reset mails. Empty: the role writes
+# no APP_URL, and the links lead to http://localhost:8080, which only the
+# server itself reaches; bin/diagnose warns about it.
+ansilume_app_url: ""
+
 # -- Secrets (MUST override in production) -----------------------------------
 
 # Yii2 cookie signing key. Minimum 32 characters.
@@ -91,8 +99,11 @@ ansilume_redis_db: 0
 # password. Keep it in Ansible Vault (see group_vars/ansilume.yaml).
 ansilume_redis_password: ""
 
-# Redis image and version for the local container.
-ansilume_redis_image: "redis:7.2-alpine"
+# Redis image and version for the local container, which keeps its data in
+# the volume redis_data. A Redis cannot load data that a newer line wrote:
+# before you set an older one, see the update to Redis 8.10 in
+# docs/updating.md.
+ansilume_redis_image: "redis:8.10-alpine"
 
 # -- Nginx -------------------------------------------------------------------
 
@@ -158,6 +169,18 @@ ansilume_smtp_password: ""
 ansilume_admin_email: "admin@example.com"
 ansilume_sender_email: "noreply@ansilume.local"
 
+# -- Outbound HTTP -----------------------------------------------------------
+
+# OUTBOUND_CA_BUNDLE: a PEM file of CA certificates that the notification
+# channels and the outbound webhooks trust on top of the system's, for an
+# endpoint whose certificate an internal CA issued. A path inside the app,
+# queue-worker, notification-worker and schedule-runner containers: when
+# building from source (ansilume_use_prebuilt_images: false) a file in
+# ansilume_install_dir is at /var/www/<its path>; with the prebuilt images the
+# file must be mounted into those containers. Empty: the system's CAs only.
+# TLS verification is always on.
+ansilume_outbound_ca_bundle: ""
+
 # -- Audit / SIEM ------------------------------------------------------------
 
 # Forward audit log events to syslog (works with Promtail/Loki, Splunk syslog
@@ -198,7 +221,7 @@ ansilume_restart_policy: unless-stopped
 ansilume_network_name: ansilume
 
 # Network for the bundled runners. Only nginx joins both networks, so
-# playbooks cannot reach app, db, redis or the queue-worker. Must differ
+# playbooks cannot reach app, db, redis or the workers. Must differ
 # from ansilume_network_name.
 ansilume_runner_network_name: runners
 

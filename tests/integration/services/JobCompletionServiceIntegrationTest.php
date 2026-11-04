@@ -408,6 +408,73 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
     }
 
     /**
+     * @return array<string, array{0: string, 1: string}> the component that fails, and what the log line calls it
+     */
+    public static function failingAnnouncementProvider(): array
+    {
+        return [
+            'the notification' => ['notificationDispatcher', 'notification'],
+            'the webhooks' => ['webhookService', 'webhooks'],
+        ];
+    }
+
+    /**
+     * Regression (workflow notifications plan, Task 7): a notification or a
+     * webhook that failed when the job of a workflow step ended, here on a
+     * database error while their templates were read, ended the report
+     * before the workflow advance: the step stayed running, and its run
+     * with it, with nothing left to move them on. The failure is logged
+     * (its class, SQLSTATE and driver error code, never its message) and
+     * the run moves on.
+     *
+     * @dataProvider failingAnnouncementProvider
+     */
+    public function testRegressionACompletionAdvancesItsWorkflowWhenNotificationsFail(string $component, string $what): void
+    {
+        $user = $this->createUser();
+        $template = $this->createJobTemplate(
+            (int)$this->createProject((int)$user->id)->id,
+            (int)$this->createInventory((int)$user->id)->id,
+            (int)$this->createRunnerGroup((int)$user->id)->id,
+            (int)$user->id
+        );
+        $step = $this->createWorkflowStep((int)$this->createWorkflowTemplate((int)$user->id)->id, 10, WorkflowStep::TYPE_JOB, (int)$template->id);
+        $job = $this->createJob((int)$template->id, (int)$user->id, Job::STATUS_RUNNING);
+        $this->seedTaskFor($job, 'ok');
+        $run = $this->runningRunAt($step, $job);
+        $error = new \yii\db\Exception(
+            "SQLSTATE[HY000]: General error: 2006 MySQL server has gone away\nThe SQL being executed was: SELECT 'marker-5150'",
+            ['HY000', 2006, 'MySQL server has gone away']
+        );
+        $component === 'notificationDispatcher'
+            ? \Yii::$app->set('notificationDispatcher', new FailingNotificationDispatcher([\app\models\NotificationTemplate::EVENT_JOB_SUCCEEDED], $error))
+            : \Yii::$app->set('webhookService', new class ($error) extends \app\services\WebhookService {
+                public function __construct(private readonly \Throwable $error)
+                {
+                    parent::__construct();
+                }
+
+                public function dispatch(string $event, Job $job): void
+                {
+                    throw $this->error;
+                }
+            });
+        $engine = $this->recordWorkflowAdvances();
+
+        $errors = $this->errorsLoggedDuring(fn () => $this->service->complete($job, 0));
+
+        $this->assertSame([(int)$job->id], $engine->advancedJobIds, 'the run moves on');
+        $execution = WorkflowJobStep::findOne(['workflow_job_id' => $run->id, 'job_id' => $job->id]);
+        $this->assertNotNull($execution);
+        $this->assertSame(WorkflowJobStep::STATUS_SUCCEEDED, $execution->status, 'the step ended with its job');
+        $this->assertSame(Job::STATUS_SUCCEEDED, $job->status);
+        $this->assertSame(
+            [sprintf(JobCompletionService::ANNOUNCE_FAILED, $what, (int)$job->id, 'yii\db\Exception', 'HY000', '2006')],
+            $errors
+        );
+    }
+
+    /**
      * The line that explains a failure is written in the same transaction
      * as the status: a failed job without its reason is never committed.
      */
@@ -976,6 +1043,32 @@ class JobCompletionServiceIntegrationTest extends DbTestCase
         $logs = JobLog::find()->where(['job_id' => $job->id])->orderBy(['sequence' => SORT_ASC, 'id' => SORT_ASC])->all();
 
         return array_map(static fn (JobLog $log): string => (string)$log->content, $logs);
+    }
+
+    /**
+     * The errors JobCompletionService logs while $action runs.
+     *
+     * @return list<string>
+     */
+    private function errorsLoggedDuring(callable $action): array
+    {
+        $logger = new \yii\log\Logger();
+        $logger->flushInterval = PHP_INT_MAX;
+        $previous = \Yii::getLogger();
+        \Yii::setLogger($logger);
+        try {
+            $action();
+        } finally {
+            \Yii::setLogger($previous);
+        }
+        $errors = [];
+        foreach ($logger->messages as $message) {
+            if ($message[1] === \yii\log\Logger::LEVEL_ERROR && $message[2] === JobCompletionService::class && is_string($message[0])) {
+                $errors[] = $message[0];
+            }
+        }
+
+        return $errors;
     }
 
     /**

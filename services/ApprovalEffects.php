@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\AppLinks;
 use app\components\JobInventory;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
@@ -12,6 +13,8 @@ use app\models\Job;
 use app\models\NotificationTemplate;
 use app\models\WorkflowJob;
 use app\services\notification\JobPayloadBuilder;
+use app\services\notification\NotificationRefs;
+use app\services\notification\RunContext;
 
 /**
  * The side effects of approval requests, run after the transaction that
@@ -26,8 +29,11 @@ use app\services\notification\JobPayloadBuilder;
  *   closed because its job no longer waited (with the reason), and
  *   job.canceled for a job the settlement canceled; the approval.approved
  *   or approval.rejected notification once a vote decided the request (a
- *   timeout sends none); and the workflow engine's onApprovalResolved()
- *   when the outcome says so (ApprovalOutcome::workflowDecision()).
+ *   timeout sends none); the workflow engine's onApprovalResolved() when
+ *   the outcome says so (ApprovalOutcome::workflowDecision()); and, for the
+ *   request of a workflow step, a refresh of its run's status posts
+ *   (WorkflowRunEvents::statusChanged()), which no event covers when a
+ *   timeout settled it.
  *
  * A job the settlement canceled gets what the cancel it stands in for
  * would have written:
@@ -52,8 +58,13 @@ final class ApprovalEffects
      * m000088), and the inventory the job was launched with (inventory_id,
      * as its runner payload records it, JobInventory::idOf(): null for the
      * placeholder of a workflow approval step).
+     *
+     * $workflowJobId is the run of the workflow step whose job $job is, when
+     * the caller knows it before the step records the job (the launch of a
+     * gated job step); the notification's refs name it
+     * (NotificationRefs::ofApproval()).
      */
-    public function requested(ApprovalRequest $request, Job $job, ApprovalRule $rule): void
+    public function requested(ApprovalRequest $request, Job $job, ApprovalRule $rule, ?int $workflowJobId = null): void
     {
         $this->audit(
             AuditLog::ACTION_APPROVAL_REQUESTED,
@@ -68,7 +79,7 @@ final class ApprovalEffects
                 'inventory_id' => JobInventory::idOf($job->decodedRunnerPayload()),
             ]
         );
-        $this->notify(NotificationTemplate::EVENT_APPROVAL_REQUESTED, $request, $job, $rule);
+        $this->notify(NotificationTemplate::EVENT_APPROVAL_REQUESTED, $request, $job, $rule, $workflowJobId);
     }
 
     /**
@@ -83,13 +94,15 @@ final class ApprovalEffects
             default => null,
         };
         if ($event !== null) {
-            $this->notify($event, $outcome->request, $outcome->job, $outcome->rule);
+            $runId = $outcome->step === null ? null : (int)$outcome->step->workflow_job_id;
+            $this->notify($event, $outcome->request, $outcome->job, $outcome->rule, $runId);
         }
         if ($outcome->canceledForDeletedTemplate()) {
             $this->endJobOfDeletedTemplate($outcome);
-            return;
+        } else {
+            $this->advanceWorkflow($outcome);
         }
-        $this->advanceWorkflow($outcome);
+        $this->refreshRunStatus($outcome);
     }
 
     private function auditOutcome(ApprovalOutcome $outcome, ?int $actorId): void
@@ -197,15 +210,22 @@ final class ApprovalEffects
 
     /**
      * The approval.requested, .approved or .rejected notification: the
-     * request, with what required it (required_by), and its job, with the
-     * inventory it was launched with (JobInventory::ofJob(): its name at
-     * launch, else its current name), all as strings, '' where there is
-     * none (a placeholder job has no template and no inventory; before
-     * m000088 a request records nothing).
+     * request, with what required it (required_by) and its page (url), and
+     * its job, with the inventory it was launched with (JobInventory::ofJob():
+     * its name at launch, else its current name), all as strings, '' where
+     * there is none (a placeholder job has no template and no inventory;
+     * before m000088 a request records nothing). The request of a workflow
+     * step carries the run's context too (RunContext: workflow.*, step.*),
+     * which the dispatcher leaves out for an identity that may not see the
+     * run's workflow. Its refs name the request, its job and the run of the
+     * job's workflow step ($workflowJobId, else the step that records the
+     * job), if any.
      */
-    private function notify(string $event, ApprovalRequest $request, ?Job $job, ?ApprovalRule $rule): void
+    private function notify(string $event, ApprovalRequest $request, ?Job $job, ?ApprovalRule $rule, ?int $workflowJobId): void
     {
         $inventory = JobInventory::ofJob($job);
+        $refs = NotificationRefs::ofApproval($request, $job, $workflowJobId);
+        $run = $job === null ? null : RunContext::ofJob((int)$job->id, $refs['workflow_job_id'] ?? null);
         /** @var NotificationDispatcher $dispatcher */
         $dispatcher = \Yii::$app->get('notificationDispatcher');
         $dispatcher->dispatch($event, [
@@ -215,6 +235,7 @@ final class ApprovalEffects
                 'rule_id' => (string)($rule?->id ?? ''),
                 'rule_name' => (string)($rule?->name ?? ''),
                 'required_by' => (string)$request->requiredBy(),
+                'url' => AppLinks::approval((int)$request->id),
             ],
             'job' => [
                 'id' => (string)($job?->id ?? ''),
@@ -223,6 +244,20 @@ final class ApprovalEffects
                 'inventory_id' => (string)$inventory->id,
                 'inventory_name' => (string)$inventory->name,
             ],
-        ]);
+        ] + ($run?->payload() ?? []) + [NotificationDispatcher::REFS => $refs]);
+    }
+
+    /**
+     * A settled request of a workflow step changed what its run shows (it
+     * no longer waits for the approval), also when no event says so (a
+     * timeout sends no approval event): the run's status posts are
+     * refreshed (WorkflowRunEvents::statusChanged()), after the run moved on.
+     */
+    private function refreshRunStatus(ApprovalOutcome $outcome): void
+    {
+        $run = $outcome->resolution === null ? null : $outcome->step?->workflowJob;
+        if ($run instanceof WorkflowJob) {
+            (new WorkflowRunEvents())->statusChanged($run);
+        }
     }
 }

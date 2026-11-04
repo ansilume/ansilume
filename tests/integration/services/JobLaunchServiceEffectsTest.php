@@ -84,7 +84,7 @@ class JobLaunchServiceEffectsTest extends DbTestCase
                 parent::__construct();
             }
 
-            public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule): void
+            public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule, ?int $workflowJobId = null): void
             {
                 throw $this->failure;
             }

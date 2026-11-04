@@ -19,6 +19,20 @@
 # fails the same way, and no test finds that). A suite that set -e ends
 # before print_summary names the line and the command it ended at
 # (report_early_end).
+#
+# A check judges its tool by the tool's exit code: it passes on the code of
+# a clean run (with the line that says so, where the tool prints one: OK of
+# PHPUnit, "Migrated up successfully" of yii migrate), reports the findings
+# on the code for findings, and fails on any other code with the code ("did
+# not complete (exit N)", "failed (exit N)") and the last lines the tool
+# printed (show_output_tail). It never reads a pass from the output alone:
+# a count of findings that a report without one gave as 0 passed a phpcs
+# and a PHP-CS-Fixer that ended before their report
+# (tests/unit/bin/StyleSuiteExitStatusTest.php; SuiteCountFallbackTest.php
+# finds such a fallback to 0), "Connection refused" in the output of a
+# failing integration run made it a skip (PhpunitSuiteExitStatusTest.php),
+# and a composer audit that could not reach Packagist passed
+# (LintSuiteComposerAuditTest.php).
 
 # Navigate to repo root
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,6 +61,18 @@ section() { echo -e "\n${CYAN}${BOLD}══ $1 ══${NC}"; }
 ok()      { echo -e "  ${GREEN}✔${NC}  $1"; PASS=$((PASS+1)); }
 fail()    { echo -e "  ${RED}✘${NC}  $1"; FAIL=$((FAIL+1)); ERRORS+=("$1"); }
 skip()    { echo -e "  ${YELLOW}–${NC}  $1 (skipped)"; SKIP=$((SKIP+1)); }
+
+# The last lines a tool printed, under the check that failed, or that it
+# printed nothing: a fatal error prints nothing where php.ini only logs
+# errors, as the app container's does, unless PHP runs with
+# -d display_errors=stderr.
+show_output_tail() {
+    if [[ -n "$1" ]]; then
+        tail -20 <<< "$1" | sed 's/^/     /'
+    else
+        echo "     (no output)"
+    fi
+}
 
 # ─── Docker detection ───────────────────────────────────────────────────────
 DOCKER_AVAILABLE=0

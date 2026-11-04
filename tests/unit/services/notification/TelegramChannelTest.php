@@ -203,10 +203,11 @@ class TelegramChannelTest extends TestCase
     }
 
     /**
-     * An answer outside 2xx is an error with its code and the first 200
-     * bytes of its body, which notification.failed records.
+     * An answer outside 2xx is an error with its code, which
+     * notification.failed records; never with the answer's body, which
+     * held the first 200 bytes of it before (ChannelSchemeRegressionTest).
      */
-    public function testAnAnswerOutside2xxIsAnErrorWithItsCodeAndTheStartOfItsBody(): void
+    public function testAnAnswerOutside2xxIsAnErrorWithItsCodeOnly(): void
     {
         $answer = '{"ok":false,"error_code":400,"description":"Bad Request: can\'t parse entities: '
             . str_repeat('x', 300) . '"}';
@@ -219,23 +220,27 @@ class TelegramChannelTest extends TestCase
             $server->stop();
         }
 
-        $this->assertSame('TelegramChannel: HTTP 400 — ' . substr($answer, 0, 200), $error);
+        $this->assertSame('TelegramChannel: HTTP 400.', $error);
         $this->assertCount(1, $requests);
     }
 
-    public function testABotApiThatCannotBeReachedIsAnErrorWithoutCode(): void
+    /**
+     * A Bot API that cannot be reached is an error with curl's code: 7, the
+     * connection was refused.
+     */
+    public function testABotApiThatCannotBeReachedIsAConnectError(): void
     {
         $channel = $this->channel('http://127.0.0.1:1/bot-loopback/sendMessage');
 
         $error = self::errorOf(fn () => $channel->send($this->makeTemplate(self::config()), 'Alert', 'Body', []));
 
-        $this->assertSame('TelegramChannel: HTTP 0 — ', $error);
+        $this->assertSame('TelegramChannel: Could not connect (curl error 7).', $error);
     }
 
     /**
-     * curl_init() gives false for a URL longer than libcurl takes
-     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes); the bot token is part of the
-     * URL, so the real channel builds one.
+     * curl does not take a URL longer than libcurl takes
+     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes): curl error 43. The bot token
+     * is part of the URL, so the real channel builds one.
      */
     public function testAUrlThatCurlDoesNotTakeIsAnError(): void
     {
@@ -246,7 +251,7 @@ class TelegramChannelTest extends TestCase
 
         $error = self::errorOf(fn () => (new TelegramChannel())->send($template, 'Alert', 'Body', []));
 
-        $this->assertSame('TelegramChannel: failed to init curl', $error);
+        $this->assertSame('TelegramChannel: The request could not be made (curl error 43).', $error);
     }
 
     /**

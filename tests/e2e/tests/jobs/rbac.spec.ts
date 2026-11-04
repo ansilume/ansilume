@@ -12,6 +12,7 @@ import {
 } from '../../lib/approvals';
 import { HOST_INVENTORY, HOST_TEMPLATE } from '../../lib/inventories';
 import { LOGSTREAM_RUNNING_JOB, seededJobId } from '../../lib/jobs';
+import { expectTheJobPageNamesTheRecoveringRun, expectTheListNamesTheRecoveringRun, recoveryJobs } from '../../lib/recovery';
 import { cancelJobIfActive } from '../../lib/runs';
 import { asAdmin } from '../../lib/scoping';
 
@@ -38,6 +39,22 @@ test.describe('Jobs RBAC', () => {
       await expect(page.locator('#page-content input[name="date_from"]'), value).toHaveAttribute('value', '');
       await expect(page.locator('#page-content').getByRole('link', { name: 'Clear filters' }), value).toHaveCount(0);
     }
+  });
+
+  // Whoever sees a failed job sees which later run of the same job template
+  // recovered it, on the job page and in the job list: both jobs belong to
+  // the same template (commands/E2eRecoveredFailureSeeder.php, on a project
+  // that no team has).
+  test('viewer sees on the job page and in the job list which run recovered a failure', async ({ page }) => {
+    const jobs = await recoveryJobs(page);
+    await expectTheJobPageNamesTheRecoveringRun(page, jobs);
+    await expectTheListNamesTheRecoveringRun(page, jobs);
+  });
+
+  test('operator sees on the job page and in the job list which run recovered a failure', async ({ page }) => {
+    const jobs = await recoveryJobs(page);
+    await expectTheJobPageNamesTheRecoveringRun(page, jobs);
+    await expectTheListNamesTheRecoveringRun(page, jobs);
   });
 
   test('viewer cannot see cancel/relaunch buttons', async ({ page }) => {

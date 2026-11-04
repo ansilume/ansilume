@@ -89,8 +89,9 @@ class UnusablePasswordNameLaunchPathsTest extends WebControllerTestCase
         $template = $this->templateWithPasswordField((int)$user->id, $name);
         $this->swap('jobLaunchService', new JobLaunchService());
         $this->swap('lintService', new class () extends LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
         $posts = [

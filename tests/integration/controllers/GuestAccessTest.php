@@ -64,6 +64,7 @@ final class GuestAccessTest extends WebControllerTestCase
     private const NOT_CONTROLLERS = [
         'BaseController.php' => 'The abstract base class of the web controllers.',
         'traits/TeamScopingTrait.php' => 'A trait of the web controllers.',
+        'traits/LintCardTrait.php' => 'A trait of the job template and project controllers: the lint card of their pages.',
     ];
 
     /** The pages a signed-in user without a role reaches through the default role. */

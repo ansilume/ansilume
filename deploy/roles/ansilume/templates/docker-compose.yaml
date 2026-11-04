@@ -113,6 +113,10 @@ services:
     image: {{ ansilume_redis_image }}
     container_name: {{ ansilume_compose_project }}_redis
     restart: {{ ansilume_restart_policy }}
+    # Keeps the sessions, the cache and the queue across recreation: since
+    # 8.6 the redis images declare no VOLUME for /data.
+    volumes:
+      - redis_data:/data
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     # requirepass only when REDIS_PASSWORD is set; the password comes from the
@@ -223,6 +227,57 @@ services:
     networks:
       - {{ ansilume_network_name }}
 
+  # Sends the notifications from a queue of their own, so that none waits
+  # behind a project sync of the queue-worker. It runs as the queue-worker
+  # does, with the same .env, but needs no project checkouts.
+  notification-worker:
+{% if ansilume_use_prebuilt_images %}
+    image: {{ ansilume_app_image }}:{{ ansilume_image_tag }}
+{% else %}
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+      pull: true
+      args:
+        USER_ID: ${UID:-{{ ansilume_uid }}}
+        GROUP_ID: ${GID:-{{ ansilume_gid }}}
+{% endif %}
+    container_name: {{ ansilume_compose_project }}_notification_worker
+    restart: {{ ansilume_restart_policy }}
+    working_dir: /var/www
+    command: ["php", "yii", "worker/start", "--queue=notificationQueue"]
+    # Lets the delivery in flight finish on a stop: the worker ends after its
+    # job, which takes at most the notification queue's TTR of 120 seconds.
+    stop_grace_period: 120s
+    stop_signal: SIGTERM
+{% if not ansilume_use_prebuilt_images %}
+    volumes:
+      - .:/var/www
+      - ./docker/php/php.ini:/usr/local/etc/php/conf.d/local.ini
+{% endif %}
+    env_file:
+      - .env
+{% if ansilume_db_local or ansilume_redis_local %}
+    depends_on:
+{% endif %}
+{% if ansilume_db_local %}
+      db:
+        condition: service_healthy
+{% endif %}
+{% if ansilume_redis_local %}
+      redis:
+        condition: service_healthy
+{% endif %}
+    healthcheck:
+      # As www-data, the user of the worker (see app).
+      test: ["CMD", "gosu", "www-data", "php", "/var/www/yii", "health/check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - {{ ansilume_network_name }}
+
 {% for i in range(1, ansilume_runner_count + 1) %}
   runner-{{ i }}:
   # The standalone runner image in both modes, never a mount of the install
@@ -263,14 +318,17 @@ networks:
   {{ ansilume_network_name }}:
     driver: bridge
   # Runners reach the server only through nginx; playbooks must not reach
-  # app (php-fpm), db, redis or the queue-worker.
+  # app (php-fpm), db, redis or the workers.
   {{ ansilume_runner_network_name }}:
     driver: bridge
 
-{% if ansilume_db_local or ansilume_use_prebuilt_images or ansilume_runner_count > 0 %}
+{% if ansilume_db_local or ansilume_redis_local or ansilume_use_prebuilt_images or ansilume_runner_count > 0 %}
 volumes:
 {% if ansilume_db_local %}
   db_data:
+{% endif %}
+{% if ansilume_redis_local %}
+  redis_data:
 {% endif %}
 {% if ansilume_use_prebuilt_images %}
   runtime_projects:

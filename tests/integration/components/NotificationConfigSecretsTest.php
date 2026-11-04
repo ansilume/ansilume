@@ -195,6 +195,7 @@ class NotificationConfigSecretsTest extends DbTestCase
     public static function refusalProvider(): array
     {
         $webhook = NotificationTemplate::CHANNEL_WEBHOOK;
+        $mattermost = NotificationTemplate::CHANNEL_MATTERMOST;
         $headers = ['url' => 'https://a.example', 'headers' => ['Authorization' => 'Bearer x']];
 
         return [
@@ -206,7 +207,69 @@ class NotificationConfigSecretsTest extends DbTestCase
             'no url' => [$webhook, $headers, $webhook, ['headers' => ['Authorization' => self::SHOWN]], 'headers.Authorization: url changed; enter the real value.'],
             'the whole headers to a new url' => [$webhook, $headers, $webhook, ['url' => 'https://b.example', 'headers' => self::SHOWN], 'headers: url changed; enter the real value.'],
             'a header named by a number' => [$webhook, ['url' => 'u', 'headers' => ['x']], $webhook, ['url' => 'v', 'headers' => [self::SHOWN]], 'headers.0: url changed; enter the real value.'],
+            // Regression (review focus 3): the stored bot token went to the server an editor entered.
+            'a bot token to a new server' => [$mattermost, ChannelSecretFixtures::MATTERMOST, $mattermost, ['bot_token' => self::SHOWN, 'server_url' => 'https://evil.example.com'] + ChannelSecretFixtures::MATTERMOST, 'bot_token: server_url changed; enter the real value.'],
+            'a bot token to the server with a slash' => [$mattermost, ChannelSecretFixtures::MATTERMOST, $mattermost, ['bot_token' => self::SHOWN, 'server_url' => ChannelSecretFixtures::MATTERMOST_SERVER . '/'] + ChannelSecretFixtures::MATTERMOST, 'bot_token: server_url changed; enter the real value.'],
+            'a bot token without a server' => [$mattermost, ChannelSecretFixtures::MATTERMOST, $mattermost, ['bot_token' => self::SHOWN, 'channel_id' => 'abcdefghijklmnopqrstuvwxyz'], 'bot_token: server_url changed; enter the real value.'],
+            // The signing secret proves a request comes from Ansilume: it must not sign for another receiver.
+            'a signing secret to a new url' => [$webhook, ChannelSecretFixtures::SIGNED_WEBHOOK, $webhook, ['url' => 'https://b.example', 'signing_secret' => self::SHOWN], 'signing_secret: url changed; enter the real value.'],
+            'a signing secret without a url' => [$webhook, ChannelSecretFixtures::SIGNED_WEBHOOK, $webhook, ['signing_secret' => self::SHOWN, 'payload' => 'event'], 'signing_secret: url changed; enter the real value.'],
+            'no stored signing secret' => [$webhook, ['url' => 'https://a.example'], $webhook, ['url' => self::SHOWN, 'signing_secret' => self::SHOWN], 'signing_secret has no stored value; enter the real value.'],
         ];
+    }
+
+    /**
+     * The signing secret of a webhook template keeps its stored value while
+     * the url keeps its own, sent back as the placeholder or typed again; a
+     * new signing secret, or the event payload, is no reason to enter the
+     * header values again: they go along with the url only.
+     */
+    public function testASigningSecretStaysWithItsUrlAndTheHeadersWithTheUrlOnly(): void
+    {
+        $kept = $this->stored(NotificationTemplate::CHANNEL_WEBHOOK, ChannelSecretFixtures::SIGNED_WEBHOOK);
+        $kept->config = (string)json_encode(['url' => self::SHOWN, 'headers' => ['Authorization' => self::SHOWN], 'signing_secret' => self::SHOWN, 'payload' => 'event']);
+        $typed = $this->stored(NotificationTemplate::CHANNEL_WEBHOOK, ChannelSecretFixtures::SIGNED_WEBHOOK);
+        $typed->config = (string)json_encode(['url' => ChannelSecretFixtures::WEBHOOK_URL, 'signing_secret' => self::SHOWN]);
+        $rotated = $this->stored(NotificationTemplate::CHANNEL_WEBHOOK, ChannelSecretFixtures::SIGNED_WEBHOOK);
+        $rotated->config = (string)json_encode(['url' => self::SHOWN, 'headers' => ['Authorization' => self::SHOWN], 'signing_secret' => 'whsec-rotated-0099']);
+
+        $this->assertNull((new NotificationConfigSecrets($kept))->restore());
+        $this->assertNull((new NotificationConfigSecrets($typed))->restore());
+        $this->assertNull((new NotificationConfigSecrets($rotated))->restore());
+
+        $this->assertSame([
+            'url' => ChannelSecretFixtures::WEBHOOK_URL,
+            'headers' => ['Authorization' => ChannelSecretFixtures::HEADER_TOKEN],
+            'signing_secret' => ChannelSecretFixtures::SIGNING_SECRET,
+            'payload' => 'event',
+        ], $kept->getParsedConfig());
+        $this->assertSame(['url' => ChannelSecretFixtures::WEBHOOK_URL, 'signing_secret' => ChannelSecretFixtures::SIGNING_SECRET], $typed->getParsedConfig());
+        $this->assertSame(
+            ['url' => ChannelSecretFixtures::WEBHOOK_URL, 'headers' => ['Authorization' => ChannelSecretFixtures::HEADER_TOKEN], 'signing_secret' => 'whsec-rotated-0099'],
+            $rotated->getParsedConfig()
+        );
+    }
+
+    /**
+     * The bot token of a Mattermost template keeps its stored value while
+     * server_url keeps its own: a new channel, mention or team is no reason
+     * to enter it again. Telegram's bot token goes to Telegram's fixed
+     * address, so no key binds it.
+     */
+    public function testABotTokenStaysWithItsServer(): void
+    {
+        $mattermost = $this->stored(NotificationTemplate::CHANNEL_MATTERMOST, ChannelSecretFixtures::MATTERMOST);
+        $submitted = ['bot_token' => self::SHOWN, 'channel_id' => 'abcdefghijklmnopqrstuvwxyz', 'mention' => '@oncall'] + ChannelSecretFixtures::MATTERMOST;
+        unset($submitted['team'], $submitted['channel']);
+        $mattermost->config = (string)json_encode($submitted);
+        $telegram = $this->stored(NotificationTemplate::CHANNEL_TELEGRAM, ChannelSecretFixtures::TELEGRAM);
+        $telegram->config = (string)json_encode(['bot_token' => self::SHOWN, 'chat_id' => '-1009', 'server_url' => 'https://evil.example.com']);
+
+        $this->assertNull((new NotificationConfigSecrets($mattermost))->restore());
+        $this->assertNull((new NotificationConfigSecrets($telegram))->restore());
+
+        $this->assertSame(['bot_token' => ChannelSecretFixtures::MATTERMOST_TOKEN] + $submitted, $mattermost->getParsedConfig());
+        $this->assertSame(ChannelSecretFixtures::BOT_TOKEN, $telegram->getParsedConfig()['bot_token'] ?? null);
     }
 
     public function testANewTemplateHasNoStoredValue(): void

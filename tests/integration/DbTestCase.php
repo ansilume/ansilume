@@ -215,6 +215,7 @@ abstract class DbTestCase extends TestCase
         $nt->body_template = 'Template: {{ template.name }}';
         $nt->events = $events;
         $nt->created_by = $createdBy;
+        $nt->delivers_as = $createdBy;
         $nt->created_at = time();
         $nt->updated_at = time();
         $nt->save(false);

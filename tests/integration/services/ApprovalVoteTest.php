@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\components\AppLinks;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\models\AuditLog;
@@ -76,6 +77,7 @@ class ApprovalVoteTest extends DbTestCase
                 'rule_id' => (string)$request->approval_rule_id,
                 'rule_name' => (string)$request->approvalRule?->name,
                 'required_by' => ApprovalRequest::REQUIRED_BY_JOB_TEMPLATE,
+                'url' => AppLinks::base() . '/approval/view?id=' . $request->id,
             ],
             $approved[0]['approval']
         );

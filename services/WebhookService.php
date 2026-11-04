@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\ErrorText;
+use app\components\OutboundHttpClient;
+use app\components\OutboundHttpException;
 use app\models\Job;
 use app\models\Webhook;
 
@@ -12,10 +15,30 @@ use app\models\Webhook;
  *
  * Each delivery is an HTTP POST with a JSON body signed with
  * HMAC-SHA256 in the X-Ansilume-Signature header when a secret
- * is configured on the webhook.
+ * is configured on the webhook. It goes through the outbound HTTP client
+ * (OutboundHttpClient): http and https only, no redirect followed, and only
+ * a 2xx answer is a delivery. A delivery the webhook did not take is logged
+ * with its status or why no answer came (NOT_DELIVERED), never with the
+ * URL, a header or the answer.
  */
 class WebhookService extends \yii\base\Component
 {
+    /**
+     * Logged (warning) for a delivery the webhook did not take. sprintf():
+     * the webhook's ID, the event, the job's ID, then the outbound HTTP
+     * client's error (ErrorText): the HTTP status of an answer outside 2xx,
+     * a redirect included, or why no answer came.
+     */
+    public const NOT_DELIVERED = 'Webhook #%d non-success for event=%s job=%d: %s';
+
+    /**
+     * Logged (error) for a delivery that failed before its request.
+     * sprintf(): the webhook's ID, the event, the job's ID, then what may be
+     * said about the error (ErrorText): never the message of a database
+     * error.
+     */
+    public const DELIVERY_FAILED = 'Webhook #%d delivery failed for event=%s job=%d: %s';
+
     /**
      * Fire all enabled webhooks that listen to the given event.
      * Failures are logged but never throw — webhook delivery must not
@@ -36,16 +59,14 @@ class WebhookService extends \yii\base\Component
             try {
                 $this->deliver($webhook, $event, $job);
             } catch (\Throwable $e) {
-                \Yii::error(
-                    "Webhook #{$webhook->id} delivery failed for event={$event} job={$job->id}: " . $e->getMessage(),
-                    __CLASS__
-                );
+                \Yii::error(sprintf(self::DELIVERY_FAILED, $webhook->id, $event, $job->id, ErrorText::of($e)), __CLASS__);
             }
         }
     }
 
     /**
-     * Build the payload and POST it to the webhook URL.
+     * Build the payload and POST it to the webhook URL; a delivery the
+     * webhook did not take is logged (NOT_DELIVERED), not thrown.
      */
     protected function deliver(Webhook $webhook, string $event, Job $job): void
     {
@@ -65,36 +86,12 @@ class WebhookService extends \yii\base\Component
             $headers[] = 'X-Ansilume-Signature: ' . $sig;
         }
 
-        $ctx = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => implode("\r\n", $headers),
-                'content' => $payload,
-                'timeout' => 10,
-                'ignore_errors' => true,
-            ],
-        ]);
-
-        $networkError = '';
-        set_error_handler(function (int $errno, string $errstr) use (&$networkError): bool {
-            $networkError = $errstr;
-            return true;
-        }, E_WARNING);
-        // PHP keeps the headers of the last HTTP answer for the whole process
-        // until the next HTTP request: cleared, so that a delivery that got no
-        // HTTP answer has no status line.
-        http_clear_last_response_headers();
-        $response = file_get_contents($webhook->url, false, $ctx);
-        restore_error_handler();
-
-        // Log non-2xx responses for diagnostics but do not throw.
-        $statusLine = http_get_last_response_headers()[0] ?? '';
-        if ($response === false || !str_contains($statusLine, '2')) {
-            $detail = $networkError !== '' ? " ({$networkError})" : '';
-            \Yii::warning(
-                "Webhook #{$webhook->id} non-success for event={$event} job={$job->id}: {$statusLine}{$detail}",
-                __CLASS__
-            );
+        /** @var OutboundHttpClient $client */
+        $client = \Yii::$app->get('outboundHttp');
+        try {
+            $client->request('POST', (string)$webhook->url, $headers, $payload);
+        } catch (OutboundHttpException $e) {
+            \Yii::warning(sprintf(self::NOT_DELIVERED, $webhook->id, $event, $job->id, ErrorText::of($e)), __CLASS__);
         }
     }
 

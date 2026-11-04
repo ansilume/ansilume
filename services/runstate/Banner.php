@@ -68,25 +68,34 @@ final class Banner
     public static function of(RunState $state, ?int $now = null): ?array
     {
         $current = $state->current;
-        if ($current === null) {
+        $title = $current === null ? null : self::title($state->waitingFor, $current->stepType, $current->stepName, $current->jobId);
+        if ($current === null || $title === null) {
             return null;
         }
         $now ??= time();
 
         return match ($state->waitingFor) {
-            Display::WAITING_FOR_APPROVAL => self::approvalBanner($current, $now),
-            Display::WAITING_FOR_RESUME => self::banner(
-                self::KIND_RESUME,
-                self::TONE_WARNING,
-                sprintf(Texts::BANNER_PAUSED, $current->stepName),
-                self::sinceFacts($current->waitingSince, $now)
-            ),
-            Display::WAITING_FOR_RUNNER => self::banner(
-                self::KIND_RUNNER,
-                self::TONE_SECONDARY,
-                sprintf(Texts::BANNER_QUEUED, (int)$current->jobId, $current->stepName),
-                self::sinceFacts($current->waitingSince, $now)
-            ),
+            Display::WAITING_FOR_APPROVAL => self::approvalBanner($current, $title, $now),
+            Display::WAITING_FOR_RESUME => self::banner(self::KIND_RESUME, self::TONE_WARNING, $title, self::sinceFacts($current->waitingSince, $now)),
+            default => self::banner(self::KIND_RUNNER, self::TONE_SECONDARY, $title, self::sinceFacts($current->waitingSince, $now)),
+        };
+    }
+
+    /**
+     * The title of the banner of a step that waits for $waitingFor
+     * (Display::WAITING_FOR_*): a step of type $stepType named $stepName,
+     * whose job is #$jobId; null for a step that waits for nothing. The
+     * notifications of a run say it too (workflow.reason,
+     * notification\RunContext), so a message says what the run page says.
+     */
+    public static function title(?string $waitingFor, ?string $stepType, string $stepName, ?int $jobId): ?string
+    {
+        return match ($waitingFor) {
+            Display::WAITING_FOR_APPROVAL => $stepType === WorkflowStep::TYPE_APPROVAL
+                ? sprintf(Texts::BANNER_APPROVAL_STEP, $stepName)
+                : sprintf(Texts::BANNER_GATED_JOB, (int)$jobId, $stepName),
+            Display::WAITING_FOR_RESUME => sprintf(Texts::BANNER_PAUSED, $stepName),
+            Display::WAITING_FOR_RUNNER => sprintf(Texts::BANNER_QUEUED, (int)$jobId, $stepName),
             default => null,
         };
     }
@@ -136,11 +145,8 @@ final class Banner
      *     warning: string|null
      * }
      */
-    private static function approvalBanner(StepState $current, int $now): array
+    private static function approvalBanner(StepState $current, string $title, int $now): array
     {
-        $title = $current->stepType === WorkflowStep::TYPE_APPROVAL
-            ? sprintf(Texts::BANNER_APPROVAL_STEP, $current->stepName)
-            : sprintf(Texts::BANNER_GATED_JOB, (int)$current->jobId, $current->stepName);
         $wait = $current->approval;
         if ($wait === null) {
             $missing = self::requestExists((int)$current->jobId) ? [] : [self::fact(Texts::BANNER_REQUEST_MISSING)];

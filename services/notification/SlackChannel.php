@@ -35,27 +35,18 @@ class SlackChannel implements ChannelInterface
     }
 
     /**
+     * POSTs $payload to the webhook through the outbound HTTP client
+     * (ChannelHttp): http and https only, no redirect, and an error that
+     * names the status, never the URL or the answer.
+     *
      * @param string[] $headers
+     * @throws \app\components\OutboundHttpException when the webhook did not take it
      */
     protected function post(#[\SensitiveParameter] string $url, string $payload, array $headers): string
     {
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new \RuntimeException('SlackChannel: failed to init curl');
-        }
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        $result = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $response = ChannelHttp::post('SlackChannel', $url, $payload, $headers);
 
-        if ($code < 200 || $code >= 300) {
-            throw new \RuntimeException("SlackChannel: HTTP {$code} — " . substr((string)$result, 0, 200));
-        }
-
-        \Yii::info("SlackChannel: sent to webhook — {$code}", __CLASS__);
-        return (string)$result;
+        \Yii::info("SlackChannel: sent to webhook — {$response->status}", __CLASS__);
+        return $response->body;
     }
 }

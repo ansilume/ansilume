@@ -17,6 +17,7 @@ use app\services\JobCancellationService;
 use app\services\JobLaunchInput;
 use app\services\JobLaunchRejectedException;
 use app\services\JobLaunchService;
+use app\services\RecoveredFailures;
 use app\services\runstate\ApprovalRequestContexts;
 use app\services\runstate\Viewer;
 use app\services\WorkflowAccessChecker;
@@ -43,6 +44,12 @@ use yii\web\NotFoundHttpException;
  * deleted; both are null for a job launched without one, such as the
  * placeholder of a workflow approval step, and the name is null when it is
  * unknown.
+ *
+ * Every job has recovered_by_job_id: for a failed or timed-out job that a
+ * later run of the same job template recovered, that run's ID, otherwise
+ * null (RecoveredFailures). The list takes recovered=1|0 for the failures
+ * that were or were not recovered, and finished_since for the jobs that
+ * finished at a Unix time or later (JobSearchForm).
  */
 class JobsController extends BaseApiController
 {
@@ -76,9 +83,11 @@ class JobsController extends BaseApiController
 
     /**
      * The jobs the caller may see, newest first. Their artifacts are counted
-     * in one query for the page, not one per job, and the inventories they
+     * in one query for the page, not one per job, the inventories they
      * were launched with are read in one query for the page
-     * (JobInventory::ofPayloads()), none when no job names one.
+     * (JobInventory::ofPayloads()), none when no job names one, and so are
+     * the runs that recovered its failures (RecoveredFailures::recoveredBy()),
+     * none when no job on it failed.
      *
      * @return array{data: array<int, mixed>, meta: array{total: int, page: int, per_page: int, pages: int}}
      */
@@ -107,12 +116,13 @@ class JobsController extends BaseApiController
             $payloads[(int)$job->id] = $job->decodedRunnerPayload();
         }
         $inventories = JobInventory::ofPayloads($payloads);
+        $recoveredBy = RecoveredFailures::recoveredBy($jobs);
         $total = $dp->totalCount;
         $per = 25;
 
         return $this->paginated(
             array_map(
-                fn (Job $j) => $this->serializeJob($j, false, $artifactCounts[(int)$j->id] ?? 0, $inventories[(int)$j->id]),
+                fn (Job $j) => $this->serializeJob($j, false, $artifactCounts[(int)$j->id] ?? 0, $inventories[(int)$j->id], $recoveredBy),
                 $jobs
             ),
             (int)$total,
@@ -466,11 +476,16 @@ class JobsController extends BaseApiController
      * list counted them for all its jobs at once; null counts them here.
      * $inventory: the inventory the job was launched with, as the list read
      * it for all its jobs at once; null reads it here (JobInventory::ofJob()).
+     * $recoveredBy: the runs that recovered the failures among the list's
+     * jobs, as the list read them for all its jobs at once; null reads the
+     * job's own here, which asks only for a failure.
      *
+     * @param array<int, int>|null $recoveredBy failure ID => recovering job ID
      * @return array<string, mixed>
      */
-    private function serializeJob(Job $job, bool $detail = false, ?int $artifactCount = null, ?JobInventory $inventory = null): array
+    private function serializeJob(Job $job, bool $detail = false, ?int $artifactCount = null, ?JobInventory $inventory = null, ?array $recoveredBy = null): array
     {
+        $recoveredBy ??= RecoveredFailures::recoveredBy([$job]);
         $data = [
             'id' => $job->id,
             'status' => $job->status,
@@ -483,6 +498,7 @@ class JobsController extends BaseApiController
             'verbosity' => $job->verbosity,
             'check_mode' => (bool)$job->check_mode,
             'exit_code' => $job->exit_code,
+            'recovered_by_job_id' => $recoveredBy[(int)$job->id] ?? null,
             'execution_command' => $job->execution_command,
             'artifact_count' => $artifactCount ?? (int)$job->getArtifacts()->count(),
             'queued_at' => $job->queued_at,

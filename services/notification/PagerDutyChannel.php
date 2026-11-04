@@ -19,20 +19,40 @@ use app\models\NotificationTemplate;
  * repeated dispatches for the same incident collapse into one alert and get
  * auto-resolved when the recovery event fires (e.g. runner.recovered after
  * runner.offline).
+ *
+ * The info events of a workflow step's start and success (NEVER_TRIGGERED)
+ * never trigger an incident: PagerDuty gets nothing for them, and a
+ * template gets no delivery of them (sendsEvent(), SelectiveChannelInterface),
+ * so none claims a send that never happened. Every other event triggers
+ * one, or resolves it, as it did before they existed.
  */
-class PagerDutyChannel implements ChannelInterface
+class PagerDutyChannel implements SelectiveChannelInterface
 {
+    /** The events that never trigger an incident: a step of a run started, or succeeded. */
+    public const NEVER_TRIGGERED = [
+        NotificationTemplate::EVENT_WORKFLOW_STEP_STARTED,
+        NotificationTemplate::EVENT_WORKFLOW_STEP_SUCCEEDED,
+    ];
+
     private const ENDPOINT = 'https://events.pagerduty.com/v2/enqueue';
+
+    /**
+     * Every event but those that never trigger an incident (NEVER_TRIGGERED).
+     */
+    public function sendsEvent(string $event): bool
+    {
+        return !in_array($event, self::NEVER_TRIGGERED, true);
+    }
 
     public function send(NotificationTemplate $template, string $subject, string $body, array $variables): void
     {
         $config = $template->getParsedConfig();
         $routingKey = (string)($config['routing_key'] ?? '');
-        if ($routingKey === '') {
+        $event = $variables['event'] ?? '';
+        if ($routingKey === '' || !$this->sendsEvent($event)) {
             return;
         }
 
-        $event = $variables['event'] ?? '';
         $severity = $this->mapSeverity((string)($variables['severity'] ?? 'error'));
         $action = $this->isRecoveryEvent($event) ? 'resolve' : 'trigger';
 
@@ -80,7 +100,11 @@ class PagerDutyChannel implements ChannelInterface
     }
 
     /**
-     * Stable key so retries + recoveries map to the same PD incident.
+     * Stable key so retries + recoveries map to the same PD incident. An
+     * event about a job (job.id: a job or an approval event) keeps the
+     * incident of its job's project, job template or the job itself, also
+     * when the job is a workflow step's and the event carries the run's
+     * context (workflow.id, RunContext).
      *
      * @param array<string, string> $variables
      */
@@ -90,8 +114,9 @@ class PagerDutyChannel implements ChannelInterface
             'ansilume',
             (string)$template->id,
         ];
+        $aboutAJob = array_key_exists('job.id', $variables);
         foreach (['runner.id', 'project.id', 'workflow.id', 'job.template_id'] as $key) {
-            if (!empty($variables[$key])) {
+            if (!empty($variables[$key]) && ($key !== 'workflow.id' || !$aboutAJob)) {
                 $parts[] = $key . '=' . $variables[$key];
                 return implode(':', $parts);
             }
@@ -103,27 +128,18 @@ class PagerDutyChannel implements ChannelInterface
     }
 
     /**
+     * POSTs $payload, which holds the routing key, to the Events API through
+     * the outbound HTTP client (ChannelHttp): an error names the status,
+     * never the URL or the answer.
+     *
      * @param string[] $headers
+     * @throws \app\components\OutboundHttpException when PagerDuty did not take it
      */
-    protected function post(string $url, #[\SensitiveParameter] string $payload, array $headers): string
+    protected function post(#[\SensitiveParameter] string $url, #[\SensitiveParameter] string $payload, array $headers): string
     {
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new \RuntimeException('PagerDutyChannel: failed to init curl');
-        }
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        $result = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $response = ChannelHttp::post('PagerDutyChannel', $url, $payload, $headers);
 
-        if ($code < 200 || $code >= 300) {
-            throw new \RuntimeException("PagerDutyChannel: HTTP {$code} — " . substr((string)$result, 0, 200));
-        }
-
-        \Yii::info("PagerDutyChannel: sent — {$code}", __CLASS__);
-        return (string)$result;
+        \Yii::info("PagerDutyChannel: sent — {$response->status}", __CLASS__);
+        return $response->body;
     }
 }

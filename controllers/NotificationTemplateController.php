@@ -9,6 +9,10 @@ use app\components\NotificationTestVariables;
 use app\components\ShownSecretField;
 use app\models\AuditLog;
 use app\models\NotificationTemplate;
+use app\services\notification\NotificationIdentity;
+use app\services\notification\NotificationTemplateFormPost;
+use app\services\notification\NotificationTemplateFormView;
+use app\services\notification\NotificationTemplatePage;
 use app\services\NotificationDispatcher;
 use yii\data\ActiveDataProvider;
 use yii\web\NotFoundHttpException;
@@ -57,19 +61,35 @@ class NotificationTemplateController extends BaseController
         return $this->render('index', ['dataProvider' => $dataProvider]);
     }
 
+    /**
+     * The template, as its viewer may see it (NotificationTemplatePage): whom
+     * it delivers as, its filter and its deliveries.
+     */
     public function actionView(int $id): string
     {
-        return $this->render('view', ['model' => $this->findModel($id)]);
+        $model = $this->findModel($id);
+
+        return $this->render('view', ['model' => $model, 'page' => NotificationTemplatePage::of($model, $this->userId())]);
     }
 
+    /**
+     * Creates the template as the signed-in user, who is the user it
+     * delivers as, with the fields and the workflow filter the form posts,
+     * read as the API reads a body (NotificationTemplateFormPost): the
+     * template and its filter are saved together, or neither.
+     */
     public function actionCreate(): Response|string
     {
         $model = new NotificationTemplate();
         $model->channel = NotificationTemplate::CHANNEL_EMAIL;
+        $model->level = NotificationTemplate::LEVEL_ALL;
+        $model->workflow_scope = NotificationTemplate::WORKFLOW_SCOPE_ALL;
+        $form = NotificationTemplateFormPost::of((array)\Yii::$app->request->post());
 
-        if ($model->load((array)\Yii::$app->request->post())) {
-            $model->created_by = (int)\Yii::$app->user->id;
-            if ($model->save()) {
+        if ($form->load($model)) {
+            $model->created_by = $this->userId();
+            $model->delivers_as = $model->created_by;
+            if ($form->create($model, $this->userId())) {
                 \Yii::$app->get('auditService')->log(
                     AuditLog::ACTION_NOTIFICATION_TEMPLATE_CREATED,
                     'notification_template',
@@ -81,24 +101,35 @@ class NotificationTemplateController extends BaseController
                 return $this->redirect(['view', 'id' => $model->id]);
             }
         }
-        return $this->render('form', ['model' => $model, 'config' => $this->shownConfig($model)]);
+        return $this->render('form', $this->formParams($model, $form));
     }
 
+    /**
+     * Saves the form, its fields read as the API reads a body, with the
+     * workflow filter as the form posts it: the part of the filter the
+     * editor may see is replaced, the rest stays
+     * (NotificationTemplateFormPost). A change of what or where the template
+     * delivers makes the editor the user it delivers as
+     * (NotificationIdentity), recorded in the audit entry as delivers_as
+     * {from, to}.
+     */
     public function actionUpdate(int $id): Response|string
     {
         $model = $this->findModel($id);
-        if ($model->load((array)\Yii::$app->request->post()) && $model->save()) {
+        $identity = new NotificationIdentity($model);
+        $form = NotificationTemplateFormPost::of((array)\Yii::$app->request->post());
+        if ($form->load($model) && $form->update($model, $identity, $this->userId())) {
             \Yii::$app->get('auditService')->log(
                 AuditLog::ACTION_NOTIFICATION_TEMPLATE_UPDATED,
                 'notification_template',
                 $model->id,
                 null,
-                ['name' => $model->name]
+                ['name' => $model->name] + $identity->auditContext()
             );
             $this->session()->setFlash('success', "Notification template \"{$model->name}\" updated.");
             return $this->redirect(['view', 'id' => $model->id]);
         }
-        return $this->render('form', ['model' => $model, 'config' => $this->shownConfig($model)]);
+        return $this->render('form', $this->formParams($model, $form));
     }
 
     /**
@@ -111,14 +142,14 @@ class NotificationTemplateController extends BaseController
     public function actionTest(int $id): Response
     {
         $model = $this->findModel($id);
-        $event = NotificationTestVariables::eventOf($model);
         $launchedBy = \Yii::$app->user->identity?->username ?? NotificationTestVariables::NO_USER;
-        $variables = NotificationTestVariables::of($event, $launchedBy);
 
         try {
+            // The event asks the template's channel which events it sends.
+            $event = NotificationTestVariables::eventOf($model);
             /** @var NotificationDispatcher $dispatcher */
             $dispatcher = \Yii::$app->get('notificationDispatcher');
-            $error = $dispatcher->sendSingle($model, $variables, $event);
+            $error = $dispatcher->sendSingle($model, NotificationTestVariables::of($event, $launchedBy), $event);
         } catch (\Throwable $e) {
             $error = ErrorText::of($e);
         }
@@ -148,12 +179,35 @@ class NotificationTemplateController extends BaseController
     }
 
     /**
+     * What the form of $model renders: the template, its config as shown
+     * (shownConfig()) and what the form offers its editor
+     * (NotificationTemplateFormView), with the filter $form posted as the
+     * selection after a failed save.
+     *
+     * @return array{model: NotificationTemplate, config: string, choices: NotificationTemplateFormView}
+     */
+    private function formParams(NotificationTemplate $model, NotificationTemplateFormPost $form): array
+    {
+        return [
+            'model' => $model,
+            'config' => $this->shownConfig($model),
+            'choices' => NotificationTemplateFormView::of($model, $this->userId(), $form->workflowTemplateIds),
+        ];
+    }
+
+    /**
      * The config the edit form shows: as this request submitted it, else as
      * stored with the placeholder for every secret (ShownSecretField).
      */
     private function shownConfig(NotificationTemplate $model): string
     {
         return ShownSecretField::value($model, 'config', $model->getRedactedConfigJson());
+    }
+
+    /** The signed-in user. */
+    private function userId(): int
+    {
+        return (int)\Yii::$app->user->id;
     }
 
     private function findModel(int $id): NotificationTemplate

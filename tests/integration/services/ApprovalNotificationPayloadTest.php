@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\components\AppLinks;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
@@ -13,13 +14,14 @@ use app\models\JobTemplate;
 use app\models\NotificationTemplate;
 use app\models\User;
 use app\models\WorkflowStep;
+use app\services\NotificationDispatcher;
 use app\tests\integration\DbTestCase;
 use app\tests\integration\TeamScopeFixtures;
 
 /**
  * The approval.requested, approval.approved and approval.rejected
- * notifications (ApprovalEffects) say what required the request
- * (approval.required_by) and name the inventory the job was launched with
+ * notifications (ApprovalEffects) link the request (approval.url), say what
+ * required it (approval.required_by) and name the inventory the job was launched with
  * (job.inventory_id, job.inventory_name: JobInventory, the name as launched,
  * else the current one), every value a string, '' where there is none. The
  * approval.requested audit entry says the same with its own types:
@@ -71,6 +73,7 @@ class ApprovalNotificationPayloadTest extends DbTestCase
                     'rule_id' => (string)$this->rule->id,
                     'rule_name' => (string)$this->rule->name,
                     'required_by' => ApprovalRequest::REQUIRED_BY_INVENTORY,
+                    'url' => AppLinks::base() . '/approval/view?id=' . $request->id,
                 ],
                 'job' => [
                     'id' => (string)$job->id,
@@ -79,6 +82,7 @@ class ApprovalNotificationPayloadTest extends DbTestCase
                     'inventory_id' => (string)$inventory->id,
                     'inventory_name' => (string)$inventory->name,
                 ],
+                NotificationDispatcher::REFS => ['job_id' => (int)$job->id, 'approval_request_id' => (int)$request->id],
             ],
             $this->onlyPayloadOf(NotificationTemplate::EVENT_APPROVAL_REQUESTED)
         );
@@ -130,6 +134,7 @@ class ApprovalNotificationPayloadTest extends DbTestCase
                     'rule_id' => (string)$this->rule->id,
                     'rule_name' => (string)$this->rule->name,
                     'required_by' => ApprovalRequest::REQUIRED_BY_INVENTORY,
+                    'url' => AppLinks::base() . '/approval/view?id=' . $request->id,
                 ],
                 'job' => [
                     'id' => (string)$job->id,
@@ -138,6 +143,7 @@ class ApprovalNotificationPayloadTest extends DbTestCase
                     'inventory_id' => (string)$inventory->id,
                     'inventory_name' => (string)$inventory->name,
                 ],
+                NotificationDispatcher::REFS => ['job_id' => (int)$job->id, 'approval_request_id' => (int)$request->id],
             ],
             $this->onlyPayloadOf($event)
         );
@@ -219,7 +225,8 @@ class ApprovalNotificationPayloadTest extends DbTestCase
 
     /**
      * Every value of both parts is a string, so the templates render them
-     * alike; the keys come in this order.
+     * alike; the keys come in this order. The refs that follow them are
+     * IDs, no variables (NotificationRefs).
      */
     public function testEveryValueIsAString(): void
     {
@@ -228,10 +235,10 @@ class ApprovalNotificationPayloadTest extends DbTestCase
 
         $payload = $this->onlyPayloadOf(NotificationTemplate::EVENT_APPROVAL_REQUESTED);
 
-        $this->assertSame(['approval', 'job'], array_keys($payload));
+        $this->assertSame(['approval', 'job', NotificationDispatcher::REFS], array_keys($payload));
         $this->assertIsArray($payload['approval']);
         $this->assertIsArray($payload['job']);
-        $this->assertSame(['id', 'status', 'rule_id', 'rule_name', 'required_by'], array_keys($payload['approval']));
+        $this->assertSame(['id', 'status', 'rule_id', 'rule_name', 'required_by', 'url'], array_keys($payload['approval']));
         $this->assertSame(['id', 'status', 'template_id', 'inventory_id', 'inventory_name'], array_keys($payload['job']));
         foreach ([...array_values($payload['approval']), ...array_values($payload['job'])] as $value) {
             $this->assertIsString($value);

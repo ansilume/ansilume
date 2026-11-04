@@ -587,6 +587,32 @@ verify_install() {
     return 0
 }
 
+# ── Helper: verify the workers ──────────────────────────────────────────────
+# The services that work in the background answer no HTTP request, so
+# verify_install cannot see one that does not run: the queue-worker runs the
+# project syncs, the notification-worker sends the notifications, the
+# schedule-runner runs the schedules and the maintenance. A notification-worker
+# of this compose file with images pinned to an older release restarts without
+# end ("Unknown option: --queue"). Returns non-zero when one does not run.
+
+verify_workers() {
+    local svc container state failed=0
+    for svc in queue-worker notification-worker schedule-runner; do
+        container=$($COMPOSE_CMD $COMPOSE_ARGS ps -q "$svc" < /dev/null 2>/dev/null | head -1 || true)
+        state=""
+        if [ -n "$container" ]; then
+            state=$(docker inspect --format '{{.State.Status}}' "$container" 2>/dev/null || true)
+        fi
+        if [ "$state" = "running" ]; then
+            ok "${svc}: running"
+        else
+            fail "${svc}: not running${state:+ (${state})} — see ${COMPOSE_CMD}${COMPOSE_ARGS:+ $COMPOSE_ARGS} logs ${svc}"
+            failed=1
+        fi
+    done
+    return "$failed"
+}
+
 # ── Resolve compose download ref ────────────────────────────────────────────
 # Use version tag for GitHub raw URLs, fall back to main if version is "latest".
 
@@ -775,6 +801,7 @@ if [ "$INSTALL_MODE" = "update" ]; then
     section "Verifying update"
     UPDATE_OK=1
     verify_install || UPDATE_OK=0
+    verify_workers || UPDATE_OK=0
 
     # The version that runs, not the one the update meant to install.
     RUNNING_VERSION=$($COMPOSE_CMD $COMPOSE_ARGS exec -T app cat /var/www/VERSION < /dev/null 2>/dev/null | tr -d '[:space:]' || true)
@@ -1054,6 +1081,7 @@ section "Verifying installation"
 
 VERIFY_OK=1
 verify_install || VERIFY_OK=0
+verify_workers || VERIFY_OK=0
 
 # ── 13. Done ──────────────────────────────────────────────────────────────────
 
@@ -1069,7 +1097,7 @@ else
     printf "  ║   Installed — verification FAILED     ║\n"
     printf "  ╚═══════════════════════════════════════╝\n"
     printf "${NC}\n"
-    warn "The containers are up, but the HTTP checks above did not pass."
+    warn "The containers are up, but the checks above did not pass."
     warn "Ansilume may not be reachable yet — see the failed checks and run the diagnostics."
     printf "\n"
 fi

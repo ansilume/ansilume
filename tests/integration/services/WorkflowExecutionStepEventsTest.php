@@ -89,7 +89,16 @@ class WorkflowExecutionStepEventsTest extends DbTestCase
         $this->assertSame(['status' => WorkflowJobStep::STATUS_FAILED, 'job_id' => (int)$job->id], $this->metadataOf($completed[0]));
         $failed = $this->notifications->payloadsOf(NotificationTemplate::EVENT_WORKFLOW_STEP_FAILED);
         $this->assertCount(1, $failed);
-        $this->assertSame(['id' => (string)$execution->id, 'job_id' => (string)$job->id], $failed[0]['step'] ?? null);
+        $this->assertSame([
+            'id' => (string)$execution->id,
+            'job_id' => (string)$job->id,
+            'execution_id' => (string)$execution->id,
+            'workflow_step_id' => (string)$step->id,
+            'position' => '1',
+            'name' => 'step-0',
+            'type' => $stepType,
+            'waiting_for' => '',
+        ], $failed[0]['step'] ?? null);
         $workflow = $failed[0]['workflow'] ?? null;
         $this->assertIsArray($workflow);
         $this->assertSame((string)$run->id, $workflow['id'] ?? null);

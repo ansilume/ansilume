@@ -237,6 +237,26 @@ class SubmittedNumbersWebFormTest extends WebControllerTestCase
                 'job_template_ids[]' => ['valid' => '{template}', 'refused' => '302 /credential-assignment/index?id={vault}; flash danger: job_template_ids must be a non-empty list of job template IDs.'],
             ],
         ],
+        // The workflow filter, as the form's multi-select posts it (NotificationTemplateFormPost).
+        'notification-template/create' => [
+            'body' => ['NotificationTemplate' => [
+                'name' => 'numbers-guard-notification',
+                'channel' => 'email',
+                'config' => '{"emails":["ops@example.com"]}',
+                'events' => 'workflow.failed',
+            ]],
+            'fields' => self::NOTIFICATION_TEMPLATE_FIELDS,
+        ],
+        'notification-template/update' => [
+            'params' => ['id' => '{notificationTemplate}'],
+            'body' => ['NotificationTemplate' => ['name' => 'numbers-guard-renamed']],
+            'fields' => self::NOTIFICATION_TEMPLATE_FIELDS,
+        ],
+    ];
+
+    /** The fields of the notification template form: the IDs of its workflow filter. */
+    private const NOTIFICATION_TEMPLATE_FIELDS = [
+        'workflow_template_ids[]' => ['valid' => '{workflow}', 'refused' => '200 form: workflow_template_ids must be a list of workflow template IDs.'],
     ];
 
     /** The fields of the inventory form. */

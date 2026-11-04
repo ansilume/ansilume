@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace app\tests\unit\components;
 
 use app\components\AllowlistQueueSerializer;
+use app\jobs\DeliverNotificationJob;
+use app\jobs\LintProjectJob;
+use app\jobs\LintTemplateJob;
 use app\jobs\SyncProjectJob;
 use PHPUnit\Framework\TestCase;
 use yii\queue\InvalidJobException;
 use yii\queue\JobInterface;
+use yii\queue\Queue;
 use yii\queue\serializers\PhpSerializer;
 use yii\queue\sync\Queue as SyncQueue;
 
@@ -50,6 +54,52 @@ class AllowlistQueueSerializerTest extends TestCase
 
         $this->assertInstanceOf(SyncProjectJob::class, $restored);
         $this->assertSame(42, $restored->projectId);
+    }
+
+    /**
+     * The job of the notification queue, which carries the ID of a
+     * notification delivery only, is allowed; a message whose ID is no
+     * whole number is rejected as an invalid job.
+     */
+    public function testTheNotificationDeliveryJobRoundTrips(): void
+    {
+        $serializer = new AllowlistQueueSerializer();
+
+        $restored = $serializer->unserialize($serializer->serialize(new DeliverNotificationJob(['deliveryId' => 42])));
+
+        $this->assertInstanceOf(DeliverNotificationJob::class, $restored);
+        $this->assertSame(42, $restored->deliveryId);
+        $this->assertSame([SyncProjectJob::class, DeliverNotificationJob::class, LintTemplateJob::class, LintProjectJob::class], AllowlistQueueSerializer::ALLOWED_CLASSES);
+
+        $payload = serialize(new DeliverNotificationJob(['deliveryId' => 1]));
+        $this->assertStringContainsString('s:10:"deliveryId";i:1;', $payload);
+        [$job, $error] = $this->queueWith($serializer)->unserializeMessage(str_replace('s:10:"deliveryId";i:1;', 's:10:"deliveryId";s:4:"evil";', $payload));
+        $this->assertNull($job);
+        $this->assertInstanceOf(InvalidJobException::class, $error);
+    }
+
+    /**
+     * The lint runs of the queue-worker, which carry the ID of a job
+     * template or a project and when the run was requested, are allowed; a
+     * message whose time is no whole number is rejected as an invalid job.
+     */
+    public function testTheLintJobsRoundTrip(): void
+    {
+        $serializer = new AllowlistQueueSerializer();
+
+        $template = $serializer->unserialize($serializer->serialize(new LintTemplateJob(['templateId' => 42, 'requestedAt' => 1700000000])));
+        $project = $serializer->unserialize($serializer->serialize(new LintProjectJob(['projectId' => 7, 'requestedAt' => 1700000001])));
+
+        $this->assertInstanceOf(LintTemplateJob::class, $template);
+        $this->assertSame([42, 1700000000], [$template->templateId, $template->requestedAt]);
+        $this->assertInstanceOf(LintProjectJob::class, $project);
+        $this->assertSame([7, 1700000001], [$project->projectId, $project->requestedAt]);
+
+        $payload = serialize(new LintTemplateJob(['templateId' => 1, 'requestedAt' => 2]));
+        $this->assertStringContainsString('s:11:"requestedAt";i:2;', $payload);
+        [$job, $error] = $this->queueWith($serializer)->unserializeMessage(str_replace('s:11:"requestedAt";i:2;', 's:11:"requestedAt";s:4:"evil";', $payload));
+        $this->assertNull($job);
+        $this->assertInstanceOf(InvalidJobException::class, $error);
     }
 
     public function testInjectedJobIsRejectedInsteadOfBeingRunnable(): void
@@ -166,12 +216,25 @@ class AllowlistQueueSerializerTest extends TestCase
     }
 
     /**
+     * Every queue of every application unserializes with the allowlist, the
+     * notification queue as the queue of project syncs; both are found, so
+     * that the check cannot pass on none.
+     *
      * @dataProvider configProvider
      */
     public function testEveryQueueConfigUsesTheAllowlistSerializer(string $file): void
     {
         $config = require dirname(__DIR__, 3) . '/config/' . $file;
 
-        $this->assertSame(AllowlistQueueSerializer::class, $config['components']['queue']['serializer'] ?? null);
+        $serializers = [];
+        foreach ($config['components'] as $id => $component) {
+            $class = is_array($component) ? ltrim((string)($component['class'] ?? ''), '\\') : '';
+            if ($class !== '' && is_a($class, Queue::class, true)) {
+                $serializers[$id] = $component['serializer'] ?? null;
+            }
+        }
+        ksort($serializers);
+
+        $this->assertSame(['notificationQueue' => AllowlistQueueSerializer::class, 'queue' => AllowlistQueueSerializer::class], $serializers);
     }
 }

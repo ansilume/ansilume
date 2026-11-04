@@ -21,6 +21,7 @@ use app\models\User;
 use app\models\WorkflowJob;
 use app\models\WorkflowTemplate;
 use app\controllers\traits\TeamScopingTrait;
+use app\services\RecoveredFailures;
 use app\services\runstate\ApprovalRequestContexts;
 use app\services\runstate\Viewer;
 use app\services\runstate\WorkflowRunStates;
@@ -35,6 +36,9 @@ class SiteController extends BaseController
 
     /** The dashboard's link to the list of workflow runs. */
     public const ALL_WORKFLOW_JOBS = 'All Workflow Jobs';
+
+    /** How far back Failed Jobs (last 24h) and its line on recovered failures look, in seconds. */
+    public const FAILED_JOBS_WINDOW = 86400;
 
     /**
      * @return array<int, array<string, mixed>>
@@ -58,7 +62,10 @@ class SiteController extends BaseController
      * see. Panels for a permission the user lacks stay empty. Runners are
      * shared infrastructure and stay unscoped. What the running workflows
      * wait for (WorkflowRunStates) and what the pending requests are for
-     * (ApprovalRequestContexts) are read for all of them at once.
+     * (ApprovalRequestContexts) are read for all of them at once. The red
+     * panel and Jobs Today leave out the failures that a later run of the
+     * same job template recovered (RecoveredFailures), which a line counts
+     * instead; the chart and Status (7 days) count every failure.
      */
     public function actionIndex(): string
     {
@@ -80,7 +87,7 @@ class SiteController extends BaseController
         $viewer = Viewer::current();
         $cutoff = time() - RunnerGroup::STALE_AFTER;
 
-        return $this->render('index', [
+        return $this->render('index', $this->failedJobsPanel($jobFilter) + [
             'stats' => $this->buildStatCards($today, $jobFilter, $approvals),
             'statusCounts' => $this->buildStatusCounts((int)strtotime('-6 days', $today), $jobFilter),
             'recentJobs' => $this->jobs($jobFilter)
@@ -111,13 +118,6 @@ class SiteController extends BaseController
                 ->orderBy(['next_run_at' => SORT_ASC])
                 ->limit(5)
                 ->all(),
-            'failedJobs' => $this->jobs($jobFilter)
-                ->with(['jobTemplate', 'launcher'])
-                ->andWhere(['status' => Job::terminalFailureStatuses()])
-                ->andWhere(['>=', 'finished_at', $today - 86400])
-                ->orderBy(['finished_at' => SORT_DESC])
-                ->limit(5)
-                ->all(),
             'syncErrors' => self::restrict(
                 Project::find()->where(['status' => Project::STATUS_ERROR])->orderBy(['updated_at' => SORT_DESC]),
                 $this->checker()->buildProjectFilter($this->currentUserId())
@@ -127,6 +127,39 @@ class SiteController extends BaseController
     }
 
     /**
+     * Failed Jobs (last 24h): the five newest failures of the last 24 hours
+     * that no later run of the same job template recovered, how many of
+     * that window were recovered (RecoveredFailures), and when the window
+     * began, which the line's link to the job list passes as finished_since,
+     * so that the list shows the failures the line counts.
+     *
+     * @param array<int|string, mixed>|null $jobFilter
+     * @return array{failedJobs: list<Job>, recoveredFailures24h: int, recoveredFailuresSince: int}
+     */
+    private function failedJobsPanel(?array $jobFilter): array
+    {
+        $since = time() - self::FAILED_JOBS_WINDOW;
+        /** @var list<Job> $open */
+        $open = RecoveredFailures::filterRecovered($this->jobs($jobFilter)->andWhere(['>=', 'finished_at', $since]), false)
+            ->with(['jobTemplate', 'launcher'])
+            ->orderBy(['finished_at' => SORT_DESC])
+            ->limit(5)
+            ->all();
+
+        return [
+            'failedJobs' => $open,
+            'recoveredFailures24h' => (int)RecoveredFailures::filterRecovered(
+                $this->jobs($jobFilter)->andWhere(['>=', 'finished_at', $since]),
+                true
+            )->count(),
+            'recoveredFailuresSince' => $since,
+        ];
+    }
+
+    /**
+     * Jobs Today turns red for a failure of today that no later run
+     * recovered (jobs_today_failed).
+     *
      * @param array<int|string, mixed>|null $jobFilter
      * @return array{jobs_today: int, jobs_today_failed: int, queued: int, running: int, pending_approvals: int}
      */
@@ -134,10 +167,10 @@ class SiteController extends BaseController
     {
         return [
             'jobs_today' => (int)$this->jobs($jobFilter)->andWhere(['>=', 'created_at', $today])->count(),
-            'jobs_today_failed' => (int)$this->jobs($jobFilter)
-                ->andWhere(['>=', 'created_at', $today])
-                ->andWhere(['status' => Job::terminalFailureStatuses()])
-                ->count(),
+            'jobs_today_failed' => (int)RecoveredFailures::filterRecovered(
+                $this->jobs($jobFilter)->andWhere(['>=', 'created_at', $today]),
+                false
+            )->count(),
             'queued' => (int)$this->jobs($jobFilter)->andWhere(['status' => Job::STATUS_QUEUED])->count(),
             'running' => (int)$this->jobs($jobFilter)->andWhere(['status' => Job::STATUS_RUNNING])->count(),
             'pending_approvals' => $approvals === null ? 0 : (int)(clone $approvals)->count(),

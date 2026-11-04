@@ -241,6 +241,7 @@ class ProjectService extends Component
                 'status' => (string)$project->status,
                 'error' => (string)($project->last_sync_error ?? ''),
             ],
+            NotificationDispatcher::REFS => ['project_id' => (int)$project->id],
         ]);
     }
 

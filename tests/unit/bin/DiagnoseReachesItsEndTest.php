@@ -85,6 +85,10 @@ class DiagnoseReachesItsEndTest extends TestCase
     /** Why compose cannot tell the state of the containers when the user may not reach the daemon. */
     private const NO_DAEMON = 'docker cannot reach the Docker daemon';
 
+    /** What the Diagnosis Summary says when the app image queues notifications that no notification-worker sends. */
+    private const NO_NOTIFICATION_WORKER = 'notification-worker: not in the compose file — the app image queues the'
+        . ' notifications for it, and no container sends them: take the compose file of this release';
+
     private const STUBS = [
         'docker' => <<<'BASH'
             #!/usr/bin/env bash
@@ -98,7 +102,11 @@ class DiagnoseReachesItsEndTest extends TestCase
             # that gets a line per docker exec, "<user> <container>: <command>"; STUB_HEALTH:
             # what health/check prints as www-data, exiting 1; STUB_NOT_WRITABLE: a
             # directory www-data may not write; STUB_LOG_NOT_WRITABLE: www-data may not
-            # write app.log. Other calls print nothing.
+            # write app.log; STUB_NOTIFICATION_QUEUE: the app image queues notifications
+            # (its console config has the notification queue), an image of an older
+            # release without it; STUB_NOTIFICATION_WORKER: the compose file has the
+            # notification-worker; STUB_NOTIFICATIONS: what the notifications probe
+            # prints. Other calls print nothing.
             if [ -n "${STUB_CONFIG_FAILS:-}" ] && [ "$1" = compose ] && [ "${2:-}" != version ]; then
                 echo "$STUB_CONFIG_FAILS" >&2
                 exit 1
@@ -117,7 +125,11 @@ class DiagnoseReachesItsEndTest extends TestCase
                 "version --format {{.Server.Version}}") echo "27.3.1" ;;
                 "compose version") echo "Docker Compose version v2.29.7" ;;
                 "compose version --short") echo "2.29.7" ;;
-                "compose config --services") printf 'nginx\napp\n' ;;
+                "compose config --services")
+                    printf 'nginx\napp\n'
+                    if [ -n "${STUB_NOTIFICATION_WORKER:-}" ]; then
+                        printf 'notification-worker\n'
+                    fi ;;
                 "compose ps -q") printf 'appcid\nnginxcid\n' ;;
                 "compose ps -q app") echo appcid ;;
                 "compose ps -q nginx") echo nginxcid ;;
@@ -158,6 +170,11 @@ class DiagnoseReachesItsEndTest extends TestCase
                         "www-data sh -c "*" sh /var/www/runtime/logs/app.log")
                             if [ -n "${STUB_LOG_NOT_WRITABLE:-}" ]; then
                                 exit 3
+                            fi ;;
+                        "www-data php -r "*"isDeliveringAsInactive"*) printf '%s' "${STUB_NOTIFICATIONS:-}" ;;
+                        "root grep -q notificationQueue /var/www/config/console.php")
+                            if [ -z "${STUB_NOTIFICATION_QUEUE:-}" ]; then
+                                exit 1
                             fi ;;
                     esac ;;
                 "inspect "*)
@@ -646,7 +663,7 @@ class DiagnoseReachesItsEndTest extends TestCase
             array_values(array_filter($execs, static fn (string $exec): bool => str_contains($exec, ' php /var/www/yii ')))
         );
         $boots = array_values(array_filter($execs, static fn (string $exec): bool => str_contains($exec, 'new yii\console\Application')));
-        $this->assertCount(6, $boots, 'project sync, runner transport, trusted networks, RBAC, users, summary');
+        $this->assertCount(7, $boots, 'project sync, runner transport, trusted networks, RBAC, users, notifications, summary');
         foreach ($boots as $boot) {
             $this->assertStringStartsWith('www-data appcid: php -r ', $boot);
         }
@@ -761,6 +778,107 @@ class DiagnoseReachesItsEndTest extends TestCase
         $this->assertStringNotContainsString('Likely cause: Nginx healthcheck deadlock', $output);
         $this->assertStringContainsString("Issues detected. Share this output with developers:\n", $output);
         $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * The notification-worker sends the notifications that the app image
+     * queues: a compose file without the service, such as one of an older
+     * release kept with newer images, leaves every notification unsent.
+     * diagnose names it in the Diagnosis Summary as an issue, and lists the
+     * service among the containers whose logs it shows.
+     */
+    public function testAComposeFileWithoutTheNotificationWorkerIsAnIssueForAnImageThatQueuesNotifications(): void
+    {
+        $this->writeEnv(self::env());
+
+        [$status, $output] = $this->runDiagnose(['STUB_NOTIFICATION_QUEUE' => '1']);
+
+        $this->assertStringContainsString("  ✗ " . self::NO_NOTIFICATION_WORKER . "\n", $output);
+        $this->assertStringContainsString("Issues detected. Share this output with developers:\n", $output);
+        $this->assertStringContainsString("  ⚠ notification-worker: not running\n", $this->between($output, '═══ Recent Logs', '═══ Migration Status'));
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * @return array<string, array{0: array<string, string>}>
+     */
+    public static function notificationWorkerInPlaceProvider(): array
+    {
+        return [
+            'the compose file has it' => [['STUB_NOTIFICATION_QUEUE' => '1', 'STUB_NOTIFICATION_WORKER' => '1']],
+            'an image of an older release queues no notifications' => [[]],
+        ];
+    }
+
+    /**
+     * @dataProvider notificationWorkerInPlaceProvider
+     * @param array<string, string> $env
+     */
+    public function testNoNotificationWorkerIsMissingWhereTheStackHasItOrNeedsNone(array $env): void
+    {
+        $this->writeEnv(self::env());
+
+        [$status, $output] = $this->runDiagnose($env);
+
+        $this->assertStringNotContainsString(self::NO_NOTIFICATION_WORKER, $output);
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * The notifications probe found a template that delivers as an inactive
+     * user and no APP_URL: its section says so, between the application's
+     * checks and the HTTP checks, and the summary repeats both, as warnings:
+     * neither says that the stack is unwell.
+     */
+    public function testTheNotificationsSectionAndTheSummaryNameWhatSendsNothing(): void
+    {
+        $this->writeEnv(self::env());
+        $inactive = "Notification template #3 'Deploy alerts' delivers as user #12, who is inactive: it sends nothing until"
+            . ' someone saves it, who then becomes the user it delivers as';
+        $unset = 'APP_URL is not set, so the links of notifications lead to http://localhost:8080';
+
+        [$status, $output] = $this->runDiagnose(['STUB_NOTIFICATIONS' => "app_url|0|http://localhost:8080
+inactive|3|Deploy alerts|12
+templates|4
+"]);
+
+        $this->assertStringContainsString(
+            "\n═══ Notifications ═══\n\n  ⚠ {$unset}: set APP_URL in .env to the address your users open (the deploy role: ansilume_app_url),"
+            . " then docker compose up -d\n  ⚠ {$inactive}\n\n═══ HTTP Reachability (host) ═══\n",
+            $output
+        );
+        $summary = $this->between($output, '═══ Diagnosis Summary ═══', 'End of diagnostics.');
+        $this->assertStringContainsString('  ⚠ notifications: 1 template(s) deliver as an inactive user and send nothing (see Notifications)', $summary);
+        $this->assertStringContainsString("  ⚠ notifications: {$unset} (see Notifications)", $summary);
+        $this->assertStringNotContainsString('✗ notifications:', $summary, 'Warnings: the stack itself may be healthy.');
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * A probe that printed nothing is no finding, and no all-clear either.
+     */
+    public function testANotificationsProbeThatPrintedNothingSaysSo(): void
+    {
+        $this->writeEnv(self::env());
+
+        [$status, $output] = $this->runDiagnose();
+
+        $this->assertStringContainsString("\n═══ Notifications ═══\n\n  ⚠ Could not check APP_URL and the notification templates\n", $output);
+        $this->assertStringNotContainsString('notifications: ', $this->between($output, '═══ Diagnosis Summary ═══', 'End of diagnostics.'));
+        $this->assertReachesItsEnd($status, $output);
+    }
+
+    /**
+     * The part of $output from $from up to $to.
+     */
+    private function between(string $output, string $from, string $to): string
+    {
+        $start = strpos($output, $from);
+        $this->assertIsInt($start, "No {$from}: {$output}");
+        $end = strpos($output, $to, $start);
+        $this->assertIsInt($end, "No {$to} after {$from}: {$output}");
+
+        return substr($output, $start, $end - $start);
     }
 
     /**

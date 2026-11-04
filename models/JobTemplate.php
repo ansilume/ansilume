@@ -41,6 +41,7 @@ use yii\validators\Validator;
  * @property string|null $lint_output       Last ansible-lint output
  * @property int|null    $lint_at           Unix timestamp of last lint run
  * @property int|null    $lint_exit_code    Exit code of last ansible-lint run (0 = clean)
+ * @property int|null    $lint_queued_at    Unix timestamp of a lint run requested whose result is not stored yet (null = none pending); set in code only (LintService)
  * @property int         $created_by
  * @property int         $created_at
  * @property int         $updated_at

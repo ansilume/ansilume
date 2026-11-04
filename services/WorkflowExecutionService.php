@@ -23,9 +23,11 @@ use yii\base\Component;
  * A step leaves running with one conditional UPDATE: only the caller that
  * moved it moves the run on, so a stale or repeated job completion, a second
  * decision or a second resume never routes a step twice. A run ends the same
- * way, so a run that was canceled meanwhile keeps its outcome. Notifications
- * are best-effort (WorkflowRunEvents): a failed one is logged, and the run
- * goes on.
+ * way, so a run that was canceled meanwhile keeps its outcome. Only the
+ * caller whose update made a transition announces it (WorkflowRunEvents):
+ * a step's start, its success or failure, a wait for a person, the run's
+ * end; a refused transition announces nothing. Notifications are
+ * best-effort: a failed one is logged, and the run goes on.
  */
 class WorkflowExecutionService extends Component
 {
@@ -109,6 +111,12 @@ class WorkflowExecutionService extends Component
      * cancel or its runner came first) ends with that job right away, as
      * nobody else moved it on (WorkflowStepDispatcher::settleStart()).
      *
+     * Once its work started, a step that still runs announces it
+     * (workflow.step_started, then workflow.waiting when it waits for a
+     * person: WorkflowRunEvents::stepStarted()); one that the run's cancel
+     * ended meanwhile announces nothing, and one that could not start
+     * announces workflow.step_failed, once its update ended it.
+     *
      * When the execution cannot be written (or the run's current step, or
      * the step.started audit entry), the run ends as failed before the error
      * is thrown on: nothing would ever move it on, and an active run locks
@@ -160,6 +168,12 @@ class WorkflowExecutionService extends Component
             return $wjs;
         }
         $ended = $this->dispatcher->settleStart($wfJob, $wjs);
+        // A step that the run's cancel ended meanwhile announces nothing:
+        // the run's workflow.canceled covers it.
+        $wjs->refresh();
+        if ($wjs->status === WorkflowJobStep::STATUS_RUNNING) {
+            (new WorkflowRunEvents())->stepStarted($wfJob, $wjs);
+        }
         if ($ended !== null) {
             $this->onChildJobCompleted($ended);
             $wjs->refresh();
@@ -173,8 +187,8 @@ class WorkflowExecutionService extends Component
      * failed before it ran, or it was canceled), and by executeStep() for a
      * job that ended before its step was linked to it. Its step, if it still
      * runs, ends with the job's outcome (the workflow.step.completed audit
-     * entry, and the workflow.step_failed notification when it failed), and
-     * the run moves on. A job that never ran because its approval was
+     * entry, and the workflow.step_succeeded or workflow.step_failed
+     * notification), and the run moves on. A job that never ran because its approval was
      * rejected or canceled while it waited is a closed gate: the step fails
      * with why (WorkflowStepRouter::closedGate()).
      */
@@ -202,8 +216,8 @@ class WorkflowExecutionService extends Component
      *   (WorkflowStepRouter): only an explicit On Failure branch goes on.
      *
      * The step ends as one that ends with its job does: the
-     * workflow.step.completed audit entry, and the workflow.step_failed
-     * notification when it failed (WorkflowRunEvents::stepEnded()).
+     * workflow.step.completed audit entry, and the workflow.step_succeeded
+     * or workflow.step_failed notification (WorkflowRunEvents::stepEnded()).
      */
     public function onApprovalResolved(Job $job, bool $approved): void
     {
@@ -218,7 +232,8 @@ class WorkflowExecutionService extends Component
 
     /**
      * Resume a paused workflow step. The pause step is marked as succeeded
-     * and the workflow advances to the next step.
+     * (workflow.step_succeeded, by the resume that moved it) and the workflow
+     * advances to the next step.
      *
      * Access is checked first, so a user who may not operate the workflow
      * learns nothing about the run's state.
@@ -251,6 +266,7 @@ class WorkflowExecutionService extends Component
             $userId,
             ['step_name' => $paused[0]->stepName()]
         );
+        (new WorkflowRunEvents())->stepSucceeded($wfJob, $paused[0]);
 
         $this->advance($paused[0], true, false);
     }
@@ -365,7 +381,7 @@ class WorkflowExecutionService extends Component
     /**
      * End $wjs, which ended with $job (its runner's report, a cancel, an
      * approval decision): when this call moved it out of running, the
-     * workflow.step.completed audit entry and, for a step that failed, the
+     * workflow.step.completed audit entry and the workflow.step_succeeded or
      * workflow.step_failed notification, then the run moves on. $gate: why
      * the step's approval gate did not open, or null.
      */
@@ -455,13 +471,14 @@ class WorkflowExecutionService extends Component
 
     /**
      * End a step that could not start, and with it the workflow, without
-     * following its branches. A denial ($denied context) is audited.
+     * following its branches: workflow.step_failed when this call ended the
+     * step, then the run's end. A denial ($denied context) is audited.
      *
      * @param array<string, int>|null $denied
      */
     private function failStep(WorkflowJob $wfJob, WorkflowJobStep $wjs, string $reason, ?array $denied): void
     {
-        $this->closeStep($wjs, false, $reason);
+        $closed = $this->closeStep($wjs, false, $reason);
         \Yii::warning("Workflow job #{$wfJob->id} step #{$wjs->id}: {$reason}", __CLASS__);
 
         if ($denied !== null) {
@@ -472,6 +489,10 @@ class WorkflowExecutionService extends Component
                 (int)$wfJob->launched_by,
                 array_merge(['workflow_job_id' => (int)$wfJob->id, 'workflow_step_id' => (int)$wjs->workflow_step_id], $denied)
             );
+        }
+        // A step that the run's cancel ended first announces nothing.
+        if ($closed) {
+            (new WorkflowRunEvents())->stepFailed($wfJob, $wjs);
         }
         $this->completeWorkflow($wfJob, WorkflowJob::STATUS_FAILED);
     }

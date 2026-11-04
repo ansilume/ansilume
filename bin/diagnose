@@ -132,6 +132,96 @@ report_trusted_networks() {
     fi
 }
 
+# The host of the URL $1, in lower case: without the scheme, a user, the
+# port, the path, the query and the fragment; an IPv6 address keeps its
+# brackets.
+url_host() {
+    local rest=${1#*://}
+    rest=${rest%%[/?#]*}
+    rest=${rest##*@}
+    case "$rest" in
+        \[*) rest="${rest%%]*}]" ;;
+        *) rest=${rest%%:*} ;;
+    esac
+    printf '%s' "$rest" | tr '[:upper:]' '[:lower:]'
+}
+
+# Succeeds for a host that only this host reaches: localhost and its
+# subdomains, 127.0.0.0/8, ::1 and 0.0.0.0.
+is_loopback_host() {
+    case "$1" in
+        localhost | *.localhost | '[::1]' | 0.0.0.0) return 0 ;;
+    esac
+    [[ $1 =~ ^127\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+# Says whether APP_URL gives the links that notifications carry an address
+# that others reach: $1 is 1 when APP_URL is set, $2 the base of the links
+# (params.appBaseUrl, without a user). Ansilume builds every link that
+# leaves it from APP_URL, never from a request: without it the base is
+# http://localhost:8080. Sets app_url_problem, which the summary repeats.
+report_app_url() {
+    app_url_problem=""
+    if [ "$1" != "1" ]; then
+        app_url_problem="APP_URL is not set, so the links of notifications lead to ${2}"
+    elif [ -z "$2" ]; then
+        app_url_problem="APP_URL is empty, so the links of notifications are paths without an address"
+    elif is_loopback_host "$(url_host "$2")"; then
+        app_url_problem="APP_URL is ${2}, which only this host reaches, so the links of notifications open nowhere else"
+    fi
+    if [ -n "$app_url_problem" ]; then
+        warn "${app_url_problem}: set APP_URL in .env to the address your users open (the deploy role: ansilume_app_url), then docker compose up -d"
+    else
+        ok "APP_URL: ${2}, the base of the links of notifications"
+    fi
+}
+
+# Reports the lines of the notifications probe (NOTIFICATION_PROBE_PHP):
+# "app_url|<1 when APP_URL is set, else 0>|<the base of the links>", then
+# "inactive|<id>|<name>|<user ID>" for each notification template that
+# delivers as an inactive user, and so delivers nothing
+# (docs/notifications.md, "Delivers as"), then "templates|<how many there
+# are>". A probe that printed less could not check. Sets
+# notification_inactive and app_url_problem for the summary.
+report_notifications() {
+    local kind a b c templates="" url_seen=false
+    notification_inactive=0
+    while IFS='|' read -r kind a b c; do
+        case "$kind" in
+            app_url)
+                report_app_url "$a" "$b"
+                url_seen=true ;;
+            inactive)
+                warn "Notification template #${a} '${b}' delivers as user #${c}, who is inactive: it sends nothing until someone saves it, who then becomes the user it delivers as"
+                notification_inactive=$((notification_inactive + 1)) ;;
+            templates)
+                templates=$a ;;
+        esac
+    done
+    if [ -z "$templates" ]; then
+        if [ "$url_seen" = true ]; then
+            warn "Could not check the notification templates"
+        else
+            warn "Could not check APP_URL and the notification templates"
+        fi
+    elif [ "$templates" = "0" ]; then
+        info "No notification templates"
+    elif [ "$notification_inactive" -eq 0 ]; then
+        ok "Notification templates: ${templates}, each delivering as an active user"
+    fi
+}
+
+# The lines of the Diagnosis Summary for what report_notifications() found:
+# warnings, as the stack itself may be healthy.
+summarize_notifications() {
+    if [ "${notification_inactive:-0}" -gt 0 ]; then
+        warn "notifications: ${notification_inactive} template(s) deliver as an inactive user and send nothing (see Notifications)"
+    fi
+    if [ -n "${app_url_problem:-}" ]; then
+        warn "notifications: ${app_url_problem} (see Notifications)"
+    fi
+}
+
 # PHP prelude for in-container deep probes. Boots a console application the
 # same way ./yii does: load .env first (the dev checkout injects only APP_ENV
 # into the app container, so DB_* must come from the bind-mounted .env; in
@@ -158,6 +248,27 @@ RUNNER_TRANSPORT_LINE_PHP='
         $clean = static fn (string $value): string => (string)preg_replace("/[|[:cntrl:]]/", " ", $value);
         return implode("|", [$clean($name), $clean($group), $transport, $addr, $online ? "1" : "0", $age === null ? "" : (string)$age]) . "\n";
     };
+'
+
+# The notifications probe, for report_notifications(): whether APP_URL is
+# set and the base of the links it gives (without a user, as diagnose's
+# output is shared), each notification template that delivers as an
+# inactive user by the model's own rule, in the order of their IDs, and how
+# many templates there are. "|" and control characters in names become
+# spaces, so a name cannot break into lines that pass for other templates.
+# It holds no single quote, which would end the shell string
+# (tests/integration/bin/DiagnoseNotificationsProbeTest.php runs it).
+NOTIFICATION_PROBE_PHP='
+    $clean = static fn (string $value): string => (string)preg_replace("/[|[:cntrl:]]/", " ", $value);
+    $base = (string)preg_replace("~^([a-z][a-z0-9+.-]*://)[^/?#@]*@~i", "\$1", (string)($app->params["appBaseUrl"] ?? ""));
+    echo "app_url|", isset($_ENV["APP_URL"]) ? "1" : "0", "|", $clean($base), "\n";
+    $templates = app\models\NotificationTemplate::find()->orderBy(["id" => SORT_ASC])->all();
+    foreach ($templates as $template) {
+        if ($template->isDeliveringAsInactive()) {
+            echo "inactive|", (int)$template->id, "|", $clean((string)$template->name), "|", (int)$template->delivers_as, "\n";
+        }
+    }
+    echo "templates|", count($templates), "\n";
 '
 
 # ── Preamble ─────────────────────────────────────────────────────────────────
@@ -501,7 +612,7 @@ fi
 
 section "Recent Logs (last 30 lines per container)"
 
-for svc in db redis app nginx queue-worker schedule-runner runner-1; do
+for svc in db redis app nginx queue-worker notification-worker schedule-runner runner-1; do
     container_id=$(docker compose ps -q "$svc" 2>/dev/null | head -1 || true)
     if [ -z "$container_id" ]; then
         if [ "$compose_loads" = false ]; then
@@ -579,7 +690,7 @@ else
 
         # Bundled runners must only share a network with nginx. Otherwise
         # playbooks can reach php-fpm, the database or Redis.
-        for backend in app db redis queue-worker; do
+        for backend in app db redis queue-worker notification-worker; do
             backend_cid=$(docker compose ps -q "$backend" 2>/dev/null | head -1 || true)
             if [ -n "$backend_cid" ] && share_network "$runner_cid" "$backend_cid"; then
                 fail "${runner_svc}: shares a Docker network with '${backend}' — runners must only join the 'runners' network (docs/updating.md)"
@@ -802,6 +913,23 @@ if [ -n "$nginx_container" ]; then
     fi
 fi
 
+# ── 10d2. Notifications ─────────────────────────────────────────────────────
+# Whether the links that notifications carry lead where users reach
+# Ansilume, and which notification templates send nothing because the user
+# they deliver as is inactive.
+
+notification_inactive=0
+app_url_problem=""
+if [ -n "$app_container" ]; then
+    section "Notifications"
+
+    notification_output=$(docker exec -u www-data "$app_container" php -r "
+        ${PHP_BOOT}
+        ${NOTIFICATION_PROBE_PHP}
+    " 2>/dev/null || true)
+    report_notifications <<< "$notification_output"
+fi
+
 # ── 10e. HTTP reachability from the host ────────────────────────────────────
 # Everything above checks the stack from the inside; this section checks what
 # an operator actually experiences via the published port.
@@ -976,6 +1104,17 @@ for svc in $expected_services; do
     fi
 done
 
+# The notification-worker sends the notifications that the app image queues
+# (its console config has the notification queue): a compose file without
+# the service, such as one of an older release kept with newer images, leaves
+# every notification unsent.
+if [ "$compose_loads" = true ] && [ -n "$app_container" ] \
+    && ! grep -qx 'notification-worker' <<< "$services" \
+    && docker exec "$app_container" grep -q notificationQueue /var/www/config/console.php 2>/dev/null; then
+    fail "notification-worker: not in the compose file — the app image queues the notifications for it, and no container sends them: take the compose file of this release"
+    all_ok=false
+fi
+
 # Application integrity in summary
 if [ -n "$app_container" ]; then
     # Re-check admin user for summary
@@ -997,6 +1136,9 @@ if [ -n "$app_container" ]; then
     else
         ok "vendor: intact"
     fi
+
+    # What the Notifications section found
+    summarize_notifications
 fi
 
 # Host-side HTTP reachability in summary

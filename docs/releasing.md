@@ -75,7 +75,7 @@ When a version tag (`v*`) is pushed, GitHub Actions automatically builds and pub
 
 | Image | Purpose |
 |---|---|
-| `ghcr.io/ansilume/ansilume` | App (PHP-FPM), queue-worker, schedule-runner |
+| `ghcr.io/ansilume/ansilume` | App (PHP-FPM), queue-worker, notification-worker, schedule-runner |
 | `ghcr.io/ansilume/ansilume-nginx` | Nginx with baked-in config and static assets |
 | `ghcr.io/ansilume/ansilume-runner` | Standalone runner (PHP CLI + Ansible, no DB/Redis) |
 

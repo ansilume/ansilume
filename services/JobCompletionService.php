@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\services;
 
+use app\components\DbErrorSummary;
 use app\models\Job;
 use app\models\JobHostSummary;
 use app\models\JobLog;
@@ -44,6 +45,15 @@ class JobCompletionService extends Component
      * finished. sprintf(): the job's status.
      */
     public const LATE_TIMEOUT = 'Runner reported timeout after job was already in terminal status "%s" — ignored.';
+
+    /**
+     * Logged when the notification or the webhooks of a job that ended
+     * failed (an error outside the deliveries, such as reading their
+     * templates); the job's workflow goes on. sprintf(): what failed
+     * (notification, webhooks), the job's ID, then the error's class,
+     * SQLSTATE and driver error code (DbErrorSummary), never its message.
+     */
+    public const ANNOUNCE_FAILED = 'JobCompletionService: the %s of job #%d failed: %s (SQLSTATE %s, driver error %s); its workflow goes on.';
 
     /** Job log line for a playbook that exited 0 without running against any host. */
     public const NO_HOST_MATCHED = "Job did not execute against any host.\n"
@@ -213,7 +223,10 @@ class JobCompletionService extends Component
     /**
      * After this call ended the job: the job.finished audit entry, the
      * success or failure webhook, the notification, and for the job of a
-     * workflow step the workflow advance.
+     * workflow step the workflow advance. The webhooks and the notification
+     * never keep the advance from running: an error of theirs is logged
+     * (ANNOUNCE_FAILED), else the step would stay running, and its run with
+     * it, with nothing left to move them on.
      *
      * @param array<string, int|string> $auditContext
      */
@@ -227,19 +240,35 @@ class JobCompletionService extends Component
             $auditContext
         );
 
-        /** @var WebhookService $ws */
-        $ws = \Yii::$app->get('webhookService');
-        $ws->dispatch(
-            $job->status === Job::STATUS_SUCCEEDED ? Webhook::EVENT_JOB_SUCCESS : Webhook::EVENT_JOB_FAILURE,
-            $job
-        );
-
-        $this->dispatchNotifications($job);
+        $this->besideTheAdvance('webhooks', $job, static function (Job $job): void {
+            /** @var WebhookService $ws */
+            $ws = \Yii::$app->get('webhookService');
+            $ws->dispatch(
+                $job->status === Job::STATUS_SUCCEEDED ? Webhook::EVENT_JOB_SUCCESS : Webhook::EVENT_JOB_FAILURE,
+                $job
+            );
+        });
+        $this->besideTheAdvance('notification', $job, fn (Job $job) => $this->dispatchNotifications($job));
 
         if (WorkflowJobStep::find()->where(['job_id' => $job->id])->exists()) {
             /** @var WorkflowExecutionService $wes */
             $wes = \Yii::$app->get('workflowExecutionService');
             $wes->onChildJobCompleted($job);
+        }
+    }
+
+    /**
+     * Runs $announce for $job, which ended; an error of it is logged
+     * (ANNOUNCE_FAILED, $what) instead of ending the caller.
+     *
+     * @param \Closure(Job): void $announce
+     */
+    private function besideTheAdvance(string $what, Job $job, \Closure $announce): void
+    {
+        try {
+            $announce($job);
+        } catch (\Throwable $e) {
+            \Yii::error(sprintf(self::ANNOUNCE_FAILED, $what, (int)$job->id, ...DbErrorSummary::of($e)), __CLASS__);
         }
     }
 

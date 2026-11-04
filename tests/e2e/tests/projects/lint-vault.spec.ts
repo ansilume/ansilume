@@ -1,4 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
+import { expectFlash } from '../../lib/helpers';
+import { expectLintResult, lintQueuedFlash } from '../../lib/lint';
 
 // ansible-lint never gets a vault password on the server, so a playbook with
 // vault-encrypted vars_files cannot be linted. That is reported neutrally, not
@@ -24,7 +26,10 @@ test.describe('Lint of vault-encrypted playbooks', () => {
 
     await page.locator('button:has-text("Run Lint")').click();
 
-    await expect(page.getByTestId('lint-badge')).toHaveText(VERDICT, { timeout: 90_000 });
+    // The queue-worker runs it; the page reloads itself with the result.
+    await expectFlash(page, 'success', lintQueuedFlash('e2e-vault-project'));
+    await expectLintResult(page);
+    await expect(page.getByTestId('lint-badge')).toHaveText(VERDICT);
     await expect(page.getByTestId('lint-vault-note')).toContainText('never decrypts vault content on the server');
     await expect(page.locator('body')).not.toContainText(PLAINTEXT);
   });

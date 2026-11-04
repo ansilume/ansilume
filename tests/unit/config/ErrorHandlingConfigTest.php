@@ -55,9 +55,26 @@ class ErrorHandlingConfigTest extends TestCase
         $this->assertSame(['class' => ConsoleErrorHandler::class], $this->components($file)['errorHandler'] ?? null);
     }
 
-    public function testTheQueueWorkerLogsJobsWithTheQueueLogBehavior(): void
+    /**
+     * @return array<string, array{0: string}>
+     */
+    public static function workerQueueProvider(): array
     {
-        $queue = $this->components('console.php')['queue'] ?? null;
+        return [
+            'the queue-worker (worker/start)' => ['queue'],
+            'the notification-worker (worker/start --queue=notificationQueue)' => ['notificationQueue'],
+        ];
+    }
+
+    /**
+     * Each queue that a worker of the console runs logs its jobs with
+     * QueueLogBehavior.
+     *
+     * @dataProvider workerQueueProvider
+     */
+    public function testTheQueueWorkersLogJobsWithTheQueueLogBehavior(string $id): void
+    {
+        $queue = $this->components('console.php')[$id] ?? null;
 
         $this->assertIsArray($queue);
         $this->assertSame(QueueLogBehavior::class, $queue['as log'] ?? null);
@@ -73,20 +90,40 @@ class ErrorHandlingConfigTest extends TestCase
 
     /**
      * A queue that gets a log behaviour gets QueueLogBehavior: the web only
-     * pushes jobs, and the tests run none, so neither has one now.
+     * pushes jobs, and the tests run none, so neither has one now. Every
+     * queue of the application counts, the notification queue as the queue
+     * of project syncs.
      *
      * @dataProvider configProvider
      */
     public function testEveryQueueLogBehaviourIsTheQueueLogBehavior(string $file): void
     {
-        $queue = $this->components($file)['queue'] ?? null;
-        $this->assertIsArray($queue);
+        $queues = array_filter(
+            $this->components($file),
+            static fn (mixed $component): bool => is_a(self::className($component), \yii\queue\Queue::class, true),
+        );
+        $this->assertSame(['notificationQueue', 'queue'], self::sorted(array_keys($queues)), "{$file}: its queues");
 
-        foreach ($queue as $key => $value) {
-            if (is_string($key) && str_starts_with($key, 'as ') && is_a(self::className($value), \yii\queue\LogBehavior::class, true)) {
-                $this->assertSame(QueueLogBehavior::class, self::className($value), "{$file}: queue behaviour '{$key}'");
+        foreach ($queues as $id => $queue) {
+            $this->assertIsArray($queue);
+            foreach ($queue as $key => $value) {
+                if (is_string($key) && str_starts_with($key, 'as ') && is_a(self::className($value), \yii\queue\LogBehavior::class, true)) {
+                    $this->assertSame(QueueLogBehavior::class, self::className($value), "{$file}: behaviour '{$key}' of {$id}");
+                }
             }
         }
+    }
+
+    /**
+     * @param list<int|string> $keys
+     * @return list<string>
+     */
+    private static function sorted(array $keys): array
+    {
+        $names = array_map('strval', $keys);
+        sort($names);
+
+        return $names;
     }
 
     /**

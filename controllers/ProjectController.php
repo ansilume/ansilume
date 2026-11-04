@@ -7,13 +7,13 @@ namespace app\controllers;
 use app\components\GitSyncDiagnostics;
 use app\components\ProjectFilesNote;
 use app\components\WorkerHeartbeat;
+use app\controllers\traits\LintCardTrait;
 use app\helpers\AppVersion;
 use app\models\AuditLog;
 use app\models\Credential;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\models\User;
-use app\services\LintService;
 use app\services\ProjectAccessChecker;
 use app\services\ProjectDeletionService;
 use app\services\ProjectService;
@@ -23,6 +23,8 @@ use yii\web\Response;
 
 class ProjectController extends BaseController
 {
+    use LintCardTrait;
+
     /**
      * The note of the project page's sync output once its poll
      * (actionSyncStatus) was refused: 401 or 403 (signed out, or no access
@@ -30,13 +32,26 @@ class ProjectController extends BaseController
      */
     public const SYNC_LIVE_STOPPED = 'Live updates stopped. Reload the page to keep following the sync.';
 
+    /** The flash of Run Lint, which queues a lint run of the project; sprintf(): its name. */
+    public const FLASH_LINT_QUEUED = 'Lint queued for "%s".';
+
+    /**
+     * What the sync output and the lint card of a queued run say when no
+     * queue worker beats (WorkerHeartbeat::all(): the notification-worker
+     * does not count), followed by START_QUEUE_WORKER.
+     */
+    public const NO_QUEUE_WORKER = 'No queue worker is running. Start one with:';
+
+    /** The command that starts the queue worker, after NO_QUEUE_WORKER. */
+    public const START_QUEUE_WORKER = 'docker compose up -d queue-worker';
+
     /**
      * @return array<int, array<string, mixed>>
      */
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view', 'sync-status'], 'allow' => true, 'roles' => ['project.view']],
+            ['actions' => ['index', 'view', 'sync-status', 'lint-status'], 'allow' => true, 'roles' => ['project.view']],
             ['actions' => ['create'], 'allow' => true, 'roles' => ['project.create']],
             ['actions' => ['update', 'sync', 'lint'], 'allow' => true, 'roles' => ['project.update']],
             ['actions' => ['delete'], 'allow' => true, 'roles' => ['project.delete']],
@@ -99,7 +114,16 @@ class ProjectController extends BaseController
             'unreadableNote' => ProjectFilesNote::of($model, $localPath, $unreadable, $playbooks !== [] || $tree !== []),
             'unreadable' => $unreadable,
             'vault' => $vaultOverview->forProject($model, static fn (string $permission): bool => $superadmin || \Yii::$app->user->can($permission)),
-        ]);
+        ] + $this->lintCard($model));
+    }
+
+    /** The project of the lint card's poll (LintCardTrait), with the page's 404 and 403. */
+    protected function findLintRecord(int $id): Project
+    {
+        $model = $this->findModel($id);
+        $this->requireAccess($model, false);
+
+        return $model;
     }
 
     /**
@@ -217,15 +241,21 @@ class ProjectController extends BaseController
         return $this->redirect(['index']);
     }
 
+    /**
+     * Run Lint: queues a lint run of the whole project, which the
+     * queue-worker makes (LintCardTrait::queueLint()); the page shows "Lint
+     * queued" until its result is stored. Audited as project.linted: the
+     * request, also when the queue could not be reached.
+     */
     public function actionLint(int $id): Response
     {
         $model = $this->findModel($id);
         $this->requireAccess($model, true);
-        /** @var LintService $lintSvc */
-        $lintSvc = \Yii::$app->get('lintService');
-        $lintSvc->runForProject($model);
+        $queued = $this->queueLint($model);
         \Yii::$app->get('auditService')->log(AuditLog::ACTION_PROJECT_LINTED, 'project', $model->id, null, ['name' => $model->name]);
-        $this->session()->setFlash('success', "Lint completed for \"{$model->name}\".");
+        if ($queued) {
+            $this->session()->setFlash('success', sprintf(self::FLASH_LINT_QUEUED, $model->name));
+        }
         return $this->redirect(['view', 'id' => $id]);
     }
 

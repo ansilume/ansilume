@@ -11,8 +11,8 @@ declare(strict_types=1);
 /** @var bool $changeLocked $lockedNotice !== null */
 /** @var bool $canViewRules approval-rule.view: the approval rules as links, else as text */
 /** @var app\models\ApprovalRule|null $inventoryRule the rule of the template's inventory (JobTemplateGate), shown when it has one */
+/** @var bool $lintWorkerMissing a lint run is queued, and no queue worker beats (LintCardTrait::lintCard()) */
 
-use app\components\LintVerdict;
 use app\helpers\TimeHelper;
 use app\services\JobTemplateRuleAssignment;
 use yii\helpers\Html;
@@ -191,46 +191,14 @@ $this->title = $model->name;
     <?php endif; ?>
 
     <div class="col-12">
-        <div class="card">
-            <?php
-            $lintVerdict = LintVerdict::of($model->lint_exit_code, $model->lint_output);
-            ?>
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span>Ansible Lint <small class="text-muted fw-normal">(--profile production)</small></span>
-                <span>
-                    <span class="badge <?= Html::encode(LintVerdict::badgeClass($lintVerdict)) ?>" data-testid="lint-badge"><?= Html::encode(LintVerdict::label($lintVerdict)) ?></span>
-                    <?php if ($model->lint_at !== null) : ?>
-                        <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output?></small>
-                    <?php endif; ?>
-                </span>
-            </div>
-            <div class="card-body p-0">
-                <?php if ($model->lint_output) : ?>
-                    <?php if ($lintVerdict === LintVerdict::VAULT_SKIPPED) : ?>
-                        <p class="text-muted small px-3 pt-3 mb-2" data-testid="lint-vault-note"><?= Html::encode(LintVerdict::VAULT_NOTE) ?></p>
-                        <details><summary class="px-3 small">Show ansible-lint output</summary>
-                    <?php endif; ?>
-                    <pre class="job-log m-0" id="template-lint-output" style="max-height:300px;overflow-y:auto;"></pre>
-                    <?php if ($lintVerdict === LintVerdict::VAULT_SKIPPED) : ?>
-                        </details>
-                    <?php endif; ?>
-                    <script src="<?= \Yii::$app->request->baseUrl ?>/js/ansi_up.min.js"></script>
-                    <script>
-                    (function () {
-                        var au = new AnsiUp();
-                        au.use_classes = false;
-                        au.ansi_colors[0][0].rgb = [118, 118, 118];
-                        au.ansi_colors[0][4].rgb = [77, 159, 236];
-                        au.ansi_colors[0][5].rgb = [198, 120, 221];
-                        var el = document.getElementById('template-lint-output');
-                        el.innerHTML = au.ansi_to_html(<?= \yii\helpers\Json::htmlEncode($model->lint_output) // xss-ok: hex-escaped JSON?>);
-                    })();
-                    </script>
-                <?php else : ?>
-                    <p class="text-muted p-3 mb-0">Lint output will appear here after saving the template or syncing the project.</p>
-                <?php endif; ?>
-            </div>
-        </div>
+        <?= $this->render('/project/_lint', [
+            'model' => $model,
+            'scope' => '--profile production',
+            'outputId' => 'template-lint-output',
+            'maxHeight' => 300,
+            'emptyText' => 'Lint output will appear here after saving the template or syncing the project.',
+            'workerMissing' => $lintWorkerMissing,
+        ]) ?>
     </div>
 
     <div class="col-12">

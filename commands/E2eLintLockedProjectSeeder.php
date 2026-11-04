@@ -8,20 +8,27 @@ use app\helpers\FileHelper;
 use app\models\Project;
 
 /**
- * Seeds a manual project whose directory the web server's user may list
- * but not enter, for projects/lint-not-run.spec.ts: Run Lint cannot start
- * ansible-lint there (ProcessStarter), and the lint card says "not run"
- * and why, not "issues found".
+ * Seeds a manual project whose directory the server's user may list but not
+ * enter, for projects/lint-not-run.spec.ts: the lint run that Run Lint
+ * queues cannot start ansible-lint there (ProcessStarter), and the lint card
+ * says "not run" and why, not "issues found".
  *
- * The seeder runs as root and php-fpm as www-data, so the directory is
- * root's, mode 0744, and stays empty: the project page reads the playbooks
- * in a project's directory, which it could not open here. Run as another
- * user, the seeder skips, and so does the spec. Idempotent: every seed
- * creates the directory again and resets the lint result.
+ * The directory is in the runtime directory (DIRECTORY): lint runs in the
+ * queue-worker, which does not see the temp directory of the app container,
+ * while in a git checkout both bind-mount the repository at /var/www. The
+ * seeder runs as root, and php-fpm and the queue-worker as www-data, so the
+ * directory is root's, mode 0744, and stays empty: the project page reads
+ * the playbooks in a project's directory, which it could not open here. Run
+ * as another user, the seeder skips, and so does the spec. Idempotent: every
+ * seed creates the directory again and resets the lint result, and the E2E
+ * teardown removes it (teardown()).
  */
 class E2eLintLockedProjectSeeder
 {
     public const PROJECT = 'e2e-lint-locked-project';
+
+    /** Where the project's directory goes by default: seen by the app and the queue-worker. */
+    public const DIRECTORY = '@runtime/e2e-lint-locked';
 
     /** @var callable(string): void */
     private $logger;
@@ -31,13 +38,12 @@ class E2eLintLockedProjectSeeder
 
     /**
      * @param callable(string): void $logger
-     * @param string|null $dir where the project's directory goes, by default ansilume-e2e-lint-locked in the temp
-     *        directory
+     * @param string|null $dir where the project's directory goes, by default DIRECTORY
      */
     public function __construct(callable $logger, ?string $dir = null)
     {
         $this->logger = $logger;
-        $this->dir = $dir ?? sys_get_temp_dir() . '/ansilume-e2e-lint-locked';
+        $this->dir = $dir ?? (string)\Yii::getAlias(self::DIRECTORY);
     }
 
     public function seed(int $userId): void
@@ -59,6 +65,18 @@ class E2eLintLockedProjectSeeder
         $project->lint_at = null;
         $project->save(false);
         ($this->logger)("  Seeded lint-locked project {$project->name} (ID {$project->id}).\n");
+    }
+
+    /**
+     * Removes the project's directory; the e2e- prefix teardown removes the
+     * record.
+     */
+    public function teardown(): void
+    {
+        if (is_dir($this->dir)) {
+            FileHelper::removeDirectory($this->dir);
+            ($this->logger)("  Deleted lint-locked project directory {$this->dir}.\n");
+        }
     }
 
     /** Whether the seeder runs as root: only root makes a directory that php-fpm's user may not enter. */

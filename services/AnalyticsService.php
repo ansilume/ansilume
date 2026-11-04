@@ -82,11 +82,15 @@ class AnalyticsService extends Component
     }
 
     /**
-     * Mean Time To Recovery: for every failed job in the window, find
-     * the next succeeded job for the same template and take the delta
-     * between the failure's finished_at and the recovery's started_at.
-     * Average those deltas. Failures that never recovered within the
-     * observable data are excluded (they can't contribute a finite value).
+     * Mean Time To Recovery: for every failed job in the window, find the
+     * job that recovered it, by the rule of the dashboard and the job pages
+     * (RecoveredFailures: the first succeeded job of the same template that
+     * started after the failure finished, or in that second with a higher
+     * ID, and was no dry run), and take the
+     * delta between the failure's finished_at and the recovery's
+     * started_at. Average those deltas. Failures that never recovered within
+     * the observable data are excluded (they can't contribute a finite
+     * value).
      *
      * Returned in seconds, rounded to one decimal. Zero when no failure
      * in the window has a subsequent success.
@@ -100,9 +104,7 @@ class AnalyticsService extends Component
             'SELECT AVG(recovery_seconds) AS mttr FROM ('
             . '  SELECT'
             . '    (SELECT MIN(s.started_at) FROM {{%job}} s'
-            . '       WHERE s.job_template_id = f.job_template_id'
-            . '         AND s.status = :succ'
-            . '         AND s.started_at > f.finished_at'
+            . '       WHERE ' . RecoveredFailures::recoveryCondition('f', 's')
             . '    ) - f.finished_at AS recovery_seconds'
             . '  FROM {{%job}} f'
             . '  WHERE f.status IN (:failed, :error, :timed_out)'
@@ -112,7 +114,6 @@ class AnalyticsService extends Component
             . ') AS r'
             . ' WHERE r.recovery_seconds IS NOT NULL',
             array_merge($where['params'], [
-                ':succ' => 'succeeded',
                 ':failed' => 'failed',
                 ':error' => 'error',
                 ':timed_out' => 'timed_out',

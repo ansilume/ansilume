@@ -49,27 +49,18 @@ class TelegramChannel implements ChannelInterface
     }
 
     /**
+     * POSTs $payload to the Bot API through the outbound HTTP client
+     * (ChannelHttp): an error names the status, never the URL, which holds
+     * the bot token, or the answer.
+     *
      * @param string[] $headers
+     * @throws \app\components\OutboundHttpException when the Bot API did not take it
      */
     protected function post(#[\SensitiveParameter] string $url, string $payload, array $headers): string
     {
-        $ch = curl_init($url);
-        if ($ch === false) {
-            throw new \RuntimeException('TelegramChannel: failed to init curl');
-        }
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-        $result = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $response = ChannelHttp::post('TelegramChannel', $url, $payload, $headers);
 
-        if ($code < 200 || $code >= 300) {
-            throw new \RuntimeException("TelegramChannel: HTTP {$code} — " . substr((string)$result, 0, 200));
-        }
-
-        \Yii::info("TelegramChannel: sent — {$code}", __CLASS__);
-        return (string)$result;
+        \Yii::info("TelegramChannel: sent — {$response->status}", __CLASS__);
+        return $response->body;
     }
 }

@@ -32,14 +32,18 @@ final class IdleDatabaseConnectionTest extends TestCase
 
     /**
      * What each process that a stack keeps running does with its database
-     * connection while it waits: a console route, or the command of an
-     * image that runs no console route.
+     * connection while it waits: a console route, with the --queue it runs
+     * where it names one, or the command of an image that runs no console
+     * route.
      */
     private const PROCESSES = [
         'php-fpm' => 'The web UI and the API: a request opens a connection when it needs one, and PHP closes it when'
             . ' the request ends; config/db.php asks for no persistent connection.',
         'worker/start' => 'The queue-worker: it closes the connection before and after each queue job, so that each'
             . ' job opens its own (WorkerController::attachWorkerEvents(), WorkerJobDbConnectionTest).',
+        'worker/start --queue=notificationQueue' => 'The notification-worker: as the queue-worker, it closes the connection'
+            . ' before and after each job of the notification queue, so that each delivery opens its own'
+            . ' (WorkerController::attachWorkerEvents(), WorkerJobDbConnectionTest, NotificationWorkerProcessTest).',
         'runner/start' => 'A runner: it opens none, as it reaches the server through the runner API only.',
         'schedule/run' => 'The schedule-runner: a process of its own for each run, which its loop starts every minute.',
         'maintenance/run' => 'The schedule-runner: a process of its own for each run, after schedule/run.',
@@ -90,6 +94,7 @@ final class IdleDatabaseConnectionTest extends TestCase
                 . ' connection while it waits (CLAUDE.md, Database), then add it with what it does with its connection'
         );
         $this->assertSame(['worker/start'], $processes['queue-worker'] ?? [], "the queue-worker of {$stack}");
+        $this->assertSame(['worker/start --queue=notificationQueue'], $processes['notification-worker'] ?? [], "the notification-worker of {$stack}");
     }
 
     /**
@@ -130,8 +135,21 @@ final class IdleDatabaseConnectionTest extends TestCase
     }
 
     /**
+     * The scan tells the workers apart by the --queue that follows worker/start
+     * in their command, and only there.
+     */
+    public function testTheScanTellsTheWorkersApartByTheirQueue(): void
+    {
+        $this->assertSame(' --queue=notificationQueue', self::queueOption('php yii worker/start --queue=notificationQueue', 'worker/start'));
+        $this->assertSame(' --queue=notificationQueue', self::queueOption('php yii worker/start --color=0 --queue=notificationQueue', 'worker/start'));
+        $this->assertSame('', self::queueOption('php yii worker/start', 'worker/start'));
+        $this->assertSame('', self::queueOption('php yii worker/start && php yii other/start --queue=notificationQueue', 'worker/start'));
+    }
+
+    /**
      * The processes each service of an image with Ansilume's code runs in
-     * $stack: the console routes of its command, or the command itself
+     * $stack: the console routes of its command, each with the --queue it
+     * names (worker/start --queue=notificationQueue), or the command itself
      * when it runs none.
      *
      * @return array<string, list<string>> by service
@@ -145,11 +163,27 @@ final class IdleDatabaseConnectionTest extends TestCase
                 continue;
             }
             $command = $this->wordsOf($service['command'] ?? null) ?: $this->commandOf($dockerfile);
-            $routes = array_column(YiiExecScan::routesIn(implode(' ', $command)), 'route');
+            $text = implode(' ', $command);
+            $routes = array_map(
+                static fn (string $route): string => $route . self::queueOption($text, $route),
+                array_column(YiiExecScan::routesIn($text), 'route')
+            );
             $processes[$name] = $routes === [] ? [$command[0] ?? ''] : $routes;
         }
 
         return $processes;
+    }
+
+    /**
+     * The --queue option that follows $route in $command, with the space
+     * before it, or '' without one: the queue a worker runs decides which
+     * worker it is.
+     */
+    private static function queueOption(string $command, string $route): string
+    {
+        $found = preg_match('/(?<![\w\/-])' . preg_quote($route, '/') . '(?:\s+--[\w-]+(?:=\S*)?)*?\s+(--queue=[^\s"\'`;&|)]+)/', $command, $match);
+
+        return $found === 1 ? ' ' . $match[1] : '';
     }
 
     /**

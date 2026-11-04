@@ -55,8 +55,9 @@ class GatedJobTemplateApprovalTest extends WebControllerTestCase
         parent::setUp();
         $this->replace('notificationDispatcher', new RecordingNotificationDispatcher());
         $this->replace('lintService', new class () extends LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
 

@@ -83,10 +83,15 @@ class SyncProjectJob extends BaseObject implements JobInterface
         try {
             /** @var LintService $lintSvc */
             $lintSvc = \Yii::$app->get('lintService');
-            $lintSvc->runForProject($project);
+            // Every run of the phase serves the lint requests up to its
+            // start, read before it reads the templates: a template saved
+            // later keeps its mark, which its own queued run clears, and is
+            // never marked done by a run of the copy read before the save.
+            $servedUpTo = time();
+            $lintSvc->runForProject($project, $servedUpTo);
             // andWhere(): where() would replace the scope that hides deleted templates.
             foreach (JobTemplate::find()->andWhere(['project_id' => $project->id])->all() as $tpl) {
-                $lintSvc->runForTemplate($tpl);
+                $lintSvc->runForTemplate($tpl, $servedUpTo);
             }
         } catch (\Throwable $e) {
             \Yii::warning(sprintf(self::LINT_FAILED, (int)$project->id, ErrorText::of($e)), __CLASS__);

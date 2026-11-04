@@ -26,8 +26,11 @@ class HealthcheckUserTest extends TestCase
 {
     use RendersDeployRole;
 
-    /** The health check of the app and the queue-worker. */
+    /** The health check of the app, the queue-worker and the notification-worker. */
     private const HEALTH_CHECK = ['CMD', 'gosu', 'www-data', 'php', '/var/www/yii', 'health/check'];
+
+    /** The services that check their health with PHP: the app and the workers of the queues. */
+    private const PHP_CHECKED = ['app', 'queue-worker', 'notification-worker'];
 
     /** The images of the services that run the health check, with gosu. */
     private const DOCKERFILES = ['docker/php/Dockerfile', 'docker/php/Dockerfile.prod'];
@@ -45,12 +48,16 @@ class HealthcheckUserTest extends TestCase
         ];
     }
 
+    /**
+     * The notification-worker, which runs the console as the queue-worker
+     * does, checks its health as the queue-worker does.
+     */
     #[DataProvider('stackProvider')]
-    public function testRegressionTheAppAndTheQueueWorkerCheckTheirHealthAsWwwData(string $stack): void
+    public function testRegressionTheAppAndTheWorkersCheckTheirHealthAsWwwData(string $stack): void
     {
         $services = $this->services($stack);
 
-        foreach (['app', 'queue-worker'] as $name) {
+        foreach (self::PHP_CHECKED as $name) {
             $this->assertArrayHasKey($name, $services);
             $this->assertSame(self::HEALTH_CHECK, $this->healthCheckOf($services[$name]), "the health check of {$name}");
         }
@@ -72,7 +79,7 @@ class HealthcheckUserTest extends TestCase
             $checked++;
             $this->assertSame(['CMD', 'gosu', 'www-data', 'php'], array_slice($test, 0, 4), "the health check of {$name} runs php as www-data");
         }
-        $this->assertSame(2, $checked, 'the app and the queue-worker run php in their health check');
+        $this->assertSame(count(self::PHP_CHECKED), $checked, 'the app, the queue-worker and the notification-worker run php in their health check');
     }
 
     /**

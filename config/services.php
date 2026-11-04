@@ -27,8 +27,30 @@ return [
     'credentialService' => [
         'class' => 'app\services\CredentialService',
     ],
+    // The channels of notification templates: the built-in ones, and the
+    // installation's own that config/notification-channels.php returns when
+    // it exists, name => definition (docs/notifications.md, "Channels of your
+    // own"). The web and the console application build the dispatcher when
+    // they start (their bootstrap), which reads the file then, under their
+    // error handler: a definition that is wrong stops the application at its
+    // start, with a message that names the channel and what is wrong.
     'notificationDispatcher' => [
         'class' => 'app\services\NotificationDispatcher',
+        'channelsFile' => __DIR__ . '/notification-channels.php',
+    ],
+    // Delivers the notification outbox: the notification-worker runs its
+    // deliver() for each message of the notification queue, the maintenance
+    // run its sweep() every minute. backoffSeconds and maxAttempts set the
+    // retries of a delivery.
+    'notificationDeliveryService' => [
+        'class' => 'app\services\notification\NotificationDeliveryService',
+    ],
+    // The HTTP client of the notification channels and the outbound webhooks:
+    // http and https only, no redirect, TLS always verified. OUTBOUND_CA_BUNDLE
+    // names a PEM file of CAs to trust on top of the system's.
+    'outboundHttp' => [
+        'class' => 'app\components\OutboundHttpClient',
+        'caBundle' => getenv('OUTBOUND_CA_BUNDLE') ?: null,
     ],
     'analyticsService' => [
         'class' => 'app\services\AnalyticsService',

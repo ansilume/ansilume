@@ -11,7 +11,7 @@ use app\models\NotificationTemplate;
  * (tests/e2e/tests/notification-templates/send-test.spec.ts):
  *
  * - e2e-failing-notification: a webhook to a port nothing listens on in the
- *   app container, so every delivery fails at once (HTTP 0). It listens only
+ *   app container, so every delivery fails at once (curl error 7). It listens only
  *   to EVENT, which `yii health/check-runners` dispatches, and the E2E stack
  *   never runs it: only Send Test delivers it.
  *
@@ -49,6 +49,7 @@ final class E2eFailingNotificationSeeder
         $template->subject_template = 'E2E {{event}}';
         $template->body_template = 'E2E notification for {{event}}.';
         $template->created_by = $userId;
+        $template->delivers_as = $userId;
         $template->save(false);
 
         ($this->logger)(sprintf(

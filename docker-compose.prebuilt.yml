@@ -83,6 +83,36 @@ services:
     networks:
       - ansilume
 
+  # Sends the notifications from a queue of their own, so that none waits
+  # behind a project sync of the queue-worker. It runs as the queue-worker
+  # does, with the same .env (OUTBOUND_CA_BUNDLE, a file it then needs mounted
+  # too, see .env.prod.example), but needs no project checkouts.
+  notification-worker:
+    image: ghcr.io/ansilume/ansilume:${ANSILUME_IMAGE_TAG:-latest}
+    container_name: ansilume_notification_worker
+    restart: unless-stopped
+    command: ["php", "yii", "worker/start", "--queue=notificationQueue"]
+    # Lets the delivery in flight finish on a stop: the worker ends after its
+    # job, which takes at most the notification queue's TTR of 120 seconds.
+    stop_grace_period: 120s
+    stop_signal: SIGTERM
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # As www-data, the user of the worker (see app).
+      test: ["CMD", "gosu", "www-data", "php", "/var/www/yii", "health/check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - ansilume
+
   schedule-runner:
     image: ghcr.io/ansilume/ansilume:${ANSILUME_IMAGE_TAG:-latest}
     container_name: ansilume_schedule_runner
@@ -159,9 +189,14 @@ services:
       - ansilume
 
   redis:
-    image: redis:7.2-alpine
+    image: redis:8.10-alpine
     container_name: ansilume_redis
     restart: unless-stopped
+    # Keeps the sessions, the cache and the queue across container
+    # recreation: since 8.6 the redis images declare no VOLUME for /data,
+    # whose anonymous volume kept them before.
+    volumes:
+      - redis_data:/data
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     # requirepass only when REDIS_PASSWORD is set. The password comes from the
@@ -186,13 +221,14 @@ networks:
     driver: bridge
   # Bundled runners live on their own network and reach the server only
   # through nginx (API_URL=http://nginx). Playbooks run on runners, so they must
-  # not reach app (php-fpm), db, redis or the queue-worker. Not 'internal':
+  # not reach app (php-fpm), db, redis or the workers. Not 'internal':
   # playbooks, git and composer need outbound access.
   runners:
     driver: bridge
 
 volumes:
   db_data:
+  redis_data:
   runtime_projects:
   runner_1_runtime:
   # Yii2 publishes framework assets (jQuery, yii.js) to /var/www/web/assets/

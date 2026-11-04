@@ -305,14 +305,15 @@ class JobTemplatesControllerGatedLockTest extends WebControllerTestCase
     }
 
     /**
-     * Everything the template runs: its columns but name, description and
-     * the timestamps, and its credentials in order.
+     * Everything the template runs: its columns but name, description, the
+     * timestamps and the mark of the lint run that every save queues
+     * (lint_queued_at), and its credentials in order.
      *
      * @return array<string, mixed>
      */
     private function snapshot(JobTemplate $template): array
     {
-        $columns = $template->getAttributes(null, ['name', 'description', 'updated_at']);
+        $columns = $template->getAttributes(null, ['name', 'description', 'updated_at', 'lint_queued_at']);
 
         return $columns + ['credentials' => array_column($this->fresh($template)->credentialSnapshot(), 'id')];
     }

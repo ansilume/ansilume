@@ -211,8 +211,12 @@ class JobLaunchService extends Component
             ['template_id' => $template->id, 'template_name' => $template->name] + ($context === null ? [] : $context->auditContext)
         );
 
+        // The job of a workflow step is announced before the step records it:
+        // the launch context names the run.
+        $runId = $context?->auditContext['workflow_job_id'] ?? null;
+        $runId = is_int($runId) ? $runId : null;
         if ($request instanceof ApprovalRequest && $rule instanceof ApprovalRule) {
-            $this->approvals()->announceRequest($request, $job, $rule);
+            $this->approvals()->announceRequest($request, $job, $rule, $runId);
             return;
         }
         // Only fire job.launched once the job is actually queued — a
@@ -222,7 +226,7 @@ class JobLaunchService extends Component
         $dispatcher = \Yii::$app->get('notificationDispatcher');
         $dispatcher->dispatch(
             NotificationTemplate::EVENT_JOB_LAUNCHED,
-            JobPayloadBuilder::build($job)
+            JobPayloadBuilder::build($job, $runId)
         );
     }
 

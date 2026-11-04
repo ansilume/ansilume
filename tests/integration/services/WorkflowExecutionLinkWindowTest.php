@@ -326,7 +326,7 @@ class WorkflowExecutionLinkWindowTest extends DbTestCase
 
         $this->assertCount(1, $runs);
         $job = $this->jobOfStep($runs[0], $first);
-        $link = $this->statementIndex($statements, '~^UPDATE `workflow_job_step` SET `job_id`=' . $job->id . '\b~');
+        $link = $this->statementIndex($statements, $this->linkOfJob((int)$job->id));
         $read = $this->statementIndex($statements, '~^SELECT \* FROM `job` WHERE `id` = ' . $job->id . ' LOCK IN SHARE MODE$~');
         $this->assertLessThan($read, $link, implode("\n", $statements));
     }
@@ -515,9 +515,9 @@ class WorkflowExecutionLinkWindowTest extends DbTestCase
                 parent::__construct();
             }
 
-            public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule): void
+            public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule, ?int $workflowJobId = null): void
             {
-                parent::announceRequest($request, $job, $rule);
+                parent::announceRequest($request, $job, $rule, $workflowJobId);
                 $this->recordDecision(ApprovalRequest::findOne(['id' => $request->id]) ?? $request, $this->approverId, $this->decision);
             }
         });

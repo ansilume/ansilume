@@ -4,13 +4,20 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\components\PendingMigrations;
 use app\models\AuditLog;
 use app\models\JobArtifact;
+use app\models\NotificationDelivery;
+use app\models\NotificationTemplate;
 use app\models\Project;
 use app\models\ProjectSyncLog;
 use app\services\ArtifactService;
 use app\services\MaintenanceService;
+use app\services\notification\NotificationDeliveryService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
+use app\tests\integration\services\notification\RecordingNotificationQueue;
+use yii\log\Logger;
 
 /**
  * Integration tests for MaintenanceService.
@@ -21,11 +28,19 @@ use app\tests\integration\DbTestCase;
  */
 class MaintenanceServiceTest extends DbTestCase
 {
+    use RestoresComponents;
+
     private string $tempDir;
+
+    private RecordingNotificationQueue $notificationQueue;
 
     protected function setUp(): void
     {
         parent::setUp();
+        $this->notificationQueue = new RecordingNotificationQueue();
+        $this->swapComponent('notificationQueue', $this->notificationQueue);
+        $this->keepComponent('notificationDeliveryService');
+        $this->keepComponent('artifactService');
         $this->tempDir = sys_get_temp_dir() . '/ansilume_maintenance_int_' . uniqid('', true);
         mkdir($this->tempDir, 0750, true);
         \Yii::$app->cache->flush();
@@ -33,6 +48,7 @@ class MaintenanceServiceTest extends DbTestCase
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         $this->removeDir($this->tempDir);
         \Yii::$app->cache->flush();
         parent::tearDown();
@@ -97,6 +113,7 @@ class MaintenanceServiceTest extends DbTestCase
                 ['task' => 'stale-sync-sweep', 'reason' => 'none-stale'],
                 ['task' => MaintenanceService::TASK_APPROVAL_TIMEOUTS, 'reason' => MaintenanceService::SKIP_NONE_EXPIRED],
                 ['task' => MaintenanceService::TASK_DELETED_TEMPLATE_SWEEP, 'reason' => MaintenanceService::SKIP_NONE_FOUND],
+                ['task' => MaintenanceService::TASK_NOTIFICATION_SWEEP, 'reason' => MaintenanceService::SKIP_NONE_FOUND],
                 ['task' => 'survey-secret-scrub', 'reason' => 'done'],
             ],
             $report['skipped']
@@ -224,6 +241,178 @@ class MaintenanceServiceTest extends DbTestCase
 
         $this->assertSame(1, $report['results']['artifact-cleanup']['by_count']);
         $this->assertSame(0, $report['results']['artifact-cleanup']['quota_trimmed']);
+    }
+
+    // -------------------------------------------------------------------------
+    // The sweep of notification deliveries
+    // -------------------------------------------------------------------------
+
+    /**
+     * Every tick sweeps the notification outbox
+     * (NotificationDeliveryService::sweep()), without a cooldown: a
+     * delivery whose message was lost is pushed again within a minute or
+     * two. It reports its counts when it changed something, and is quiet
+     * (none-found) otherwise.
+     */
+    public function testEveryTickSweepsTheNotificationOutbox(): void
+    {
+        $template = $this->createNotificationTemplate((int)$this->createUser('maint-sweep')->id);
+        $lost = new NotificationDelivery();
+        $lost->notification_template_id = (int)$template->id;
+        $lost->event = NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN;
+        $lost->setVariableMap([]);
+        $lost->next_attempt_at = time() - 300;
+        $this->assertTrue($lost->save());
+        $maintenance = $this->maintenanceWithoutOtherTasks();
+
+        $first = $maintenance->runIfDue();
+        $second = $maintenance->runIfDue();
+
+        $this->assertSame([MaintenanceService::TASK_NOTIFICATION_SWEEP], $first['ran']);
+        $this->assertSame(['repushed' => 1, 'reset' => 0, 'purged' => 0], $first['results'][MaintenanceService::TASK_NOTIFICATION_SWEEP]);
+        $this->assertSame([(int)$lost->id], $this->notificationQueue->pushedIds());
+        $this->assertSame([], $second['ran'], 'pushed again a minute ago: not yet again');
+        $this->assertContains(['task' => MaintenanceService::TASK_NOTIFICATION_SWEEP, 'reason' => MaintenanceService::SKIP_NONE_FOUND], $second['skipped']);
+        $this->assertSame('notification-sweep', MaintenanceService::TASK_NOTIFICATION_SWEEP);
+    }
+
+    /**
+     * The sweep reads and changes the outbox, which a pending migration may
+     * not have made yet: it waits while migrations are pending, as the
+     * other tasks that change jobs do.
+     */
+    public function testTheNotificationSweepWaitsWhileMigrationsArePending(): void
+    {
+        $sweeps = $this->recordingSweeps();
+
+        $report = $this->maintenanceWithoutOtherTasks(2)->runIfDue();
+
+        $this->assertSame([], $sweeps->calls);
+        $this->assertContains(['task' => MaintenanceService::TASK_NOTIFICATION_SWEEP, 'reason' => MaintenanceService::SKIP_MIGRATIONS_PENDING], $report['skipped']);
+    }
+
+    /**
+     * The sweep gets the deadline the tasks that change jobs share: it starts
+     * no further batch once the tick's budget is used up.
+     */
+    public function testTheNotificationSweepGetsTheSharedDeadline(): void
+    {
+        $sweeps = $this->recordingSweeps();
+        $maintenance = $this->maintenanceWithoutOtherTasks();
+        $maintenance->jobTaskBudgetSeconds = 45.0;
+        $before = microtime(true);
+
+        $maintenance->runIfDue();
+        $maintenance->jobTaskBudgetSeconds = 0;
+        $maintenance->runIfDue();
+
+        $this->assertCount(2, $sweeps->calls);
+        [$now, $deadline] = $sweeps->calls[0];
+        $this->assertEqualsWithDelta(time(), $now, 2);
+        $this->assertNotNull($deadline);
+        $this->assertGreaterThanOrEqual($before + 45.0, $deadline);
+        $this->assertLessThanOrEqual(microtime(true) + 45.0, $deadline);
+        $this->assertNull($sweeps->calls[1][1], 'no budget: no deadline');
+    }
+
+    /**
+     * An error of the sweep is logged by its class only, never its message
+     * (a database error's carries the SQL statement with its values); the
+     * next tick sweeps again.
+     */
+    public function testANotificationSweepErrorIsLoggedWithoutItsMessage(): void
+    {
+        $sweeps = $this->recordingSweeps(new \yii\db\Exception("SQLSTATE[HY000]: UPDATE notification_delivery SET last_error = 'maint-marker-8810'"));
+        $maintenance = $this->maintenanceWithoutOtherTasks();
+
+        $logger = new Logger();
+        $logger->flushInterval = PHP_INT_MAX;
+        $previous = \Yii::getLogger();
+        \Yii::setLogger($logger);
+        try {
+            $report = $maintenance->runIfDue();
+            $maintenance->runIfDue();
+        } finally {
+            \Yii::setLogger($previous);
+        }
+
+        $this->assertContains(['task' => MaintenanceService::TASK_NOTIFICATION_SWEEP, 'reason' => MaintenanceService::SKIP_ERROR], $report['skipped']);
+        $this->assertCount(2, $sweeps->calls, 'retried on the next tick');
+        $warnings = [];
+        foreach ($logger->messages as $message) {
+            $this->assertStringNotContainsString('maint-marker-8810', is_string($message[0]) ? $message[0] : '');
+            if ($message[1] === Logger::LEVEL_WARNING && $message[2] === MaintenanceService::class) {
+                $warnings[] = $message[0];
+            }
+        }
+        $this->assertSame(array_fill(0, 2, sprintf(MaintenanceService::TASK_FAILED, 'the sweep of notification deliveries', \yii\db\Exception::class)), $warnings);
+    }
+
+    /**
+     * A MaintenanceService that runs only the tasks of every tick: no
+     * artifact cleanup, no survey scrub, no sweep of deleted templates;
+     * $pendingMigrations answers the migration check.
+     */
+    private function maintenanceWithoutOtherTasks(int $pendingMigrations = 0): MaintenanceService
+    {
+        $maintenance = new class ($pendingMigrations) extends MaintenanceService {
+            public function __construct(private readonly int $pending)
+            {
+                parent::__construct();
+            }
+
+            protected function pendingMigrations(): PendingMigrations
+            {
+                return new class ($this->pending) extends PendingMigrations {
+                    public function __construct(private readonly int $answer)
+                    {
+                        parent::__construct();
+                    }
+
+                    public function count(): int
+                    {
+                        return $this->answer;
+                    }
+                };
+            }
+        };
+        $maintenance->artifactCleanupIntervalSeconds = 0;
+        $maintenance->surveySecretScrubBudgetSeconds = 0;
+        $maintenance->deletedTemplateSweepIntervalSeconds = 0;
+
+        return $maintenance;
+    }
+
+    /**
+     * The delivery service as a double whose sweep() records its now and
+     * deadline, answers nothing done, or throws $failWith.
+     *
+     * @return NotificationDeliveryService&object{calls: list<array{0: int, 1: float|null}>}
+     */
+    private function recordingSweeps(?\Throwable $failWith = null): NotificationDeliveryService
+    {
+        $double = new class ($failWith) extends NotificationDeliveryService {
+            /** @var list<array{0: int, 1: float|null}> */
+            public array $calls = [];
+
+            public function __construct(private readonly ?\Throwable $failWith)
+            {
+                parent::__construct();
+            }
+
+            public function sweep(int $now, ?float $deadline = null): array
+            {
+                $this->calls[] = [$now, $deadline];
+                if ($this->failWith !== null) {
+                    throw $this->failWith;
+                }
+
+                return ['repushed' => 0, 'reset' => 0, 'purged' => 0];
+            }
+        };
+        \Yii::$app->set('notificationDeliveryService', $double);
+
+        return $double;
     }
 
     // -------------------------------------------------------------------------

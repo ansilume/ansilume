@@ -33,6 +33,9 @@ class NotificationTestSendParityTest extends WebControllerTestCase
     /** The variables whose sample values are the time of the send. */
     private const TIMES = ['timestamp', 'runner.last_seen_at'];
 
+    /** The variables whose sample values are those of each send: its time as a Unix time, and its event ID. */
+    private const PER_SEND = ['occurred_at', 'event_id'];
+
     /** The OpenAPI path of the API's test send. */
     private const TEST_PATH = '/api/v1/notification-templates/{id}/test';
 
@@ -95,6 +98,8 @@ class NotificationTestSendParityTest extends WebControllerTestCase
         foreach (self::TIMES as $name) {
             $this->assertEqualsWithDelta(strtotime($fromWeb['variables'][$name]), strtotime($fromApi['variables'][$name]), 5, "{$name} is the time of each send");
         }
+        $this->assertEqualsWithDelta((int)$fromWeb['variables']['occurred_at'], (int)$fromApi['variables']['occurred_at'], 5, 'occurred_at is the time of each send');
+        $this->assertNotSame($fromWeb['variables']['event_id'], $fromApi['variables']['event_id'], 'each send is an event of its own');
         $this->assertSame($fromWeb['subject'], $fromApi['subject'], 'both render the same subject');
         $this->assertSame($fromWeb['body'], $fromApi['body'], 'both render the same body');
         $this->assertSame([$event, $event], $this->auditedEvents($template), 'both audit entries name the event of the test');
@@ -105,7 +110,9 @@ class NotificationTestSendParityTest extends WebControllerTestCase
 
     /**
      * The spec of the API's test send says that it sends the sample
-     * variables of the web UI's Send Test, for the template's first event.
+     * variables of the web UI's Send Test, for the template's first event
+     * that its channel sends something for, and how it refuses a template
+     * whose channel sends none of its events.
      */
     public function testTheSpecSaysTheApiSendsTheSampleVariablesOfTheWebsSendTest(): void
     {
@@ -117,7 +124,8 @@ class NotificationTestSendParityTest extends WebControllerTestCase
 
         $this->assertStringContainsString("Sends one test message through the template's channel, with the sample variables of the web UI's Send Test:", $text);
         $this->assertStringContainsString('`approval.required_by`, `job.inventory_id` and `job.inventory_name`; `launched_by` is the caller.', $text);
-        $this->assertStringContainsString("The event is the template's first event, else `test`, as in the web UI.", $text);
+        $this->assertStringContainsString("The event is the template's first event that its channel sends something for, else its first event, else `test`, as in the web UI:", $text);
+        $this->assertStringContainsString('502 `Test failed: ' . sprintf(NotificationDispatcher::SENDS_NOTHING, NotificationTemplate::CHANNEL_PAGERDUTY, NotificationTemplate::EVENT_WORKFLOW_STEP_STARTED) . '`', $text);
     }
 
     /**
@@ -138,6 +146,7 @@ class NotificationTestSendParityTest extends WebControllerTestCase
         $template->subject_template = '{{ approval.required_by }} {{ job.inventory_name }}';
         $template->body_template = '{{ event }} ({{ severity }}) of {{ template.name }} in {{ project.name }} by {{ launched_by }}: {{ job.url }}';
         $template->created_by = $userId;
+        $template->delivers_as = $userId;
         $template->save(false);
 
         return $template;
@@ -183,11 +192,11 @@ class NotificationTestSendParityTest extends WebControllerTestCase
 
     /**
      * @param array<string, string> $variables
-     * @return array<string, string> $variables without the times of the send
+     * @return array<string, string> $variables without the times and the event ID of the send
      */
     private function withoutTimes(array $variables): array
     {
-        return array_diff_key($variables, array_flip(self::TIMES));
+        return array_diff_key($variables, array_flip([...self::TIMES, ...self::PER_SEND]));
     }
 
     /**

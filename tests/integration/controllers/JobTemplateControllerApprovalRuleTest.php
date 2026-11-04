@@ -45,8 +45,9 @@ class JobTemplateControllerApprovalRuleTest extends WebControllerTestCase
     {
         parent::setUp();
         $this->swap('lintService', new class extends LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
         $this->admin = $this->createUserWithRole('jt-rule-admin', 'admin');

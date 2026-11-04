@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace app\tests\integration\commands;
 
+use app\commands\E2eLintLockedProjectSeeder;
+use app\commands\E2eProjectDirectory;
 use app\commands\E2eTeardownHelper;
 use app\commands\E2eVaultEdgeSeeder;
+use app\commands\E2eVaultFixtureSeeder;
 use app\commands\E2eVaultScanSeeder;
 use app\models\ApprovalRequest;
 use app\models\ApprovalRule;
@@ -574,6 +577,35 @@ class E2eTeardownHelperTest extends DbTestCase
         $this->assertContains("  Deleted vault edge checkout {$edge}.\n", $this->log);
     }
 
+    /**
+     * The project directories that lint reads in the queue-worker live in
+     * the runtime directory, which the app and the queue-worker both see:
+     * the teardown removes them, e2e-project's, the lint-locked one and the
+     * vault fixture project, and says so.
+     */
+    public function testTeardownAllRemovesTheProjectDirectoriesOfLint(): void
+    {
+        $this->checkoutsInTemporaryRuntime();
+        $directories = [
+            (string)\Yii::getAlias(E2eProjectDirectory::DIRECTORY) => 'e2e project directory',
+            (string)\Yii::getAlias(E2eLintLockedProjectSeeder::DIRECTORY) => 'lint-locked project directory',
+            (string)\Yii::getAlias(E2eVaultFixtureSeeder::DIRECTORY) => 'vault fixture project',
+        ];
+        foreach (array_keys($directories) as $directory) {
+            $this->assertStringStartsWith($this->temporaryRuntime . '/', $directory);
+            FileHelper::createDirectory($directory);
+            file_put_contents($directory . '/site.yml', "---\n");
+        }
+
+        $this->assertSame([], $this->helper()->teardownAll());
+
+        foreach ($directories as $directory => $what) {
+            $this->assertDirectoryDoesNotExist($directory);
+            $this->assertContains("  Deleted {$what} {$directory}.\n", $this->log);
+        }
+        $this->assertSame([], $this->helper()->teardownAll(), 'nothing to remove is no problem');
+    }
+
     public function testTeardownAllReportsWhatEitherPartLeftAndStillRunsTheOther(): void
     {
         // Without the alias the checkout paths cannot be resolved.
@@ -588,12 +620,15 @@ class E2eTeardownHelperTest extends DbTestCase
 
         $this->assertNull(User::findOne($admin->id), 'the database part does what it can');
         $this->assertNotNull(User::findOne($operator->id));
-        $this->assertCount(5, $problems, implode(' | ', $problems));
+        $this->assertCount(8, $problems, implode(' | ', $problems));
         $this->assertMatchesRegularExpression('/^Failed deleting the inventory rows of e2e users: .*1451/', $problems[0]);
         $this->assertMatchesRegularExpression("/^User '{$operator->username}' was not deleted: /", $problems[1]);
         $this->assertSame("1 user row(s) named like '{$this->prefix}' are left.", $problems[2]);
         $this->assertSame('Failed removing the vault scan checkout: Invalid path alias: ' . E2eVaultScanSeeder::CHECKOUT, $problems[3]);
         $this->assertSame('Failed removing the vault edge checkout: Invalid path alias: ' . E2eVaultEdgeSeeder::CHECKOUT, $problems[4]);
+        $this->assertSame('Failed removing the e2e project directory: Invalid path alias: ' . E2eProjectDirectory::DIRECTORY, $problems[5]);
+        $this->assertSame('Failed removing the lint-locked project directory: Invalid path alias: ' . E2eLintLockedProjectSeeder::DIRECTORY, $problems[6]);
+        $this->assertSame('Failed removing the vault fixture project: Invalid path alias: ' . E2eVaultFixtureSeeder::DIRECTORY, $problems[7]);
     }
 
     /**

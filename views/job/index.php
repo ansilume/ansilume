@@ -9,11 +9,14 @@ declare(strict_types=1);
 /** @var app\models\RunnerGroup[] $runnerGroups */
 /** @var app\models\User[] $users */
 /** @var array $statusOptions */
+/** @var array<int, int> $recoveredBy the failures of the page that a later run of their job template recovered => that run (RecoveredFailures) */
 
 use app\helpers\TimeHelper;
 use app\models\Job;
 use app\models\JobHostSummary;
+use app\models\JobSearchForm;
 use app\models\RunnerGroup;
+use app\services\RecoveredFailures;
 use app\services\runstate\Texts;
 use yii\helpers\Html;
 use yii\widgets\LinkPager;
@@ -89,11 +92,41 @@ $this->title = 'Jobs';
                     <option value="0" <?= $searchForm->has_changes === '0' ? 'selected' : '' ?>>No changes</option>
                 </select>
             </div>
+            <?php
+            // Only a value the filter takes is kept: any other is no filter.
+            $recovered = in_array($searchForm->recovered, [JobSearchForm::RECOVERED_YES, JobSearchForm::RECOVERED_NO], true) ? $searchForm->recovered : '';
+            ?>
+            <div class="col-md-2">
+                <label class="form-label small mb-1" for="job-filter-recovered">Recovered</label>
+                <?= Html::dropDownList('recovered', $recovered, [
+                    '' => '— Any —',
+                    JobSearchForm::RECOVERED_YES => 'Recovered failures',
+                    JobSearchForm::RECOVERED_NO => 'Unrecovered failures',
+                ], [
+                    'id' => 'job-filter-recovered',
+                    'class' => 'form-select form-select-sm',
+                    'title' => 'Failed and timed-out jobs that a later run of the same job template recovered, or that none recovered',
+                ]) ?>
+            </div>
             <div class="col-md-1">
                 <button type="submit" class="btn btn-sm btn-primary w-100">Filter</button>
             </div>
         </div>
-        <?php if ($searchForm->status || $searchForm->template_id || $searchForm->launched_by || $searchForm->runner_group_id || $searchForm->date_from || $searchForm->date_to || $searchForm->has_changes !== null && $searchForm->has_changes !== '') : ?>
+        <?php
+        // When the jobs finished (the dashboard's link passes it): the form carries it, as the pages do.
+        $finishedSince = $searchForm->finishedSince();
+        ?>
+        <?php if ($finishedSince !== null) : ?>
+            <?= Html::hiddenInput('finished_since', (string)$finishedSince) ?>
+            <div class="mt-1 small text-body-secondary" id="job-filter-finished-since">
+                <?= Html::encode(sprintf(JobSearchForm::FINISHED_SINCE_NOTE, date(TimeHelper::STAMP_OTHER_DAY, $finishedSince))) ?>
+                <?= Html::a(
+                    Html::encode(JobSearchForm::FINISHED_SINCE_CLEAR),
+                    ['index'] + array_diff_key(\Yii::$app->request->queryParams, ['finished_since' => true, 'page' => true])
+                ) ?>
+            </div>
+        <?php endif; ?>
+        <?php if ($searchForm->status || $searchForm->template_id || $searchForm->launched_by || $searchForm->runner_group_id || $searchForm->date_from || $searchForm->date_to || $searchForm->has_changes !== null && $searchForm->has_changes !== '' || $recovered !== '' || $finishedSince !== null) : ?>
             <div class="mt-1">
                 <?= Html::a('Clear filters', ['index'], ['class' => 'small text-muted']) ?>
             </div>
@@ -126,6 +159,11 @@ $this->title = 'Jobs';
                         ) ?>
                         <?php if ($job->check_mode) : ?>
                             <span class="badge text-bg-info">Dry Run</span>
+                        <?php endif; ?>
+                        <?php if (isset($recoveredBy[(int)$job->id])) : ?>
+                            <span class="small text-body-secondary text-nowrap ms-1" data-recovered-by="<?= (int)$recoveredBy[(int)$job->id] ?>">
+                                <?= sprintf(Html::encode(RecoveredFailures::LIST_NOTE), Html::a('#' . (int)$recoveredBy[(int)$job->id], ['view', 'id' => (int)$recoveredBy[(int)$job->id]])) ?>
+                            </span>
                         <?php endif; ?>
                     </td>
                     <td>

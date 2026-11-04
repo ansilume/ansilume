@@ -85,7 +85,12 @@ class JobPayloadBuilderTest extends TestCase
         }
     }
 
-    public function testJobUrlFallsBackToHostInfoWhenAppBaseUrlIsEmpty(): void
+    /**
+     * Regression: without appBaseUrl (an empty APP_URL=) job.url is a path
+     * without an address, never the host of the request: a runner's report
+     * arrives with Host: nginx (AppLinks).
+     */
+    public function testJobUrlIsAPathWithoutAppBaseUrl(): void
     {
         $origParams = \Yii::$app->params;
         unset(\Yii::$app->params['appBaseUrl']);
@@ -94,14 +99,13 @@ class JobPayloadBuilderTest extends TestCase
         \Yii::$app->set('request', new class extends \yii\web\Request {
             public function getHostInfo(): string
             {
-                return 'https://from-request.example';
+                return 'http://nginx';
             }
         });
 
         try {
             $payload = JobPayloadBuilder::build($this->makeJob(7));
-            $this->assertStringStartsWith('https://from-request.example', $payload['job']['url']);
-            $this->assertStringContainsString('id=7', $payload['job']['url']);
+            $this->assertSame('/job/view?id=7', $payload['job']['url']);
         } finally {
             \Yii::$app->params = $origParams;
             if ($origRequest !== null) {

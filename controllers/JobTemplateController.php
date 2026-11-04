@@ -25,8 +25,8 @@ use app\services\JobTemplateDeletionService;
 use app\services\JobTemplateGate;
 use app\services\JobTemplateInventoryOptions;
 use app\services\JobTemplateRuleAssignment;
-use app\services\LintService;
 use app\services\TriggerTokenService;
+use app\controllers\traits\LintCardTrait;
 use app\controllers\traits\TeamScopingTrait;
 use yii\data\ActiveDataProvider;
 use yii\web\ForbiddenHttpException;
@@ -36,6 +36,7 @@ use yii\web\Response;
 class JobTemplateController extends BaseController
 {
     use TeamScopingTrait;
+    use LintCardTrait;
 
     /** sprintf(): the job ID. */
     public const FLASH_QUEUED = 'Job #%d queued.';
@@ -66,7 +67,7 @@ class JobTemplateController extends BaseController
     protected function accessRules(): array
     {
         return [
-            ['actions' => ['index', 'view'], 'allow' => true, 'roles' => ['job-template.view']],
+            ['actions' => ['index', 'view', 'lint-status'], 'allow' => true, 'roles' => ['job-template.view']],
             ['actions' => ['create', 'clone'], 'allow' => true, 'roles' => ['job-template.create']],
             ['actions' => ['update'], 'allow' => true, 'roles' => ['job-template.update']],
             ['actions' => ['delete'], 'allow' => true, 'roles' => ['job-template.delete']],
@@ -168,7 +169,15 @@ class JobTemplateController extends BaseController
             // a link to them only for users who may open rules.
             'canViewRules' => $this->userCan('approval-rule.view'),
             'inventoryRule' => JobTemplateGate::of($model)->inventoryRule,
-        ]);
+        ] + $this->lintCard($model));
+    }
+
+    /** The template of the lint card's poll (LintCardTrait), with the page's 404 and 403. */
+    protected function findLintRecord(int $id): JobTemplate
+    {
+        $model = $this->findModel($id);
+        $this->requireChildView($model->project_id);
+        return $model;
     }
 
     /**
@@ -221,10 +230,8 @@ class JobTemplateController extends BaseController
             $saved = !$model->hasErrors(JobTemplateRuleAssignment::FIELD)
                 && $this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId());
             if ($saved) {
-                /** @var \app\services\LintService $lintService */
-                $lintService = \Yii::$app->get('lintService');
-                $lintService->runForTemplate($model);
                 $this->session()->setFlash('success', "Template \"{$model->name}\" created.");
+                $this->queueLint($model);
                 return $this->redirect(['view', 'id' => $model->id]);
             }
             $this->refuseLockedSave($model);
@@ -265,10 +272,8 @@ class JobTemplateController extends BaseController
             $saved = !$model->hasErrors(JobTemplateRuleAssignment::FIELD)
                 && $this->credentialService()->saveWithCredentials($model, $credentialIds, $ruleAudit, $this->currentUserId());
             if ($saved) {
-                /** @var \app\services\LintService $lintService */
-                $lintService = \Yii::$app->get('lintService');
-                $lintService->runForTemplate($model);
                 $this->session()->setFlash('success', "Template \"{$model->name}\" updated.");
+                $this->queueLint($model);
                 return $this->redirect(['view', 'id' => $model->id]);
             }
             $this->refuseLockedSave($model);
@@ -403,8 +408,8 @@ class JobTemplateController extends BaseController
      * Duplicates a template 1:1 — all config fields, the full credential
      * attachment list (primary + pivot), and survey_fields — under a new
      * name "<source> (copy)". Stale and security-sensitive fields are
-     * stripped (trigger_token and its trigger_token_created_by,
-     * lint_output/lint_at/lint_exit_code).
+     * stripped (trigger_token and its trigger_token_created_by, and every
+     * lint_* column: the clone queues a lint run of its own).
      *
      * Redirects straight to /job-template/update so the operator can
      * adjust the name and any other fields before committing.
@@ -426,7 +431,8 @@ class JobTemplateController extends BaseController
         $clone = new JobTemplate();
         foreach ($source->attributes as $attr => $value) {
             if (
-                in_array($attr, [
+                str_starts_with($attr, 'lint_')
+                || in_array($attr, [
                 'id',
                 'created_at',
                 'updated_at',
@@ -434,9 +440,6 @@ class JobTemplateController extends BaseController
                 // The clone has no token; a copied generator would also
                 // keep that user from being deleted (foreign key).
                 'trigger_token_created_by',
-                'lint_output',
-                'lint_at',
-                'lint_exit_code',
                 'deleted_at',
                 ], true)
             ) {
@@ -463,6 +466,7 @@ class JobTemplateController extends BaseController
             'success',
             "Cloned \"{$source->name}\" → \"{$clone->name}\". Rename or adjust as needed, then save.",
         );
+        $this->queueLint($clone);
         return $this->redirect(['update', 'id' => $clone->id]);
     }
 

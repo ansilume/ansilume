@@ -1,4 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
+import { expectFlash } from '../../lib/helpers';
+import { expectLintResult, lintQueuedFlash } from '../../lib/lint';
 
 // Regression: "Run Lint" used to fail with
 //   CRITICAL:root:Unhandled exception when retrieving 'DEFAULT_LOCAL_TMP':
@@ -8,7 +10,8 @@ import { test, expect, Page } from '@playwright/test';
 // touch. The fix drops non-php-fpm containers to www-data via gosu, and
 // LintService::ensureCacheDir now falls back to /tmp when the project-
 // local cache dir is unusable. These tests exercise the UI path that
-// surfaced the original symptom.
+// surfaced the original symptom. Run Lint queues the run, which the
+// queue-worker makes; the page reloads itself with the result.
 
 test.describe('Project Sync/Lint', () => {
   test('sync button present on git project detail', async ({ page }) => {
@@ -21,6 +24,7 @@ test.describe('Project Sync/Lint', () => {
   });
 
   test('Run Lint on a manual project with a playbook produces output without EACCES', async ({ page }) => {
+    test.setTimeout(150_000);
     await openE2eProjectDetail(page);
 
     const runLint = page.getByRole('button', { name: /run\s*lint/i }).first();
@@ -28,7 +32,8 @@ test.describe('Project Sync/Lint', () => {
       timeout: 5_000,
     });
     await runLint.click();
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    await expectFlash(page, 'success', lintQueuedFlash('e2e-project'));
+    await expectLintResult(page);
 
     const body = await page.locator('body').innerText();
     expect(body, 'page must not show an uncaught exception').not.toMatch(/Exception|Fatal error|Uncaught/i);
@@ -43,13 +48,15 @@ test.describe('Project Sync/Lint', () => {
     // it. Under the original bug, run #2 blew up with EACCES because the
     // cache dir was inherited from a root-owned worker-created tree. With
     // the fix, both runs use a writable cache dir owned by the current user.
+    test.setTimeout(240_000);
     for (let i = 0; i < 2; i++) {
       await openE2eProjectDetail(page);
 
       const runLint = page.getByRole('button', { name: /run\s*lint/i }).first();
       await expect(runLint, `run #${i + 1}: Run Lint button must be present`).toBeVisible({ timeout: 5_000 });
       await runLint.click();
-      await page.waitForLoadState('networkidle', { timeout: 30_000 });
+      await expectFlash(page, 'success', lintQueuedFlash('e2e-project'));
+      await expectLintResult(page);
 
       const body = await page.locator('body').innerText();
       expect(body, `run #${i + 1} must not raise a permission error`).not.toMatch(

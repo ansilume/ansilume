@@ -87,8 +87,8 @@ class E2eTeardownHelper
     }
 
     /**
-     * The database part, then the fixture checkouts on disk, each regardless
-     * of the other.
+     * The database part, then the fixture checkouts and project directories
+     * on disk, each regardless of the other.
      *
      * @return list<string> what is left behind; empty when everything is gone
      */
@@ -102,9 +102,19 @@ class E2eTeardownHelper
         $this->attempt('removing the vault edge checkout', function (): void {
             (new E2eVaultEdgeSeeder($this->logger))->teardown();
         });
+        $this->attempt('removing the e2e project directory', function (): void {
+            (new E2eProjectDirectory($this->logger))->remove();
+        });
+        $this->attempt('removing the lint-locked project directory', function (): void {
+            (new E2eLintLockedProjectSeeder($this->logger))->teardown();
+        });
+        $this->attempt('removing the vault fixture project', function (): void {
+            (new E2eVaultFixtureSeeder($this->logger))->teardown();
+        });
 
         return array_merge($problems, $this->problems);
     }
+
 
     /**
      * Deletes the E2E rows and users. Touches the database only.

@@ -15,6 +15,7 @@ use app\services\JobLaunchInput;
 use app\services\JobLaunchRejectedException;
 use app\services\JobLaunchService;
 use app\services\NotificationDispatcher;
+use app\services\notification\NotificationOutbox;
 use app\services\ProjectAccessChecker;
 use app\services\WorkflowAccessChecker;
 use app\services\WorkflowAccessDeniedException;
@@ -245,19 +246,24 @@ class TriggerController extends Controller
 
     /**
      * Tell operators about a call with an unknown token. Only the token's
-     * first six characters go into the notification.
+     * first six characters go into the notification. A template gets it at
+     * most once every 5 minutes (NotificationOutbox::THROTTLE_SECONDS), as
+     * its note (trigger.note) says; every further call is in the audit log
+     * as notification.throttled.
      *
      * @param array<string, string> $details
      */
     private function notifyUnknownToken(#[\SensitiveParameter] string $token, array $details): void
     {
         $request = $this->webRequest();
+        $minutes = intdiv(NotificationOutbox::THROTTLE_SECONDS[NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN], 60);
         /** @var NotificationDispatcher $dispatcher */
         $dispatcher = \Yii::$app->get('notificationDispatcher');
         $dispatcher->dispatch(NotificationTemplate::EVENT_WEBHOOK_INVALID_TOKEN, [
             'trigger' => ['token_prefix' => substr($token, 0, 6)] + $details + [
                 'ip' => (string)($request->userIP ?? ''),
                 'user_agent' => substr((string)($request->userAgent ?? ''), 0, 200),
+                'note' => sprintf(NotificationOutbox::THROTTLE_NOTE, $minutes),
             ],
         ]);
     }

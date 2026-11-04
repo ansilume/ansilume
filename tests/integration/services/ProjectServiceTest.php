@@ -78,12 +78,15 @@ class ProjectServiceTest extends DbTestCase
         $this->assertSame('failed', $stored->last_sync_event);
         $this->assertSame([[
             'event' => NotificationTemplate::EVENT_PROJECT_SYNC_FAILED,
-            'payload' => ['project' => [
-                'id' => (string)$project->id,
-                'name' => (string)$project->name,
-                'status' => Project::STATUS_ERROR,
-                'error' => 'This git project has no repository URL.',
-            ]],
+            'payload' => [
+                'project' => [
+                    'id' => (string)$project->id,
+                    'name' => (string)$project->name,
+                    'status' => Project::STATUS_ERROR,
+                    'error' => 'This git project has no repository URL.',
+                ],
+                NotificationDispatcher::REFS => ['project_id' => (int)$project->id],
+            ],
         ]], $this->dispatcher->dispatched);
     }
 

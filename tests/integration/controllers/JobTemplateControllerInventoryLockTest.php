@@ -50,8 +50,9 @@ class JobTemplateControllerInventoryLockTest extends WebControllerTestCase
         parent::setUp();
         $this->replaced['lintService'] = \Yii::$app->getComponents(true)['lintService'] ?? null;
         \Yii::$app->set('lintService', new class () extends LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
         $this->admin = $this->createUserWithRole('wil-admin', 'admin');

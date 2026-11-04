@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\components\GitSyncDiagnostics;
+use app\components\LintState;
 use app\components\SubmittedInteger;
 use app\models\AuditLog;
 use app\models\Project;
 use app\controllers\api\v1\traits\ApiTeamScopingTrait;
+use app\services\LintService;
 use app\services\ProjectService;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
@@ -23,6 +25,10 @@ use yii\web\NotFoundHttpException;
  * PUT    /api/v1/projects/{id}
  * DELETE /api/v1/projects/{id}
  * POST   /api/v1/projects/{id}/sync
+ * POST   /api/v1/projects/{id}/lint
+ *
+ * Every answer has the project's lint state (lint), one project also its
+ * output.
  */
 class ProjectsController extends BaseApiController
 {
@@ -36,6 +42,7 @@ class ProjectsController extends BaseApiController
             'create' => 'project.create',
             'update' => 'project.update',
             'sync' => 'project.update',
+            'lint' => 'project.update',
             'delete' => 'project.delete',
         ];
     }
@@ -80,7 +87,7 @@ class ProjectsController extends BaseApiController
         if ($userId === null || !$this->checker()->canView($userId, $model->id)) {
             return $this->error('Forbidden.', 403);
         }
-        return $this->success($this->serialize($model));
+        return $this->success($this->serialize($model, true));
     }
 
     /**
@@ -122,7 +129,7 @@ class ProjectsController extends BaseApiController
             $svc->queueSync($model);
         }
 
-        return $this->success($this->serialize($model), 201);
+        return $this->success($this->serialize($model, true), 201);
     }
 
     /**
@@ -167,7 +174,7 @@ class ProjectsController extends BaseApiController
             $svc->queueSync($model);
         }
 
-        return $this->success($this->serialize($model));
+        return $this->success($this->serialize($model, true));
     }
 
     /**
@@ -239,6 +246,46 @@ class ProjectsController extends BaseApiController
     }
 
     /**
+     * POST /api/v1/projects/{id}/lint: queues a lint run of the whole project
+     * (LintService::queueForProject()), which the queue-worker makes, as Run
+     * Lint on the project's page: project.update and operator access to the
+     * project, and the same audit entry, project.linted, with source api.
+     * Answers 202 with the project's lint state, whose queued_at says when
+     * the run was queued, or 503 when the queue could not be reached
+     * (LintService::NOT_QUEUED).
+     *
+     * @return array{data: mixed}|array{error: array{message: string}}
+     */
+    public function actionLint(int $id): array
+    {
+        if (!$this->userCan('project.update')) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        $model = $this->findModel($id);
+        $userId = $this->currentUserId();
+        if ($userId === null || !$this->checker()->canOperate($userId, $model->id)) {
+            return $this->error('Forbidden.', 403);
+        }
+
+        /** @var LintService $lint */
+        $lint = \Yii::$app->get('lintService');
+        $queued = $lint->queueForProject($model);
+        \Yii::$app->get('auditService')->log(
+            AuditLog::ACTION_PROJECT_LINTED,
+            'project',
+            $model->id,
+            null,
+            ['name' => $model->name, 'source' => 'api']
+        );
+        if (!$queued) {
+            return $this->error(LintService::NOT_QUEUED, 503);
+        }
+
+        return $this->success(LintState::of($model)->toApi(true), 202);
+    }
+
+    /**
      * Sets the fields $body holds. scm_credential_id is read as the model's
      * integer rule reads it (SubmittedInteger), never with an (int) cast,
      * which fails on PHP 8.5 for a JSON number beyond the int range: a value
@@ -270,9 +317,12 @@ class ProjectsController extends BaseApiController
     }
 
     /**
-     * @return array{id: int, name: string, description: string|null, scm_type: string, scm_url: string|null, scm_branch: string, status: string, last_synced_at: int|null, created_at: int, vault_password_source: string, vault_scanned_at: int|null}
+     * lint is the project's lint state (LintState::toApi()), with its output
+     * for one project ($withLintOutput), not in lists.
+     *
+     * @return array{id: int, name: string, description: string|null, scm_type: string, scm_url: string|null, scm_branch: string, status: string, last_synced_at: int|null, created_at: int, vault_password_source: string, vault_scanned_at: int|null, lint: array{status: string|null, exit_code: int|null, checked_at: int|null, queued_at: int|null, output?: string|null}}
      */
-    private function serialize(Project $p): array
+    private function serialize(Project $p, bool $withLintOutput = false): array
     {
         return [
             'id' => $p->id,
@@ -286,6 +336,7 @@ class ProjectsController extends BaseApiController
             'created_at' => $p->created_at,
             'vault_password_source' => (string)$p->vault_password_source,
             'vault_scanned_at' => $p->vault_scanned_at === null ? null : (int)$p->vault_scanned_at,
+            'lint' => LintState::of($p)->toApi($withLintOutput),
         ];
     }
 

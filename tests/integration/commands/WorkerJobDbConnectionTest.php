@@ -8,7 +8,9 @@ use app\commands\WorkerController;
 use app\components\AllowlistQueueSerializer;
 use app\components\ExceptionLogText;
 use app\components\WorkerHeartbeat;
+use app\jobs\DeliverNotificationJob;
 use app\jobs\SyncProjectJob;
+use app\tests\integration\RestoresComponents;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use yii\base\Event;
@@ -20,10 +22,14 @@ use yii\queue\Queue;
 use yii\queue\redis\Queue as RedisQueue;
 
 /**
- * The queue worker (worker/start) runs each queue job on a database
- * connection of its own: its events (WorkerController::attachWorkerEvents())
- * close the application's connection before and after each job, so that it
- * holds none while the queue sits idle.
+ * The queue workers run each queue job on a database connection of its own:
+ * the queue-worker (worker/start) and the notification-worker (worker/start
+ * --queue=notificationQueue) alike. Their events
+ * (WorkerController::attachWorkerEvents()) close the application's
+ * connection before and after each job, so that a worker holds none while
+ * its queue sits idle. Each case runs on the queue component that a worker
+ * started with its --queue runs (WorkerController::queueComponent()), which
+ * the test makes a queue of its own while it runs.
  *
  * Regression: the worker kept the connection that its first job opened for
  * its whole life. Once the queue had sat idle longer than the database's
@@ -45,9 +51,12 @@ use yii\queue\redis\Queue as RedisQueue;
  * back as its definition (RestoresComponents), it was a new connection, while
  * the authManager kept writing through the old one: the roles and assignments
  * of every later test stayed in the test database (RestoresComponentsTest).
+ * The queue components go back as their definitions (RestoresComponents).
  */
 final class WorkerJobDbConnectionTest extends TestCase
 {
+    use RestoresComponents;
+
     /** Seconds a probe's connection may sit idle before the server closes it. */
     private const WAIT_TIMEOUT = 1;
 
@@ -57,7 +66,8 @@ final class WorkerJobDbConnectionTest extends TestCase
     /** Seconds the server may take to drop a connection that the worker closed. */
     private const QUIT_DEADLINE = 5;
 
-    private ?RedisQueue $queue = null;
+    /** @var array<string, RedisQueue> the queues of the test, by the component ID a worker runs them as */
+    private array $queues = [];
 
     /** The application's database connection before the test, which tearDown() puts back. */
     private ?Connection $applicationDb = null;
@@ -84,23 +94,6 @@ final class WorkerJobDbConnectionTest extends TestCase
         $this->observer = self::connection();
         ConnectionProbeJob::$connectionIds = [];
 
-        $this->queue = new RedisQueue([
-            'redis' => \Yii::$app->get('redis'),
-            'channel' => 'ansilume-test-worker-db-' . bin2hex(random_bytes(6)),
-            'serializer' => [
-                'class' => AllowlistQueueSerializer::class,
-                'allowedClasses' => [...AllowlistQueueSerializer::ALLOWED_CLASSES, ConnectionProbeJob::class],
-            ],
-            // SignalLoop without exit signals: no signal handlers in the test process.
-            'loopConfig' => ['class' => SignalLoop::class, 'exitSignals' => []],
-        ]);
-        $this->queue->on(Queue::EVENT_AFTER_EXEC, function (): void {
-            $this->succeeded++;
-        });
-        $this->queue->on(Queue::EVENT_AFTER_ERROR, function (ExecEvent $event): void {
-            $this->errors[] = $event->error ?? new \LogicException('An error event without its error.');
-        });
-
         $app = \Yii::$app;
         $this->assertNotNull($app);
         (new WorkerController('worker', $app))->attachWorkerEvents(self::silentHeartbeat());
@@ -108,25 +101,44 @@ final class WorkerJobDbConnectionTest extends TestCase
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         if ($this->applicationDb !== null) {
             \Yii::$app->set('db', $this->applicationDb);
         }
         $this->db?->close();
         $this->observer?->close();
-        $this->queue?->clear();
+        foreach ($this->queues as $queue) {
+            $queue->clear();
+        }
         Event::offAll();
         parent::tearDown();
     }
 
     /**
-     * @return array<string, array{0: JobInterface}>
+     * The queue component each worker runs, by its worker.
+     *
+     * @return array<string, array{0: string}>
+     */
+    public static function queueProvider(): array
+    {
+        return [
+            'the queue-worker (worker/start)' => ['queue'],
+            'the notification-worker (worker/start --queue=notificationQueue)' => ['notificationQueue'],
+        ];
+    }
+
+    /**
+     * @return array<string, array{0: string, 1: JobInterface}>
      */
     public static function jobAfterTheIdleTimeProvider(): array
     {
         return [
-            'a job that queries the database' => [new ConnectionProbeJob()],
+            'the queue-worker: a job that queries the database' => ['queue', new ConnectionProbeJob()],
             // A project that does not exist: the job reads it, logs that it is not there and ends.
-            'a project sync, the job of the queue' => [new SyncProjectJob(['projectId' => 0])],
+            'the queue-worker: a project sync, the job of its queue' => ['queue', new SyncProjectJob(['projectId' => 0])],
+            'the notification-worker: a job that queries the database' => ['notificationQueue', new ConnectionProbeJob()],
+            // A delivery that does not exist: the job's claim updates no row and it ends.
+            'the notification-worker: a notification delivery, the job of its queue' => ['notificationQueue', new DeliverNotificationJob(['deliveryId' => 0])],
         ];
     }
 
@@ -137,14 +149,14 @@ final class WorkerJobDbConnectionTest extends TestCase
      * 4031. It runs on a new connection now and succeeds.
      */
     #[DataProvider('jobAfterTheIdleTimeProvider')]
-    public function testRegressionAJobSucceedsAfterTheDatabaseClosedTheIdleConnection(JobInterface $job): void
+    public function testRegressionAJobSucceedsAfterTheDatabaseClosedTheIdleConnection(string $queue, JobInterface $job): void
     {
-        $this->runJob(new ConnectionProbeJob(['sessionWaitTimeout' => self::WAIT_TIMEOUT]));
+        $this->runJob($queue, new ConnectionProbeJob(['sessionWaitTimeout' => self::WAIT_TIMEOUT]));
         $this->assertCount(1, ConnectionProbeJob::$connectionIds);
         $first = ConnectionProbeJob::$connectionIds[0];
         $this->waitUntilTheServerDropped($first, self::CLOSE_DEADLINE);
 
-        $this->runJob($job);
+        $this->runJob($queue, $job);
 
         $this->assertSame([], $this->errorTexts(), 'The job after the idle time failed.');
         $this->assertSame(2, $this->succeeded);
@@ -155,14 +167,15 @@ final class WorkerJobDbConnectionTest extends TestCase
      * Before each job too: a connection that was opened outside a job and
      * that the database closed since is not the one the next job runs on.
      */
-    public function testAJobRunsOnANewConnectionWhenTheOneOpenedBeforeItWasClosed(): void
+    #[DataProvider('queueProvider')]
+    public function testAJobRunsOnANewConnectionWhenTheOneOpenedBeforeItWasClosed(string $queue): void
     {
         $db = \Yii::$app->getDb();
         $db->createCommand('SET SESSION wait_timeout = ' . self::WAIT_TIMEOUT)->execute();
         $before = (int)$db->createCommand('SELECT CONNECTION_ID()')->queryScalar();
         $this->waitUntilTheServerDropped($before, self::CLOSE_DEADLINE);
 
-        $this->runJob(new ConnectionProbeJob());
+        $this->runJob($queue, new ConnectionProbeJob());
 
         $this->assertSame([], $this->errorTexts(), 'The job failed on the connection that was opened before it.');
         $this->assertSame(1, $this->succeeded);
@@ -171,14 +184,17 @@ final class WorkerJobDbConnectionTest extends TestCase
     }
 
     /**
-     * @return array<string, array{0: bool}>
+     * @return array<string, array{0: string, 1: bool}>
      */
     public static function outcomeProvider(): array
     {
-        return [
-            'after a job that succeeded' => [false],
-            'after a job that failed' => [true],
-        ];
+        $cases = [];
+        foreach (self::queueProvider() as $worker => [$queue]) {
+            $cases[$worker . ', after a job that succeeded'] = [$queue, false];
+            $cases[$worker . ', after a job that failed'] = [$queue, true];
+        }
+
+        return $cases;
     }
 
     /**
@@ -188,9 +204,9 @@ final class WorkerJobDbConnectionTest extends TestCase
      * of its own would have closed yet.
      */
     #[DataProvider('outcomeProvider')]
-    public function testTheWorkerHoldsNoConnectionAfterAJob(bool $fails): void
+    public function testTheWorkerHoldsNoConnectionAfterAJob(string $queue, bool $fails): void
     {
-        $this->runJob(new ConnectionProbeJob(['fail' => $fails]));
+        $this->runJob($queue, new ConnectionProbeJob(['fail' => $fails]));
 
         $this->assertSame($fails ? [ConnectionProbeJob::FAILED] : [], array_map(static fn (\Throwable $e): string => $e->getMessage(), $this->errors));
         $this->assertSame($fails ? 0 : 1, $this->succeeded);
@@ -200,14 +216,50 @@ final class WorkerJobDbConnectionTest extends TestCase
     }
 
     /**
-     * Pushes $job and runs the worker loop until the queue is empty again.
+     * Pushes $job to the queue that a worker started with --queue=$id runs,
+     * and runs the worker loop until that queue is empty again.
      */
-    private function runJob(JobInterface $job): void
+    private function runJob(string $id, JobInterface $job): void
     {
-        $queue = $this->queue;
-        $this->assertNotNull($queue);
+        $queue = $this->queue($id);
         $queue->push($job);
         $queue->run(false);
+    }
+
+    /**
+     * The queue that a worker started with --queue=$id runs, which the
+     * component $id is while the test runs: on a Redis channel of its own,
+     * with the probe job allowed.
+     */
+    private function queue(string $id): RedisQueue
+    {
+        if (isset($this->queues[$id])) {
+            return $this->queues[$id];
+        }
+        $queue = new RedisQueue([
+            'redis' => \Yii::$app->get('redis'),
+            'channel' => 'ansilume-test-worker-db-' . bin2hex(random_bytes(6)),
+            'serializer' => [
+                'class' => AllowlistQueueSerializer::class,
+                'allowedClasses' => [...AllowlistQueueSerializer::ALLOWED_CLASSES, ConnectionProbeJob::class],
+            ],
+            // SignalLoop without exit signals: no signal handlers in the test process.
+            'loopConfig' => ['class' => SignalLoop::class, 'exitSignals' => []],
+        ]);
+        $queue->on(Queue::EVENT_AFTER_EXEC, function (): void {
+            $this->succeeded++;
+        });
+        $queue->on(Queue::EVENT_AFTER_ERROR, function (ExecEvent $event): void {
+            $this->errors[] = $event->error ?? new \LogicException('An error event without its error.');
+        });
+        $this->queues[$id] = $queue;
+        $this->swapComponent($id, $queue);
+
+        $app = \Yii::$app;
+        $this->assertNotNull($app);
+        $this->assertSame($queue, (new WorkerController('worker', $app, ['queue' => $id]))->queueComponent(), "worker/start --queue={$id} runs it");
+
+        return $queue;
     }
 
     /**

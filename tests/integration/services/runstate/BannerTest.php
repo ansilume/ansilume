@@ -251,6 +251,20 @@ class BannerTest extends WebControllerTestCase
         ], $banner);
     }
 
+    /**
+     * The title of each wait, which the notifications of a run say too
+     * (workflow.reason, RunContext): the banner's own words.
+     */
+    public function testTheTitleOfEachWaitIsWhatNotificationsSay(): void
+    {
+        $this->assertSame('Waiting for approval at step "approve".', Banner::title(Display::WAITING_FOR_APPROVAL, WorkflowStep::TYPE_APPROVAL, 'approve', 12));
+        $this->assertSame('Job #34 of step "deploy" waits for approval.', Banner::title(Display::WAITING_FOR_APPROVAL, WorkflowStep::TYPE_JOB, 'deploy', 34));
+        $this->assertSame('Paused at step "hold" until someone resumes the run.', Banner::title(Display::WAITING_FOR_RESUME, WorkflowStep::TYPE_PAUSE, 'hold', null));
+        $this->assertSame('Job #56 of step "build" is queued: it waits for a runner.', Banner::title(Display::WAITING_FOR_RUNNER, WorkflowStep::TYPE_JOB, 'build', 56));
+        $this->assertNull(Banner::title(null, WorkflowStep::TYPE_JOB, 'build', 56), 'a step that waits for nothing');
+        $this->assertNull(Banner::title('something else', WorkflowStep::TYPE_JOB, 'build', 56));
+    }
+
     public function testARunThatWaitsForNothingHasNoBanner(): void
     {
         $running = $this->step(WorkflowStep::TYPE_JOB, 'build', null, jobId: 56, waitingSince: null);

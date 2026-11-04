@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/PHP-8.5-777BB4?logo=php&logoColor=white" alt="PHP 8.5">
   <img src="https://img.shields.io/badge/Yii2-Framework-007BEE?logo=yii&logoColor=white" alt="Yii2">
   <img src="https://img.shields.io/badge/MariaDB-10.11-003545?logo=mariadb&logoColor=white" alt="MariaDB">
-  <img src="https://img.shields.io/badge/Redis-7.2-DC382D?logo=redis&logoColor=white" alt="Redis">
+  <img src="https://img.shields.io/badge/Redis-8.10-DC382D?logo=redis&logoColor=white" alt="Redis">
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker">
   <br>
   <a href="https://scrutinizer-ci.com/g/ansilume/ansilume/?branch=main"><img src="https://scrutinizer-ci.com/g/ansilume/ansilume/badges/quality-score.png?b=main" alt="Scrutinizer Code Quality"></a>
@@ -59,10 +59,11 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 - **Pull-based runners** — lightweight agents that self-register with the bootstrap secret, or start with a token an admin hands out; isolate execution from the control plane
 - **Runner groups** — logical grouping of runners, each authenticating with a token of its own, with health tracking and a selftest playbook
 - **Cancel & timeout** — in-flight jobs can be canceled; configurable per-template execution timeouts
+- **Dashboard of what needs attention** — running jobs and workflows, pending approvals, upcoming schedules, and the failed jobs of the last 24 hours that no later run of the same job template recovered; a failure that a later successful run (no dry run) put right is counted in a muted line instead, and its job page, the job list (filter **Recovered**) and the API (`recovered_by_job_id`) name the run that recovered it
 
 ### Inventory, projects & credentials
 - **Git-backed projects** — sync playbooks from remote repositories, or manage content manually
-- **Automatic ansible-lint** — lint results recorded on every project sync
+- **ansible-lint in the background** — every project sync, every save of a job template and **Run Lint** queue a lint run for the queue-worker; the pages of projects and templates and the API (`lint`) show whether one is queued, its result and the previous one
 - **Inventories** — static, file-based, and dynamic inventories parsed through real `ansible-inventory`; an admin can give one an approval rule, and every launch against it then waits for approval
 - **Credentials** — SSH key, username/password, vault secret, and token types, all AES-256-CBC encrypted at rest
 - **SSH key tools** — in-UI ed25519 key generation with algorithm/strength analysis for uploaded keys
@@ -70,10 +71,10 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 ### Automation & integrations
 - **Scheduled jobs** — cron-based scheduling with next/last-run tracking and catch-up protection
 - **Inbound webhooks** — launch job templates and workflows from external systems with a per-template trigger token, sent in the `X-Trigger-Token` header and managed in the UI or the API; a trigger runs as the user who generated its token and is refused once that user may no longer launch
-- **Notifications v2** — email, Slack, Webhook, Telegram, and PagerDuty channels with a shared event catalog
+- **Notifications** — email, Slack, Microsoft Teams, webhook, Telegram, PagerDuty and Mattermost, for jobs, workflow runs and each of their steps (started, succeeded, failed, waiting for an approval or a resume), approvals, schedules, runners and project syncs; a template can be limited to some workflows and to the failures, waits and end of a run, and delivers only what the user it delivers as may see; the notification-worker sends every notification from a queue of its own, with retries; Mattermost keeps one status post per workflow run, edited as the run moves on, with the details as replies in its thread; webhooks can be signed (HMAC-SHA256) and send a documented event payload; channels of your own by configuration ([guide](docs/notifications.md))
 - **REST API (v1)** — every feature exposed as an API; the UI is just one client
 - **OpenAPI 3.1 spec** — canonical `web/openapi.yaml` + bundled Swagger UI at `:8088` for interactive exploration
-- **Analytics dashboard** — job, workflow, approval, and runner statistics with time-window filters
+- **Analytics dashboard** — job, workflow, approval, and runner statistics with time-window filters; MTTR runs from a failure to the first later successful run of the same job template that was no dry run
 
 ### Access control & auditability
 - **Custom role management** — built-in `viewer` / `operator` / `admin` plus user-defined roles with domain-grouped permission editor
@@ -121,8 +122,8 @@ Think of it as a lightweight, self-hosted alternative to AWX or Semaphore — de
 Browser ──→ Nginx ──→ PHP-FPM (Yii2) ──→ MariaDB
               ▲                     └──→ Redis (queue / cache / sessions)
               │                                ▲
-              │ runner API (HTTP)              │
-              │                          Queue Worker (project sync, lint)
+              │ runner API (HTTP)              ├── Queue Worker (project sync, lint)
+              │                                └── Notification Worker (notifications, retries) ──→ Mattermost, Slack, webhooks, …
      Runner Agent(s) ──→ ansible-playbook
      (own network, pull jobs)
 ```
@@ -144,7 +145,7 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 
 - Credentials are AES-256-CBC encrypted at rest — raw secrets never appear in logs or HTML
 - Answers to password survey fields are encrypted with the same key — pages, the API and the stored command line show `$encrypted$`; re-launches and schedules reuse them without showing them
-- Channel secrets of notification templates (bot tokens, webhook URLs and header values, routing keys) show as `$encrypted$` on every page and in the API, and the signing secrets of outbound webhooks on their edit form; a save that sends `$encrypted$` back keeps the stored value. A project's page, its sync output and errors, the logs and the notifications show its repository URL without the credentials in it, and so does the API to those who may not update the project
+- Channel secrets of notification templates (bot tokens, webhook URLs and header values, routing keys) show as `$encrypted$` on every page and in the API, and the signing secrets of outbound webhooks on their edit form; a save that sends `$encrypted$` back keeps the stored value, and a bot token or a webhook's signing secret only while the address it goes to keeps its own. A project's page, its sync output and errors, the logs and the notifications show its repository URL without the credentials in it, and so does the API to those who may not update the project
 - Runners get password answers in a `0600` file instead of on the command line and mask them in job output (best effort); older runners get them inline with the verbosity capped so that Ansible does not print them. Each job's answers file, task records and static inventory live in a directory of the job that only the runner's user can open, removed when the job ends
 - TOTP secrets are AES-256-CBC encrypted at rest — the same key used for credentials
 - RBAC roles: `viewer` (read-only) · `operator` (launch + manage) · `admin` (full access) — plus custom roles; approval rules are created, changed and assigned by admins only (`approval-rule.update`), and only admins change what a job template with an approval rule runs, and the hosts of a static inventory with one or the source of a file or dynamic one; only admins register, move and delete runners, regenerate runner tokens and create or change runner groups (`runner-group.create`, `runner-group.update`), as a runner receives the decrypted credentials of every job of its group
@@ -161,6 +162,7 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 - Trigger tokens travel in a request header; tokens in URLs, still accepted but deprecated, are masked in the nginx access log
 - The console log no longer records every SQL statement with its values, and log lines carry no session ID; the application log names database errors, also those that nothing catches and those that the framework logs itself, by their class, SQLSTATE and driver error code, never with their statement; the stack traces of errors leave out the arguments of calls (`#[\SensitiveParameter]`, and `zend.exception_ignore_args = On` in the images); `bin/diagnose` redacts secrets before printing
 - Artifact collection skips symlinks to prevent path traversal and file exfiltration
+- Notification channels and outbound webhooks send only to `http` and `https` addresses (Mattermost: `https`), follow no redirect, always verify TLS, and their errors never hold the endpoint's answer, its URL or a header; a notification template delivers only what the user it delivers as may see
 - Fully offline capable — no CDN dependencies, no external asset loading; safe to deploy in air-gapped, classified, or compliance-restricted environments
 
 ---
@@ -174,6 +176,7 @@ Runners are pull-based agents that poll the server for queued jobs and self-regi
 | [Runners](docs/runners.md) | Runner setup, groups, selftest |
 | [Credentials](docs/credentials.md) | Credential types, attaching credentials to a job template, token env vars, vault passwords and vault files, security model, password survey answers, secrets in inventories and extra vars |
 | [Workflows](docs/workflows.md) | Building workflows, positions and branches, editing steps, waiting runs and approvals, API |
+| [Notifications](docs/notifications.md) | Channels, events and variables, which events a template gets (level, workflows, delivers as), delivery and retries, the notification-worker, the Mattermost channel, the signed webhook, channels of your own, API |
 | [Artifacts](docs/artifacts.md) | Producing artifacts in playbooks, where they appear, retention |
 | [LDAP / Active Directory](docs/ldap.md) | Optional directory login: the container images that support it, how it works, configuration for Active Directory and OpenLDAP, console commands, REST API, account lifecycle, security model |
 | [Deployment](docs/deployment.md) | Production Ansible role |

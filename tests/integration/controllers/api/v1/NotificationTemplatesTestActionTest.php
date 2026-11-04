@@ -107,6 +107,28 @@ class NotificationTemplatesTestActionTest extends WebControllerTestCase
         $this->assertSame(502, \Yii::$app->response->statusCode);
     }
 
+    /**
+     * Regression: a test of a PagerDuty template whose events are only the
+     * info events of a step answered {sent: true}, audited as dispatched,
+     * although PagerDuty sends nothing for them. It answers 502 with why
+     * now, audited as failed, and nothing is sent.
+     */
+    public function testRegressionATestOfEventsPagerDutySendsNothingForAnsweredSent(): void
+    {
+        $nt = $this->createNotificationTemplate($this->authenticateAsOperator(), NotificationTemplate::CHANNEL_PAGERDUTY, 'workflow.step_started,workflow.step_succeeded', '{"routing_key":"R0UT1NGKEY-test"}');
+        \Yii::$app->set('notificationDispatcher', new NotificationDispatcher());
+
+        $result = $this->runTest((int)$nt->id);
+
+        $this->assertSame(
+            ['error' => ['message' => 'Test failed: ' . sprintf(NotificationDispatcher::SENDS_NOTHING, NotificationTemplate::CHANNEL_PAGERDUTY, NotificationTemplate::EVENT_WORKFLOW_STEP_STARTED)]],
+            $result
+        );
+        $this->assertSame(502, \Yii::$app->response->statusCode);
+        $this->assertSame(0, $this->auditCount(AuditLog::ACTION_NOTIFICATION_DISPATCHED, $nt));
+        $this->assertSame(1, $this->auditCount(AuditLog::ACTION_NOTIFICATION_FAILED, $nt));
+    }
+
     public function testATemplateWithAnUnknownChannelAnswers502(): void
     {
         $nt = $this->templateOf($this->authenticateAsOperator());

@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace app\tests\unit\services\notification;
 
+use app\models\Job;
 use app\models\NotificationTemplate;
 use app\services\notification\TeamsChannel;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use yii\db\BaseActiveRecord;
 
@@ -38,6 +40,49 @@ class TeamsChannelTest extends TestCase
         return $nt;
     }
 
+    /**
+     * The colour of the card for each status a job ends or runs with, and
+     * grey for any other text.
+     *
+     * @return array<string, array{0: string, 1: string}>
+     */
+    public static function jobStatusColours(): array
+    {
+        return [
+            'succeeded' => [Job::STATUS_SUCCEEDED, '2DC72D'],
+            'failed' => [Job::STATUS_FAILED, 'FF0000'],
+            'timed out' => [Job::STATUS_TIMED_OUT, 'FF0000'],
+            'running' => [Job::STATUS_RUNNING, '0078D7'],
+            'canceled' => [Job::STATUS_CANCELED, '808080'],
+            'no job status' => ['successful', '808080'],
+        ];
+    }
+
+    /**
+     * Regression: the card of a succeeded job was grey. The colour was
+     * green only for "successful", a status no job has (Job::statuses()).
+     */
+    #[DataProvider('jobStatusColours')]
+    public function testRegressionTheCardTakesTheColourOfTheJobStatus(string $status, string $colour): void
+    {
+        $nt = $this->makeTemplate('{"webhook_url": "https://outlook.office.com/test"}');
+        $channel = new class extends TeamsChannel {
+            public ?string $capturedPayload = null;
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedPayload = $payload;
+                return '1';
+            }
+        };
+
+        $channel->send($nt, 'Job', 'Body', ['job.status' => $status]);
+
+        $decoded = json_decode((string)$channel->capturedPayload, true);
+        $this->assertIsArray($decoded);
+        $this->assertSame($colour, $decoded['themeColor']);
+    }
+
     public function testEmptyWebhookUrlDoesNotSend(): void
     {
         $nt = $this->makeTemplate('{}');
@@ -61,7 +106,7 @@ class TeamsChannelTest extends TestCase
             }
         };
 
-        $channel->send($nt, 'Job OK', 'All good', ['job.status' => 'successful', 'job.url' => 'http://test']);
+        $channel->send($nt, 'Job OK', 'All good', ['job.status' => Job::STATUS_SUCCEEDED, 'job.url' => 'http://test']);
 
         $decoded = json_decode((string)$channel->capturedPayload, true);
         $this->assertSame('MessageCard', $decoded['@type']);
@@ -142,7 +187,7 @@ class TeamsChannelTest extends TestCase
             }
         };
 
-        $channel->send($nt, 'Job Done', 'OK', ['job.status' => 'successful']);
+        $channel->send($nt, 'Job Done', 'OK', ['job.status' => Job::STATUS_SUCCEEDED]);
         $decoded = json_decode((string)$channel->capturedPayload, true);
         $this->assertArrayNotHasKey('potentialAction', $decoded);
     }
@@ -160,7 +205,7 @@ class TeamsChannelTest extends TestCase
             $nt = $this->makeTemplate(json_encode(['webhook_url' => $baseUrl]) ?: '{}');
             $channel = new TeamsChannel();
             // No exception = success path covered (post() returns normally, info log written).
-            $channel->send($nt, 'Hello', 'World', ['job.status' => 'successful']);
+            $channel->send($nt, 'Hello', 'World', ['job.status' => Job::STATUS_SUCCEEDED]);
             $this->assertTrue(true);
         } finally {
             $server->stop();
@@ -175,7 +220,7 @@ class TeamsChannelTest extends TestCase
             $nt = $this->makeTemplate(json_encode(['webhook_url' => $baseUrl]) ?: '{}');
             $channel = new TeamsChannel();
             $this->expectException(\RuntimeException::class);
-            $this->expectExceptionMessage('TeamsChannel: HTTP 500');
+            $this->expectExceptionMessage('TeamsChannel: HTTP 500.');
             $channel->send($nt, 'Hello', 'World', ['job.status' => 'failed']);
         } finally {
             $server->stop();
@@ -183,8 +228,8 @@ class TeamsChannelTest extends TestCase
     }
 
     /**
-     * curl_init() gives false for a URL longer than libcurl takes
-     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes).
+     * curl does not take a URL longer than libcurl takes
+     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes): curl error 43.
      */
     public function testAWebhookUrlThatCurlDoesNotTakeIsAnError(): void
     {
@@ -192,7 +237,7 @@ class TeamsChannelTest extends TestCase
         $nt = $this->makeTemplate((string)json_encode(['webhook_url' => $url]));
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('TeamsChannel: failed to init curl');
+        $this->expectExceptionMessage('TeamsChannel: The request could not be made (curl error 43).');
         (new TeamsChannel())->send($nt, 'Hello', 'World', ['job.status' => 'failed']);
     }
 }

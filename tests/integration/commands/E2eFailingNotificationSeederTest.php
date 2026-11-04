@@ -48,6 +48,7 @@ class E2eFailingNotificationSeederTest extends DbTestCase
         }
         $this->assertTrue($template->validate(), json_encode($template->errors) ?: '');
         $this->assertSame($this->adminId, (int)$template->created_by);
+        $this->assertSame($this->adminId, (int)$template->delivers_as, 'it delivers as e2e-admin, who created it');
         $this->assertSame([
             sprintf(
                 "  Restored e2e-failing-notification (ID %d): a webhook to http://127.0.0.1:1/e2e-failing-notification, which refuses every delivery.\n",
@@ -71,7 +72,7 @@ class E2eFailingNotificationSeederTest extends DbTestCase
 
         $error = $dispatcher->sendSingle($template, ['event' => 'test'], NotificationTemplate::EVENT_RUNNER_RECOVERED);
 
-        $this->assertSame('WebhookChannel: HTTP 0 — ', $error);
+        $this->assertSame('WebhookChannel: Could not connect (curl error 7).', $error);
         $this->assertLessThan(5.0, microtime(true) - $started, 'refused at once, no timeout');
         $audit = AuditLog::find()
             ->where(['action' => AuditLog::ACTION_NOTIFICATION_FAILED, 'object_type' => 'notification_template', 'object_id' => $template->id])

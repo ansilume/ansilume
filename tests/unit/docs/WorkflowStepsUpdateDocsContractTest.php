@@ -29,6 +29,8 @@ use app\models\Webhook;
 use app\models\WorkflowStep;
 use app\services\ApprovalDecisionRefusedException;
 use app\services\ApprovalRuleAssignmentPolicy;
+use app\services\notification\ChannelDefinition;
+use app\services\notification\ChannelRegistry;
 use app\services\notification\WebhookChannel;
 use app\services\ProjectService;
 use app\services\ProjectSyncProcessRunner;
@@ -111,6 +113,23 @@ class WorkflowStepsUpdateDocsContractTest extends TestCase
     private const VOTE_ENTRY = '## Approve or Reject is refused, or missing';
 
     private const SECRETS_ENTRY = '## Saving a notification template or a webhook: a secret has no stored value';
+
+    /** The notification channels of the release the section is of (2.11.0): those whose secrets its items name. */
+    private const RELEASE_CHANNELS = [
+        NotificationTemplate::CHANNEL_EMAIL,
+        NotificationTemplate::CHANNEL_SLACK,
+        NotificationTemplate::CHANNEL_TEAMS,
+        NotificationTemplate::CHANNEL_WEBHOOK,
+        NotificationTemplate::CHANNEL_TELEGRAM,
+        NotificationTemplate::CHANNEL_PAGERDUTY,
+    ];
+
+    /**
+     * The secret keys that channels of the release (RELEASE_CHANNELS) got
+     * in a later release, which the notes of that release name: the
+     * signing secret of the signed webhook.
+     */
+    private const LATER_SECRET_KEYS = ['signing_secret'];
 
     /**
      * The labels of 2.10.1 and the labels that replace them, as the section's
@@ -598,8 +617,12 @@ class WorkflowStepsUpdateDocsContractTest extends TestCase
         $api = $this->between($this->flat(self::UPDATING, self::UPDATE_SECTION), '**API contract change:**', '**Database and deployment.**');
         $placeholder = SurveySecrets::PLACEHOLDER;
         $named = ['bot_token' => '`bot_token`', 'webhook_url' => '`webhook_url`', 'url' => '`url`', 'routing_key' => '`routing_key`', 'headers' => 'the value of every header'];
-        $secretKeys = array_unique(array_merge(...array_values(NotificationTemplate::SECRET_CONFIG_KEYS), ...array_values(NotificationTemplate::SECRET_CONFIG_MAPS)));
-        $this->assertEqualsCanonicalizing(array_keys($named), array_values($secretKeys), 'The API contract change names every secret key of a channel config.');
+        $secretKeys = [];
+        foreach (self::releaseChannels() as $definition) {
+            $secretKeys = array_merge($secretKeys, $definition['secretKeys'] ?? [], $definition['secretMaps'] ?? []);
+        }
+        $secretKeys = array_diff(array_unique($secretKeys), self::LATER_SECRET_KEYS);
+        $this->assertEqualsCanonicalizing(array_keys($named), array_values($secretKeys), 'The API contract change names every secret key of a channel config of its release.');
         $expected = [
             'answer every channel secret of `config` as `' . $placeholder . '`, to every caller: the `bot_token` of a Telegram channel, the `webhook_url` of a Slack or Teams channel, the `url` and the value of every header of a webhook channel, and the `routing_key` of a PagerDuty channel.',
             'A `PUT` that sends `' . $placeholder . '` back keeps the stored value, so a `GET` and `PUT` round trip changes no secret',
@@ -1172,7 +1195,10 @@ class WorkflowStepsUpdateDocsContractTest extends TestCase
     {
         $claude = $this->flat('CLAUDE.md');
         $expected = [
-            'show password survey answers, notification channel secrets (`NotificationTemplate::SECRET_CONFIG_KEYS`, `SECRET_CONFIG_MAPS`) and the webhook signing secret only as `' . SurveySecrets::PLACEHOLDER . '`',
+            // The channel definitions replaced NotificationTemplate::SECRET_CONFIG_KEYS
+            // and SECRET_CONFIG_MAPS (workflow notifications, after 2.14.0).
+            'show password survey answers, notification channel secrets (the `secretKeys` and `secretMaps` of each channel\'s `ChannelDefinition`: `ChannelRegistry::BUILT_IN` and the installation\'s `config/notification-channels.php`;',
+            'the config of a channel the installation does not have shows every value as `' . SurveySecrets::PLACEHOLDER . '`) and the webhook signing secret only as `' . SurveySecrets::PLACEHOLDER . '`',
             'a form or API request that sends `' . SurveySecrets::PLACEHOLDER . '` back keeps the stored value',
             'A repository URL is shown and logged without the credentials of its userinfo (`GitSyncDiagnostics::redactUrl`), and so is every text a sync stores: on the project page, in its sync output and errors, in the logs, in the job log and in notifications; only the API and the edit form show it in full, to those who may update the project.',
             'A git command, git\'s output and any other text that can hold a repository URL pass through `GitSyncDiagnostics::redactUrl` before they are logged, stored or shown (`ProjectService`, `ProjectSyncProcessRunner`, `RunnerProjectSync`); a notification channel logs its HTTP code, never its URL',
@@ -1185,7 +1211,7 @@ class WorkflowStepsUpdateDocsContractTest extends TestCase
         foreach ($expected as $phrase) {
             $this->assertMentions($phrase, $claude, 'The security requirements of CLAUDE.md');
         }
-        foreach (['NotificationTemplate' => NotificationTemplate::class, 'GitSyncDiagnostics' => GitSyncDiagnostics::class] as $name => $class) {
+        foreach (['ChannelDefinition' => ChannelDefinition::class, 'ChannelRegistry' => ChannelRegistry::class, 'GitSyncDiagnostics' => GitSyncDiagnostics::class] as $name => $class) {
             $this->assertTrue(class_exists($class), "CLAUDE.md names {$name}.");
         }
         $this->assertTrue(method_exists(GitSyncDiagnostics::class, 'redactUrl'));
@@ -1282,10 +1308,12 @@ class WorkflowStepsUpdateDocsContractTest extends TestCase
     }
 
     /**
-     * How the security items name the secrets of each channel whose config
-     * holds one (NotificationTemplate::SECRET_CONFIG_KEYS and
-     * SECRET_CONFIG_MAPS): a channel that gets a secret fails the test until
-     * the items name it.
+     * How the security items name the secrets of each channel of their
+     * release (RELEASE_CHANNELS) whose config holds one (the secretKeys and
+     * secretMaps of its definition, ChannelRegistry::BUILT_IN): a
+     * channel of the release that gets a secret fails the test until the
+     * items name it. A channel added later, such as mattermost, is not of
+     * their release: its secrets are named in the notes of its own.
      *
      * @return list<string>
      */
@@ -1299,15 +1327,24 @@ class WorkflowStepsUpdateDocsContractTest extends TestCase
             NotificationTemplate::CHANNEL_PAGERDUTY => 'the routing key of a PagerDuty channel',
         ];
         $withSecrets = [];
-        foreach ([NotificationTemplate::SECRET_CONFIG_KEYS, NotificationTemplate::SECRET_CONFIG_MAPS] as $secrets) {
-            foreach ($secrets as $channel => $keys) {
-                if ($keys !== []) {
-                    $withSecrets[] = $channel;
-                }
+        foreach (self::releaseChannels() as $channel => $definition) {
+            if (($definition['secretKeys'] ?? []) !== [] || ($definition['secretMaps'] ?? []) !== []) {
+                $withSecrets[] = $channel;
             }
         }
-        $this->assertEqualsCanonicalizing(array_keys($words), array_values(array_unique($withSecrets)), 'Every channel whose config holds a secret is named.');
+        $this->assertEqualsCanonicalizing(array_keys($words), $withSecrets, 'Every channel whose config holds a secret is named.');
 
         return array_values(array_unique($words));
+    }
+
+    /**
+     * The definitions of the built-in channels of the release
+     * (RELEASE_CHANNELS, ChannelRegistry::BUILT_IN), by name.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private static function releaseChannels(): array
+    {
+        return array_intersect_key(ChannelRegistry::BUILT_IN, array_flip(self::RELEASE_CHANNELS));
     }
 }

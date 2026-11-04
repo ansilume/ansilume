@@ -221,6 +221,20 @@ trait WorkflowEngineFixtures
     }
 
     /**
+     * The pattern of the statement that links a step's execution to job
+     * $jobId: an UPDATE of workflow_job_step whose SET list sets job_id to
+     * $jobId, wherever job_id stands in it. ActiveRecord lists the
+     * attributes that changed in the order the record holds them, and
+     * updated_at, set at the insert, comes before job_id, assigned after
+     * it: when a second ticked over between the insert and the link, the
+     * list starts with updated_at.
+     */
+    protected function linkOfJob(int $jobId): string
+    {
+        return '~^UPDATE `workflow_job_step` SET (?:(?! WHERE ).)*?`job_id`=' . $jobId . '(?![0-9])~';
+    }
+
+    /**
      * The index of the first statement that matches $pattern.
      *
      * @param list<string> $statements

@@ -321,13 +321,14 @@ class JobTemplatesControllerCredentialIdsTest extends WebControllerTestCase
 
     /**
      * What the template runs: the snapshot without its name, its
-     * description and the time it was changed.
+     * description, the time it was changed and the mark of the lint run
+     * that every save queues (lint_queued_at).
      *
      * @return array<string, mixed>
      */
     private function runs(JobTemplate $template): array
     {
-        return array_diff_key($this->snapshot($template), array_flip(['name', 'description', 'updated_at']));
+        return array_diff_key($this->snapshot($template), array_flip(['name', 'description', 'updated_at', 'lint_queued_at']));
     }
 
     private function fresh(JobTemplate $template): JobTemplate

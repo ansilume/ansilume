@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace app\components;
 
+use app\jobs\DeliverNotificationJob;
+use app\jobs\LintProjectJob;
+use app\jobs\LintTemplateJob;
 use app\jobs\SyncProjectJob;
 use yii\queue\serializers\PhpSerializer;
 
@@ -26,11 +29,13 @@ final class AllowlistQueueSerializer extends PhpSerializer
 {
     /**
      * Every class implementing yii\queue\JobInterface under jobs/ must be listed
-     * here, otherwise the worker drops its messages.
+     * here, otherwise the worker drops its messages: the project syncs and the
+     * lint runs of the queue-worker, and the notification deliveries of the
+     * notification-worker.
      *
      * @var list<class-string>
      */
-    public const ALLOWED_CLASSES = [SyncProjectJob::class];
+    public const ALLOWED_CLASSES = [SyncProjectJob::class, DeliverNotificationJob::class, LintTemplateJob::class, LintProjectJob::class];
 
     private const MAX_DEPTH = 8;
 

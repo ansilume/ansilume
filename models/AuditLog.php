@@ -146,6 +146,14 @@ class AuditLog extends ActiveRecord
     // -- Notification dispatch (per-channel-delivery audit) --------------------
     public const ACTION_NOTIFICATION_DISPATCHED = 'notification.dispatched';
     public const ACTION_NOTIFICATION_FAILED = 'notification.failed';
+    /** A queued delivery was not sent: the user its template delivers as may no longer see its event (reason). */
+    public const ACTION_NOTIFICATION_SKIPPED = 'notification.skipped';
+    /**
+     * An event a template got no delivery of, because it got one of the
+     * same event a moment before (NotificationOutbox::THROTTLE_SECONDS):
+     * each call with an unknown trigger token after the first in 300 seconds.
+     */
+    public const ACTION_NOTIFICATION_THROTTLED = 'notification.throttled';
 
     // -- API token actions -----------------------------------------------------
     public const ACTION_API_TOKEN_CREATED = 'api-token.created';

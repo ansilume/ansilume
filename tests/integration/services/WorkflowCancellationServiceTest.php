@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\services;
 
+use app\components\AppLinks;
 use app\models\ApprovalDecision;
 use app\models\ApprovalRequest;
 use app\models\AuditLog;
@@ -16,6 +17,7 @@ use app\models\WorkflowJobStep;
 use app\models\WorkflowStep;
 use app\services\JobCancellationService;
 use app\services\JobCompletionService;
+use app\services\NotificationDispatcher;
 use app\services\WorkflowCancellationService;
 use app\tests\integration\DbTestCase;
 use app\tests\integration\TeamScopeFixtures;
@@ -108,13 +110,30 @@ class WorkflowCancellationServiceTest extends DbTestCase
 
         $sent = array_slice($this->notifications->events, $notificationsBefore);
         $this->assertSame([NotificationTemplate::EVENT_WORKFLOW_CANCELED], array_column($sent, 'event'), 'one notification, no job.canceled');
+        // Sent once the steps ended: it names the step the cancel ended, with the cancel's message.
         $this->assertSame([
             'workflow' => [
                 'id' => (string)$runId,
                 'status' => WorkflowJob::STATUS_CANCELED,
                 'template_id' => (string)$flow['run']->workflow_template_id,
                 'template_name' => (string)$flow['run']->workflowTemplate->name,
+                'url' => AppLinks::base() . '/workflow-job/view?id=' . $runId,
+                'steps_done' => '1',
+                'steps_total' => '3',
+                'reason' => WorkflowCancellationService::STEP_RUN_CANCELED,
             ],
+            'step' => [
+                'id' => (string)$execution->id,
+                'job_id' => (string)$flow['placeholder']->id,
+                'execution_id' => (string)$execution->id,
+                'workflow_step_id' => (string)$flow['approval']->id,
+                'position' => '1',
+                'name' => 'step-0',
+                'type' => WorkflowStep::TYPE_APPROVAL,
+                'waiting_for' => '',
+            ],
+            'approval' => ['url' => AppLinks::base() . '/approval/view?id=' . $flow['request']->id],
+            NotificationDispatcher::REFS => ['workflow_job_id' => $runId],
         ], $sent[0]['payload']);
     }
 

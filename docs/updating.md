@@ -132,11 +132,14 @@ a base image rebuilt with security fixes, such as `php:8.2-fpm` with PHP
 The builds need Docker Hub (`php:8.5-fpm`, `composer:2.10`), which limits
 anonymous pulls: `docker login` lifts the limit. When a build fails after
 `git pull`, the running containers already serve the new code without its
-migrations: fix the cause and run step 3 again, or go back to the previous
-version until a build gets through (`git checkout v2.13.1`, and
-`git checkout main` again before the next update). Updating from 2.13.1
-or older, a container that starts again before the build got through does
-not come up, see
+migrations: fix the cause and run step 3 again, or go back to the release
+you updated from until a build gets through (`git checkout v2.14.0` from
+2.14.0, `git checkout v2.13.1` from 2.13.1, `git checkout v2.12.2` from
+2.12.2; right after `git pull`, `git describe --tags ORIG_HEAD` names it,
+and a commit after a release as `v2.13.1-1-gc017f1c`, which
+`git checkout` takes too), and `git checkout main` again before the next
+update. Updating from 2.13.1 or older, a container that starts again
+before the build got through does not come up, see
 [After updating from 2.13.1 or older](#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers),
 and from 2.12.2 or older
 [After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files)
@@ -181,6 +184,717 @@ Run the diagnostics script if anything looks wrong:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 ```
+
+---
+
+## After updating from 2.14.0 or older: Redis 8.10, outbound HTTP, workflow notifications, Mattermost, lint in the background, recovered failures
+
+**Security fix: notification channels sent to more than http and https.**
+Up to 2.14.0 the HTTP notification channels (Slack, Microsoft Teams,
+Webhook, Telegram, PagerDuty) took a URL of any scheme that curl knows, and
+the error of a send that failed held the start of what the other side
+answered. **Send Test** showed that error,
+`POST /api/v1/notification-templates/{id}/test` answered it, and the
+`notification.failed` audit entry kept it. So a user who may create or
+change notification templates, operators by default, could make the app
+container read local resources, and read the start of them in those
+places. An error could also hold a secret that the endpoint echoed, such as
+the ID of an incoming webhook that Mattermost repeats in its errors. The
+outbound webhooks (**Webhooks**) followed redirects, a POST turning into a
+GET, took any status line with a "2" in it for a success, a `502`
+included, and logged PHP's warning text, which held the full URL.
+
+The HTTP channels and the outbound webhooks now send through one HTTP
+client: only to absolute `http` and `https` URLs, following no redirect (a
+`3xx` answer is an error), with TLS always verified, within 5 seconds for
+the connection and 15 for the whole request, and reading at most 64 KiB of
+an answer. Its errors name only the HTTP status, or why no answer came,
+such as `WebhookChannel: HTTP 404.` or
+`WebhookChannel: Could not connect (curl error 7).`, and never the URL, a
+header or what the endpoint answered. A template is saved only with http
+and https URLs (`webhook_url must be an http or https URL.`), a Mattermost
+template only with https. An outbound webhook succeeds only on a `2xx`
+answer. Also fixed: the creator of a notification template (`created_by`)
+could be set through a field of the edit form; the server sets it, and no
+form or request body.
+
+Who must act:
+
+- A template stored with a URL of another scheme fails every delivery
+  (`SlackChannel: The URL must use http or https.`), and its next save is
+  refused until its URL is an http or https URL. Change such URLs.
+- The audit log is immutable: `notification.failed` entries of 2.14.0 and
+  older keep the answers they held. Look through them for what the app
+  container read and for secrets, and rotate the incoming-webhook URL of
+  every channel whose ID or token appears there.
+- An endpoint whose certificate an internal CA issued needs that CA in
+  `OUTBOUND_CA_BUNDLE`, a PEM file that the app, the queue-worker, the
+  notification-worker and the schedule-runner can read (the deploy role:
+  `ansilume_outbound_ca_bundle`); see
+  [notifications.md](notifications.md#outbound-http). There is no way to
+  turn TLS verification off, and the system's CAs stay trusted.
+
+**Redis 8.10.** The bundled Redis of `docker-compose.prebuilt.yml`, of
+`docker-compose.yml` and of the deploy role (`ansilume_redis_image`) runs
+`redis:8.10-alpine` instead of `redis:7.2-alpine`. Redis 7.2 still gets
+fixes, but its image stays on Alpine 3.21, whose support ends on
+2026-11-01: since January 2025 Redis has moved no line of its images to a
+newer Alpine. 8.10 is the newest stable line of Redis, on Alpine 3.23,
+which gets fixes until 2027-11-01. Ansilume's sessions, cache, queue and
+health checks work on it as on 7.2.
+
+**Redis keeps its data in the volume `redis_data`.** Redis keeps its data
+in `/data`: the sessions, the cache and the queue of project syncs. The
+image of Redis 7.2 declares `/data` a volume, so Docker gave it an
+anonymous volume, which Docker Compose carries over to a new container only
+while the new image declares that volume too. The images of Redis 8.6 and
+later declare none: without a volume of its own, Redis 8.10 would lose its
+data with every new container, at every update that pulls a new 8.10
+release, every `docker compose up -d --force-recreate` and every run of the
+deploy role's restart handler. So the redis service mounts the named
+volume `redis_data` at `/data` now, in all three, which keeps the data
+across new containers, and across `docker compose down` and
+`docker compose up -d` too. Docker names the volume after the compose
+project: `ansilume_redis_data` for the project `ansilume`, which is the
+name of the install directory or the deploy role's
+`ansilume_compose_project`.
+
+**The update starts Redis empty, once.** The new container starts on the
+new volume, which is empty; the data of Redis 7.2 stays in its old volume
+(see **The volume of Redis 7.2 stays behind**). The database, with the
+jobs, their logs, the schedules and the workflow runs, is not touched.
+What you see:
+
+- Everyone is signed out. A user who signed in with **Remember me** is
+  signed in again by its cookie; everyone else signs in again.
+- A project sync that had not finished is lost, whether it waited in the
+  queue or the update interrupted it. The project stays **Syncing** until,
+  once 15 minutes have passed since the sync was queued, the maintenance
+  run of the schedule-runner marks it **Error**, with the sync error
+  `Sweeper recovered stuck sync after 930 seconds (threshold=900).` Sync
+  it again on the project's page or with `POST /api/v1/projects/{id}/sync`:
+  both queue a sync at once, also while the project shows **Syncing**. The
+  **Sync** of the Projects list stays disabled while the project shows
+  **Syncing**.
+- The cache starts empty and fills again. Lockouts after too many wrong
+  two-factor codes end; the artifact cleanup and the sweep of deleted job
+  and workflow templates run at the next maintenance run, as the cache
+  keeps when they last ran; and the encryption of old survey password
+  answers checks the finished jobs once more, which is safe.
+
+**The volume of Redis 7.2 stays behind.** Docker does not remove the
+anonymous volume in which Redis 7.2 kept its data, and after the update no
+container uses it. It holds the last snapshot of Redis 7.2 (`dump.rdb`),
+the sessions among them. Its name is 64 hexadecimal characters; note it
+before the update (`ansilume_redis` is the redis container of the compose
+files and of the deploy role's default project):
+
+```bash
+docker inspect --format '{{range .Mounts}}{{.Name}}{{end}}' ansilume_redis
+```
+
+Once the update has come up, remove that volume, and only it, by its
+name: `docker volume rm <name>`. Docker refuses to remove a volume that a
+container still uses (`volume is in use`). Do not use
+`docker volume prune` for it: that removes every anonymous volume that no
+container uses, those of other projects on the host too. If you updated
+without noting the name, `docker volume ls --filter dangling=true` lists
+the volumes that no container uses; the one of Redis 7.2 holds only
+`dump.rdb` (`docker run --rm -v <name>:/data:ro redis:8.10-alpine ls /data`).
+
+**Who must act:**
+
+- **Prebuilt images:** the quickstart's update and the manual update
+  download the new compose file, which brings the image and the volume.
+  This holds for an installation the quickstart made from source too: it
+  runs `docker-compose.prebuilt.yml`. Do not run the steps of the manual
+  source update there, as they start the development stack of
+  `docker-compose.yml`.
+- **Source installations** started from `docker-compose.yml`: it has the
+  same image and volume, and steps 2 and 3 of
+  [Manual update — source (git)](#manual-update--source-git) pull
+  `redis:8.10-alpine` and start it on `redis_data`.
+- **The deploy role** takes the image from `ansilume_redis_image`,
+  `redis:8.10-alpine` now, and mounts `redis_data` whenever it runs the
+  local Redis (`ansilume_redis_local`). An inventory that sets
+  `ansilume_redis_image`, to `redis:7.2-alpine` as the role's default was
+  or to a copy in a registry of your own, keeps that image: set it to
+  `redis:8.10-alpine`, or a copy of it, or remove the setting. Redis 7.2
+  starts on the new volume as well, empty once, and Redis 8.10 loads what
+  it wrote there when the image moves later. An image of Redis 8.6 or
+  later, which lost its data with every new container, keeps it now.
+- **An external Redis** (`REDIS_HOST` names a Redis of your own) is not
+  changed by the update, and Ansilume keeps working with it as before: its
+  sessions, cache and queue stay there, and nobody is signed out. The redis
+  container of `docker-compose.prebuilt.yml` and `docker-compose.yml`
+  still starts, on Redis 8.10 with its volume, and holds nothing; the
+  deploy role with `ansilume_redis_local: false` runs none.
+
+What to do:
+
+1. Before the update, note the name of the volume of Redis 7.2 (see **The
+   volume of Redis 7.2 stays behind**), and tell your users that they will
+   be signed out.
+2. Update. With the deploy role, set `ansilume_redis_image` to
+   `redis:8.10-alpine` first where your inventory sets it.
+3. Check that Redis 8.10 runs on `redis_data`:
+
+   ```bash
+   docker compose exec redis redis-server --version    # Redis server v=8.10.3 or later
+   docker inspect --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{end}}' ansilume_redis    # ansilume_redis_data /data
+   ```
+
+4. Sync the projects that show **Syncing**, on their pages or with
+   `POST /api/v1/projects/{id}/sync`; once they show **Error** with
+   `Sweeper recovered stuck sync after …`, 15 minutes after the sync was
+   queued, the **Sync** of the Projects list works too.
+5. Remove the volume of Redis 7.2 by its name.
+
+**The modules of Redis 8.** On amd64 and arm64 the images of Redis 8 load
+the modules RediSearch, RedisJSON, RedisTimeSeries and RedisBloom at every
+start, and offer no setting to leave them out. Ansilume uses none of them.
+Redis takes about 15 MB more memory when idle (22 MB instead of 8 MB), its
+image is larger (about 40 MB to download instead of 16 MB, 162 MB on disk
+instead of 57 MB), and its log shows the modules' lines at every start.
+Whoever reaches Redis with its password can call their commands too. With
+`docker-compose.prebuilt.yml` and the deploy role, Redis stays on the
+network of the server's containers, which the runners do not join;
+`docker-compose.yml` also publishes it on the host, at `DEV_BIND_ADDRESS`
+(`127.0.0.1` by default) and `REDIS_PORT` (6379), where every process of
+the host reaches it, and with `DEV_BIND_ADDRESS=0.0.0.0` every machine that
+reaches the host. Without `REDIS_PASSWORD`, as in the development stack
+unless you set one, whoever reaches Redis calls every command without a
+password, those of the modules too, and Redis 8.10 also logs
+`# WARNING: Redis does not require authentication and is not protected by network restrictions. Redis will accept connections from any IP address on any network interface.`
+at every start (see **Redis can require a password** under
+[After updating from 2.4.6 or older](#after-updating-from-246-or-older-runner-network-redis-password-maintenance)).
+
+**The license of Redis 8.** Redis 8 is available under the RSALv2, the
+SSPLv1 or the AGPLv3, at your choice, where Redis 7.2 was under the
+3-clause BSD license (see https://redis.io/legal/licenses/). Ansilume runs
+Redis's image unchanged, in a container of its own, and contains no Redis
+code. Where your organisation reviews the licenses of what it runs, review
+this one.
+
+**Notifications of workflow runs and their steps.** Three new events,
+offered to every channel: `workflow.step_started` and
+`workflow.step_succeeded` (info: a step's job was launched, its approval
+requested or its pause reached; its job succeeded, its approval was granted
+or its pause was resumed), and `workflow.waiting` (warning: the run waits
+for an approval or for someone to resume it). `workflow.step_failed` is now
+also sent for a step that could not start (an unknown step type, a refused
+or failed launch, a missing approval rule), and `workflow.canceled` once
+the cancel has ended the running steps. Each event fires once per change,
+also when a loop runs a step again; a refused change, such as a second
+report of a job that ended, fires nothing.
+
+Every workflow event carries the run's link and progress
+(`{{ workflow.url }}`, `{{ workflow.steps_done }}`,
+`{{ workflow.steps_total }}`), what the run page says
+(`{{ workflow.reason }}`, such as
+`Job #42 of step "Deploy" waits for approval.`) and its step
+(`{{ step.position }}`, `{{ step.name }}`, `{{ step.type }}`,
+`{{ step.waiting_for }}`, ...). The job and approval events of a workflow
+step carry them too, to a template whose user may see the run's workflow.
+Every approval event links its request (`{{ approval.url }}`), and every
+event has `{{ event_id }}` (32 hexadecimal digits, the same for every
+template the event reaches) and `{{ occurred_at }}` (Unix time).
+[notifications.md](notifications.md#events) lists every event and
+variable.
+
+Each template has two new options:
+
+- its workflows: all workflows (the default), or only the runs of the
+  workflow templates it names (`workflow_scope` `selected`,
+  `workflow_template_ids`), for their workflow events and the job and
+  approval events of their steps. A selection whose workflow templates were
+  all deleted reaches no run;
+- its level: `all` (the default), or `essential`, which of the workflow
+  events delivers only `workflow.step_failed`, `workflow.waiting` and the
+  run's end.
+
+Existing templates keep level `all` and every workflow.
+
+**A template delivers only what the user it delivers as may see.** Every
+notification template now delivers as a user, **Delivers as** on its page
+and `delivers_as` in the API: the user who last changed what it delivers or
+where to, its channel, its destination (such as a webhook URL, a bot token
+or a channel), its events, its level or its workflows. A new template
+delivers as its creator. That user must be active, hold the permission of
+the event's group (`job.view`, `workflow.view`, `approval.view`,
+`project.view`, `job.launch` for `schedule.failed_to_launch`,
+`runner-group.view` for the runner events) and see the event's object, a
+team-restricted project included. It is checked when the event happens and
+again when the delivery is sent, with the roles as they are then: the
+queue-worker and the notification-worker read them anew for each job. Without team-restricted projects nothing
+changes: every active user sees what their roles allow. With them, a
+template of an operator of one team no longer delivers the events of
+another team. Before, any template delivered every event it listened to, so
+whoever edited an admin's template chose where the events of every team
+went.
+
+After the update every template delivers as its creator. **A template
+whose creator's account is inactive delivers nothing**: the migration names
+such templates
+(`Notification template(s) #3, #9 deliver as their creator, whose account is inactive: they deliver nothing until someone saves them.`),
+the template's page warns, the API answers `delivers_as_inactive: true`,
+and `bin/diagnose` lists them under **Notifications**. Saving such a
+template, with any change or none (an empty
+`PUT /api/v1/notification-templates/{id}` does it), makes whoever saves it
+its user. The `notification-template.updated` audit entry of a change
+records the user as `delivers_as` `{from, to}`. A user whom a template
+delivers as cannot be deleted, as the creator of a template cannot:
+deactivate the account instead.
+
+**Notifications are queued and retried by a new service, the
+notification-worker.** The process in which an event happens (a runner's
+report, a vote, a web request, the maintenance run) now only writes a
+delivery for each template that gets the event, and the new service
+`notification-worker` (container `ansilume_notification_worker`,
+`php yii worker/start --queue=notificationQueue`) sends it from a Redis
+queue of its own, so that none waits behind a project sync and a
+notification that fails or is slow never holds up a workflow, the end of a
+job or a vote. A delivery that fails for a reason that can pass (no
+answer, a timeout, a failed TLS connection, the answer `408`, `425`, `429`
+or `5xx`) is tried again after 30 seconds, 2, 10 and 30 minutes, then 1, 2
+and 4 hours, at most 8 attempts, or after the endpoint's `Retry-After`, up
+to an hour; any other answer outside `2xx` fails it at once. The
+deliveries of a workflow run go out in the order of their events, so one
+that waits for its next attempt holds back the later ones of the same
+template and run. The deliveries are kept in the database: the
+maintenance run queues again those whose queue message was lost, once the
+queue holds no message for the notification-worker to take (while the
+worker is away it adds none, so a delivery gets at most one more message),
+gives back those whose worker stopped while it sent them, and removes those
+that finished more than 30 days ago
+(`[maintenance] ran: notification-sweep (repushed=1, reset=0, purged=0)`).
+Up to 2.14.0 a notification that failed was not sent again.
+
+A template's page lists its deliveries (event, kind, status, attempts,
+last error, what each is about), as does
+`GET /api/v1/notification-templates/{id}/deliveries`, each only those the
+reader may see. **Send Test** still sends at once, in the process that
+serves the page or the API.
+
+The notification-worker runs the app image, with the `.env` of the app,
+and needs Redis, the database and outbound connections to the endpoints of
+the templates, which the app and the schedule-runner made before. Its log
+lines are in its application log: in a git checkout
+`runtime/logs/app.log`; with the prebuilt images inside its container
+(`docker compose exec notification-worker tail -n 200 /var/www/runtime/logs/app.log`;
+an installation the quickstart made from source adds
+`-f docker-compose.prebuilt.yml`). `docker compose logs notification-worker`
+shows only that it started.
+
+What to do:
+
+- **Prebuilt images** (`docker-compose.prebuilt.yml`, also an installation
+  the quickstart made from source): take the compose file of this release,
+  which has the service. The quickstart's `--update` downloads it and now
+  checks after an install or an update that the queue-worker, the
+  notification-worker and the schedule-runner run. With a compose file of
+  an older release, the images of this release queue every notification
+  and no container sends them; `bin/diagnose` then reports
+  `notification-worker: not in the compose file — the app image queues the notifications for it, and no container sends them: take the compose file of this release`.
+- **Source installations** started from `docker-compose.yml`: after
+  `git pull`, `docker compose up -d --build` builds and starts the
+  notification-worker with the others.
+- **The deploy role** renders the notification-worker in every combination
+  of its settings. Run the role of this release.
+- With `OUTBOUND_CA_BUNDLE` and the prebuilt images, mount the CA file into
+  the notification-worker too, as into the app, the queue-worker and the
+  schedule-runner (see
+  [notifications.md](notifications.md#outbound-http)); with the deploy
+  role, in the override of its install directory, which the role uses.
+- A firewall that lets only some containers reach the endpoints of the
+  templates must let the notification-worker through.
+
+**The links of notifications.** Every link of a notification is made from
+`APP_URL` alone, never from a request: the notification-worker sends
+outside of any request. Without `APP_URL` the links lead to
+`http://localhost:8080`, as before; with an empty `APP_URL=` they took the
+address of the request in which the event happened, and are paths without
+an address now. `bin/diagnose` now warns while `APP_URL` is not set, empty
+or a loopback address such as `localhost`. The deploy role had no way to
+set it: set the new `ansilume_app_url` (it writes `APP_URL` only when
+set).
+
+**New audit actions, and entries without a user.** `notification.skipped`
+(a delivery not sent: the user its template delivers as could no longer
+see the event when it was to be sent, such as
+`Not sent: the user the template delivers as, #12, is inactive.`, or the
+template's channel, changed meanwhile, sends nothing for it) and
+`notification.throttled` (a call with an unknown trigger token that a
+template got no delivery of: `webhook.invalid_token` reaches a template at
+most once every 5 minutes; the new variable `{{ trigger.note }}` says so in
+the message). Each delivery writes one `notification.dispatched`,
+`notification.failed` or `notification.skipped` entry, for its final
+outcome, never one per attempt, and these entries carry no user: they name
+the template, the channel, the event, the delivery, its kind and its
+attempts. A test send writes its entry as before, with the user who sent
+it.
+
+**PagerDuty.** `workflow.step_started` and `workflow.step_succeeded` never
+raise an incident, so a PagerDuty template gets no delivery of them, and a
+**Send Test** of a PagerDuty template whose events are only those fails
+with `Test failed: The pagerduty channel sends nothing for workflow.step_started.`.
+Every other event raises or resolves the incident it did before; a job's
+and an approval's events keep the incident of their job.
+
+**The Mattermost channel.** A new channel, `mattermost`: a bot posts to
+one channel through Mattermost's REST API v4, Mattermost 10.11 ESR or
+later, over https only. Its config: `server_url`, `bot_token` (a channel
+secret, shown as `$encrypted$`, kept only while `server_url` keeps its
+stored value: `bot_token: server_url changed; enter the real value.`), the
+channel as `channel_id`, or `team` and `channel` (the names in its
+address), and an optional `mention`, one user or group mention, never
+`@all`, `@channel` or `@here`. Saving asks Mattermost nothing. **Send
+Test**, and the first delivery after the server, the token or the channel
+changed, check that the token is a bot's (a personal access token is
+refused), that the channel exists and that the bot is a member. A workflow
+run gets one status post per template, edited as the run moves on, with
+the run's events as short replies in its thread; the replies about a wait,
+a failed step and a failed or canceled run start with the mention. A
+status post that was deleted, or that Mattermost's edit time limit no
+longer lets the bot edit, is posted anew. One that Mattermost still has but
+does not let the bot edit (a permission scheme without **Edit Posts** for
+members) fails its delivery, saying what to allow, and nothing is posted
+anew. Setup: allow bot accounts,
+create a bot with the Member role, add it to the team and the channel,
+copy its token (see
+[notifications.md](notifications.md#the-mattermost-channel)). Where
+Mattermost's link previews are on, it may show a preview of the Ansilume
+page a reply links, mostly the login page.
+
+**Signed webhooks, and two new headers on every webhook request.** Every
+request of the webhook channel now carries `X-Ansilume-Event: <event>` and
+`X-Ansilume-Delivery: <delivery ID>`, the same on every retry (**Send
+Test** sends `test-` and 16 hexadecimal digits). A receiver whose proxy or
+firewall lets only known headers through sees two new ones. With the new
+optional `signing_secret`, a channel secret kept only while `url` keeps its
+stored value (`signing_secret: url changed; enter the real value.`), every
+request also carries
+`X-Ansilume-Signature: t=<unix time>,v1=<hex HMAC-SHA256 of "<t>.<body>">`;
+[notifications.md](notifications.md#verifying-the-signature) shows how to
+verify it in PHP and Python. The new optional `payload` sends the
+template's subject, body and variables as before (`template`, the default)
+or the documented event payload (`event`; `webhooks.notificationEvent` in
+`web/openapi.yaml`). A header in the config named `X-Ansilume-Signature`,
+`X-Ansilume-Delivery` or `X-Ansilume-Event` is refused at save
+(`headers.X-Ansilume-Event is set by Ansilume; leave it out.`) and not
+sent. Fixed: a header value that was a list or an object failed every
+delivery; it is left out. Headers that are no object of header names and
+values, which the API took and the channel then ignored, are refused at
+save (`headers must be an object of header names and values.`), and so are
+a name that is no header name and a value of more than one line: a
+template stored with such headers is refused at its next save until they
+are fixed.
+
+**Microsoft Teams.** Fixed: the card of a succeeded job was grey, as its
+colour went with `successful`, a status no job has. It is green for a
+succeeded job, red for a failed or timed-out one and blue for a running
+one. **Send Test** samples `job.status` and `workflow.status` as
+`succeeded`, the status of a success, no longer as `successful`.
+
+**Channels of your own.** An installation can add notification channels of
+its own, a PHP class and a definition in the git-ignored
+`config/notification-channels.php`; with the prebuilt images, in an image
+built on Ansilume's (see
+[notifications.md](notifications.md#channels-of-your-own)). The edit form
+offers a channel of your own with its config as JSON. A wrong definition
+stops Ansilume at start: its containers do not come up, the health check
+fails, and their log shows `Error: ` and the message, which names the
+channel and what is wrong. For code
+that extends Ansilume: `NotificationTemplate::SECRET_CONFIG_KEYS`,
+`SECRET_CONFIG_MAPS`, `URL_CONFIG_KEYS` and `DESTINATION_CONFIG_KEYS` are
+gone; read the channel definitions (`ChannelRegistry::installed()`,
+`ChannelRegistry::definitionOf()`).
+
+**API.** `GET`, `POST` and `PUT /api/v1/notification-templates` take and
+answer `level`, `workflow_scope` and `workflow_template_ids` (only the
+workflow templates the caller may see; a `PUT` keeps those it may not,
+`workflow_templates_hidden` counts them, and another ID answers 422
+`Workflow template(s) not found: #41.`), and answer `delivers_as` and
+`delivers_as_inactive`. `events` takes a list of names as well as
+comma-separated text. New: `GET /api/v1/notification-templates/{id}/deliveries`.
+Fixed: a list or an object for a text field (`{"name": ["x"]}`) answered
+500, in the API and in the web form; it answers 422
+`name must be a single value, not a list or an object.`
+
+**Fix: a workflow no longer stops when a notification or a webhook
+fails.** An error while the notifications or the outbound webhooks of a
+step's job were sent, when the job ended, left the step and its run
+running: up to 2.14.0 the channels sent in that process too. The run now
+goes on, and the log names the error:
+`JobCompletionService: the notification of job #42 failed: <error> (SQLSTATE <state>, driver error <code>); its workflow goes on.`
+
+**Saving a job template no longer waits for ansible-lint.** Up to 2.14.0
+the web UI ran ansible-lint while it saved a job template, and **Run
+Lint** ran it in the request. That took about two seconds for a small
+playbook, and up to 180 seconds while another lint run, such as the lint
+phase of a project sync, held the lock of the checkout: longer than nginx
+waits for php-fpm (120 seconds), so a save that had succeeded could answer
+`504`. Now a save of a job template (in the web UI, and now also through
+the API), its clone, **Run Lint** and the new
+`POST /api/v1/projects/{id}/lint` queue a lint run, which the queue-worker
+makes. The page of the template or the project shows **Lint queued** with
+when it was queued, keeps the previous result below it, marked as the
+previous run, and reloads itself once the new result is stored; while no
+queue-worker runs, it says
+`No queue worker is running. Start one with: docker compose up -d queue-worker`.
+**Run Lint** says `Lint queued for "<project>".` instead of
+`Lint completed for "<project>".`. When Redis cannot be reached, the save
+stays and a warning says
+`Lint was not queued: the queue could not be reached. Try again once it is back.`
+A sync lints the project and its templates in its own job, as before. An
+output longer than the 65,535 bytes a lint result keeps is stored as its
+start and its end, with the line
+`[<n> bytes of the output left out here: a lint result keeps at most 65535 bytes, the start and the end of the output.]`
+between them; a result that the database refuses all the same is stored as
+`The lint result could not be stored: <error>`. Either way the run ends
+**Lint queued**: up to 2.14.0 such an output made the save answer `500`.
+
+The API shows the lint state: every job template and project has `lint`,
+with `status` (`not-run`, `clean`, `issues`, `vault-skipped`, or null
+without a result), `exit_code`, `checked_at` and `queued_at`; one record
+(`GET`, and the answers of `POST` and `PUT`) adds `output`.
+`POST /api/v1/job-templates` and `PUT /api/v1/job-templates/{id}` now queue
+a lint run. `POST /api/v1/projects/{id}/lint` (`project.update` and
+operator access) queues one for the project: it answers `202` with the
+project's lint state, or `503` when the queue cannot be reached, and is
+audited as `project.linted`.
+
+ansible-lint no longer asks GitHub for a newer release. After every run it
+asked `https://api.github.com/repos/ansible/ansible-lint/releases/latest`;
+without outbound access every run waited for the check's 10-second timeout
+(12 seconds per run instead of 2). Ansilume now runs ansible-lint with
+`PRE_COMMIT=1`, which skips exactly that check in ansible-lint 26.10. It
+still installs the roles and collections of a project's
+`requirements.yml` (no `--offline`).
+
+**A manual project's directory must exist in the queue-worker.** The
+queue-worker lints manual projects now, not the app. In a git checkout both
+see `/var/www`. With the prebuilt images (and the deploy role with
+`ansilume_use_prebuilt_images`) they share only `runtime/projects`: a
+manual project whose directory is mounted only into the app gets the lint
+result `Project path not found: <path>`. Mount it into the queue-worker as
+well (see [deployment.md](deployment.md#architecture)). The bundled
+selftest is in both images. If a lint stays **Lint queued**, see
+[troubleshooting.md](troubleshooting.md#lint-stays-lint-queued).
+
+**Failed jobs that a later run recovered.** The dashboard points at what
+still needs attention. A failed or timed-out job is *recovered* once a job
+of the same job template succeeded that started after it finished and was
+no dry run; the first such job by start time is the one that recovered it.
+A job of a higher ID that started in the second the failure finished counts
+too, as a retry on the same runner does. The limit, the inventory and the
+survey answers of the two runs are not compared. A success that started
+before the failure finished does not count, even when it finished later: it
+was already running when the failure ended. Canceled and rejected jobs are
+no failures.
+
+- **Failed Jobs (last 24h)** lists only the failures that no later run
+  recovered. Below it, a muted line says how many failures of the last 24
+  hours a later run recovered, for example
+  `2 failed jobs of the last 24 hours were followed by a successful run of the same job template.`
+  Its link **Show them** opens the job list of those recovered failures:
+  the filter **Recovered** with `finished_since`, the start of the 24 hours,
+  which the list names (`Only jobs that finished since <time>.`), with
+  **Remove this filter**. When a later run recovered every failure, the
+  panel goes and only the line remains.
+- The panel and the line look back exactly 24 hours. Up to 2.14.0 the
+  panel listed the failures since the start of yesterday, up to 48 hours
+  back.
+- **Jobs Today** turns red only for a failure of today that no later run
+  recovered.
+- The chart **Job Outcomes** and **Status (7 days)** still count every
+  failure.
+- The page of a recovered job says
+  `A later run of this job template succeeded: #136` and links that run.
+- The job list shows `recovered by #136` next to the status of such a job.
+  Its new filter **Recovered** lists the recovered failures, or those that
+  no later run recovered.
+
+Every job answer of the API has `recovered_by_job_id`: the ID of the run
+that recovered a failed or timed-out job, otherwise `null` (`GET` of
+`/api/v1/jobs` and `/api/v1/jobs/{id}`, and the answers of
+`POST /api/v1/jobs` and `POST /api/v1/jobs/{id}/cancel`).
+`GET /api/v1/jobs` takes `recovered=1` for the recovered failures and
+`recovered=0` for those that no later run recovered; any other value is no
+filter, as for every filter of the list. It also takes `finished_since`, a
+Unix time, for the jobs that finished then or later; a value that is no
+whole number of 0 or more is no filter. A filter sent as a list
+(`status[]=failed`), in the web job list and in the API, is no filter
+either; up to 2.14.0 it answered 500.
+
+The analytics' Mean Time To Recovery (`mttr_seconds`, also in
+`GET /api/v1/analytics/summary`) runs from each failure to the run that
+recovered it, by the same rule. Up to 2.14.0 a dry run that succeeded
+counted as the recovery: for job templates that are checked in dry runs
+between real runs, MTTR now runs to the next real run and can be higher,
+and a failure that only a dry run followed no longer counts in it.
+
+**Database.** The update runs four migrations:
+
+- `m000091`: the outbox `notification_delivery`, the status posts
+  `notification_thread` and the workflow filter
+  `notification_template_workflow_template`; `level`, `workflow_scope`,
+  `channel_state` and `delivers_as` of `notification_template`, with
+  `delivers_as` set to `created_by`; and `events` widened to 1024
+  characters, as the form allowed: a template of more events failed with a
+  server error.
+- `m000092`: the index `idx_job_template_status_check_started` of `job`
+  (`job_template_id`, `status`, `check_mode`, `started_at`), with which the
+  dashboard, the job list and the API read one index entry per failure. On
+  a large `job` table it takes a moment.
+- `m000093`: the objects a delivery is about, and an index for the 30-day
+  purge.
+- `m000094`: `lint_queued_at` of `job_template` and `project`.
+
+**Going back.** To go back to 2.14.0, first revert the migrations of this
+release, with this release and before you start 2.14.0: 2.14.0 cannot
+create a notification template while `delivers_as` exists, and once it
+runs it cannot revert them, as it has not their code. `migrate/down 4`
+reverts `m000094`, `m000093`, `m000092` and `m000091`:
+
+```bash
+docker compose exec -u www-data app php yii migrate/down 4 --interactive=0
+```
+
+An installation the quickstart made from source adds
+`-f docker-compose.prebuilt.yml`, as to each `docker compose` command. It
+drops the deliveries that were not sent yet
+(`Dropped 3 notification delivery(ies) that were not delivered yet: they are never sent.`),
+the workflow filters and the levels
+(`Removed the workflow filter or level of notification template(s) #3: they deliver every workflow event they listen to again.`),
+the index of the recovered failures and the marks of queued lint runs,
+and keeps `events` at 1024 characters while a template needs it. 2.14.0
+sends its notifications itself again, at once and without retries. Its
+queue-worker drops the lint runs that are still queued, with
+`Rejected queue message for class not on the allowlist: app\jobs\LintTemplateJob`,
+which is harmless: save a template again for a new result.
+
+Going back also brings back what this release fixes. 2.14.0's channels
+send to URLs of any scheme and show the start of an answer in **Send
+Test**, the API and the audit log (see **Security fix** above): pin it only
+for as long as you must. Its templates deliver every event they listen to,
+whatever the user they delivered as may see, and a signed webhook arrives
+unsigned, with the template payload. 2.14.0 has no `mattermost` channel and
+no channels of your own: each template of theirs fails every event it
+listens to, with a `notification.failed` audit entry each time, so delete
+those templates before you go back.
+
+Then keep the compose file of this release and pin the images of 2.14.0
+(`ANSILUME_IMAGE_TAG=2.14.0`, see [Rollback](#rollback)): 2.14.0 runs on
+Redis 8.10 too, and Redis keeps its data. Keep the notification-worker of
+that compose file off: it would run the code of 2.14.0, whose
+`worker/start` has no `--queue` (`Error: Unknown option: --queue`), and
+restart without end. Turn it off in an override beside the compose file
+(`docker-compose.override.yml`; where you have one, add the service to
+it), remove its container once, and start:
+
+```yaml
+# docker-compose.override.yml
+services:
+  notification-worker:
+    profiles: ["off"]
+```
+
+```bash
+docker compose rm -sf notification-worker
+docker compose up -d
+```
+
+An installation the quickstart made from source keeps its checkout of this
+release, which holds that compose file, sets the pin in `.env`, and starts
+with `docker compose -f docker-compose.prebuilt.yml -f docker-compose.override.yml up -d`,
+after
+`docker compose -f docker-compose.prebuilt.yml -f docker-compose.override.yml rm -sf notification-worker`:
+a command that names its compose files with `-f` reads no other. With the
+deploy role, put the override into the install directory, where the role
+uses it, and run the role with `ansilume_version: "v2.14.0"`: the role you
+run keeps Redis 8.10 and the notification-worker off. Then run
+`docker compose rm -sf notification-worker` in the install directory,
+where `.env` names the compose files. Remove the override when you update
+again.
+
+A source installation started from `docker-compose.yml` builds its images
+from the checkout and has none to pin, and `git checkout v2.14.0` brings
+back the compose file of 2.14.0, with Redis 7.2. To keep Redis 8.10,
+revert the migrations as above, put the override beside
+`docker-compose.yml`, where `docker compose` reads it, remove the
+container of the notification-worker
+(`docker compose rm -sf notification-worker`), then check out the code of
+2.14.0 and keep the compose file of this release:
+
+```bash
+git checkout v2.14.0
+git checkout main -- docker-compose.yml
+docker compose up -d --build --force-recreate
+```
+
+`git checkout main` before the next update then works without a conflict.
+Do not edit `docker-compose.yml` by hand on the tag instead:
+`git checkout main` then refuses with
+`Your local changes to the following files would be overwritten by checkout`
+until you discard the edit (`git checkout -- docker-compose.yml`).
+
+Redis 7.2 cannot load what Redis 8.10 wrote. A compose file of 2.14.0 or
+older (one downloaded again, `git checkout v2.14.0`, the deploy role of
+2.14.0) runs `redis:7.2-alpine`, and Docker Compose gives it the volume
+`redis_data` of the container before, as its image declares `/data` a
+volume. Redis exits at once, and again after each restart:
+`docker compose up -d` ends with
+`dependency failed to start: container ansilume_redis is unhealthy`, and
+`docker compose logs redis` shows:
+
+```
+# Can't handle RDB format version 15
+# Fatal error loading the DB, check server logs. Exiting.
+```
+
+The same happens when only the image goes back to `redis:7.2-alpine`, in
+`docker-compose.yml` or with `ansilume_redis_image`, and `redis_data`
+stays. Remove the redis container and the volume, and start Redis again.
+`docker volume ls --filter name=redis_data` names the volume when the
+project is not called `ansilume`; with the deploy role, run the commands in
+the install directory, where `.env` names the compose files and the
+project:
+
+```bash
+docker compose rm -sf redis
+docker volume rm ansilume_redis_data
+docker compose up -d
+```
+
+In an installation the quickstart made from source, which runs
+`docker-compose.prebuilt.yml` and whose `.env` names no compose file, add
+`-f docker-compose.prebuilt.yml` to each `docker compose` command: there a
+plain `docker compose up -d` builds and starts the development stack of
+`docker-compose.yml` in place of your containers, and its runners mount the
+install directory, `.env` included.
+
+```bash
+docker compose -f docker-compose.prebuilt.yml rm -sf redis
+docker volume rm ansilume_redis_data
+docker compose -f docker-compose.prebuilt.yml up -d
+```
+
+If you ran the plain `docker compose up -d` there already,
+`docker compose -f docker-compose.prebuilt.yml up -d --remove-orphans`
+creates the containers of `docker-compose.prebuilt.yml` anew and removes
+those that only the development stack has: Adminer, mailhog, swagger-ui
+and the second runner.
+
+Once the volume is removed, Redis 7.2 starts empty, and everyone is signed
+out once more, as at the update: with the compose file of 2.14.0 on an
+anonymous volume of its image, with only the image set back on a new
+`redis_data`. Removing only the container is not enough: the next update
+would load `redis_data` again, with the sessions and the queued syncs from
+before going back. Where the compose file names `redis_data`,
+`docker compose up -d --renew-anon-volumes` does not help either: it
+renews anonymous volumes only. See also
+[Redis does not start after going back](troubleshooting.md#redis-does-not-start-after-going-back-cant-handle-rdb-format-version-15).
 
 ---
 
@@ -6932,7 +7646,7 @@ If an update causes problems:
 
 1. **Restore your `.env` backup** if it was modified.
 2. **Pin a specific version**: set `ANSILUME_IMAGE_TAG=2.10.1` in `.env` when your `docker-compose.yml` tags the images with `${ANSILUME_IMAGE_TAG:-latest}`, or edit the image tags in `docker-compose.yml` (e.g., change `:latest` to `:2.10.1`; the image tags have no leading `v`, unlike the git tags such as `v2.10.1`). A git checkout runs `git checkout v2.10.1` instead. Remove the pin again to receive updates: while it is set, every update stays on that version.
-3. **Restart** with `docker compose up -d`.
+3. **Restart** with `docker compose up -d`. An installation the quickstart made from source restarts with `docker compose -f docker-compose.prebuilt.yml up -d`: there a plain `docker compose up -d` starts the development stack of `docker-compose.yml`.
 4. **Restore your database** if a migration caused issues:
 
 ```bash
@@ -6984,6 +7698,22 @@ The images of 2.13.1 run PHP 8.3 and bring the brotli flaw back (see
 **The images of 2.13.1 carry a brotli flaw** there): pin them only for as
 long as you must. A runner installed without Docker that runs PHP 8.5
 goes back as that section says.
+
+To roll back from the update after 2.14.0 (Redis 8.10, and the migrations
+`m000091` to `m000094`), revert its migrations with that release before you
+start 2.14.0 (`migrate/down 4`: once 2.14.0 runs, it cannot revert them),
+delete the Mattermost templates and those of channels of your own, keep the
+compose file of the newer release with its notification-worker off, and pin
+the images (a source installation started from `docker-compose.yml`, which
+builds its images: `git checkout v2.14.0`, then
+`git checkout main -- docker-compose.yml`). 2.14.0 brings back the flaw of
+its notification channels that the newer release fixes: pin it only for as
+long as you must. See **Going back** at the end of
+[After updating from 2.14.0 or older](#after-updating-from-2140-or-older-redis-810-outbound-http-workflow-notifications-mattermost-lint-in-the-background-recovered-failures).
+The compose files of 2.14.0 and older run Redis 7.2, which cannot load the
+data of Redis 8.10 in the volume `redis_data`: it exits with
+`Can't handle RDB format version 15` until you remove its container and
+that volume, which signs everyone out once more.
 
 ---
 

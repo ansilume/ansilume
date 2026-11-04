@@ -287,7 +287,7 @@ final class WorkflowStepDispatcher
             return self::refusal(self::REQUEST_FAILED);
         }
         try {
-            $approvals->announceRequest($opened['request'], $opened['job'], $rule);
+            $approvals->announceRequest($opened['request'], $opened['job'], $rule, (int)$run->id);
         } catch (\Throwable $e) {
             \Yii::error(sprintf(
                 self::REQUEST_ANNOUNCE_FAILED_LOG,

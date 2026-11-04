@@ -210,15 +210,18 @@ class E2eController extends Controller
         (new E2eLockedTemplateSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
         (new E2eDeletedTemplateApprovalSeeder($logger))->seed($userId, $templateId, $approvalRuleId);
         (new E2eFailingNotificationSeeder($logger))->seed($userId);
+        (new E2eSilentNotificationSeeder($logger))->seed($userId);
         (new E2eRunnerGroupGuardSeeder($logger))->seed($userId, $templateId);
         (new E2eApproverConfigSeeder($logger))->seed($userId);
         $this->seedJobWithArtifacts($userId, $templateId);
         (new E2eUnreadableArtifactSeeder($logger))->seed($userId, $templateId);
         (new E2eLogStreamSeeder($logger))->seed($userId, $templateId);
+        (new E2eRecoveredFailureSeeder($logger))->seed($userId, $inventoryId, $runnerGroupId);
         (new E2eWorkflowPausedSeeder($logger))->seed($userId, $templateId);
         (new E2eSurveyTemplateSeeder($logger))->seed($userId, $projectId, $inventoryId, $credentialId, $runnerGroupId);
         (new E2eTeamScopingSeeder($logger))->seed($userId, $runnerGroupId);
         (new E2eWorkflowScopingSeeder($logger))->seed($userId);
+        (new E2eNotificationDeliveriesSeeder($logger))->seed($userId);
         (new E2eWorkflowGateSeeder($logger))->seed($userId, $templateId);
         (new E2eWorkflowUxSeeder($logger))->seed($userId, $templateId);
         (new E2eWorkflowWaitSeeder($logger))->seed($userId, $templateId);
@@ -316,29 +319,15 @@ class E2eController extends Controller
 
     /**
      * Materialise a minimal Ansible project on disk so lint, sync, and
-     * template runs have something real to point at. Living under
-     * sys_get_temp_dir() keeps it out of any host bind mount and out of
-     * the named `runtime_projects` volume (which only the prebuilt
-     * compose file uses).
-     *
-     * This is what makes `projects/lint-run.spec.ts` exercise the actual
-     * LintService path end-to-end — without a local playbook the
-     * "Run Lint" button only hits the "no local path" guard.
+     * template runs have something real to point at: in the runtime
+     * directory, where the queue-worker, which runs lint, sees it too
+     * (E2eProjectDirectory).
      */
     private function seedProjectPath(): string
     {
-        $path = sys_get_temp_dir() . '/ansilume-e2e-project';
-        if (!is_dir($path)) {
-            mkdir($path, 0o755, true);
-        }
-        $playbook = $path . '/site.yml';
-        if (!file_exists($playbook)) {
-            file_put_contents(
-                $playbook,
-                "---\n- name: E2E smoke test\n  hosts: localhost\n  gather_facts: false\n  tasks:\n    - name: Noop\n      ansible.builtin.debug:\n        msg: \"E2E lint target\"\n",
-            );
-        }
-        return $path;
+        return (new E2eProjectDirectory(function (string $msg): void {
+            $this->stdout($msg);
+        }))->create();
     }
 
     private function seedInventory(int $userId): int
@@ -436,6 +425,7 @@ class E2eController extends Controller
         $nt->subject_template = 'Job {{job.status}}: {{job.name}}';
         $nt->body_template = 'Job {{job.name}} finished with status {{job.status}}.';
         $nt->created_by = $userId;
+        $nt->delivers_as = $userId;
         $nt->save(false);
 
         $this->stdout("  Created notification template (ID {$nt->id}).\n");

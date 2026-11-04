@@ -45,8 +45,9 @@ class JobTemplateControllerSaveRaceTest extends WebControllerTestCase
         parent::setUp();
         // Before any write: tearDown() puts back only what was swapped here.
         $this->swapComponent('lintService', new class () extends LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
         $this->admin = $this->createUserWithRole('web-save-race-admin', 'admin');

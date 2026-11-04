@@ -67,6 +67,7 @@ class ApiAccessRulesTest extends WebControllerTestCase
         'Ldap' => ['test' => 'admin'],
         'NotificationTemplates' => [
             'index' => 'notification-template.view', 'view' => 'notification-template.view',
+            'deliveries' => 'notification-template.view',
             'create' => 'notification-template.create', 'update' => 'notification-template.update',
             'test' => 'notification-template.update', 'delete' => 'notification-template.delete',
         ],
@@ -74,7 +75,7 @@ class ApiAccessRulesTest extends WebControllerTestCase
         'ProjectVault' => ['view' => 'project.view', 'scan' => 'project.update'],
         'Projects' => [
             'index' => 'project.view', 'view' => 'project.view', 'create' => 'project.create',
-            'update' => 'project.update', 'sync' => 'project.update', 'delete' => 'project.delete',
+            'update' => 'project.update', 'sync' => 'project.update', 'lint' => 'project.update', 'delete' => 'project.delete',
         ],
         'Roles' => [
             'index' => 'role.view', 'view' => 'role.view', 'permissions' => 'role.view',

@@ -21,7 +21,7 @@ use yii\web\Response;
  * The secrets of a notification template's channel config on its page and
  * in its edit form: telegram bot_token; slack and teams webhook_url; webhook
  * url and every header value; pagerduty routing_key
- * (NotificationTemplate::SECRET_CONFIG_KEYS and SECRET_CONFIG_MAPS).
+ * (the secretKeys and secretMaps of the channels' definitions, ChannelRegistry).
  *
  * regression: every signed-in user holds the default role viewer, which
  * holds notification-template.view, and the page printed the stored config
@@ -253,7 +253,7 @@ class NotificationTemplateSecretsTest extends WebControllerTestCase
         $this->assertInstanceOf(NotificationTemplate::class, $model);
         $this->assertArrayHasKey('events', $model->getErrors());
         $this->assertSame($submitted, $ctrl->capturedParams['config']);
-        $html = $this->renderForm($model, (string)$ctrl->capturedParams['config']);
+        $html = $this->renderForm($ctrl->capturedParams);
         $this->assertNoSecretIn($html, [ChannelSecretFixtures::WEBHOOK_URL, ChannelSecretFixtures::HEADER_TOKEN, ChannelSecretFixtures::HEADER_ENV]);
         $this->assertStringContainsString('typed-new-token', $html);
         $this->assertSame(ChannelSecretFixtures::WEBHOOK, $this->reload($template)->getParsedConfig());
@@ -379,14 +379,21 @@ class NotificationTemplateSecretsTest extends WebControllerTestCase
         return $result;
     }
 
-    private function renderForm(NotificationTemplate $model, string $config): string
+    /**
+     * The edit form, rendered with the parameters an action rendered it with.
+     *
+     * @param array<string, mixed> $params
+     */
+    private function renderForm(array $params): string
     {
         $ctrl = $this->renderingController();
+        $model = $params['model'] ?? null;
+        $this->assertInstanceOf(NotificationTemplate::class, $model);
 
         return $this->withRealViews(
             $ctrl,
             '/notification-template/update?id=' . $model->id,
-            static fn (): string => $ctrl->renderPartial('form', ['model' => $model, 'config' => $config])
+            static fn (): string => $ctrl->renderPartial('form', $params)
         );
     }
 

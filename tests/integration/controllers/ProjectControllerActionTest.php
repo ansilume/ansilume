@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace app\tests\integration\controllers;
 
+use app\commands\WorkerController;
 use app\components\ProjectFilesNote;
 use app\controllers\ProjectController;
 use app\models\AuditLog;
@@ -58,12 +59,18 @@ class ProjectControllerActionTest extends WebControllerTestCase
             }
         });
 
-        // Stub LintService so runForProject doesn't shell out.
+        // Stub LintService: Run Lint queues a run, which the stub counts; nothing runs or is pushed.
         $this->swapService('lintService', new class extends \app\services\LintService {
             public int $runCalls = 0;
-            public function runForProject(Project $project): void
+            public int $queueCalls = 0;
+            public function runForProject(Project $project, ?int $requestedAt = null): void
             {
                 $this->runCalls++;
+            }
+            public function queueForProject(Project $project): bool
+            {
+                $this->queueCalls++;
+                return true;
             }
         });
     }
@@ -495,7 +502,7 @@ class ProjectControllerActionTest extends WebControllerTestCase
 
     // ── actionLint() ─────────────────────────────────────────────────────────
 
-    public function testLintDelegatesToService(): void
+    public function testLintQueuesARunOfTheService(): void
     {
         $user = $this->createSuperadmin();
         $this->loginAs($user);
@@ -505,9 +512,11 @@ class ProjectControllerActionTest extends WebControllerTestCase
         $result = $ctrl->actionLint((int)$project->id);
 
         $this->assertInstanceOf(Response::class, $result);
-        /** @var object{runCalls: int} $svc */
+        /** @var object{runCalls: int, queueCalls: int} $svc */
         $svc = \Yii::$app->get('lintService');
-        $this->assertSame(1, $svc->runCalls);
+        $this->assertSame(0, $svc->runCalls, 'Run Lint queues the run for the queue-worker');
+        $this->assertSame(1, $svc->queueCalls);
+        $this->assertSame(sprintf(ProjectController::FLASH_LINT_QUEUED, $project->name), \Yii::$app->session->getFlash('success'));
         $this->assertNotNull(AuditLog::findOne([
             'action' => AuditLog::ACTION_PROJECT_LINTED,
             'object_id' => $project->id,
@@ -839,6 +848,48 @@ class ProjectControllerActionTest extends WebControllerTestCase
             try {
                 $redis->del($foreignKey);
                 $redis->del($ourKey);
+            } catch (\Throwable) {
+                // best-effort
+            }
+        }
+    }
+
+    /**
+     * Regression guard: the notification-worker (worker/start
+     * --queue=notificationQueue) beats as the worker of its own queue, never
+     * as a sync worker of the project page: counted as one, it would hide a
+     * queue-worker that is gone or stuck. Its heartbeat is planted under the
+     * key prefix that worker/start gives the notification queue, stamped
+     * with a version and a start older than any real worker's, so that a
+     * snapshot that counted it would name its version as the oldest.
+     */
+    public function testRegressionTheNotificationWorkerIsNoSyncWorkerOnTheProjectPage(): void
+    {
+        $user = $this->createSuperadmin();
+        $this->loginAs($user);
+        $project = $this->createProject($user->id);
+        $ctrl = $this->makeController();
+
+        $redis = $this->connectRedisOrSkip();
+        $key = WorkerController::QUEUES['notificationQueue'] . 'phpunit-notification-' . uniqid('', true);
+        try {
+            $this->clearWorkerHeartbeats($redis);
+            $redis->setex($key, 120, json_encode([
+                'worker_id' => 'phpunit-notification',
+                'pid' => 4,
+                'hostname' => 'phpunit',
+                'started_at' => 1,
+                'seen_at' => time(),
+                'app_version' => '0.0.0-notification-worker',
+                'last_job_processed_at' => null,
+            ]));
+
+            $worker = $ctrl->actionSyncStatus((int)$project->id)['worker'];
+
+            $this->assertNotSame('0.0.0-notification-worker', $worker['oldest_app_version'], 'the notification-worker counts as no sync worker');
+        } finally {
+            try {
+                $redis->del($key);
             } catch (\Throwable) {
                 // best-effort
             }

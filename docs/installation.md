@@ -135,7 +135,7 @@ All configuration is via `.env`. Variables with no default are required; everyth
 | `YII_ENV` | Environment selector — `prod` or `dev` (`prod` when unset, and in `.env.prod.example`). `dev` turns on the Yii debug toolbar and gii and lets the `e2e/*` test commands run; production must use `prod` |
 | `APP_ENV` | Informational only: the compose files pass it to the containers and `bin/diagnose` shows it, but Ansilume does not read it. `YII_ENV` and `YII_DEBUG` decide how Ansilume runs |
 | `YII_DEBUG` | `1` (also `true`, `on` or `yes`) turns on verbose error pages with stack traces and the test-only web endpoints under `/e2e/`; anything else, `0` included, turns them off. Leave at `0` in production |
-| `APP_URL` | Externally reachable base URL (e.g. `https://ansilume.example.com` or `http://10.1.42.102:9911`). Drives absolute links in job notifications, password-reset mails, webhook payloads, and the OpenAPI spec. Without this, background-triggered notifications fall back to the internal docker hostname (`http://nginx/…`). |
+| `APP_URL` | Externally reachable base URL (e.g. `https://ansilume.example.com` or `http://10.1.42.102:9911`). Every link of a notification (the Mattermost status posts and webhook payloads among them) is made from it alone, never from a request: set but empty (`APP_URL=`), those links are paths without an address. Password-reset mails and the OpenAPI spec are made from it too; set but empty, a password-reset mail takes the address of the request it was asked for in. Unset, it is `http://localhost:8080`, which only the host itself reaches, and `bin/diagnose` warns while it is such a localhost address. The deploy role sets it from `ansilume_app_url`. |
 | `NGINX_PORT` | Host port for the web UI (default: `8080`) |
 | `COOKIE_VALIDATION_KEY` | Yii2 cookie signing key — at least 32 characters |
 | `APP_SECRET_KEY` | AES-256 key that encrypts credentials, TOTP secrets and password survey answers — at least 16 characters, 32 random characters recommended (`openssl rand -hex 32`); never change it once credentials, TOTP secrets or survey answers are stored, as that makes them unreadable |
@@ -179,7 +179,8 @@ All configuration is via `.env`. Variables with no default are required; everyth
 | `SMTP_ENCRYPTION` | `tls` (default), `ssl`, or empty for plaintext |
 | `SMTP_USER` / `SMTP_PASSWORD` | SMTP credentials (optional) |
 | `SENDER_EMAIL` | `From:` address on outgoing mail (default: `noreply@example.com`) |
-| `ADMIN_EMAIL` | Destination for system-level alerts like runner-offline |
+| `ADMIN_EMAIL` | The email that the quickstart asks for and gives the first admin account. Ansilume sends no alert to it: alerts such as `runner.offline` go to the notification templates that listen to them (see [notifications.md](notifications.md#events)) |
+| `OUTBOUND_CA_BUNDLE` | A PEM file of CAs that the notification channels and the outbound webhooks trust on top of the system's, for an endpoint whose certificate an internal CA issued: a path inside the app, queue-worker, notification-worker and schedule-runner containers (see [notifications.md](notifications.md#outbound-http)). TLS verification is always on |
 
 ### Artifacts
 

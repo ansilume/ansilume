@@ -24,12 +24,13 @@ use yii\base\Component;
  * while it is running.
  *
  * From the claim on, the run is canceled: its workflow.canceled audit entry
- * (with the reason) is written and its workflow.canceled notification sent
- * at once, so a step that starts meanwhile finds the reason and the actor
- * (WorkflowStepDispatcher::settleStart(), through cancelOf()).
+ * (with the reason) is written at once, so a step that starts meanwhile
+ * finds the reason and the actor (WorkflowStepDispatcher::settleStart(),
+ * through cancelOf()).
  *
  * Then each step still running is failed, with an error message that names
- * the reason, and its job, if it has one, is canceled through
+ * the reason (no step sends workflow.step_failed: the run's
+ * workflow.canceled covers them), and its job, if it has one, is canceled through
  * JobCancellationService::cancelWithinWorkflow(): a waiting or running job
  * ends canceled, and the pending approval request of an approval step's
  * placeholder, or of a job step that waits for approval, is closed as
@@ -46,6 +47,10 @@ use yii\base\Component;
  * statement or transaction of its own after the claim, so this never holds
  * the run's row while it locks a request (the vote path locks the request
  * and the job, and touches the run after its commit).
+ *
+ * The workflow.canceled notification is sent once the running steps were
+ * ended, so what it says of the run (its newest step, its counts,
+ * RunContext) is final.
  *
  * No access checks: the callers check (WorkflowExecutionService::cancel() for
  * users; the template deletion and the maintenance sweep act for the system).
@@ -110,7 +115,6 @@ class WorkflowCancellationService extends Component
         /** @var AuditService $audit */
         $audit = \Yii::$app->get('auditService');
         $audit->log(AuditLog::ACTION_WORKFLOW_CANCELED, 'workflow_job', $runId, $actorId, ['reason' => $reason]);
-        (new WorkflowRunEvents())->notify(NotificationTemplate::EVENT_WORKFLOW_CANCELED, $run);
 
         foreach ($this->runningSteps($runId) as $step) {
             try {
@@ -120,6 +124,7 @@ class WorkflowCancellationService extends Component
                 \Yii::error(sprintf(self::STEP_CANCEL_FAILED, $runId, (int)$step->id, ...DbErrorSummary::of($e)), __CLASS__);
             }
         }
+        (new WorkflowRunEvents())->notify(NotificationTemplate::EVENT_WORKFLOW_CANCELED, $run);
 
         return true;
     }

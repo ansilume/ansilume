@@ -920,9 +920,8 @@ class MaintenanceApprovalTasksTest extends DbTestCase
     }
 
     /**
-     * Every notification takes $seconds, as with an endpoint that answers
-     * slowly (notifications are sent synchronously); they are recorded, not
-     * sent.
+     * Every notification takes $seconds, as a dispatch that waits (for
+     * the database, say) would; they are recorded, not sent.
      */
     private function slowNotifications(float $seconds): void
     {

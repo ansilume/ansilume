@@ -583,6 +583,56 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /api/v1/projects/{id}/lint:
+    post:
+      tags: [Projects]
+      summary: Queue a lint run of a project
+      description: |
+        Requires `project.update` and operator access to the project, as
+        **Run Lint** on the project's page. Queues a run of ansible-lint
+        (`--profile production`) over the whole project, which the
+        queue-worker makes; the request runs no ansible-lint. Audited as
+        `project.linted`, with `source: api`, also when the queue could not
+        be reached.
+
+        Answers `202` with the project's lint state: `queued_at` says when
+        the run was queued, and `status`, `exit_code`, `checked_at` and
+        `output` are still those of the previous run. Once the queue-worker
+        has stored the result, `GET /api/v1/projects/{id}` answers it with
+        `queued_at` null. A request while a run is queued queues another;
+        the result of a run never clears the mark of a newer request. The
+        project's job templates are not linted: a save of a template, and
+        every sync of the project, lint those.
+
+        `503` when the queue could not be reached (Redis): nothing was
+        queued, and `queued_at` stays null.
+      parameters: [{ $ref: '#/components/parameters/IdPath' }]
+      responses:
+        '202':
+          description: The lint run is queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/LintStateDetail' }
+              example:
+                data:
+                  status: clean
+                  exit_code: 0
+                  checked_at: 1762180800
+                  queued_at: 1762184400
+                  output: "Passed: 0 failure(s), 0 warning(s) on 4 files."
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503':
+          description: The queue could not be reached; no lint run was queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error:
+                  message: 'Lint was not queued: the queue could not be reached. Try again once it is back.'
 
   # ───────────────────────────── Inventories ─────────────────────────────
   /api/v1/inventories:
@@ -1090,6 +1140,11 @@ paths:
         inventory has one, answers 422 `Inventory "web-prod" has the
         approval rule "deploy-prod": a job template on it may have only that
         rule as its own, or none.`
+
+        A create queues a run of ansible-lint on the template's playbook,
+        which the queue-worker makes: `lint.queued_at` of the answer says
+        when (see `lint`). When the queue cannot be reached it is null, and
+        the template is created all the same.
       requestBody:
         required: true
         content:
@@ -1221,6 +1276,11 @@ paths:
         may have only that rule as its own, or none.` A template whose own
         rule already differs from its inventory's can still be renamed; its
         launches are refused (see `POST /api/v1/jobs`).
+
+        An update queues a run of ansible-lint on the template's playbook,
+        which the queue-worker makes: `lint.queued_at` of the answer says
+        when (see `lint`). When the queue cannot be reached it is null, and
+        the update is saved all the same.
       requestBody:
         required: true
         content:
@@ -1360,7 +1420,18 @@ paths:
         is no filter, where releases up to 2.13.1 listed no job for a
         `date_from` of only whitespace and every job up to the end of today
         for such a `date_to`; a NUL byte at either end of a date is dropped,
-        where it answered 500.
+        where it answered 500. `recovered` takes only `1` or `0`, and
+        `finished_since` only a whole number of 0 or more: any other value is
+        no filter. A filter sent as a list (`status[]=failed`) is no filter
+        either, where releases up to 2.14.0 answered 500.
+
+        `recovered=1` lists the failed and timed-out jobs that a later run of
+        the same job template recovered (see `recovered_by_job_id` of
+        `Job`), `recovered=0` those that no later run recovered; neither
+        lists a job of another status. `finished_since` (a Unix time) lists
+        the jobs that finished then or later, so no job that has not
+        finished: the dashboard's line on the recovered failures of the last
+        24 hours links `recovered=1` with the start of those 24 hours.
       parameters:
         - { $ref: '#/components/parameters/Page' }
         - { in: query, name: status, required: false, schema: { type: string }, description: "Only the jobs with this status (`status` of `Job`)." }
@@ -1370,6 +1441,8 @@ paths:
         - { in: query, name: date_from, required: false, schema: { type: string, format: date }, description: "Only the jobs created on this day (YYYY-MM-DD) or later." }
         - { in: query, name: date_to, required: false, schema: { type: string, format: date }, description: "Only the jobs created on this day (YYYY-MM-DD) or earlier." }
         - { in: query, name: has_changes, required: false, schema: { type: string, enum: ['1', '0'] }, description: "1 for the jobs that changed something, 0 for those that changed nothing." }
+        - { in: query, name: recovered, required: false, schema: { type: string, enum: ['1', '0'] }, description: "1 for the failed and timed-out jobs that a later run of the same job template recovered, 0 for those that none recovered. Any other value is no filter." }
+        - { in: query, name: finished_since, required: false, schema: { type: integer, minimum: 0 }, example: 1793750400, description: "Only the jobs that finished at this Unix time or later; a job that has not finished is not listed. A value that is no whole number of 0 or more is no filter." }
       responses:
         '200':
           description: Paginated list
@@ -2502,6 +2575,11 @@ paths:
     get:
       tags: [Notification Templates]
       summary: List notification templates
+      description: |
+        Requires `notification-template.view`. Newest first, 25 per page.
+        Each template shows its caller only the workflow templates of its
+        workflow filter that the caller may see (`workflow_template_ids`)
+        and counts the others (`workflow_templates_hidden`).
       parameters: [{ $ref: '#/components/parameters/Page' }]
       responses:
         '200':
@@ -2512,16 +2590,47 @@ paths:
       tags: [Notification Templates]
       summary: Create a notification template
       description: |
-        Requires `notification-template.create`. The answer shows every
-        channel secret of `config` as `$encrypted$`, as every answer does
-        (see `config` of `NotificationTemplate`); `$encrypted$` at the place
-        of a channel secret in the body answers 422, as nothing is stored
-        yet.
+        Requires `notification-template.create`. The caller is the user the
+        template delivers as (`delivers_as`): it delivers only events that
+        the caller may see. `workflow_template_ids` takes only workflow
+        templates the caller may see; another ID answers 422
+        `Workflow template(s) not found: #41.`, and nothing is written. The
+        answer shows every channel secret of `config` as `$encrypted$`, as
+        every answer does (see `config` of `NotificationTemplate`);
+        `$encrypted$` at the place of a channel secret in the body answers
+        422, as nothing is stored yet.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/NotificationTemplateInput' }
+            examples:
+              mattermost:
+                summary: A Mattermost template for the failures and waits of one workflow
+                value:
+                  name: ops-mattermost
+                  channel: mattermost
+                  events: [workflow.launched, workflow.step_failed, workflow.waiting, workflow.succeeded, workflow.failed, workflow.canceled]
+                  level: essential
+                  workflow_scope: selected
+                  workflow_template_ids: [12]
+                  config:
+                    server_url: https://chat.example.com
+                    bot_token: '<bot-access-token>'
+                    team: ops
+                    channel: deployments
+                    mention: '@ops-oncall'
+              signedWebhook:
+                summary: A webhook that receives the signed event payload
+                value:
+                  name: ops-receiver
+                  channel: webhook
+                  events: job.failed,workflow.failed,workflow.waiting
+                  config:
+                    url: https://receiver.example.com/ansilume
+                    headers: { Authorization: 'Bearer <receiver-token>' }
+                    signing_secret: '<signing-secret>'
+                    payload: event
       responses:
         '201': { $ref: '#/components/responses/NotificationTemplateResponse' }
         '422': { $ref: '#/components/responses/NotificationTemplateRejected' }
@@ -2531,6 +2640,11 @@ paths:
     get:
       tags: [Notification Templates]
       summary: Get a single notification template
+      description: |
+        Requires `notification-template.view`. The template shows its caller
+        only the workflow templates of its workflow filter that the caller
+        may see (`workflow_template_ids`) and counts the others
+        (`workflow_templates_hidden`).
       responses:
         '200': { $ref: '#/components/responses/NotificationTemplateResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2544,16 +2658,55 @@ paths:
         keeps the stored secret, so a template read with `GET` and sent
         back unchanged keeps every secret (see `config` of
         `NotificationTemplateInput`); a new value replaces the stored one.
+        `workflow_template_ids` replaces the workflow templates of the
+        filter that the caller may see; those the caller may not see, of
+        another team or deleted, stay, so a `GET` and `PUT` round trip keeps
+        them. An ID the caller may not see answers 422 `Workflow template(s)
+        not found: #41.`, and nothing is written. A change of the channel,
+        its destination, the events, the level, the workflow scope or the
+        filter makes the caller the user the template delivers as
+        (`delivers_as`), recorded in the `notification-template.updated`
+        audit entry as `delivers_as` `{from, to}`; so does any save of a
+        template whose user is inactive (`delivers_as_inactive`).
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/NotificationTemplateInput' }
-            example:
-              name: ops-telegram
-              channel: telegram
-              events: job.failed,workflow.failed
-              config: { bot_token: '$encrypted$', chat_id: '-1001234567890' }
+            examples:
+              telegram:
+                summary: A Telegram template sent back with its bot token kept
+                value:
+                  name: ops-telegram
+                  channel: telegram
+                  events: job.failed,workflow.failed
+                  config: { bot_token: '$encrypted$', chat_id: '-1001234567890' }
+              mattermost:
+                summary: A Mattermost template with its bot token kept and the filter replaced
+                value:
+                  name: ops-mattermost
+                  channel: mattermost
+                  events: [workflow.launched, workflow.step_failed, workflow.waiting, workflow.succeeded, workflow.failed, workflow.canceled]
+                  level: essential
+                  workflow_scope: selected
+                  workflow_template_ids: [12, 15]
+                  config:
+                    server_url: https://chat.example.com
+                    bot_token: '$encrypted$'
+                    team: ops
+                    channel: deployments
+                    mention: '@ops-oncall'
+              signedWebhook:
+                summary: A signed webhook with its url, header and signing secret kept
+                value:
+                  name: ops-receiver
+                  channel: webhook
+                  events: [job.failed, workflow.failed, workflow.waiting]
+                  config:
+                    url: '$encrypted$'
+                    headers: { Authorization: '$encrypted$' }
+                    signing_secret: '$encrypted$'
+                    payload: event
       responses:
         '200': { $ref: '#/components/responses/NotificationTemplateResponse' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -2578,9 +2731,14 @@ paths:
         `app.url`, the job, template, project, runner, workflow, schedule,
         approval and trigger ones, `approval.required_by`,
         `job.inventory_id` and `job.inventory_name`; `launched_by` is the
-        caller. The event is the template's first event, else `test`, as
-        in the web UI. Before 2.12.0 it sent nine variables of its own,
-        for the event `test`. Like every send, it writes a
+        caller. The event is the template's first event that its channel
+        sends something for, else its first event, else `test`, as in the
+        web UI: PagerDuty sends nothing for `workflow.step_started` and
+        `workflow.step_succeeded`, which never trigger an incident, and a
+        template whose channel sends none of its events is not sent, 502
+        `Test failed: The pagerduty channel sends nothing for
+        workflow.step_started.` Before 2.12.0 it sent nine variables of its
+        own, for the event `test`. Like every send, it writes a
         `notification.dispatched` or `notification.failed` audit entry,
         which names the event.
         Answers `{"sent": true}` only when the channel took the message.
@@ -2620,15 +2778,47 @@ paths:
         '502':
           description: |
             The channel did not take the test message. The message names the
-            channel's error, such as the HTTP status a webhook endpoint
-            answered (`HTTP 0` when nothing answered). The
+            channel's error: the HTTP status the endpoint answered (a
+            redirect is not followed and counts as an error), or why no
+            answer came, such as `Could not connect (curl error 7).`, a
+            timeout, a TLS error, or a URL that is no http or https URL. It
+            never holds the endpoint's answer, its URL or a header. The
             `notification.failed` audit entry has the same error.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorResponse' }
               example:
                 error:
-                  message: 'Test failed: WebhookChannel: HTTP 404 — Not Found'
+                  message: 'Test failed: WebhookChannel: HTTP 404.'
+  /api/v1/notification-templates/{id}/deliveries:
+    parameters: [{ $ref: '#/components/parameters/IdPath' }]
+    get:
+      tags: [Notification Templates]
+      summary: List the deliveries of a notification template
+      description: |
+        Requires `notification-template.view`. The template's deliveries,
+        newest first, 25 per page: one per event and template, or, on a
+        channel that keeps a status post per workflow run (`mattermost`),
+        the run's status post and its replies. The notification worker
+        sends each, with retries; a finished one is kept for 30 days.
+
+        Only the deliveries whose event and objects the caller may see are
+        listed: the caller needs the permission of the event's kind
+        (`job.view`, `workflow.view`, `approval.view`, `project.view`,
+        `job.launch` for `schedule.failed_to_launch`, `runner-group.view`
+        for the runner events), of every object it names, and, where a
+        team restricts the caller, access to the job, the run's workflow,
+        the approval request, the project or the job template's project.
+        `meta.hidden` counts the others, which no answer names. A
+        delivery never shows what its event carried (its variables) or the
+        post it made.
+      parameters: [{ $ref: '#/components/parameters/Page' }]
+      responses:
+        '200':
+          description: Paginated list
+          content: { application/json: { schema: { $ref: '#/components/schemas/NotificationDeliveryList' } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   # ─────────────────────────── Approval Rules ───────────────────────────
   /api/v1/approval-rules:
@@ -4616,6 +4806,86 @@ paths:
                       message: { type: string }
                       fields: { type: object, additionalProperties: { type: string } }
 
+webhooks:
+  notificationEvent:
+    post:
+      summary: The request of a webhook notification template
+      description: |
+        What a notification template of the `webhook` channel sends to its
+        `url` for each event it delivers (docs/notifications.md): a JSON
+        `POST` of the template's subject, body and variables (its config's
+        `payload` `template`, the default: `NotificationTemplatePayload`) or
+        of the event (`payload` `event`: `NotificationEventPayload`), with
+        the headers of its config after these. Only a 2xx answer delivers
+        it, and no redirect is followed; a request that got no answer, timed
+        out, or got a 408, 425, 429 or 5xx answer is retried with the same
+        `X-Ansilume-Delivery`, so skip a delivery, or an `event_id`, you have
+        seen before.
+      tags: [Notification Templates]
+      parameters:
+        - name: X-Ansilume-Event
+          in: header
+          required: true
+          description: The event, such as `workflow.step_failed`.
+          schema: { type: string }
+        - name: X-Ansilume-Delivery
+          in: header
+          required: true
+          description: |
+            The ID of the delivery, the same on every retry of it. A test send
+            (`POST /api/v1/notification-templates/{id}/test`) has no delivery:
+            it carries `test-` and 16 hexadecimal digits, another for every
+            test.
+          schema: { type: string, example: '4711' }
+        - name: X-Ansilume-Signature
+          in: header
+          required: false
+          description: |
+            Sent when the template has a `signing_secret`:
+            `t=<unix time>,v1=<signature>`. `t` is the time the request was
+            signed, the signature the lower-case hexadecimal HMAC-SHA256 of
+            `<t>.<body>` (the body exactly as sent) with the signing secret as
+            the key. Refuse a request whose `t` is more than 300 seconds away
+            from your clock, or whose signature differs; compare in constant
+            time. A retry is signed again, at its own time.
+          schema: { type: string, example: 't=1762250000,v1=<64 hexadecimal digits>' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/NotificationEventPayload'
+                - $ref: '#/components/schemas/NotificationTemplatePayload'
+            example:
+              event: workflow.step_failed
+              event_id: '<32 hexadecimal digits>'
+              occurred_at: 1762250000
+              severity: error
+              workflow:
+                id: 12
+                workflow_template_id: 8
+                template_name: Release
+                status: running
+                steps_done: 1
+                steps_total: 3
+                reason: 'Job #42 failed: exit code 2.'
+                url: 'https://ansilume.example.com/workflow-job/view?id=12'
+              step:
+                id: 31
+                workflow_step_id: 17
+                position: 2
+                step_name: Deploy
+                step_type: job
+                job_id: 42
+                approval_request_id: null
+                waiting_for: null
+      responses:
+        '2XX':
+          description: Delivered.
+        default:
+          description: Not delivered; retried after a 408, 425, 429 or 5xx answer, failed after any other.
+
 components:
   securitySchemes:
     bearerAuth:
@@ -5312,11 +5582,17 @@ components:
               data: { $ref: '#/components/schemas/NotificationTemplate' }
     NotificationTemplateRejected:
       description: |
-        Invalid input, such as a missing name or an unknown channel, or
-        `$encrypted$` at the place of a channel secret that cannot keep a
-        stored value: nothing is stored there (always on create), the
-        channel changed, or, for a header of a webhook channel, its `url`
-        changed. Nothing was written.
+        Invalid input, such as a missing name or an unknown channel, a URL
+        of the config that is no http or https URL, `$encrypted$` at the
+        place of a channel secret that cannot keep a stored value (nothing
+        is stored there, always on create; the channel changed; for a header
+        or the `signing_secret` of a webhook channel its `url` changed, for
+        the `bot_token` of a mattermost channel its `server_url`), headers
+        of a webhook channel that are no object of header names and values,
+        a list or an object for a field that takes one value, events of
+        another form,
+        `workflow_template_ids` that are no list of IDs, or an ID of a
+        workflow template the caller may not see. Nothing was written.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -5341,6 +5617,46 @@ components:
               value:
                 error:
                   message: 'The config cannot be stored: it contains a number too large for JSON.'
+            urlScheme:
+              summary: A URL of the config that is no http or https URL
+              value:
+                error:
+                  message: 'webhook_url must be an http or https URL.'
+            serverUrlChanged:
+              summary: A Mattermost bot token kept as $encrypted$ while server_url changes
+              value:
+                error:
+                  message: 'bot_token: server_url changed; enter the real value.'
+            signingSecretUrlChanged:
+              summary: A webhook's signing secret kept as $encrypted$ while url changes
+              value:
+                error:
+                  message: 'signing_secret: url changed; enter the real value.'
+            headersForm:
+              summary: 'Headers of a webhook channel that are no object of names and values, such as the text "X-Custom: value"'
+              value:
+                error:
+                  message: 'headers must be an object of header names and values.'
+            notAValue:
+              summary: A list or an object for a field that takes one value
+              value:
+                error:
+                  message: 'name must be a single value, not a list or an object.'
+            eventsForm:
+              summary: Events that are neither text nor a list of event names
+              value:
+                error:
+                  message: 'events must be a list of event names, or the names as comma-separated text.'
+            workflowTemplateIdsForm:
+              summary: workflow_template_ids that are no list of IDs, such as "12" or [12.5]
+              value:
+                error:
+                  message: 'workflow_template_ids must be a list of workflow template IDs.'
+            workflowTemplatesNotFound:
+              summary: A workflow template the caller may not see, of another team, deleted or none
+              value:
+                error:
+                  message: 'Workflow template(s) not found: #41.'
     ApprovalRequestResponse:
       description: Approval request
       content:
@@ -5852,7 +6168,9 @@ components:
       description: |
         Unknown or revoked token. Also sends the `webhook.invalid_token`
         notification with the token's first six characters, so operators
-        notice leaked or stale tokens. Every other path under `/trigger/`
+        notice leaked or stale tokens. A notification template gets it at
+        most once every 5 minutes; every further call is in the audit log as
+        `notification.throttled`. Every other path under `/trigger/`
         answers 404 `Page not found.` too, without a notification. The body
         is the web UI's HTML error page, not JSON.
       content:
@@ -6247,6 +6565,77 @@ components:
             created before 2.8). Runners older than 2.8 always behave like
             `repository`.
         vault_scanned_at: { type: integer, nullable: true, description: Unix timestamp of the last vault scan }
+        lint:
+          description: |
+            The project's lint state: the result of the last run of
+            ansible-lint over the whole project (**Run Lint**,
+            `POST /api/v1/projects/{id}/lint`, every sync) and whether a run
+            is queued. The list gives it without `output` (`LintState`);
+            `GET /api/v1/projects/{id}` and the answers of `POST` and `PUT`
+            add it (`LintStateDetail`).
+          anyOf:
+            - $ref: '#/components/schemas/LintState'
+            - $ref: '#/components/schemas/LintStateDetail'
+    LintState:
+      type: object
+      description: |
+        The lint state of a job template or a project, as a list gives it:
+        the result the last run of ansible-lint stored, and whether a run is
+        queued. A save of a job template, **Run Lint** and
+        `POST /api/v1/projects/{id}/lint` queue a run, which the queue-worker
+        makes; a sync lints the project and its templates.
+      required: [status, exit_code, checked_at, queued_at]
+      properties:
+        status:
+          type: string
+          nullable: true
+          enum: [not-run, clean, issues, vault-skipped]
+          description: |
+            The verdict of the stored result: `clean` (exit code 0),
+            `issues` (findings), `vault-skipped` (the playbook loads
+            vault-encrypted files, which lint never decrypts on the server),
+            `not-run` (ansible-lint did not run, such as for a playbook or a
+            project path that is missing; `output` says why). null when no
+            result is stored.
+          example: clean
+        exit_code:
+          type: integer
+          nullable: true
+          description: The exit code of ansible-lint; -1 when it did not start, null when it did not run.
+          example: 0
+        checked_at:
+          type: integer
+          nullable: true
+          description: When the stored result was linted, Unix timestamp; null for none.
+          example: 1762180800
+        queued_at:
+          type: integer
+          nullable: true
+          description: |
+            When a lint run was requested whose result is not stored yet,
+            Unix timestamp; null when none is queued. While it is set, the
+            stored result is that of the previous run.
+          example: null
+    LintStateDetail:
+      description: |
+        The lint state of one job template or project, as
+        `GET /api/v1/job-templates/{id}`, `GET /api/v1/projects/{id}` and the
+        answers of their `POST` and `PUT` give it: `LintState` with the
+        output of the stored result.
+      allOf:
+        - $ref: '#/components/schemas/LintState'
+        - type: object
+          required: [output]
+          properties:
+            output:
+              type: string
+              nullable: true
+              description: |
+                What ansible-lint wrote (with ANSI colours), or why it did
+                not run; null when no result is stored. It never holds
+                secrets: lint runs without the server's environment and
+                without vault passwords.
+              example: "Passed: 0 failure(s), 0 warning(s) on 1 files."
     ProjectVault:
       type: object
       properties:
@@ -6828,6 +7217,18 @@ components:
           type: array
           description: Problems jobs of this template may run into. They never block a launch.
           items: { $ref: '#/components/schemas/JobTemplateWarning' }
+        lint:
+          description: |
+            The template's lint state: the result of the last run of
+            ansible-lint on its playbook and whether a run is queued. A
+            create and an update queue a run, which the queue-worker makes;
+            every sync of the project lints the template too. The list gives
+            it without `output` (`LintState`);
+            `GET /api/v1/job-templates/{id}` and the answers of `POST` and
+            `PUT` add it (`LintStateDetail`).
+          anyOf:
+            - $ref: '#/components/schemas/LintState'
+            - $ref: '#/components/schemas/LintStateDetail'
         created_by:
           type: integer
           description: |
@@ -6977,6 +7378,24 @@ components:
         verbosity:       { type: integer, nullable: true }
         check_mode:      { type: boolean }
         exit_code:       { type: integer, nullable: true, description: "-1 when the job ended without an exit code from ansible, for example after a timeout or a failure before execution." }
+        recovered_by_job_id:
+          type: integer
+          nullable: true
+          description: |
+            For a `failed` or `timed_out` job that a later run of the same job
+            template recovered: that run's ID, the first job of the template
+            that succeeded, started after this job finished and was no dry
+            run (`check_mode` false). A job of a higher ID that started in
+            the second this job finished counts too, as a retry on the same
+            runner does; a success that started before this job finished
+            does not count, even when it finished later. null for every
+            other job: a failure that
+            no later run recovered, a job of any other status, and a job
+            without a job template. The dashboard leaves such a failure out
+            of Failed Jobs (last 24h), and the analytics' `mttr_seconds` runs
+            to that run. Whoever may see the job may see that run: both
+            belong to the same job template.
+          example: 136
         execution_command:
           type: string
           nullable: true
@@ -7186,10 +7605,14 @@ components:
     NotificationTemplate:
       type: object
       description: >
-        Global notification subscription. Fires on any listed event across the
-        platform — no per-template pivot. Supported events (15):
+        A notification subscription. It delivers each of its `events` that its
+        `level` lets through, of the runs of every workflow (`workflow_scope`
+        `all`) or only of those of the workflow templates of its workflow
+        filter (`selected`, `workflow_template_ids`), and only what the user it
+        delivers as (`delivers_as`) may see in Ansilume. Supported events (21):
         job.launched, job.succeeded, job.failed, job.canceled,
-        workflow.launched, workflow.succeeded, workflow.failed, workflow.canceled, workflow.step_failed,
+        workflow.launched, workflow.succeeded, workflow.failed, workflow.canceled,
+        workflow.step_started, workflow.step_succeeded, workflow.step_failed, workflow.waiting,
         approval.requested, approval.approved, approval.rejected,
         schedule.failed_to_launch, runner.offline, runner.recovered,
         project.sync_failed, project.sync_succeeded, webhook.invalid_token.
@@ -7197,21 +7620,72 @@ components:
         id:          { type: integer }
         name:        { type: string }
         description: { type: string, nullable: true }
-        channel:     { type: string, enum: [email, slack, teams, webhook, telegram, pagerduty] }
+        channel:
+          type: string
+          example: webhook
+          description: |
+            A built-in channel (`email`, `slack`, `teams`, `webhook`,
+            `telegram`, `pagerduty`, `mattermost`) or a channel of the
+            installation's own (`config/notification-channels.php`,
+            docs/notifications.md).
         events:
           type: array
           items: { type: string }
           description: Event names this template subscribes to.
+        level:
+          type: string
+          enum: [all, essential]
+          description: |
+            Which of its workflow events the template delivers: `all` of them
+            (the default), or only the `essential` ones, `workflow.step_failed`,
+            `workflow.waiting` and the run's end (`workflow.succeeded`,
+            `workflow.failed`, `workflow.canceled`). Events of jobs, approvals
+            and the others are not asked.
+        workflow_scope:
+          type: string
+          enum: [all, selected]
+          description: |
+            The runs whose events the template delivers: those of every
+            workflow (`all`, the default), or only those of the workflow
+            templates of its filter (`selected`, `workflow_template_ids`): the
+            workflow events and the job and approval events of the runs'
+            steps. A `selected` filter whose workflow templates were all
+            deleted delivers no run; it never turns into `all`. Events that
+            belong to no run are not asked.
+        workflow_template_ids:
+          type: array
+          items: { type: integer }
+          description: |
+            The workflow templates of the workflow filter that the caller
+            may see, ascending: live ones whose job steps' projects the
+            caller may view. The filter holds `workflow_templates_hidden`
+            more, which a `PUT` keeps.
+        workflow_templates_hidden:
+          type: integer
+          description: |
+            How many workflow templates the filter holds that the caller may
+            not see: of another team, or deleted.
         config:
           type: object
           description: |
             Channel-specific config. email → {emails:[]}, slack/teams →
-            {webhook_url}, webhook → {url, headers?}, telegram → {bot_token,
-            chat_id}, pagerduty → {routing_key}. Every channel secret is
+            {webhook_url}, webhook → {url, headers?, signing_secret? (signs
+            every request: `X-Ansilume-Signature` of `webhooks`,
+            `notificationEvent`), payload? (`template`, the default: the
+            template's subject, body and variables; or `event`: the event
+            payload, `NotificationEventPayload`)}, telegram → {bot_token,
+            chat_id}, pagerduty → {routing_key}, mattermost → {server_url
+            (https), bot_token (a bot's access token), channel_id, or team
+            and channel (the names in the channel's address), mention? (one
+            user or group mention for the replies that need attention, never
+            @all, @channel or @here)}. Saving a mattermost template asks
+            Mattermost nothing; its first delivery after a change, and every
+            test, check the token (a bot's) and the bot's membership of the
+            channel. Every channel secret is
             answered as `$encrypted$`, to every caller: the `bot_token` of
-            telegram; the `webhook_url` of slack and teams; the `url` of
-            webhook and the value of every one of its `headers` (the header
-            names are shown); the `routing_key` of pagerduty. A key that is a
+            telegram and mattermost; the `webhook_url` of slack and teams; the `url` of
+            webhook, the value of every one of its `headers` (the header
+            names are shown) and its `signing_secret`; the `routing_key` of pagerduty. A key that is a
             secret of one channel is answered as `$encrypted$` in every
             config; an empty value (null or '') is answered as it is. The
             secrets are stored as entered: `$encrypted$` only stands in for
@@ -7220,24 +7694,98 @@ components:
         subject_template: { type: string, nullable: true }
         body_template:    { type: string, nullable: true }
         created_by:  { type: integer }
+        delivers_as:
+          type: integer
+          readOnly: true
+          description: |
+            The user the template delivers as: it delivers only events this
+            user may see in Ansilume, while the user is active. The creator
+            at first, then the user who last changed what or where it
+            delivers (its channel, its destination, its events, its level,
+            its workflow scope or filter). No request body sets it.
+        delivers_as_inactive:
+          type: boolean
+          readOnly: true
+          description: |
+            Whether `delivers_as` is no active account, so that the template
+            delivers nothing: a save of the template makes its saver the user
+            it delivers as.
         created_at:  { type: integer }
         updated_at:  { type: integer }
     NotificationTemplateInput:
       type: object
       required: [name, channel, events]
+      description: |
+        `name`, `description`, `channel`, `subject_template`,
+        `body_template`, `level` and `workflow_scope` take one value each: a
+        list or an object answers 422 `name must be a single value, not a
+        list or an object.` (with the field's name). The fields of
+        `NotificationTemplate` that this schema leaves out, `created_by` and
+        `delivers_as` among them, are the server's: a body that sends them
+        changes nothing.
       properties:
         name:             { type: string, maxLength: 128 }
         description:      { type: string, nullable: true }
-        channel:          { type: string, enum: [email, slack, teams, webhook, telegram, pagerduty] }
-        events:           { type: string, description: 'Comma-separated event names' }
+        channel:
+          type: string
+          example: webhook
+          description: |
+            A built-in channel (`email`, `slack`, `teams`, `webhook`,
+            `telegram`, `pagerduty`, `mattermost`) or a channel of the
+            installation's own (`config/notification-channels.php`,
+            docs/notifications.md); a channel the installation does not have
+            answers 422 `Channel is invalid.`
+        events:
+          description: |
+            The events the template listens to: a list of event names, or
+            the names as comma-separated text (`job.failed,workflow.waiting`).
+            A list with anything but names, or an object, answers 422
+            `events must be a list of event names, or the names as
+            comma-separated text.`; an unknown name answers 422 `Unknown
+            event: job.exploded`.
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: string } }
+        level:
+          type: string
+          enum: [all, essential]
+          description: |
+            See `level` of `NotificationTemplate`; null or '' is `all`.
+            Another value answers 422 `Level is invalid.`
+        workflow_scope:
+          type: string
+          enum: [all, selected]
+          description: |
+            See `workflow_scope` of `NotificationTemplate`; null or '' is
+            `all`. Another value answers 422 `Workflow Scope is invalid.`
+        workflow_template_ids:
+          type: array
+          items: { type: integer }
+          description: |
+            The workflow templates of the workflow filter, which counts while
+            `workflow_scope` is `selected`: a list of IDs, each a whole
+            number from 1, or its digits as text. It replaces the workflow
+            templates of the filter that the caller may see; those the caller
+            may not see stay. Left out, the filter stays as it is; `[]`
+            empties the caller's part. Anything else, a single ID, `null`, a
+            fraction such as `12.5`, a number beyond the int range, `true`, a
+            list in the list or text that is no number, answers 422
+            `workflow_template_ids must be a list of workflow template IDs.`;
+            an ID of a workflow template the caller may not see (of another
+            team, deleted, or none) answers 422 `Workflow template(s) not
+            found: #41.` Either way nothing is written.
         config:
           description: |
             Channel-specific settings (see `config` of `NotificationTemplate`),
             as an object or as JSON text. `$encrypted$` at a secret's place
             keeps the stored value, so a `GET` and `PUT` round trip changes
             no secret. That holds only while the template keeps its channel,
-            and for a header of a webhook channel only while `url` keeps its
-            stored value. Otherwise, and on create, the answer is 422 and
+            for a header and the `signing_secret` of a webhook channel only
+            while `url` keeps its stored value (`signing_secret: url changed;
+            enter the real value.`), and for the `bot_token` of a mattermost channel only
+            while `server_url` keeps its stored value (`bot_token: server_url
+            changed; enter the real value.`), so that a stored token never
+            goes to another server. Otherwise, and on create, the answer is 422 and
             nothing is written; the message starts with the place of the
             secret: `bot_token has no stored value; enter the real value.`
             where nothing is stored, `webhook_url: the channel changed; enter
@@ -7245,7 +7793,22 @@ components:
             `headers.Authorization: url changed; enter the real value.` for
             a header once `url` changed. A config that holds a number too
             large for JSON answers 422 `The config cannot be stored: it
-            contains a number too large for JSON.`
+            contains a number too large for JSON.` The `webhook_url` of
+            slack and teams and the `url` of webhook must be absolute http
+            or https URLs; another scheme answers 422 `webhook_url must be
+            an http or https URL.` (`url must be an http or https URL.` for
+            webhook). The `server_url` of mattermost must be an https URL
+            (`server_url must be an https URL.`), without a user, a query or
+            a fragment. The `payload` of webhook is `template` or `event`
+            (`payload must be template or event.`), its `signing_secret`
+            text of at most 256 characters (`signing_secret must be text of
+            at most 256 characters.`), and its `headers` an object of header
+            names and values of one line (`headers must be an object of
+            header names and values.`, `headers.X A is no header name: leave
+            out spaces, quotes, colons and the other separators.`,
+            `headers.X-A must be one line of text.`) that names none that the
+            channel sets itself (`headers.X-Ansilume-Event is set by
+            Ansilume; leave it out.`).
           oneOf:
             - { type: object }
             - { type: string }
@@ -7256,6 +7819,212 @@ components:
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/NotificationTemplate' } }
         meta: { $ref: '#/components/schemas/PaginationMeta' }
+    NotificationDelivery:
+      type: object
+      description: |
+        One delivery of one event to the template: a message of its own, or
+        on a channel that keeps a status post per workflow run the run's
+        status post (`status`) or a reply in its thread (`reply`). The
+        notification worker sends it, with retries: after 30 seconds, 2, 10
+        and 30 minutes, 1, 2 and 4 hours, at most 8 attempts.
+      properties:
+        id: { type: integer }
+        event:
+          type: string
+          example: workflow.step_failed
+          description: |
+            The event of `NotificationTemplate`'s list; `workflow.status_refresh`
+            for a status post refreshed without an event of its own, such as
+            after an approval of a step that its timeout decided.
+        kind: { type: string, enum: [message, status, reply] }
+        status:
+          type: string
+          enum: [pending, sending, delivered, failed, skipped, superseded]
+          description: |
+            `pending` waits for its next attempt (`next_attempt_at`),
+            `sending` is being sent, `delivered` the channel took, `failed`
+            the channel refused for good or after the last attempt
+            (`last_error`), `skipped` was not sent because the user the
+            template delivers as may no longer see its event (`last_error`
+            says why), `superseded` was not sent because a later status of
+            the same run replaced it.
+        attempts: { type: integer }
+        last_error:
+          type: string
+          nullable: true
+          description: |
+            Why the last attempt failed, or why the delivery was skipped:
+            the HTTP status, or why no answer came, never the channel's
+            answer, its URL or a token.
+        workflow_job_id: { type: integer, nullable: true, description: 'The workflow run it belongs to.' }
+        job_id: { type: integer, nullable: true }
+        approval_request_id: { type: integer, nullable: true }
+        project_id: { type: integer, nullable: true }
+        job_template_id: { type: integer, nullable: true, description: 'The job template of a schedule that failed to launch.' }
+        next_attempt_at: { type: integer }
+        created_at: { type: integer }
+        updated_at: { type: integer }
+        finished_at: { type: integer, nullable: true }
+    NotificationDeliveryList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/NotificationDelivery' } }
+        meta: { $ref: '#/components/schemas/NotificationDeliveryListMeta' }
+    NotificationDeliveryListMeta:
+      allOf:
+        - $ref: '#/components/schemas/PaginationMeta'
+        - type: object
+          properties:
+            hidden:
+              type: integer
+              description: |
+                How many deliveries of the template the list leaves out,
+                because the caller may not see their event or an object
+                they name. `total` and `pages` count the listed ones.
+    NotificationTemplatePayload:
+      type: object
+      description: |
+        The body of a webhook template's request with `payload` `template`
+        (the default): its subject and body as rendered, and the event's
+        variables, every value a string.
+      required: [subject, body, variables]
+      properties:
+        subject: { type: string }
+        body: { type: string }
+        variables: { type: object, additionalProperties: { type: string } }
+    NotificationEventPayload:
+      type: object
+      description: |
+        The body of a webhook template's request with `payload` `event`
+        (docs/notifications.md). `event_id` identifies the event: every
+        template that the event reaches gets the same ID, and no other
+        event has it. The objects are those of the event's group, each
+        shaped like the API's resource of it, with its page (`url`): a job's
+        event carries `job` and `project`; a workflow event `workflow`,
+        `step` and, while its step waits for one, `approval`; an approval
+        event `approval` and `job`; a project's event `project`, a
+        schedule's `schedule`, a runner's `runner`, `webhook.invalid_token`
+        `trigger`. The job and the approval events of a workflow step's run
+        also carry `workflow` and `step`, to a template whose user may see
+        the run's workflow only. A value that the event does not have is
+        null.
+      required: [event, event_id, occurred_at, severity]
+      properties:
+        event: { type: string, example: workflow.step_failed }
+        event_id: { type: string, nullable: true, description: '32 hexadecimal digits.' }
+        occurred_at: { type: integer, nullable: true, description: 'When the event happened, as a Unix time.' }
+        severity: { type: string, enum: [info, warning, error, critical] }
+        workflow: { $ref: '#/components/schemas/NotificationEventWorkflow' }
+        step: { $ref: '#/components/schemas/NotificationEventStep' }
+        job: { $ref: '#/components/schemas/NotificationEventJob' }
+        approval: { $ref: '#/components/schemas/NotificationEventApproval' }
+        project: { $ref: '#/components/schemas/NotificationEventProject' }
+        schedule: { $ref: '#/components/schemas/NotificationEventSchedule' }
+        runner: { $ref: '#/components/schemas/NotificationEventRunner' }
+        trigger: { $ref: '#/components/schemas/NotificationEventTrigger' }
+    NotificationEventWorkflow:
+      type: object
+      description: |
+        The workflow run (Workflow Job). `status` is as stored: a run that
+        waits is `running`. `steps_done` counts the steps of the workflow
+        that ended in the run, each once; `reason` is what the run's page
+        says of its step: why it waits, else why it failed.
+      properties:
+        id: { type: integer }
+        workflow_template_id: { type: integer, nullable: true }
+        template_name: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        steps_done: { type: integer, nullable: true }
+        steps_total: { type: integer, nullable: true }
+        reason: { type: string, nullable: true }
+        url: { type: string }
+    NotificationEventStep:
+      type: object
+      description: |
+        The step's execution in the run (`id`, as `steps` of
+        `GET /api/v1/workflow-jobs/{id}`): the step it ran (null once the step
+        was removed), its position 1..n, its name and type as when it ran,
+        its job, the approval request it waits for, and what it waits for
+        (`approval`, `resume` or `runner`; null for nothing).
+      properties:
+        id: { type: integer }
+        workflow_step_id: { type: integer, nullable: true }
+        position: { type: integer, nullable: true }
+        step_name: { type: string, nullable: true }
+        step_type: { type: string, nullable: true }
+        job_id: { type: integer, nullable: true }
+        approval_request_id: { type: integer, nullable: true }
+        waiting_for: { type: string, nullable: true }
+    NotificationEventJob:
+      type: object
+      description: |
+        The job. A job's event names its template and launcher; an approval
+        event the inventory the job was launched with.
+      properties:
+        id: { type: integer }
+        status: { type: string, nullable: true }
+        job_template_id: { type: integer, nullable: true }
+        template_name: { type: string, nullable: true }
+        inventory_id: { type: integer, nullable: true }
+        inventory_name: { type: string, nullable: true }
+        launched_by: { type: string, nullable: true, description: 'The launcher''s username.' }
+        exit_code: { type: integer, nullable: true }
+        url: { type: string }
+    NotificationEventApproval:
+      type: object
+      description: |
+        The approval request: of an approval event with its status, rule and
+        what required it (`job_template`, `inventory` or `approval_step`); of
+        a workflow event whose step waits for it only its ID, job and page.
+      properties:
+        id: { type: integer }
+        status: { type: string, nullable: true }
+        approval_rule_id: { type: integer, nullable: true }
+        approval_rule_name: { type: string, nullable: true }
+        required_by: { type: string, nullable: true }
+        job_id: { type: integer, nullable: true }
+        url: { type: string }
+    NotificationEventProject:
+      type: object
+      description: |
+        The project; a sync event also with its status and the error of its
+        last sync, without the credentials of a repository URL.
+      properties:
+        id: { type: integer }
+        name: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        last_sync_error: { type: string, nullable: true }
+        url: { type: string }
+    NotificationEventSchedule:
+      type: object
+      description: The schedule that did not launch, why, and its job template.
+      properties:
+        id: { type: integer }
+        name: { type: string, nullable: true }
+        cron_expression: { type: string, nullable: true }
+        job_template_id: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+        url: { type: string }
+    NotificationEventRunner:
+      type: object
+      description: The runner, and when it was last seen, as a Unix time.
+      properties:
+        id: { type: integer }
+        name: { type: string, nullable: true }
+        last_seen_at: { type: integer, nullable: true }
+    NotificationEventTrigger:
+      type: object
+      description: |
+        A call of the trigger endpoint with a token that no template has:
+        the token's first six characters, the kind of trigger (`workflow`;
+        null for a job template's), where the call came from, and where the
+        further calls are (they are throttled).
+      properties:
+        kind: { type: string, nullable: true }
+        token_prefix: { type: string }
+        ip: { type: string, nullable: true }
+        user_agent: { type: string, nullable: true }
+        note: { type: string, nullable: true }
 
     ProjectInput:
       type: object

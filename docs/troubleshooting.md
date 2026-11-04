@@ -22,6 +22,13 @@ only (`0600`). Otherwise diagnose says what it lacks:
   subdirectory of the install directory `docker compose` still finds the
   compose file of the parent directory.
 
+Under **Notifications** it lists every notification template that delivers
+as an inactive user, and so delivers nothing (see
+[A notification template delivers nothing: the user it delivers as is inactive](#a-notification-template-delivers-nothing-the-user-it-delivers-as-is-inactive)),
+and warns while `APP_URL` leaves the links of notifications at a localhost
+address (see [Links in notifications lead to localhost](#links-in-notifications-lead-to-localhost)).
+Its **Diagnosis Summary** repeats both, as warnings.
+
 Where `docker compose` cannot tell the state of the containers, diagnose
 reports it as unknown, and where it cannot tell the port of the stack either,
 it skips the HTTP and port checks. Up to 2.13.1 it reported every variable of
@@ -103,6 +110,71 @@ script that the repository's `ansible.cfg` names. What you see instead:
 
 Jobs are not affected: the runner decrypts with the job template's vault
 credential.
+
+## Lint stays "Lint queued"
+
+**Symptom:** The lint card of a job template's or a project's page shows
+**Lint queued** longer than a lint run takes (a few seconds, longer only
+behind a project sync), perhaps with
+`⚠ No queue worker is running. Start one with: docker compose up -d queue-worker`.
+`GET /api/v1/job-templates/{id}` and `GET /api/v1/projects/{id}` answer a
+`lint.queued_at` that stays set.
+
+**Cause:** ansible-lint never runs in a web request. A save of a job
+template, in the web UI and through the API, **Run Lint** on a project's
+page and `POST /api/v1/projects/{id}/lint` queue a lint run on the queue of
+the queue-worker, which runs it and stores the result; the page asks every
+two seconds whether the run is done and reloads itself with the result.
+The run waits while no queue-worker takes the queue: its container is
+stopped or unhealthy, or the worker is stuck on a stale Redis connection.
+The card shows the hint while no queue-worker beats (the
+notification-worker does not count). A run whose queue message was lost,
+as when Redis started without its data, never comes.
+
+**Fix:** Check the queue-worker:
+
+```bash
+docker compose ps queue-worker
+docker compose logs --tail 100 queue-worker
+```
+
+An installation the quickstart made from source adds
+`-f docker-compose.prebuilt.yml` to each `docker compose` command: there a
+plain one reads `docker-compose.yml`, the development stack, and
+`docker compose up -d queue-worker` would put a development queue-worker in
+place of yours. Start it with `docker compose up -d queue-worker`, or
+restart it with `docker compose restart queue-worker` when it runs but
+takes no job (the sync output of a project's page warns of that too). The
+queued run then comes, and the page shows its result without a reload.
+
+`docker compose logs` shows only that the worker started. Its application
+log names each run as `app\jobs\LintTemplateJob` or
+`app\jobs\LintProjectJob`, with the error of one that failed: in a git
+checkout `runtime/logs/app.log`, with the prebuilt images inside the
+container:
+
+```bash
+docker compose exec queue-worker tail -n 200 /var/www/runtime/logs/app.log | grep -E 'Lint(Template|Project)Job'
+```
+
+For a run that failed there, or whose message was lost, save the template
+again or click **Run Lint** to queue a new one.
+
+When a save or **Run Lint** says
+`Lint was not queued: the queue could not be reached. Try again once it is back.`,
+Redis could not be reached: the template was saved all the same, nothing
+was queued, and the API answers `lint.queued_at` null
+(`POST /api/v1/projects/{id}/lint` answers `503`). The application log has
+`LintService: the lint run of job template #12 could not be queued (its save stays):`
+and the error. Check the `redis` container, then save again or click
+**Run Lint**.
+
+A manual project's lint runs in the queue-worker, which needs the
+project's directory too: a result `Project path not found: /srv/playbooks`
+while the project's page lists its files means that the queue-worker does
+not see the directory. With the prebuilt images the app and the
+queue-worker share only `runtime/projects`: mount the directory into both
+(see [deployment.md](deployment.md#architecture)).
 
 ## Generate Ed25519 Key Pair or Parse Inventory: the server refused the request
 
@@ -276,6 +348,41 @@ the log and changes nothing else: the job keeps its status, and no
 
 **Fix:** None for the job: its status is final. A playbook that ran on after
 the cancel may have changed the hosts; check them.
+
+## A failed job is missing from the dashboard's Failed Jobs
+
+**Symptom:** A job of the last 24 hours that failed or timed out is not
+listed under **Failed Jobs (last 24h)** on the dashboard, and **Jobs Today**
+does not turn red for it. Where the panel was, or below it, a muted line
+says, for example,
+`2 failed jobs of the last 24 hours were followed by a successful run of the same job template.`
+
+**Cause:** A later run of the same job template recovered the failure: a
+job of the same job template succeeded that started after the failure
+finished and was no dry run. A success that started in the second the
+failure finished counts too when it is the later job, of a higher ID: a
+runner claims its next job, such as the retry of a workflow step whose On
+Failure branch leads back to it, right after it reported the failure. The
+panel and the card show only the failures that still need attention. The job's page says
+`A later run of this job template succeeded: #136`, linking that run, the
+job list shows `recovered by #136` next to the job's status, and
+`GET /api/v1/jobs` and `GET /api/v1/jobs/{id}` answer the run's ID in
+`recovered_by_job_id`. A success that started before the failure finished
+does not recover it, even when it finished later, as it was already running
+when the failure ended, and neither does a dry run, which checks and
+changes nothing. The limit, the inventory and the survey answers of the two
+runs are not compared. The history still counts every failure: the chart
+Job Outcomes and Status (7 days). The analytics' MTTR runs from each failure
+to the run that recovered it, by the same rule; up to 2.14.0 a dry run that
+succeeded counted as the recovery.
+
+**Fix:** None. **Show them** on that line lists the recovered failures of
+those 24 hours: the job list's filter **Recovered**
+(`/job/index?recovered=1`, and `GET /api/v1/jobs?recovered=1` in the API)
+with `finished_since`, the Unix time the 24 hours began. The list then says
+`Only jobs that finished since <time>.`, and its link **Remove this filter**
+lists the recovered failures of any time. `recovered=0` lists the failures
+that no later run recovered.
 
 ## A job stays running, or ends without task results: the server refused the runner's report
 
@@ -1209,13 +1316,36 @@ A run that stopped after a resume can be canceled.
 **Symptom:** A notification does not arrive, for example the email or the
 webhook call of a failed job.
 
-**Cause:** Every send of a notification template writes an audit entry:
-`notification.dispatched`, or `notification.failed` with the `error` of the
+**Cause:** The process that caused an event sends no notification itself:
+it writes a delivery for each notification template that may deliver the
+event, and the notification-worker sends it. A template gets no delivery of
+an event when the user it delivers as, who last changed what or where it
+delivers, may not see the event in Ansilume or is inactive, when its
+level or its workflow filter leaves the event out, or when its channel
+sends nothing for the event, as PagerDuty for `workflow.step_started` and
+`workflow.step_succeeded`, which never trigger an incident. A delivery that fails
+for a reason that can pass (no answer, a timeout, a failed TLS connection,
+or the answer `408`, `425`, `429` or `5xx`) is tried again, up to 8
+attempts, after 30 seconds, 2, 10 and 30 minutes, then 1, 2 and 4 hours,
+or later when the endpoint asks for it with `Retry-After`, up to an hour.
+Any other answer outside `2xx`, such as `400`, `401`, `403`, `404` or
+`413`, fails it at once. A delivery whose queue message was lost, for
+example with Redis, is queued again by the maintenance run within a few
+minutes. Its outcome writes one audit entry, without a user:
+`notification.dispatched`, `notification.failed` with the `error` of the
 channel, such as the HTTP status a webhook endpoint answered, or that the
-mailer could not send an email. The application log of the container that
-sent it (the app container for the web UI, the API and runner reports, the
-schedule-runner for schedules and the maintenance run, the queue-worker for
-project syncs) has the same error, for example
+mailer could not send an email, or `notification.skipped` with the reason
+when the user the template delivers as could no longer see the event when
+it was to be sent, or the template's channel, changed meanwhile, sends
+nothing for it. The application log of the notification-worker has the
+same error, for example
+`NotificationDeliveryService: delivery #41 of notification template #3 (webhook) for job.failed failed after 1 attempt(s): WebhookChannel: HTTP 404.`:
+in a git checkout `runtime/logs/app.log`, which every container writes,
+with the prebuilt images a log of its own inside its container
+(`docker compose exec notification-worker tail -n 200 /var/www/runtime/logs/app.log`);
+`docker compose logs notification-worker` shows only that it started. The
+test send of a template is sent by the container that serves the page or
+the API, whose log has, for example
 `NotificationDispatcher: failed to send notification #3 (webhook) for job.failed: ...`.
 A database error is written to both only as its class, SQLSTATE and driver
 error code, for example
@@ -1227,22 +1357,302 @@ no audit entry is written; the log has
 `Workflow job #12: the workflow.step_failed notification failed: yii\db\Exception (SQLSTATE HY000, driver error 2006).`,
 and the run goes on.
 
-**Fix:** For a channel error, check the channel's settings on the
-notification template (for email also the
+**Fix:** When nothing is sent at all, check that the notification-worker
+runs (`docker compose ps notification-worker`; see
+[Notifications are not sent: the notification-worker does not run](#notifications-are-not-sent-the-notification-worker-does-not-run)).
+A template whose user is inactive delivers nothing (see
+[A notification template delivers nothing: the user it delivers as is inactive](#a-notification-template-delivers-nothing-the-user-it-delivers-as-is-inactive));
+for Mattermost, see
+[A Mattermost notification fails](#a-mattermost-notification-fails). For a channel error, check
+the channel's settings on the notification template (for email also the
 [mail settings](installation.md#email--notifications) of the installation),
 then use **Send Test** on its page. When the channel does not take the test
 message, the page shows `Test notification failed: ` and the channel's
-error as an error, for example `WebhookChannel: HTTP 404 — ...` with the
-start of the endpoint's answer, or `WebhookChannel: HTTP 0 — ` when nothing
-answered; `POST /api/v1/notification-templates/{id}/test` answers `502` with
+error as an error, for example `WebhookChannel: HTTP 404.` when the endpoint
+answered 404, `WebhookChannel: Could not connect (curl error 7).` when
+nothing answered, `WebhookChannel: The URL must use http or https.` for a
+URL of another scheme, or
+`WebhookChannel: The TLS connection failed (curl error 60).` for a
+certificate that no trusted CA issued (`OUTBOUND_CA_BUNDLE` adds the CA of
+an internal one). The error never holds the endpoint's answer, its URL or a
+header. The test sends the template's first event that its channel sends
+something for; a template whose channel sends none of its events shows
+`The pagerduty channel sends nothing for workflow.step_started.`: subscribe
+it to an event its channel sends. `POST /api/v1/notification-templates/{id}/test` answers `502` with
 `Test failed: ` and the same error. Before the update to approvals and
 workflows the test said `Test notification sent successfully.` whatever the
 channel answered. Like every send, the test writes its
 `notification.dispatched` or `notification.failed` audit entry. For a
 database error, see
 [Approval timeouts or the deleted-template sweep keep failing](#approval-timeouts-or-the-deleted-template-sweep-keep-failing)
-for what the SQLSTATE and the driver's error code mean. A notification that
-failed is not sent again.
+for what the SQLSTATE and the driver's error code mean. A delivery that
+failed for good is not sent again; the next event is.
+
+## A notification waits for its next attempt, or failed after 8 attempts
+
+**Symptom:** On the page of a notification template, a delivery of its
+**Deliveries** shows `pending` with `Not yet: next attempt` and when, and
+the same last error after each attempt, or `failed` after 8 attempts.
+`GET /api/v1/notification-templates/{id}/deliveries` shows the same
+(`status`, `attempts`, `last_error`, `next_attempt_at`). The application log
+of the notification-worker has a line for each attempt, for example
+`NotificationDeliveryService: delivery #41 of notification template #3 (webhook) for job.failed failed on attempt 3 of 8; the next attempt in 600 seconds: WebhookChannel: HTTP 503.`
+
+**Cause:** The endpoint did not take the delivery for a reason that can
+pass: no answer, a timeout, a failed TLS connection, or the answer `408`,
+`425`, `429` or `5xx`. The notification-worker tries such a delivery again,
+after 30 seconds, 2, 10 and 30 minutes, then 1, 2 and 4 hours, at most 8
+attempts, or later when the endpoint asks for it with `Retry-After`, up to
+an hour (see [notifications.md](notifications.md#retries)). After the 8th
+attempt the delivery fails for good, with a `notification.failed` audit
+entry. The later deliveries of the same workflow run to the same template
+wait behind it, `pending` without an attempt of their own, so that they keep
+the order of their events.
+
+**Fix:** The error says what to fix: the endpoint that answered `503`, the
+network or the firewall for `Could not connect (curl error 7).`, the CA of
+the endpoint for `The TLS connection failed (curl error 60).` (see
+[A notification fails with `The TLS connection failed (curl error 60).`](#a-notification-fails-with-the-tls-connection-failed-curl-error-60)).
+Once it is fixed, the next attempt sends the delivery; **Send Test** checks
+the channel at once. A delivery that failed for good is not sent again; the
+next event is.
+
+## Notifications are not sent: the notification-worker does not run
+
+**Symptom:** No notification arrives. The deliveries of the templates stay
+`pending`, their next attempt long past. `docker compose ps` shows no
+`notification-worker`, or shows it restarting, and the **Diagnosis
+Summary** of `bin/diagnose` says `notification-worker: not running` (no
+container), `notification-worker: stopped (state=restarting)` or
+`notification-worker: stopped (state=exited)` (a container that does not
+run), or
+`notification-worker: not in the compose file — the app image queues the notifications for it, and no container sends them: take the compose file of this release`.
+A notification-worker of an image of 2.14.0 or older restarts without end,
+with `Error: Unknown option: --queue` in
+`docker compose logs notification-worker`.
+
+**Cause:** The notification-worker sends every notification: the process in
+which an event happens only writes its deliveries. A compose file of 2.14.0
+or older has no such service, so with the images of this release every
+notification waits; so it does while the service is stopped. Images of
+2.14.0 or older, with `ANSILUME_IMAGE_TAG` pinned to such a release and the
+compose file of this release, have no notification queue, and their
+`worker/start` has no `--queue`.
+
+**Fix:** Take the compose file of this release (the quickstart's
+`--update` downloads it; see
+[Manual update — prebuilt images](updating.md#manual-update--prebuilt-images)),
+and start the service (an installation the quickstart made from source
+adds `-f docker-compose.prebuilt.yml`):
+
+```bash
+docker compose up -d notification-worker
+```
+
+The deliveries wait in the database: none is lost. While no worker takes
+the messages of the notification queue, the maintenance run queues none of
+them again, so that the queue, in the Redis that also holds the sessions
+and the cache, holds at most one message per delivery however long the
+worker is away. Once the worker runs, it takes those messages and sends the
+deliveries that are due; once the queue holds no message that waits, that
+a worker took, or whose delay has passed, the maintenance run queues again,
+within 2 minutes, those whose message was lost. With the images of 2.14.0 or
+older, pinned to go back, keep the service off in an override and remove
+its container once (`docker compose rm -sf notification-worker`), as
+**Going back.** under
+[After updating from 2.14.0 or older](updating.md#after-updating-from-2140-or-older-redis-810-outbound-http-workflow-notifications-mattermost-lint-in-the-background-recovered-failures)
+says: the compose file of 2.14.0 runs Redis 7.2, which cannot load the
+data of Redis 8.10.
+
+## A notification template delivers nothing: the user it delivers as is inactive
+
+**Symptom:** The page of a notification template says
+`Delivers nothing: alice, the user it delivers as, is inactive. Saving the template makes whoever saves it the user it delivers as.`,
+and its edit form warns too. The API answers `"delivers_as_inactive": true`
+for it. `bin/diagnose` lists it under **Notifications**:
+`Notification template #3 'Deploy alerts' delivers as user #12, who is inactive: it sends nothing until someone saves it, who then becomes the user it delivers as`.
+Its deliveries end `skipped` with
+`Not sent: the user the template delivers as, #12, is inactive.`, or it
+gets none.
+
+**Cause:** A template delivers only what the user it delivers as may see,
+and nothing while that user is inactive (see
+[Delivers as](notifications.md#delivers-as)). That user is whoever last
+changed what the template delivers or where to; after the update to
+workflow notifications every template delivers as its creator, so a
+template whose creator was deactivated delivers nothing.
+
+**Fix:** Check what the template delivers and where to, then save it, on
+its edit form or through the API: any save of such a template makes you the
+user it delivers as, and it then delivers what you may see. An empty `PUT`
+does it:
+
+```bash
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{}' https://ansilume.example.com/api/v1/notification-templates/3
+```
+
+The `notification-template.updated` audit entry records the change as
+`delivers_as` `{from, to}`.
+
+## A Mattermost notification fails
+
+**Symptom:** **Send Test** of a Mattermost template shows
+`Test notification failed: ` and one of the messages below, or a delivery
+of the template ends `failed` with it: on the template's page, in the API's
+`last_error`, in its `notification.failed` audit entry and in the
+application log of the notification-worker. Each names the HTTP status,
+Mattermost's error id and the request ID, which Mattermost's logs know.
+
+**Cause and fix:**
+
+- `Mattermost refused the bot token (HTTP 401, error api.context.session_expired.app_error, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe): it was revoked or has expired, or the bot was disabled when its owner was deactivated.`
+  Create a new token for the bot (**Integrations → Bot Accounts → Create
+  New Token**), or enable the bot again, and enter the token in the
+  template.
+- `The Mattermost token is not a bot's: a personal token carries the rights of a person. Create a bot account with the Member role, add it to the team and the channel, and use the bot's token.`
+  Do as it says (see [Setting it up](notifications.md#setting-it-up)).
+- `Mattermost has no channel ops/deployments that the bot may see (HTTP 404, error app.channel.get_by_name.missing.app_error, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe): check the channel ID, or the team and channel names, and add the bot to the team, and to the channel if it is private.`
+  The team and the channel are the names in the channel's address, not its
+  display name.
+- `The bot is not a member of the Mattermost channel h8kc6rz1ytgq3mbxd9wfs5ea4n (HTTP 404, error app.channel.get_member.missing.app_error, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe): add it to the channel; without it, the bot cannot edit its status posts.`
+  Add the bot to the channel (`/invite @ansilume` in the channel). The next
+  delivery checks again.
+- `Mattermost refused the post in channel h8kc6rz1ytgq3mbxd9wfs5ea4n (HTTP 403, error api.context.permissions.app_error, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe): the channel no longer exists, or the bot is not a member of it.`
+  Add the bot to the channel again, or choose another channel.
+- `The Mattermost channel h8kc6rz1ytgq3mbxd9wfs5ea4n is archived (HTTP 400, error api.post.create_post.can_not_post_to_deleted.error, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe): unarchive it, or choose another channel.`,
+  or `The Mattermost channel ops/deployments is archived: unarchive it, or choose another channel.`
+  when the check found it so.
+- `Mattermost: checking the bot token got an answer that Mattermost's API does not give (HTTP 200): check that server_url is the address of a Mattermost server, 10.11 or later.`
+  `server_url` names another server, or a page in front of Mattermost, such
+  as the login page of a proxy.
+- `The Mattermost config cannot be used: server_url must be an https URL.`
+  The stored config breaks a rule of the channel: save the template with
+  what the message names.
+- `Mattermost: a delivery makes at most 7 requests, and this one needed more.`
+  A delivery stops before an eighth request, so that it ends within the
+  notification queue's 120 seconds, and fails. It should never need one:
+  please report it, with the request IDs of the delivery's errors.
+- `Mattermost does not let the bot edit its own status post 1q8ytn3ixjbkzmd5cpf7rk4w1r (HTTP 403, error api.context.permissions.app_error, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe): allow members to edit their own posts (Edit Posts in the permission scheme of the system or of the team). Until then the post stays as it is, and no new one is posted.`
+  A permission scheme takes **Edit Posts** (own posts) from members, the
+  role of the bot: the System Scheme (**System Console → User Management →
+  Permissions**) or the team's override scheme. Allow it there; the run's
+  next status delivery edits the post again. Mattermost refuses such an
+  edit as it refuses the edit of a deleted post, so the bot looks the post
+  up before it posts anew: a status post that was deleted is posted anew,
+  and one that Mattermost still has is left as it is, so that the channel
+  does not get a new post for every change of the run.
+- `Mattermost: looking up the status post failed (HTTP 403, error api.context.permissions.app_error, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe).`
+  The bot may not read its own status post, which it looks up when
+  Mattermost refused to let it edit the post: check the members' rights in
+  the permission schemes of the system and of the team. The delivery fails,
+  and nothing is posted anew.
+- `Mattermost: posting failed (HTTP 503, request ID 7q1ba8jxifgk7ghx9xnj1p4yhe).`,
+  `Mattermost: checking the bot token failed (Could not connect (curl error 7)).`
+  and other errors of a request that can pass are tried again (see
+  [A notification waits for its next attempt, or failed after 8 attempts](#a-notification-waits-for-its-next-attempt-or-failed-after-8-attempts)),
+  a `429` after Mattermost's `Retry-After`. For an error that ends in
+  `(The TLS connection failed (curl error 60)).`, see
+  [A notification fails with `The TLS connection failed (curl error 60).`](#a-notification-fails-with-the-tls-connection-failed-curl-error-60).
+- `The run has no status post to reply to: its status delivery did not create one.`
+  A reply goes into the thread of the run's status post, and the status
+  delivery before it failed: its error says why.
+- `The run no longer exists.` The status of a run that was removed meanwhile
+  is not sent.
+- `The status post was made, but its thread could not be saved.` The
+  database failed after the post was made. The delivery is tried again, and
+  the run's status post may then be in the channel twice.
+
+A status post that was deleted, or that Mattermost's edit time limit
+(`ServiceSettings.PostEditTimeLimit`) no longer lets the bot edit, fails no
+delivery: the run gets a new status post. One that Mattermost still has but
+does not let the bot edit fails its delivery with the message above, and no
+new one is posted.
+
+## Links in notifications lead to localhost
+
+**Symptom:** The links of notifications, of the Mattermost status posts,
+of webhook payloads and of password-reset mails lead to
+`http://localhost:8080/…`, which opens nothing on another computer.
+`bin/diagnose` says under **Notifications**
+`APP_URL is not set, so the links of notifications lead to http://localhost:8080: set APP_URL in .env to the address your users open (the deploy role: ansilume_app_url), then docker compose up -d`,
+or that `APP_URL` is an address that only the host reaches.
+
+**Cause:** Ansilume builds the links of notifications from `APP_URL` alone,
+never from the request at hand: a runner's report arrives through the
+internal nginx, and the notification-worker serves no request at all.
+Without `APP_URL` the base is `http://localhost:8080`; with an empty
+`APP_URL=` the links of notifications are paths without an address, and a
+password-reset mail takes the address of its request.
+
+**Fix:** Set `APP_URL` to the address your users open Ansilume at, such as
+`https://ansilume.example.com`:
+
+- with the prebuilt images, in `.env` (the quickstart asks for it as the
+  external URL), then recreate the containers: `docker compose up -d`, or
+  `docker compose -f docker-compose.prebuilt.yml up -d` in an installation
+  the quickstart made from source;
+- in a git checkout, in `.env`, then restart the workers, which read it when
+  they start: `docker compose restart queue-worker notification-worker`;
+- with the deploy role, as `ansilume_app_url`, and run the role.
+
+A notification sent before keeps its link.
+
+## Saving a notification template: `webhook_url must be an http or https URL.`
+
+**Symptom:** Saving a Slack, Microsoft Teams or Webhook notification
+template, on its edit form or with `POST` or
+`PUT /api/v1/notification-templates` (`422` in the API), is refused with
+`webhook_url must be an http or https URL.` (`url must be an http or https URL.`
+for the Webhook channel). A Mattermost template is refused with
+`server_url must be an https URL.` for any other scheme, `http` included.
+
+**Cause:** The channels send only to absolute `http` and `https` URLs with
+a host, and a template is saved only with such a URL. A template stored
+earlier with another scheme fails every delivery, for example with
+`SlackChannel: The URL must use http or https.`, and its next save is
+refused until its URL is changed, also when the form keeps the URL as
+`$encrypted$`.
+
+**Fix:** Enter the endpoint's `https://` (or `http://`) URL; for
+Mattermost, its `https://` address: its bot token is a full session of the
+bot, which must never travel in clear.
+
+## A notification fails with `The TLS connection failed (curl error 60).`
+
+**Symptom:** **Send Test** or a delivery fails with
+`<Channel>: The TLS connection failed (curl error 60).`, or with
+`curl error 77`.
+
+**Cause:** TLS verification is always on.
+
+- 60: no CA that the containers trust issued the endpoint's certificate (an
+  internal CA), or the certificate names another host.
+- 77: the file that `OUTBOUND_CA_BUNDLE` names cannot be read.
+
+**Fix:** Set `OUTBOUND_CA_BUNDLE` to a PEM file with the internal CA, as
+[notifications.md](notifications.md#outbound-http) shows for each way of
+installing:
+
+- with the prebuilt images, mount the file read-only into the app,
+  queue-worker, notification-worker and schedule-runner services (the
+  notification-worker sends the notifications), for example in a
+  `docker-compose.override.yml`, name its path in the container, and run
+  `docker compose up -d`. An installation the quickstart made from source
+  names both files:
+  `docker compose -f docker-compose.prebuilt.yml -f docker-compose.override.yml up -d`;
+  there a plain `docker compose up -d` starts the development stack of
+  `docker-compose.yml`;
+- in a source installation started from `docker-compose.yml`, use a file in
+  the checkout, at `/var/www/<its path>`, and restart the services, which
+  read `.env` only when they start:
+  `docker compose restart app queue-worker notification-worker schedule-runner`.
+  **Send Test** works before that restart, the deliveries do not;
+- with the deploy role, set `ansilume_outbound_ca_bundle`; with its prebuilt
+  images, also put that override into the install directory, where the
+  role uses it.
+
+The system's CAs stay trusted.
 
 ## Saving a notification template or a webhook: a secret has no stored value
 
@@ -1254,6 +1664,8 @@ the secret in the channel's config:
 - `bot_token has no stored value; enter the real value.`
 - `webhook_url: the channel changed; enter the real value.`
 - `headers.Authorization: url changed; enter the real value.`
+- `signing_secret: url changed; enter the real value.`
+- `bot_token: server_url changed; enter the real value.`
 
 Or saving an outbound webhook, on its form or with `POST` or
 `PUT /api/v1/webhooks`, says
@@ -1266,12 +1678,14 @@ its signing secret so (the API never answers it). A save that sends
 only where a value is stored: not for a new template or webhook, not after
 the template's channel changed, and not for a header of a webhook channel
 once its URL changed, so that a header is never sent to another address
-without being entered again.
+without being entered again. The same holds for the signing secret of a
+webhook channel once its URL changed, and for the bot token of a
+Mattermost channel once its `server_url` changed.
 
 **Fix:** Enter the real value in place of `$encrypted$`: the bot token, the
-webhook URL, the routing key or the header's value; for an outbound
-webhook, the signing secret, or an empty field to send deliveries
-unsigned.
+webhook URL, the routing key, the header's value or the signing secret of
+a webhook channel; for an outbound webhook, the signing secret, or an
+empty field to send deliveries unsigned.
 
 ## Approval timeouts or the deleted-template sweep keep failing
 
@@ -1406,7 +1820,9 @@ Give the new token to the system that calls the trigger, to send in the
   `Authorization: Bearer <token>`. An empty `?token=`, or `token[]=…`,
   counts as none, and only the Bearer scheme of `Authorization` counts.
 - **`404`**: the token is unknown or was revoked; the `webhook.invalid_token`
-  notification names its first six characters. Every other path under
+  notification names its first six characters. A notification template gets
+  it at most once every 5 minutes; every further call is in the audit log as
+  `notification.throttled`. Every other path under
   `/trigger/` answers `404 Page not found.` too, for example
   `/trigger/fire/<token>`.
 - **`405`**: the request used another method than `POST`, for example a
@@ -1946,6 +2362,68 @@ with it, Composer stops at that directory with `Permission denied`. For
 `ERROR: API_URL environment variable is required.`, put the runner's
 settings in `.env` of its directory and remove them from the unit (see
 [runners.md](runners.md#setup)).
+
+## Redis does not start after going back: "Can't handle RDB format version 15"
+
+**Symptom:** After going back to an older release or an older Redis image,
+the redis container exits at once and restarts again and again,
+`docker compose up -d` ends with
+`dependency failed to start: container ansilume_redis is unhealthy`, and
+`docker compose logs redis` shows:
+
+```
+# Can't handle RDB format version 15
+# Fatal error loading the DB, check server logs. Exiting.
+```
+
+**Cause:** A Redis older than 8.10, such as the `redis:7.2-alpine` of
+2.14.0 and older, starts on the data that Redis 8.10 wrote in the volume
+`redis_data`, and cannot load it. A compose file of 2.14.0 or older does
+not name the volume, but Docker Compose gives it to the new container all
+the same, as the image of Redis 7.2 declares `/data` a volume. With an
+older `image:` in `docker-compose.yml`, or an older `ansilume_redis_image`
+of the deploy role, the compose file mounts the volume itself.
+
+**Fix:** Remove the redis container and the volume, and start Redis again
+(with the deploy role, in the install directory;
+`docker volume ls --filter name=redis_data` names the volume when the
+project is not called `ansilume`):
+
+```bash
+docker compose rm -sf redis
+docker volume rm ansilume_redis_data
+docker compose up -d
+```
+
+In an installation the quickstart made from source, which runs
+`docker-compose.prebuilt.yml` and whose `.env` names no compose file, add
+`-f docker-compose.prebuilt.yml` to each `docker compose` command: there a
+plain `docker compose up -d` builds and starts the development stack of
+`docker-compose.yml` in place of your containers, and its runners mount the
+install directory, `.env` included.
+
+```bash
+docker compose -f docker-compose.prebuilt.yml rm -sf redis
+docker volume rm ansilume_redis_data
+docker compose -f docker-compose.prebuilt.yml up -d
+```
+
+If you ran the plain `docker compose up -d` there already,
+`docker compose -f docker-compose.prebuilt.yml up -d --remove-orphans`
+creates the containers of `docker-compose.prebuilt.yml` anew and removes
+those that only the development stack has: Adminer, mailhog, swagger-ui
+and the second runner.
+
+Once the volume is removed, Redis starts empty: everyone is signed out (a
+user who signed in with **Remember me** is signed in again by its cookie,
+everyone else signs in again), and a project sync that waited in the queue
+must be started again. To keep the data instead, run Redis 8.10 again: keep
+the compose file of the release that brought it and pin the Ansilume
+images; a source installation started from `docker-compose.yml`, which
+builds its images, keeps that compose file after the `git checkout` of the
+older release with `git checkout main -- docker-compose.yml`. See
+**Going back** under
+[After updating from 2.14.0 or older](updating.md#after-updating-from-2140-or-older-redis-810-outbound-http-workflow-notifications-mattermost-lint-in-the-background-recovered-failures).
 
 ## Launch fails: "The database update has not finished; run the migrations."
 
@@ -2575,7 +3053,8 @@ for example in `docker compose logs schedule-runner`.
 **Cause:** An error that nothing in Ansilume caught. The application log of
 the container that ran the code has it, with its file, line and stack
 trace: the app container for the web UI and the API, the schedule-runner
-for schedules and the maintenance run, the queue-worker for project syncs.
+for schedules and the maintenance run, the queue-worker for project syncs
+and lint runs, the notification-worker for the notifications it sends.
 In a git checkout they all write `runtime/logs/app.log`;
 with the prebuilt images, the log is inside each container, for example:
 
@@ -2623,8 +3102,10 @@ the one line held the statement with its values (see
 
 No process of Ansilume keeps a database connection while it waits: php-fpm
 opens one for each request, the schedule-runner one for each run of
-`schedule/run` and of `maintenance/run`, and the queue-worker one for each
-project sync, which it closes when the sync ends; the runners have none.
+`schedule/run` and of `maintenance/run`, the queue-worker one for each
+project sync and each lint run, and the notification-worker one for each
+notification it sends, which they close when the job ends; the runners have
+none.
 Up to 2.13.1 the queue-worker kept its connection for its whole life:
 once the queue had sat idle longer than the database's `wait_timeout`
 (28800 seconds, 8 hours, by default on MariaDB and MySQL), as overnight,
@@ -2653,8 +3134,9 @@ values: never turn it on in production (see
 
 ## App or queue-worker container is unhealthy: the log file cannot be written
 
-**Symptom:** `docker compose ps` shows the app or the queue-worker as
-`unhealthy`. Its health check prints the following line, in the
+**Symptom:** `docker compose ps` shows the app, the queue-worker or the
+notification-worker as `unhealthy`. Its health check prints the following
+line, in the
 container's health log (`docker inspect ansilume_app`, `State.Health.Log`),
 in `bin/diagnose` under **App health check**, and with
 `docker compose exec -u www-data app php yii health/check`:
@@ -2670,7 +3152,8 @@ nginx anew does not start it
 (`dependency failed to start: container ansilume_app is unhealthy`).
 
 **Cause:** `www-data`, the user of php-fpm's workers and of the
-queue-worker, cannot append to `runtime/logs/app.log`. Yii drops every
+queue-worker and the notification-worker, cannot append to
+`runtime/logs/app.log`. Yii drops every
 line of a process that cannot write its log file, so the errors of the web
 UI and the API are lost without a word. A process of another user, mostly
 root, created the file after the container started: a console command run
@@ -2690,8 +3173,10 @@ it:
 docker compose exec app chown -R www-data:www-data /var/www/runtime/logs
 ```
 
-With the prebuilt images the queue-worker keeps a log of its own:
-`docker compose exec queue-worker chown -R www-data:www-data /var/www/runtime/logs`.
+With the prebuilt images the queue-worker and the notification-worker
+keep a log of their own each:
+`docker compose exec queue-worker chown -R www-data:www-data /var/www/runtime/logs`,
+and the same with `notification-worker`.
 Or restart the container (`docker compose restart app`): its entrypoint
 does the same when it starts.
 

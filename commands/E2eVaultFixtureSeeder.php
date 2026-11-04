@@ -22,6 +22,13 @@ use app\models\Project;
  *
  * The fixture files are generated with ansible-vault on every seed. Without
  * ansible-vault the seeder skips, and the specs skip as well.
+ *
+ * The project is in the runtime directory (DIRECTORY): its lint runs in the
+ * queue-worker, which does not see the temp directory of the app container,
+ * while in a git checkout both bind-mount the repository at /var/www. Its
+ * files get the owner of the runtime directory, so the user of a dev
+ * checkout can still remove them; the E2E teardown removes the project
+ * (teardown()).
  */
 class E2eVaultFixtureSeeder
 {
@@ -30,6 +37,9 @@ class E2eVaultFixtureSeeder
     public const SOURCE_INVENTORY = 'e2e-vault-source-inventory';
     public const TEMPLATE = 'e2e-vault-template';
     public const PLAINTEXT = 'E2E-VAULT-PLAINTEXT-MARKER';
+
+    /** Where the fixture project goes by default: seen by the app and the queue-worker. */
+    public const DIRECTORY = '@runtime/e2e-vault-project';
 
     private const FIXTURE_SECRET = 'e2e-vault-fixture-secret';
 
@@ -41,13 +51,12 @@ class E2eVaultFixtureSeeder
 
     /**
      * @param callable(string): void $logger
-     * @param string|null $dir where the fixture project goes, by default ansilume-e2e-vault-project in the temp
-     *        directory
+     * @param string|null $dir where the fixture project goes, by default DIRECTORY
      */
     public function __construct(callable $logger, ?string $dir = null)
     {
         $this->logger = $logger;
-        $this->dir = $dir ?? sys_get_temp_dir() . '/ansilume-e2e-vault-project';
+        $this->dir = $dir ?? (string)\Yii::getAlias(self::DIRECTORY);
     }
 
     public function seed(int $userId, int $runnerGroupId): void
@@ -60,11 +69,47 @@ class E2eVaultFixtureSeeder
             return;
         }
 
+        $this->adopt($dir);
         $project = $this->ensureProject($dir, $userId);
         $inventory = $this->ensureInventory(self::INVENTORY, 'inventory/hosts.yml', $project->id, $userId);
         $this->ensureInventory(self::SOURCE_INVENTORY, 'encrypted-hosts.yml', $project->id, $userId);
         $this->ensureTemplate($dir, $project->id, $inventory->id, $runnerGroupId, $userId);
         ($this->logger)("  Seeded vault fixture project {$project->name} (ID {$project->id}).\n");
+    }
+
+    /**
+     * Removes the fixture project; the e2e- prefix teardown removes the
+     * records.
+     */
+    public function teardown(): void
+    {
+        if (is_dir($this->dir)) {
+            FileHelper::removeDirectory($this->dir);
+            ($this->logger)("  Deleted vault fixture project {$this->dir}.\n");
+        }
+    }
+
+    /**
+     * Gives $dir and everything in it the owner of the runtime directory
+     * when the seeder runs as root (runtimeOwner()), so the user of a dev
+     * checkout can still remove the fixture.
+     */
+    private function adopt(string $dir): void
+    {
+        $owner = $this->runtimeOwner();
+        if ($owner === null) {
+            return;
+        }
+        $paths = [$dir];
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST) as $file) {
+            if ($file instanceof \SplFileInfo) {
+                $paths[] = $file->getPathname();
+            }
+        }
+        foreach ($paths as $path) {
+            chown($path, $owner['uid']);
+            chgrp($path, $owner['gid']);
+        }
     }
 
     private function writeFixtures(string $dir): void
@@ -94,6 +139,17 @@ class E2eVaultFixtureSeeder
             "---\n- name: E2E vault site\n  hosts: all\n  vars_files:\n    - vault.yml\n  tasks:\n"
                 . "    - name: Show the value\n      ansible.builtin.debug:\n        msg: \"{{ e2e_vault_plaintext }}\"\n"
         );
+    }
+
+    /**
+     * The owner of the runtime directory, which the fixture's files get;
+     * null unless the seeder runs as root (E2eFixtureHelper::runtimeOwner()).
+     *
+     * @return array{uid: int, gid: int}|null
+     */
+    protected function runtimeOwner(): ?array
+    {
+        return E2eFixtureHelper::runtimeOwner();
     }
 
     private function write(string $dir, string $relative, string $content): void

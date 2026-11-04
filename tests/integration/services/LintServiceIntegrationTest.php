@@ -42,7 +42,7 @@ class LintServiceIntegrationTest extends DbTestCase
         $this->assertNotNull($template->lint_output);
         $this->assertNotNull($template->lint_at);
         $this->assertNull($template->lint_exit_code);
-        $this->assertStringContainsString('local path', strtolower($template->lint_output));
+        $this->assertSame(LintService::NO_LOCAL_PATH, $template->lint_output);
     }
 
     public function testRunForTemplateStoresErrorWhenProjectDirDoesNotExist(): void
@@ -183,7 +183,7 @@ class LintServiceIntegrationTest extends DbTestCase
 
             $template->refresh();
             $this->assertNotNull($template->lint_output);
-            $this->assertStringContainsString('Playbook not found', $template->lint_output);
+            $this->assertSame(sprintf(LintService::PLAYBOOK_NOT_FOUND, 'nonexistent_playbook.yml'), $template->lint_output);
         } finally {
             \app\helpers\FileHelper::safeRmdir($dir);
         }

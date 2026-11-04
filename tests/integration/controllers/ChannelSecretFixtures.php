@@ -8,7 +8,7 @@ use app\models\NotificationTemplate;
 
 /**
  * Channel configs of notification templates that hold secrets
- * (NotificationTemplate::SECRET_CONFIG_KEYS and SECRET_CONFIG_MAPS), for the
+ * (the secretKeys and secretMaps of their channels' definitions, ChannelRegistry::BUILT_IN), for the
  * tests of their redaction. Test fixtures, not secrets: each value is
  * distinct, so a test can tell which one reached a page or an answer.
  */
@@ -23,12 +23,17 @@ final class ChannelSecretFixtures
     public const HEADER_TOKEN = 'Bearer w5b-header-secret-3317';
     public const HEADER_ENV = 'prod-w5b-header-2208';
     public const ROUTING_KEY = 'R0UT1NG-w5b-secret-8890';
+    public const MATTERMOST_SERVER = 'https://chat.example.com';
+    public const MATTERMOST_TOKEN = 'mmbot-secret-token-6604';
+    public const SIGNING_SECRET = 'whsec-w5b-signing-secret-3390';
 
     public const TELEGRAM = ['bot_token' => self::BOT_TOKEN, 'chat_id' => self::CHAT_ID];
     public const SLACK = ['webhook_url' => self::SLACK_URL];
     public const TEAMS = ['webhook_url' => self::TEAMS_URL];
     public const WEBHOOK = ['url' => self::WEBHOOK_URL, 'headers' => ['Authorization' => self::HEADER_TOKEN, 'X-Env' => self::HEADER_ENV]];
+    public const SIGNED_WEBHOOK = ['url' => self::WEBHOOK_URL, 'headers' => ['Authorization' => self::HEADER_TOKEN], 'signing_secret' => self::SIGNING_SECRET, 'payload' => 'event'];
     public const PAGERDUTY = ['routing_key' => self::ROUTING_KEY];
+    public const MATTERMOST = ['server_url' => self::MATTERMOST_SERVER, 'bot_token' => self::MATTERMOST_TOKEN, 'team' => 'ops', 'channel' => 'deploys', 'mention' => '@ops-team'];
 
     /** SurveySecrets::PLACEHOLDER, which the page, the form and the API show for a secret. */
     public const SHOWN = '$encrypted$';
@@ -51,7 +56,19 @@ final class ChannelSecretFixtures
                 [self::WEBHOOK_URL, self::HEADER_TOKEN, self::HEADER_ENV],
                 ['url' => self::SHOWN, 'headers' => ['Authorization' => self::SHOWN, 'X-Env' => self::SHOWN]],
             ],
+            'signed webhook' => [
+                NotificationTemplate::CHANNEL_WEBHOOK,
+                self::SIGNED_WEBHOOK,
+                [self::WEBHOOK_URL, self::HEADER_TOKEN, self::SIGNING_SECRET],
+                ['url' => self::SHOWN, 'headers' => ['Authorization' => self::SHOWN], 'signing_secret' => self::SHOWN, 'payload' => 'event'],
+            ],
             'pagerduty' => [NotificationTemplate::CHANNEL_PAGERDUTY, self::PAGERDUTY, [self::ROUTING_KEY], ['routing_key' => self::SHOWN]],
+            'mattermost' => [
+                NotificationTemplate::CHANNEL_MATTERMOST,
+                self::MATTERMOST,
+                [self::MATTERMOST_TOKEN],
+                ['server_url' => self::MATTERMOST_SERVER, 'bot_token' => self::SHOWN, 'team' => 'ops', 'channel' => 'deploys', 'mention' => '@ops-team'],
+            ],
         ];
     }
 

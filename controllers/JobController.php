@@ -18,6 +18,7 @@ use app\models\User;
 use app\services\ArtifactService;
 use app\services\JobCancellationService;
 use app\services\JobLaunchService;
+use app\services\RecoveredFailures;
 use app\services\RelaunchRefusedException;
 use app\services\RelaunchService;
 use app\services\runstate\ApprovalRequestContexts;
@@ -80,6 +81,8 @@ class JobController extends BaseController
         $searchForm = new JobSearchForm();
         $searchForm->teamFilter = $checker->buildJobFilter($userId);
         $dataProvider = $searchForm->search(\Yii::$app->request->queryParams);
+        /** @var list<Job> $jobs */
+        $jobs = $dataProvider->getModels();
 
         $templateQuery = JobTemplate::find()->orderBy('name');
         $templateFilter = $checker->buildChildResourceFilter($userId, 'job_template.project_id');
@@ -90,6 +93,8 @@ class JobController extends BaseController
         return $this->render('index', [
             'searchForm' => $searchForm,
             'dataProvider' => $dataProvider,
+            // The failures of the page that a later run recovered, read in one query.
+            'recoveredBy' => RecoveredFailures::recoveredBy($jobs),
             'templates' => $templateQuery->all(),
             'runnerGroups' => RunnerGroup::find()->orderBy('name')->all(),
             'users' => User::find()->orderBy('username')->all(),
@@ -121,6 +126,8 @@ class JobController extends BaseController
             'jobInventory' => JobInventory::ofJob($job),
             // The workflow run and step the job was created for, and the approval it waits or waited for.
             'context' => $contexts->forJob($job, Viewer::current()),
+            // The later run of the same job template that recovered a failure; null otherwise.
+            'recoveredBy' => RecoveredFailures::recoveredBy([$job])[(int)$job->id] ?? null,
         ]);
     }
 

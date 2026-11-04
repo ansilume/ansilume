@@ -9,7 +9,9 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Runs the real bin/tests-style.sh without a Docker stack, with a stand-in
- * for php whose PHP-CS-Fixer counts files to fix without listing them.
+ * for php whose PHP-CS-Fixer counts files to fix without listing them and
+ * exits 8, as a dry run of the real one does when files need fixing: the
+ * suite judges it by its exit code (StyleSuiteExitStatusTest).
  *
  * Regression: after "PHP-CS-Fixer: N file(s) need fixing" the script showed
  * the listed files with a plain `grep -m 20 … | sed`, which fails when grep
@@ -27,9 +29,10 @@ class StyleSuiteFixerListTest extends TestCase
         # php for StyleSuiteFixerListTest: PHP-CS-Fixer counts two files without listing them.
         case "$*" in
             *" --version") echo "stub 1.0" ;;
-            "vendor/bin/php-cs-fixer fix "*)
-                printf 'Found 2 of 1552 files that can be fixed in 1.234 seconds, 20.00 MB memory used\n' ;;
-            "vendor/bin/phpcpd "*) echo "No code clones found." ;;
+            *"vendor/bin/php-cs-fixer fix "*)
+                printf 'Found 2 of 1552 files that can be fixed in 1.234 seconds, 20.00 MB memory used\n'
+                exit 8 ;;
+            *"vendor/bin/phpcpd "*) echo "No code clones found." ;;
         esac
         BASH;
 

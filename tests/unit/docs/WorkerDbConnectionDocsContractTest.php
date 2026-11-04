@@ -20,7 +20,8 @@ use yii\queue\sync\Queue as SyncQueue;
 /**
  * What the operator docs and CLAUDE.md say about the database connection
  * of the processes that keep running is what they do: none keeps one while
- * it waits, the queue-worker runs each project sync on one of its own, and
+ * it waits, the queue-worker runs each project sync and each lint run on one
+ * of its own, and
  * a sync that failed on the connection the database had closed left the
  * line that the queue's log behaviour writes.
  *
@@ -60,9 +61,13 @@ final class WorkerDbConnectionDocsContractTest extends TestCase
 
         foreach (
             [
+                // Since lint runs moved into the queue (LintTemplateJob,
+                // LintProjectJob), the queue-worker opens one for each of
+                // them too: the events that close it are of every job.
                 'No process of Ansilume keeps a database connection while it waits: php-fpm opens one for each request,'
-                    . ' the schedule-runner one for each run of `schedule/run` and of `maintenance/run`, and the queue-worker'
-                    . ' one for each project sync, which it closes when the sync ends; the runners have none.',
+                    . ' the schedule-runner one for each run of `schedule/run` and of `maintenance/run`, the queue-worker'
+                    . ' one for each project sync and each lint run, and the notification-worker one for each notification'
+                    . ' it sends, which they close when the job ends; the runners have none.',
                 'Up to 2.13.1 the queue-worker kept its connection for its whole life: once the queue had sat idle longer'
                     . ' than the database\'s `wait_timeout` (28800 seconds, 8 hours, by default on MariaDB and MySQL), as'
                     . ' overnight, the database had closed it, and every project sync of the server failed until the'

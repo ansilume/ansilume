@@ -110,6 +110,18 @@ final class WorkflowRunStates extends Component
     }
 
     /**
+     * What $execution waits for (Display::WAITING_FOR_*), as forRun() and
+     * forRuns() derive it from its step's type and $jobStatus, the status of
+     * its job (null without one): the same code, which the notifications of
+     * a run use too (notification\RunContext). Null when it waits for
+     * nothing, or no longer runs.
+     */
+    public static function waitingForOf(WorkflowJobStep $execution, ?string $jobStatus): ?string
+    {
+        return Display::waitingFor(self::executionState($execution, $jobStatus));
+    }
+
+    /**
      * A condition for a query of runs (WorkflowJob::find(), whose table is
      * not aliased) that keeps the running runs that wait for $waitingFor
      * (Display::WAITING_FOR_*) at their current execution, exactly as

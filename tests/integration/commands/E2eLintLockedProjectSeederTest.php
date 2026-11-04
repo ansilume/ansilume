@@ -11,8 +11,10 @@ use app\tests\integration\DbTestCase;
 
 /**
  * The fixture of projects/lint-not-run.spec.ts: a manual project whose
- * directory only root may enter, so that php-fpm, as www-data, cannot start
- * ansible-lint there, while the project page can still list it. The
+ * directory only root may enter, so that the queue-worker, as www-data,
+ * cannot start ansible-lint there, while the project page can still list
+ * it. The directory is in the runtime directory by default, which the app
+ * and the queue-worker both see, and the E2E teardown removes it. The
  * rollback removes the project.
  */
 class E2eLintLockedProjectSeederTest extends DbTestCase
@@ -75,6 +77,41 @@ class E2eLintLockedProjectSeederTest extends DbTestCase
         clearstatcache();
         $this->assertSame(0o744, fileperms($this->dir) & 0o777);
         $this->assertSame(['.', '..'], scandir($this->dir), 'the page could not read a playbook in it');
+    }
+
+    /**
+     * By default the directory is in the runtime directory: lint runs in the
+     * queue-worker, which does not see the temp directory of the app
+     * container. teardown() removes it, and says so.
+     */
+    public function testTheDirectoryIsInTheRuntimeDirectoryAndTheTeardownRemovesIt(): void
+    {
+        $runtime = sys_get_temp_dir() . '/ansilume_lint_locked_runtime_' . uniqid('', true);
+        mkdir($runtime);
+        $previous = (string)\Yii::getAlias('@runtime');
+        \Yii::setAlias('@runtime', $runtime);
+        try {
+            $seeder = new E2eLintLockedProjectSeeder(function (string $line): void {
+                $this->log[] = $line;
+            });
+            $seeder->seed($this->createUser()->id);
+            $dir = $runtime . '/e2e-lint-locked';
+
+            $this->assertSame('@runtime/e2e-lint-locked', E2eLintLockedProjectSeeder::DIRECTORY);
+            $this->assertSame($dir, $this->seededProject()->local_path);
+            $this->assertSame(0o744, fileperms($dir) & 0o777);
+            $this->assertSame(0, fileowner($dir));
+
+            $seeder->teardown();
+            $seeder->teardown();
+
+            $this->assertDirectoryDoesNotExist($dir);
+            $this->assertSame("  Deleted lint-locked project directory {$dir}.\n", end($this->log));
+            $this->assertCount(2, $this->log, 'the second teardown found nothing to remove');
+        } finally {
+            \Yii::setAlias('@runtime', $previous);
+            FileHelper::removeDirectory($runtime);
+        }
     }
 
     public function testSkipsWhenItDoesNotRunAsRoot(): void

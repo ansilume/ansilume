@@ -130,6 +130,56 @@ class JobSearchFormTest extends TestCase
     }
 
     /**
+     * recovered takes 1 (the failures a later run recovered), 0 (those none
+     * recovered) or nothing; any other value fails the rule, which the
+     * search ignores: it is no filter (JobPageRecoveryTest,
+     * JobsRecoveryApiTest).
+     */
+    public function testRecoveredTakesOneZeroOrNothing(): void
+    {
+        foreach ([JobSearchForm::RECOVERED_YES, JobSearchForm::RECOVERED_NO, '', null] as $value) {
+            $form = new JobSearchForm();
+            $form->recovered = $value;
+            $this->assertTrue($form->validate(['recovered']), (string)json_encode($value));
+        }
+        $this->assertSame(['1', '0'], [JobSearchForm::RECOVERED_YES, JobSearchForm::RECOVERED_NO]);
+        foreach (['yes', '2', ' 1', '1.0', 'true'] as $value) {
+            $form = new JobSearchForm();
+            $form->recovered = $value;
+            $this->assertFalse($form->validate(['recovered']), $value);
+        }
+    }
+
+    /**
+     * finished_since takes a Unix time, a whole number of 0 or more, which
+     * finishedSince() reads as an int; any other value fails the rule and
+     * is no filter (null), a fraction, a sign alone, whitespace before it,
+     * an exponent and a number below 0 included. The dashboard's link to
+     * the recovered failures of its last 24 hours passes it.
+     */
+    public function testFinishedSinceTakesAUnixTime(): void
+    {
+        foreach (['1793770000' => 1793770000, '0' => 0, '+5' => 5, '007' => 7, "5\n" => 5] as $value => $since) {
+            $form = new JobSearchForm();
+            $form->finished_since = (string)$value;
+            $this->assertTrue($form->validate(['finished_since']), (string)json_encode($value));
+            $this->assertSame($since, $form->finishedSince(), (string)json_encode($value));
+        }
+        foreach ([null, ''] as $value) {
+            $form = new JobSearchForm();
+            $form->finished_since = $value;
+            $this->assertTrue($form->validate(['finished_since']), 'no filter: ' . json_encode($value));
+            $this->assertNull($form->finishedSince());
+        }
+        foreach (['abc', '1.5', '-1', ' 1', '1e3', '0x10', '1 2', '+', "1\0"] as $value) {
+            $form = new JobSearchForm();
+            $form->finished_since = $value;
+            $this->assertFalse($form->validate(['finished_since']), (string)json_encode($value));
+            $this->assertNull($form->finishedSince(), (string)json_encode($value));
+        }
+    }
+
+    /**
      * Dates of only whitespace that trim() strips: strtotime() read " ",
      * "\t", "\n" and "  " as now on PHP 8.3 and as no date on PHP 8.4 and
      * later, and reads a NUL byte as now on every version.
@@ -218,6 +268,8 @@ class JobSearchFormTest extends TestCase
             'date_from'       => '',
             'date_to'         => '',
             'has_changes'     => '',
+            'recovered'       => '',
+            'finished_since'  => '',
         ], '');
         $form->validate();
         $this->assertFalse($form->hasErrors());

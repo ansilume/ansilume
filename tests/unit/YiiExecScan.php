@@ -16,9 +16,9 @@ namespace app\tests\unit;
  *   (wrappersIn(): dc() of bin/tests-common.sh), and a task of the Ansible
  *   modules docker_container_exec and docker_compose_v2_exec.
  * - It runs in the app image when it names one of its services (app,
- *   queue-worker, schedule-runner, and the runners, which run the app image
- *   in a git checkout) or one of their containers (bin/diagnose's
- *   $app_container, ansilume_app).
+ *   queue-worker, notification-worker, schedule-runner, and the runners,
+ *   which run the app image in a git checkout) or one of their containers
+ *   (bin/diagnose's $app_container, ansilume_app).
  * - It runs Yii when its command runs php yii, or the yii script by its
  *   path (./yii, /var/www/yii, also through require), or boots a console
  *   application: bin/diagnose's PHP_BOOT prelude, a yii\console\Application
@@ -54,10 +54,10 @@ final class YiiExecScan
     public const WWW_DATA = 'www-data';
 
     /** The compose services of the app image (the runners run it in a git checkout). */
-    private const APP_SERVICE = '/^(?:app|queue-worker|schedule-runner|runner-\d+)$/';
+    private const APP_SERVICE = '/^(?:app|queue-worker|notification-worker|schedule-runner|runner-\d+)$/';
 
     /** The containers of the app image: bin/diagnose's variables, the names compose and the deploy role give them. */
-    private const APP_CONTAINER = '/^(?:\$\{?app_container\w*\}?|.*[_-](?:app|queue[_-]worker|schedule[_-]runner|runner[_-]\d+)(?:[_-]\d+)?)$/';
+    private const APP_CONTAINER = '/^(?:\$\{?app_container\w*\}?|.*[_-](?:app|queue[_-]worker|notification[_-]worker|schedule[_-]runner|runner[_-]\d+)(?:[_-]\d+)?)$/';
 
     /** Where an exec starts: compose (named or in a variable), or docker before exec. */
     private const START = '/(?<![\w$\/.-])(?:(?<compose>docker[ \t]+compose(?![\w.-])|docker-compose(?![\w.-])'

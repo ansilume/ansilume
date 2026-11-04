@@ -13,7 +13,11 @@ $config = [
     'id' => 'ansilume',
     'name' => 'Ansilume',
     'basePath' => dirname(__DIR__),
-    'bootstrap' => ['log'],
+    // notificationDispatcher: the channels of notification templates are
+    // checked when the application starts (config/services.php), so a wrong
+    // definition answers every request with a 500 instead of only the pages
+    // that use them. config/console.php as well.
+    'bootstrap' => ['log', 'notificationDispatcher'],
     // Every 'integer', 'number' and 'double' rule is a WholeNumberValidator:
     // Yii's NumberValidator reads a float as its text of 14 digits and took
     // 2.9999999999999996 (text "3") for a whole number, which the column's
@@ -167,6 +171,17 @@ $config = [
             'channel' => 'ansilume-queue',
             'ttr' => 3600,
         ],
+        // The notification queue, as config/console.php defines it: the web
+        // pushes the deliveries of notification templates, and the
+        // notification-worker of the console runs them.
+        'notificationQueue' => [
+            'class' => 'yii\queue\redis\Queue',
+            // Only Ansilume's own job classes may be unserialized from Redis.
+            'serializer' => \app\components\AllowlistQueueSerializer::class,
+            'redis' => $redis,
+            'channel' => 'ansilume-notifications',
+            'ttr' => 120,
+        ],
         'urlManager' => [
             'enablePrettyUrl' => true,
             'showScriptName' => false,
@@ -195,6 +210,7 @@ $config = [
                 ['pattern' => 'api/v1/job-templates', 'route' => 'api/v1/job-templates/index', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/job-templates', 'route' => 'api/v1/job-templates/create', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/projects/<id:\d+>/sync', 'route' => 'api/v1/projects/sync', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/projects/<id:\d+>/lint', 'route' => 'api/v1/projects/lint', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/projects/<id:\d+>/vault', 'route' => 'api/v1/project-vault/view', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/projects/<id:\d+>/vault/scan', 'route' => 'api/v1/project-vault/scan', 'verb' => 'POST'],
                 ['pattern' => 'api/v1/projects/<id:\d+>', 'route' => 'api/v1/projects/view', 'verb' => 'GET'],
@@ -222,6 +238,7 @@ $config = [
                 ['pattern' => 'api/v1/schedules', 'route' => 'api/v1/schedules/create', 'verb' => 'POST'],
                 // Notification templates API
                 ['pattern' => 'api/v1/notification-templates/<id:\d+>/test', 'route' => 'api/v1/notification-templates/test', 'verb' => 'POST'],
+                ['pattern' => 'api/v1/notification-templates/<id:\d+>/deliveries', 'route' => 'api/v1/notification-templates/deliveries', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/notification-templates/<id:\d+>', 'route' => 'api/v1/notification-templates/view', 'verb' => 'GET'],
                 ['pattern' => 'api/v1/notification-templates/<id:\d+>', 'route' => 'api/v1/notification-templates/update', 'verb' => 'PUT'],
                 ['pattern' => 'api/v1/notification-templates/<id:\d+>', 'route' => 'api/v1/notification-templates/delete', 'verb' => 'DELETE'],

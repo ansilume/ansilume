@@ -96,7 +96,7 @@ class WorkflowExecutionDispatchTest extends DbTestCase
         $this->assertNull($placeholder->job_template_id);
         $savepoint = $this->statementIndex($statements, '~^SAVEPOINT LEVEL\d+$~');
         $job = $this->statementIndex($statements, '~^INSERT INTO `job`~');
-        $link = $this->statementIndex($statements, '~^UPDATE `workflow_job_step` SET `job_id`=' . $placeholder->id . '~');
+        $link = $this->statementIndex($statements, $this->linkOfJob((int)$placeholder->id));
         $insert = $this->statementIndex($statements, '~^INSERT INTO `approval_request`~');
         $release = $this->statementIndex($statements, '~^RELEASE SAVEPOINT LEVEL\d+$~');
         $announced = $this->statementIndex($statements, '~^INSERT INTO `audit_log` .*approval\.requested~s');
@@ -106,6 +106,30 @@ class WorkflowExecutionDispatchTest extends DbTestCase
         );
         $this->assertSame(ApprovalRequest::STATUS_PENDING, $request->status);
         $this->assertCount(1, $this->auditEntries(AuditLog::ACTION_APPROVAL_REQUESTED, 'approval_request', (int)$request->id));
+    }
+
+    /**
+     * Regression: testThePlaceholderAndItsRequestAreWrittenInOneTransaction
+     * failed now and then. Its pattern expected job_id first in the SET
+     * list of the link, but ActiveRecord lists the attributes that changed
+     * in the order the record holds them, and TimestampBehavior's
+     * updated_at, set at the insert, comes before job_id, assigned after
+     * it: when a second ticked over between the insert and the link,
+     * updated_at changed too and came first. The link is found wherever
+     * job_id stands in the SET list, never by job_id in the WHERE clause or
+     * by the ID of another job that starts with the same digits.
+     */
+    public function testRegressionTheLinkIsFoundWhereverJobIdStandsInItsSetList(): void
+    {
+        $statements = [
+            'UPDATE `workflow_job_step` SET `updated_at`=1762214401 WHERE (`id`=7) AND (`job_id`=42)',
+            'UPDATE `workflow_job_step` SET `job_id`=420, `updated_at`=1762214401 WHERE `id`=7',
+            'UPDATE `workflow_job_step` SET `updated_at`=1762214401, `job_id`=42 WHERE `id`=7',
+        ];
+
+        $this->assertSame(2, $this->statementIndex($statements, $this->linkOfJob(42)), 'after updated_at');
+        $this->assertSame(0, $this->statementIndex(['UPDATE `workflow_job_step` SET `job_id`=42, `updated_at`=1762214401 WHERE `id`=7'], $this->linkOfJob(42)), 'first');
+        $this->assertSame(0, $this->statementIndex(['UPDATE `workflow_job_step` SET `job_id`=42 WHERE `id`=7'], $this->linkOfJob(42)), 'alone');
     }
 
     /**
@@ -241,7 +265,7 @@ class WorkflowExecutionDispatchTest extends DbTestCase
                 parent::__construct();
             }
 
-            public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule): void
+            public function announceRequest(ApprovalRequest $request, Job $job, ApprovalRule $rule, ?int $workflowJobId = null): void
             {
                 throw $this->failure;
             }

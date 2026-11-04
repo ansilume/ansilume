@@ -63,11 +63,12 @@ class GatedTemplateBehaviourDocsContractTest extends DbTestCase
     /**
      * The columns of job_template that no user sets as a field of the
      * template: bookkeeping, the trigger token (managed on its own), the
-     * lint result, and the approval rule (ApprovalRuleAssignmentPolicy).
+     * lint result and the mark of its queued run, and the approval rule
+     * (ApprovalRuleAssignmentPolicy).
      */
     private const NOT_FIELDS = [
         'id', 'approval_rule_id', 'trigger_token', 'trigger_token_created_by',
-        'lint_output', 'lint_at', 'lint_exit_code', 'created_by', 'created_at', 'updated_at', 'deleted_at',
+        'lint_output', 'lint_at', 'lint_exit_code', 'lint_queued_at', 'created_by', 'created_at', 'updated_at', 'deleted_at',
     ];
 
     /** The fields only admins change on a gated job template, in the words of the docs. */

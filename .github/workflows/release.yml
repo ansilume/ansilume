@@ -10,7 +10,8 @@ name: Release — Build & Push Container Images
 #      platforms are present in the pushed manifest.
 #   3. smoke-test-arm64 — boots the prebuilt compose stack on an arm64
 #      runner against the freshly pushed images of the version and waits
-#      for the app, nginx, and runner containers to report healthy.
+#      for the app, nginx, runner and notification-worker containers to
+#      report healthy.
 #      scan — at the same time, scans both platforms of each image of the
 #      version with grype: a vulnerability of high or critical severity
 #      that has a fix fails the release (.grype.yaml lists accepted ones).
@@ -257,10 +258,12 @@ jobs:
       # runner-1 restart-loops until its first successful registration
       # (each attempt before the admin user existed exits non-zero), so
       # transient exited/restarting states are expected — poll until
-      # healthy instead of failing fast on container state.
+      # healthy instead of failing fast on container state. The
+      # notification-worker proves that the image runs the notification queue
+      # (worker/start --queue=notificationQueue).
       - name: Wait for services to become healthy
         run: |
-          for service in app nginx runner-1; do
+          for service in app nginx runner-1 notification-worker; do
             container="ansilume_${service//-/_}"
             echo "Waiting for ${container}..."
             STATUS=none
@@ -310,7 +313,7 @@ jobs:
       - name: Verify runner isolation and Redis authentication
         run: |
           compose="docker compose -f docker-compose.prebuilt.yml"
-          backends="app redis queue-worker schedule-runner"
+          backends="app redis queue-worker notification-worker schedule-runner"
           if ${compose} ps --services --status running | grep -qx db; then
             backends="${backends} db"
           fi

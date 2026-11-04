@@ -48,7 +48,7 @@ use yii\helpers\FileHelper;
  *
  * `yii e2e/seed` runs here only up to the fixtures that live in the
  * database, and the one file every seed writes when it is missing, the
- * playbook of e2e-project in /tmp: the seeders after them write fixture
+ * playbook of e2e-project in the runtime directory: the seeders after them write fixture
  * projects into /tmp and the runtime directory, outside the test's
  * transaction. One test runs it on to the team scoping fixtures, with the
  * artifact directory pointed at a scratch directory for the files of the
@@ -94,7 +94,7 @@ class E2eControllerTest extends DbTestCase
 
     private const SEED_STOPPED_AFTER_FAILING_NOTIFICATION = 'The test stopped the seed after the failing notification.';
 
-    /** The line E2eRunnerGroupGuardSeeder prints, right after the failing notification; the seed wrote nothing to disk before it. */
+    /** The line E2eRunnerGroupGuardSeeder prints, right after the failing and the silent notification; the seed wrote nothing to disk before it. */
     private const RUNNER_GROUP_GUARD_LINE = '  Restored ' . E2eRunnerGroupGuardSeeder::TEMPLATE_GROUP . ' (ID ';
 
     private const SEED_STOPPED_AFTER_RUNNER_GROUPS = 'The test stopped the seed after the runner groups in use.';
@@ -162,9 +162,11 @@ class E2eControllerTest extends DbTestCase
     }
 
     /**
-     * bin/tests-e2e.sh counts a seed as successful when its output contains
-     * "complete" or "already exists", and ignores the exit code. The refusal
-     * must say neither.
+     * bin/tests-e2e.sh fails the refused seed by its exit code; up to 2.14.0
+     * it counted a seed as successful when its output contained "complete"
+     * or "already exists", whatever the exit code. The refusal says neither,
+     * as a second line of defence, so its text can never read as a
+     * successful seed.
      */
     public function testTheRefusalCannotPassForASuccessfulSeed(): void
     {
@@ -497,6 +499,9 @@ class E2eControllerTest extends DbTestCase
         $notification = NotificationTemplate::findOne(['name' => E2eFailingNotificationSeeder::NAME]);
         $this->assertNotNull($notification);
         $this->assertSame(['url' => E2eFailingNotificationSeeder::URL], $notification->getParsedConfig());
+        $admin = User::findOne(['username' => 'e2e-admin']);
+        $this->assertNotNull($admin);
+        $this->assertSame((int)$admin->id, (int)$notification->delivers_as, 'it delivers as e2e-admin, who created it');
     }
 
     /**

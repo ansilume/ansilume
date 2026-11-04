@@ -4,20 +4,30 @@ declare(strict_types=1);
 
 namespace app\services\notification;
 
+use app\components\AppLinks;
 use app\models\Job;
+use app\services\NotificationDispatcher;
 
 /**
  * Builds the notification payload for a job event.
  *
  * Returns a nested array that TemplateRenderer::buildVariables() flattens into
- * dot-keyed template variables like {{ job.id }}, {{ project.name }}, etc.
+ * dot-keyed template variables like {{ job.id }}, {{ project.name }}, etc.;
+ * for the job of a workflow step also the run's context (RunContext:
+ * workflow.*, step.*), which the dispatcher leaves out for an identity that
+ * may not see the run's workflow; and the event's refs under
+ * NotificationDispatcher::REFS: the job, and the run of the workflow step
+ * whose job it is (NotificationRefs::ofJob()).
  */
 class JobPayloadBuilder
 {
     /**
+     * @param int|null $workflowJobId the run of the workflow step whose job
+     *     $job is, when the caller knows it before the step records the job
+     *     (the launch of a step's job); else the step that records it says
      * @return array<string, mixed>
      */
-    public static function build(Job $job): array
+    public static function build(Job $job, ?int $workflowJobId = null): array
     {
         $template = $job->jobTemplate;
         $project = $template?->project;
@@ -27,8 +37,8 @@ class JobPayloadBuilder
         if ($job->started_at && $job->finished_at) {
             $duration = (string)($job->finished_at - $job->started_at) . 's';
         }
-
-        $jobUrl = self::jobUrl($job->id);
+        $refs = NotificationRefs::ofJob($job, $workflowJobId);
+        $run = RunContext::ofJob((int)$job->id, $refs['workflow_job_id'] ?? null);
 
         return [
             'job' => [
@@ -36,7 +46,10 @@ class JobPayloadBuilder
                 'status' => (string)$job->status,
                 'exit_code' => (string)($job->exit_code ?? ''),
                 'duration' => $duration,
-                'url' => $jobUrl,
+                // From appBaseUrl (APP_URL) alone, never the request's host:
+                // a job's report arrives on the runner→nginx path (Host:
+                // nginx), whose host must not reach a notification.
+                'url' => AppLinks::job((int)$job->id),
                 'template_id' => (string)($template?->id ?? ''),
             ],
             'template' => [
@@ -48,25 +61,6 @@ class JobPayloadBuilder
                 'name' => (string)($project?->name ?? ''),
             ],
             'launched_by' => (string)($launcher?->username ?? ''),
-        ];
-    }
-
-    private static function jobUrl(int $jobId): string
-    {
-        // appBaseUrl (APP_URL) is operator-authoritative and must outrank
-        // the current request's hostInfo. Job-finalise requests arrive on
-        // the runner→nginx path (Host: nginx), so hostInfo would otherwise
-        // leak the internal docker hostname into notifications.
-        $base = '';
-        if (!empty(\Yii::$app->params['appBaseUrl'])) {
-            $base = rtrim((string)\Yii::$app->params['appBaseUrl'], '/');
-        } elseif (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
-            $base = \Yii::$app->request->hostInfo;
-        }
-        try {
-            return $base . \Yii::$app->urlManager->createUrl(['/job/view', 'id' => $jobId]);
-        } catch (\yii\base\InvalidConfigException) {
-            return $base . '/job/view?id=' . $jobId;
-        }
+        ] + ($run?->payload() ?? []) + [NotificationDispatcher::REFS => $refs];
     }
 }

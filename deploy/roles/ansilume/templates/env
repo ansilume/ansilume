@@ -11,6 +11,9 @@ COMPOSE_PROJECT_NAME={{ ansilume_compose_project }}
 APP_ENV={{ ansilume_app_env }}
 YII_ENV={{ ansilume_yii_env }}
 YII_DEBUG={{ ansilume_yii_debug | ternary('1', '0') }}
+{% if ansilume_app_url | length > 0 %}
+APP_URL={{ ansilume_app_url }}
+{% endif %}
 
 # Security
 COOKIE_VALIDATION_KEY={{ ansilume_cookie_validation_key }}
@@ -56,6 +59,9 @@ SMTP_PASSWORD=
 {% endif %}
 ADMIN_EMAIL={{ ansilume_admin_email }}
 SENDER_EMAIL={{ ansilume_sender_email }}
+
+# Outbound HTTP: CAs to trust on top of the system's (notification channels, outbound webhooks)
+OUTBOUND_CA_BUNDLE={{ ansilume_outbound_ca_bundle }}
 
 # Artifacts
 ARTIFACT_MAX_FILE_SIZE={{ ansilume_artifact_max_file_size }}

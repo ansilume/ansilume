@@ -10,7 +10,11 @@ use app\models\NotificationTemplate;
 use app\models\Runner;
 use app\models\RunnerGroup;
 use app\services\NotificationDispatcher;
+use app\services\notification\NotificationDeliveryService;
 use app\tests\integration\DbTestCase;
+use app\tests\integration\RestoresComponents;
+use app\tests\integration\TeamScopeFixtures;
+use app\tests\integration\services\notification\RecordingNotificationQueue;
 use app\tests\integration\services\RecordingChannel;
 use app\tests\unit\RunsUnprivileged;
 use yii\console\ExitCode;
@@ -25,12 +29,18 @@ use yii\console\ExitCode;
 class HealthControllerTest extends DbTestCase
 {
     use RunsUnprivileged;
+    use RestoresComponents;
+    use TeamScopeFixtures;
+
+    /** The notification queue of the runner checks; null until installRecordingDispatcher(). */
+    private ?RecordingNotificationQueue $notificationQueue = null;
 
     /** A directory of the test's own, for a stand-in of the log file. */
     private string $directory = '';
 
     protected function tearDown(): void
     {
+        $this->restoreComponents();
         if ($this->directory !== '') {
             FileHelper::removeDirectory($this->directory);
         }
@@ -359,16 +369,38 @@ class HealthControllerTest extends DbTestCase
 
     /**
      * Wire a NotificationDispatcher with a RecordingChannel for CHANNEL_EMAIL
-     * and register it as the app's `notificationDispatcher` service so
-     * actionCheckRunners() picks it up via Yii::$app->get().
+     * and a notification queue that records its deliveries, as the app's
+     * components, so actionCheckRunners() queues the notifications and
+     * deliverQueued() sends them as the notification worker would.
      */
     private function installRecordingDispatcher(): RecordingChannel
     {
         $channel = new RecordingChannel();
         $dispatcher = new NotificationDispatcher();
         $dispatcher->setChannel(NotificationTemplate::CHANNEL_EMAIL, $channel);
-        \Yii::$app->set('notificationDispatcher', $dispatcher);
+        $this->swapComponent('notificationDispatcher', $dispatcher);
+        $this->notificationQueue = new RecordingNotificationQueue();
+        $this->swapComponent('notificationQueue', $this->notificationQueue);
+        $this->swapComponent('notificationDeliveryService', ['class' => NotificationDeliveryService::class]);
         return $channel;
+    }
+
+    /**
+     * The notification worker delivers what the checks queued.
+     */
+    private function deliverQueued(): void
+    {
+        $this->assertNotNull($this->notificationQueue);
+        $this->notificationQueue->run();
+    }
+
+    /**
+     * A user who may see runner events (runner-group.view, which operators
+     * hold): the user a template of the runner checks delivers as.
+     */
+    private function runnerEventReader(): \app\models\User
+    {
+        return $this->createUserWithRole('health-runners', 'operator');
     }
 
     private function markRunnerOffline(Runner $runner): void
@@ -385,7 +417,7 @@ class HealthControllerTest extends DbTestCase
 
     public function testCheckRunnersFiresOfflineNotificationOnce(): void
     {
-        $user = $this->createUser();
+        $user = $this->runnerEventReader();
         $group = $this->createRunnerGroup($user->id);
         $runner = $this->createRunner($group->id, $user->id);
         $this->markRunnerOffline($runner);
@@ -398,6 +430,7 @@ class HealthControllerTest extends DbTestCase
         $ctrl = $this->makeController();
 
         $result = $ctrl->actionCheckRunners();
+        $this->deliverQueued();
 
         $this->assertSame(ExitCode::OK, $result);
         $this->assertCount(1, $channel->calls);
@@ -410,7 +443,7 @@ class HealthControllerTest extends DbTestCase
 
     public function testCheckRunnersDoesNotRefireOfflineNotificationOnSubsequentRuns(): void
     {
-        $user = $this->createUser();
+        $user = $this->runnerEventReader();
         $group = $this->createRunnerGroup($user->id);
         $runner = $this->createRunner($group->id, $user->id);
         $this->markRunnerOffline($runner);
@@ -424,6 +457,7 @@ class HealthControllerTest extends DbTestCase
         $this->makeController()->actionCheckRunners();
         $this->makeController()->actionCheckRunners();
         $this->makeController()->actionCheckRunners();
+        $this->deliverQueued();
 
         // Idempotency: only the first sweep should have fired.
         $this->assertCount(1, $channel->calls);
@@ -431,7 +465,7 @@ class HealthControllerTest extends DbTestCase
 
     public function testCheckRunnersFiresRecoveredNotificationWhenRunnerComesBack(): void
     {
-        $user = $this->createUser();
+        $user = $this->runnerEventReader();
         $group = $this->createRunnerGroup($user->id);
         $runner = $this->createRunner($group->id, $user->id);
         $this->markRunnerOffline($runner);
@@ -448,6 +482,7 @@ class HealthControllerTest extends DbTestCase
 
         // First sweep: detect offline.
         $this->makeController()->actionCheckRunners();
+        $this->deliverQueued();
         $this->assertCount(1, $channel->calls);
         $this->assertSame($offlineTpl->id, $channel->calls[0]['template']->id);
 
@@ -455,6 +490,7 @@ class HealthControllerTest extends DbTestCase
         $this->markRunnerOnline($runner);
         $ctrl = $this->makeController();
         $ctrl->actionCheckRunners();
+        $this->deliverQueued();
 
         $this->assertCount(2, $channel->calls);
         $this->assertSame($recoveredTpl->id, $channel->calls[1]['template']->id);
@@ -466,7 +502,7 @@ class HealthControllerTest extends DbTestCase
 
     public function testCheckRunnersIsSilentForHealthyRunner(): void
     {
-        $user = $this->createUser();
+        $user = $this->runnerEventReader();
         $group = $this->createRunnerGroup($user->id);
         $runner = $this->createRunner($group->id, $user->id);
         $this->markRunnerOnline($runner);
@@ -478,6 +514,7 @@ class HealthControllerTest extends DbTestCase
         $channel = $this->installRecordingDispatcher();
         $ctrl = $this->makeController();
         $ctrl->actionCheckRunners();
+        $this->deliverQueued();
 
         $this->assertCount(0, $channel->calls);
         $this->assertSame('', $ctrl->captured);
@@ -485,7 +522,7 @@ class HealthControllerTest extends DbTestCase
 
     public function testCheckRunnersOfflineNotificationCarriesRunnerContext(): void
     {
-        $user = $this->createUser();
+        $user = $this->runnerEventReader();
         $group = $this->createRunnerGroup($user->id);
         $runner = $this->createRunner($group->id, $user->id);
         $this->markRunnerOffline($runner);
@@ -496,6 +533,7 @@ class HealthControllerTest extends DbTestCase
 
         $channel = $this->installRecordingDispatcher();
         $this->makeController()->actionCheckRunners();
+        $this->deliverQueued();
 
         $this->assertCount(1, $channel->calls);
         $vars = $channel->calls[0]['variables'];

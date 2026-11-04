@@ -25,6 +25,7 @@ use yii\db\ActiveRecord;
  * @property string|null $lint_output       Last ansible-lint output (full project)
  * @property int|null    $lint_at           Unix timestamp of last project lint run
  * @property int|null    $lint_exit_code    Exit code of last project lint run (0 = clean)
+ * @property int|null    $lint_queued_at    Unix timestamp of a lint run requested whose result is not stored yet (null = none pending); set in code only (LintService)
  * @property string      $vault_password_source 'ansilume' or 'repository', see VAULT_SOURCE_*
  * @property int|null    $vault_scanned_at  Unix timestamp of the last vault scan
  * @property string|null $vault_scan_commit Commit the last vault scan saw

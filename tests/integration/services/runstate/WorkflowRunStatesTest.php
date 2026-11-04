@@ -18,6 +18,7 @@ use app\services\runstate\Display;
 use app\services\runstate\RunState;
 use app\services\runstate\StepState;
 use app\services\runstate\Viewer;
+use app\services\runstate\WorkflowRunStates;
 use app\services\StrandedJobSweep;
 use app\services\WorkflowCancellationService;
 use app\tests\integration\CountsQueries;
@@ -169,6 +170,13 @@ class WorkflowRunStatesTest extends DbTestCase
             $this->assertSame(Display::waitingFor($state), $step->waitingFor, $row);
             $this->assertSame($since, $step->waitingSince, $row);
             $this->assertSame($execution->status, $step->status, "{$row}: the stored status stays");
+            // Notifications say what a step waits for with the same code.
+            $jobStatus = Job::find()->select('status')->where(['id' => $execution->job_id])->scalar();
+            $this->assertSame(
+                $step->waitingFor,
+                WorkflowRunStates::waitingForOf($execution, is_string($jobStatus) ? $jobStatus : null),
+                "{$row}: waitingForOf() derives it alike"
+            );
         }
     }
 

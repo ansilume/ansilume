@@ -117,6 +117,15 @@ class ControllerAccessRulesTest extends TestCase
         $this->assertActionRequiresRole($rules, 'view', 'job-template.view');
     }
 
+    /**
+     * The poll of the lint card needs what the page needs (LintCardTrait).
+     */
+    public function testTheLintPollsRequireTheViewPermissionsOfThePages(): void
+    {
+        $this->assertActionRequiresRole($this->getAccessRules(JobTemplateController::class), 'lint-status', 'job-template.view');
+        $this->assertActionRequiresRole($this->getAccessRules(ProjectController::class), 'lint-status', 'project.view');
+    }
+
     public function testJobTemplateCreateRequiresPermission(): void
     {
         $rules = $this->getAccessRules(JobTemplateController::class);

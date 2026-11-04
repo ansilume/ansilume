@@ -33,7 +33,7 @@ class PhpunitSuiteLargeOutputTest extends TestCase
         case "$*" in
             "compose ps app --quiet") echo stubbed-app ;;
             "compose exec -T db mariadb "*) ;;
-            *"--testsuite=Unit,Integration "*) cat "$STUB_COVERAGE_RUN" ;;
+            *"--testsuite=Unit,Integration "*) cat "$STUB_COVERAGE_RUN"; exit "$STUB_COVERAGE_RC" ;;
             *"--testsuite=Unit "*) echo "OK (4201 tests, 23447 assertions)" ;;
             *"php yii migrate "*) printf '*** applied m000001_000000_init\nMigrated up successfully.\n' ;;
             *) echo "unexpected: docker $*" >&2; exit 1 ;;
@@ -66,9 +66,9 @@ class PhpunitSuiteLargeOutputTest extends TestCase
 
     public function testRegressionAFailedRunWithALargeCoverageReportIsReportedToTheEnd(): void
     {
-        [$status, $output] = $this->runSuite("There was 1 failure:\n\n1) app\\tests\\integration\\ExampleTest::testExample\nFailed asserting that false is true.\n\nFAILURES!\nTests: 12909, Assertions: 125760, Failures: 1.\n");
+        [$status, $output] = $this->runSuite("There was 1 failure:\n\n1) app\\tests\\integration\\ExampleTest::testExample\nFailed asserting that false is true.\n\nFAILURES!\nTests: 12909, Assertions: 125760, Failures: 1.\n", 1);
 
-        $this->assertStringContainsString('✘  Integration tests failed', $output);
+        $this->assertStringContainsString("✘  Integration tests failed (exit 1)\n", $output);
         $this->assertStringContainsString('1) app\\tests\\integration\\ExampleTest::testExample', $output, 'the failure, without the coverage report');
         $this->assertStringNotContainsString('Methods: 100.00%', $output, 'the coverage report is cut off');
         $this->assertStringContainsString('✔  Coverage — Lines: 95.18%  Methods: 90.54%  Classes: 75.43%', $output);
@@ -79,11 +79,14 @@ class PhpunitSuiteLargeOutputTest extends TestCase
 
     /**
      * Runs bin/tests-phpunit.sh with SIGPIPE ignored, its coverage run
-     * printing $result and then the coverage report.
+     * printing $result and then the coverage report, and exiting with
+     * $exitCode, as PHPUnit does: 0 when no test failed and it raised no
+     * PHPUnit warning, 1 for failures and for a PHPUnit warning
+     * (PhpunitSuiteExitStatusTest).
      *
      * @return array{0: int, 1: string} exit code, output without colours
      */
-    private function runSuite(string $result): array
+    private function runSuite(string $result, int $exitCode = 0): array
     {
         file_put_contents($this->directory . '/docker', self::STUB_DOCKER . "\n");
         chmod($this->directory . '/docker', 0o755);
@@ -98,6 +101,7 @@ class PhpunitSuiteLargeOutputTest extends TestCase
                 'PATH' => $this->directory . ':' . (string)getenv('PATH'),
                 'HOME' => $this->directory,
                 'STUB_COVERAGE_RUN' => $this->directory . '/coverage-run.txt',
+                'STUB_COVERAGE_RC' => (string)$exitCode,
             ]
         );
         $this->assertIsResource($process);

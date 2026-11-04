@@ -15,9 +15,10 @@ use app\tests\integration\TeamScopeFixtures;
 
 /**
  * GET /api/v1/jobs: the cost of a page of jobs does not grow with the jobs
- * on it. artifact_count is counted for the whole page in one query, and the
+ * on it. artifact_count is counted for the whole page in one query, the
  * inventories the jobs were launched with (inventory_id, inventory_name)
- * are read for the whole page in one query.
+ * are read for the whole page in one query, and so are the runs that
+ * recovered its failures (recovered_by_job_id).
  */
 final class JobsListQueriesTest extends WebControllerTestCase
 {
@@ -90,7 +91,66 @@ final class JobsListQueriesTest extends WebControllerTestCase
         $this->assertSame($expected, $listed, 'newest first, each with its own inventory');
     }
 
+    /**
+     * recovered_by_job_id is read for the whole page in one query
+     * (RecoveredFailures::recoveredBy()): a page of 2 recovered failures and
+     * a page of 12 cost the same, and each failure names the run that
+     * recovered it.
+     */
+    public function testTheListReadsTheRecoveringJobsOfItsFailuresInOneQuery(): void
+    {
+        $admin = $this->createUserWithRole('jobs-list-admin', 'admin');
+        $template = $this->template((int)$admin->id);
+        $few = $this->createUser('jobs-list-few');
+        $many = $this->createUser('jobs-list-many');
+        $fewRecovered = $this->recoveredFailuresOf($template, $few, (int)$admin->id, 2, time() - 20000);
+        $this->recoveredFailuresOf($template, $many, (int)$admin->id, 12, time() - 10000);
+        $this->loginAs($admin);
+        $this->list($few);
+
+        $this->assertSame(
+            $this->queriesOf(fn () => $this->list($few)),
+            $this->queriesOf(fn () => $this->list($many)),
+            'a page of 2 recovered failures and a page of 12'
+        );
+        $listed = [];
+        foreach ($this->list($few)['data'] as $job) {
+            $this->assertIsArray($job);
+            $listed[$job['id']] = $job['recovered_by_job_id'];
+        }
+        $this->assertSame(array_reverse($fewRecovered, true), $listed, 'newest first, each with the run that recovered it');
+    }
+
     // -- Helpers --------------------------------------------------------------
+
+    /**
+     * $count failures of $template that $launcher launched, oldest first,
+     * from $from on, each recovered by a success that $recoverer launched
+     * ten seconds after it finished and before the next one failed.
+     *
+     * @return array<int, int> failure ID => recovering job ID
+     */
+    private function recoveredFailuresOf(JobTemplate $template, User $launcher, int $recoverer, int $count, int $from): array
+    {
+        $recovered = [];
+        for ($i = 0; $i < $count; $i++) {
+            $finishedAt = $from + $i * 100;
+            $failure = $this->finishedJob($template, (int)$launcher->id, Job::STATUS_FAILED, $finishedAt);
+            $recovered[(int)$failure->id] = (int)$this->finishedJob($template, $recoverer, Job::STATUS_SUCCEEDED, $finishedAt + 40)->id;
+        }
+
+        return $recovered;
+    }
+
+    private function finishedJob(JobTemplate $template, int $launchedBy, string $status, int $finishedAt): Job
+    {
+        $job = $this->createJob((int)$template->id, $launchedBy, $status);
+        $job->started_at = $finishedAt - 30;
+        $job->finished_at = $finishedAt;
+        $job->save(false);
+
+        return $job;
+    }
 
     private function template(int $createdBy): JobTemplate
     {

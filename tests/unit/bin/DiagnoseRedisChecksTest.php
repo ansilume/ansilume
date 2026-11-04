@@ -88,7 +88,7 @@ class DiagnoseRedisChecksTest extends TestCase
     {
         $diagnose = $this->diagnose();
 
-        $this->assertStringContainsString('for backend in app db redis queue-worker; do', $diagnose);
+        $this->assertStringContainsString('for backend in app db redis queue-worker notification-worker; do', $diagnose);
         $this->assertStringContainsString('share_network "$runner_cid" "$backend_cid"', $diagnose);
     }
 

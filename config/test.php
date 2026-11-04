@@ -64,6 +64,17 @@ return [
             // fixture jobs the tests push to assert is_stuck / queue_depth.
             'channel' => 'ansilume-test-queue',
         ],
+        // The notification queue of config/console.php, on a channel of the
+        // tests: the dev notification-worker would take their messages and
+        // look for the deliveries they name in its own database.
+        'notificationQueue' => [
+            'class' => 'yii\queue\redis\Queue',
+            // Only Ansilume's own job classes may be unserialized from Redis.
+            'serializer' => \app\components\AllowlistQueueSerializer::class,
+            'redis' => $redis,
+            'channel' => 'ansilume-test-notifications',
+            'ttr' => 120,
+        ],
         'redis' => $redis,
         // The class of config/web.php and config/console.php, but without
         // their default role viewer: tests build users without the viewer's
@@ -86,8 +97,20 @@ return [
         'roleService' => [
             'class' => 'app\services\RoleService',
         ],
+        // The built-in channels only: without the channelsFile of
+        // config/services.php, the tests never read the channels of the
+        // installation's own (config/notification-channels.php).
         'notificationDispatcher' => [
             'class' => 'app\services\NotificationDispatcher',
+            'channels' => [],
+        ],
+        'notificationDeliveryService' => [
+            'class' => 'app\services\notification\NotificationDeliveryService',
+        ],
+        // As config/services.php, without a CA bundle: the tests that need one
+        // make the client with it.
+        'outboundHttp' => [
+            'class' => 'app\components\OutboundHttpClient',
         ],
         'analyticsService' => [
             'class' => 'app\services\AnalyticsService',
@@ -116,8 +139,13 @@ return [
         'webhookService' => [
             'class' => 'app\services\WebhookService',
         ],
+        // The lint runs that saves and Run Lint queue (LintService::$queue) go
+        // to a queue in memory here, which nothing runs: in the Redis channel
+        // of the queue above they would stay, and the sync status tests read
+        // its depth. A test of what is queued swaps in a queue of its own.
         'lintService' => [
             'class' => 'app\services\LintService',
+            'queue' => new \yii\queue\sync\Queue(['serializer' => \app\components\AllowlistQueueSerializer::class]),
         ],
         'projectDeletionService' => [
             'class' => 'app\services\ProjectDeletionService',

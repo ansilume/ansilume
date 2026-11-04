@@ -57,6 +57,12 @@ use yii\base\InvalidArgumentException;
  * parseOutput(), extractGroups(), extractHosts() and the checks of the
  * runner's result, AnsibleInventoryRunner's output buffers and the error
  * made of them, and VaultValueMasker, which walks every value.
+ *
+ * The outbound HTTP client (OutboundHttpClient), which every HTTP
+ * notification channel and the outbound webhooks send through, marks the
+ * URL, the request's headers and body, and the answer it reads. The
+ * Mattermost channel marks its bot token, a full session of its bot
+ * (MattermostApi, MattermostConfig), and the config it checks.
  */
 class SensitiveParametersTest extends TestCase
 {
@@ -105,6 +111,20 @@ class SensitiveParametersTest extends TestCase
         'app\components\JobInventory::idOf($payload)',
         'app\components\JobInventory::launchedName($payload)',
         'app\components\JobInventory::ofPayloads($payloads)',
+        'app\components\NotificationConfigUrls::refusals($config)',
+        'app\components\OutboundHttpClient::checkRequest($headers)',
+        'app\components\OutboundHttpClient::checkRequest($url)',
+        'app\components\OutboundHttpClient::options($body)',
+        'app\components\OutboundHttpClient::options($headers)',
+        'app\components\OutboundHttpClient::options($url)',
+        'app\components\OutboundHttpClient::request($body)',
+        'app\components\OutboundHttpClient::request($headers)',
+        'app\components\OutboundHttpClient::request($url)',
+        'app\components\OutboundHttpClient::schemeOf($url)',
+        'app\components\OutboundHttpResponse::__construct($body)',
+        'app\components\OutboundHttpResponse::__construct($headers)',
+        'app\components\OutboundHttpTransfer::onBody($data)',
+        'app\components\OutboundHttpTransfer::onHeader($line)',
         'app\components\OutputMasker::__construct($answers)',
         'app\components\OutputMasker::feed($bytes)',
         'app\components\OutputMasker::floatForms($answer)',
@@ -254,7 +274,6 @@ class SensitiveParametersTest extends TestCase
         'app\controllers\api\v1\InventoriesController::applyBody($body)',
         'app\controllers\api\v1\JobsController::buildOverrides($body)',
         'app\controllers\api\v1\JobsController::templateIdFrom($body)',
-        'app\controllers\api\v1\NotificationTemplatesController::applyBody($body)',
         'app\controllers\api\v1\ProjectsController::applyBody($body)',
         'app\controllers\api\v1\SchedulesController::applyBody($body)',
         'app\controllers\api\v1\UsersController::applyAuthSourceOnCreate($body)',
@@ -386,12 +405,39 @@ class SensitiveParametersTest extends TestCase
         'app\services\ldap\LdapConfig::fromArray($params)',
         'app\services\ldap\LdapService::authenticate($password)',
         'app\services\ldap\PhpLdapClient::bindAsUser($password)',
+        'app\services\notification\ChannelConfigRules::refusals($config)',
+        'app\services\notification\ChannelDefinition::refusals($config)',
+        'app\services\notification\ChannelHttp::post($headers)',
+        'app\services\notification\ChannelHttp::post($payload)',
+        'app\services\notification\ChannelHttp::post($url)',
+        'app\services\notification\MattermostApi::__construct($token)',
+        'app\services\notification\MattermostConfig::__construct($token)',
+        'app\services\notification\MattermostConfig::channelRefusals($config)',
+        'app\services\notification\MattermostConfig::refusals($config)',
+        'app\services\notification\NotificationIdentity::meaning($value)',
+        'app\services\notification\NotificationIdentity::text($value)',
+        'app\services\notification\NotificationTemplateBody::apply($body)',
+        'app\services\notification\NotificationTemplateBody::refusalOf($body)',
+        'app\services\notification\NotificationTemplateBody::textOf($submitted)',
+        'app\services\notification\NotificationTemplateFormPost::__construct($fields)',
+        'app\services\notification\NotificationTemplateFormPost::of($post)',
         'app\services\notification\PagerDutyChannel::post($payload)',
+        'app\services\notification\PagerDutyChannel::post($url)',
         'app\services\notification\SlackChannel::post($url)',
         'app\services\notification\TeamsChannel::post($url)',
         'app\services\notification\TelegramChannel::post($url)',
         'app\services\notification\WebhookChannel::post($headers)',
         'app\services\notification\WebhookChannel::post($url)',
+        'app\services\notification\WebhookChannel::signature($secret)',
+        'app\services\notification\WebhookConfig::customHeaders($config)',
+        'app\services\notification\WebhookConfig::headerRefusals($headers)',
+        'app\services\notification\WebhookConfig::headersOf($config)',
+        'app\services\notification\WebhookConfig::isHeaderValue($value)',
+        'app\services\notification\WebhookConfig::isUnset($value)',
+        'app\services\notification\WebhookConfig::payloadOf($config)',
+        'app\services\notification\WebhookConfig::refusals($config)',
+        'app\services\notification\WebhookConfig::reservedNames($config)',
+        'app\services\notification\WebhookConfig::signingSecretOf($config)',
     ];
 
     /**
@@ -405,6 +451,8 @@ class SensitiveParametersTest extends TestCase
     private const MARKED_CLOSURES = [
         'app\components\SurveySecretBackfill' => ['row', 'row', 'row'],
         'app\components\VaultValueMasker' => ['item'],
+        // The items of a config value that NotificationIdentity::meaning() compares.
+        'app\services\notification\NotificationIdentity' => ['item'],
     ];
 
     /**
@@ -546,6 +594,9 @@ class SensitiveParametersTest extends TestCase
         'app\controllers\api\v1\WebhooksController' => ['body'],
         // Request bodies with the channel secrets of a notification template, or credentials in a repository URL.
         'app\controllers\api\v1\NotificationTemplatesController' => ['body'],
+        'app\services\notification\NotificationTemplateBody' => ['body', 'submitted'],
+        // The web form's post: the channel secrets of the config as typed.
+        'app\services\notification\NotificationTemplateFormPost' => ['post', 'fields'],
         'app\controllers\api\v1\ProjectsController' => ['body'],
         'app\controllers\api\v1\BaseApiController' => ['data'],
         // A request body checked for lists and objects before it reaches the model, static inventory content among
@@ -555,14 +606,31 @@ class SensitiveParametersTest extends TestCase
         'app\components\SubmittedInteger' => ['values'],
         'app\services\CredentialWriteService' => ['secretInput', 'provided'],
         'app\components\CredentialSecretPolicy' => ['input', 'provided'],
-        // Notification channels: what carries their channel secrets (NotificationTemplate::SECRET_CONFIG_KEYS,
-        // SECRET_CONFIG_MAPS): the webhook URLs, the webhook channel's header values, Telegram's URL with the
-        // bot token, and PagerDuty's body with the routing key.
+        // Notification channels: what carries their channel secrets (the secretKeys and secretMaps of their
+        // definitions, ChannelRegistry::BUILT_IN): the webhook URLs, the webhook channel's header values, Telegram's
+        // URL with the bot token, and PagerDuty's body with the routing key.
         'app\services\notification\SlackChannel' => ['url'],
         'app\services\notification\TeamsChannel' => ['url'],
-        'app\services\notification\WebhookChannel' => ['url', 'headers'],
+        // The webhook channel also signs with its signing secret, and its config holds all of these.
+        'app\services\notification\WebhookChannel' => ['url', 'headers', 'secret'],
+        'app\services\notification\WebhookConfig' => ['config', 'headers', 'value'],
+        // A config's text and the values of its keys, with the channel's secrets, compared for whether a save changes
+        // where the template delivers.
+        'app\services\notification\NotificationIdentity' => ['value'],
         'app\services\notification\TelegramChannel' => ['url'],
-        'app\services\notification\PagerDutyChannel' => ['payload'],
+        'app\services\notification\PagerDutyChannel' => ['url', 'payload'],
+        'app\services\notification\ChannelHttp' => ['url', 'payload', 'headers'],
+        // The outbound HTTP client of the notification channels and the outbound webhooks: the URL (a webhook's URL,
+        // Telegram's with the bot token), the request's headers and body, and the answer it reads.
+        'app\components\OutboundHttpClient' => ['url', 'headers', 'body'],
+        'app\components\OutboundHttpResponse' => ['headers', 'body'],
+        'app\components\OutboundHttpTransfer' => ['line', 'data'],
+        // A channel config with its secrets, whose URLs are checked, and which a channel's definition checks.
+        'app\components\NotificationConfigUrls' => ['config'],
+        'app\services\notification\ChannelDefinition' => ['config'],
+        // The Mattermost channel: its bot token, a full session of the bot, and the config it checks.
+        'app\services\notification\MattermostApi' => ['token'],
+        'app\services\notification\MattermostConfig' => ['token', 'config'],
     ];
 
     public function testEveryMarkedParameterIsListed(): void

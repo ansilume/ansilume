@@ -215,7 +215,12 @@ class TemplateRendererTest extends TestCase
         }
     }
 
-    public function testBaseUrlFallsBackToHostInfoWhenAppBaseUrlIsEmpty(): void
+    /**
+     * Regression: without appBaseUrl (an empty APP_URL=) app.url is empty,
+     * so the links of a notification are paths, never the host of the
+     * request (AppLinks).
+     */
+    public function testBaseUrlIsEmptyWithoutAppBaseUrlInAWebRequestToo(): void
     {
         $origParams = \Yii::$app->params;
         unset(\Yii::$app->params['appBaseUrl']);
@@ -224,13 +229,13 @@ class TemplateRendererTest extends TestCase
         \Yii::$app->set('request', new class extends \yii\web\Request {
             public function getHostInfo(): string
             {
-                return 'https://from-request.example';
+                return 'http://nginx';
             }
         });
 
         try {
             $vars = $this->renderer->buildVariables([]);
-            $this->assertSame('https://from-request.example', $vars['app.url']);
+            $this->assertSame('', $vars['app.url']);
         } finally {
             \Yii::$app->params = $origParams;
             if ($origRequest !== null) {

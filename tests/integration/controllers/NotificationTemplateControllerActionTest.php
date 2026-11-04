@@ -222,6 +222,30 @@ class NotificationTemplateControllerActionTest extends WebControllerTestCase
     }
 
     /**
+     * Regression: Send Test of a PagerDuty template whose events are only
+     * the info events of a step flashed success, although PagerDuty sends
+     * nothing for them. The danger flash says why now.
+     */
+    public function testRegressionSendTestOfEventsPagerDutySendsNothingForFlashedSuccess(): void
+    {
+        $user = $this->createUser();
+        $this->loginAs($user);
+        $nt = $this->makeTemplate($user->id, 'workflow.step_started,workflow.step_succeeded');
+        $nt->channel = NotificationTemplate::CHANNEL_PAGERDUTY;
+        $nt->config = '{"routing_key":"R0UT1NGKEY-test"}';
+        $nt->save(false);
+        $this->setPost([]);
+        \Yii::$app->set('notificationDispatcher', new NotificationDispatcher());
+
+        $this->makeController()->actionTest((int)$nt->id);
+
+        $this->assertSame(
+            ['danger' => sprintf(NotificationTemplateController::TEST_FAILED, sprintf(NotificationDispatcher::SENDS_NOTHING, 'pagerduty', 'workflow.step_started'))],
+            \Yii::$app->session->getAllFlashes()
+        );
+    }
+
+    /**
      * The form's list of variables names those of an approval that the
      * inventory's rule required: approval.required_by and
      * job.inventory_name.
@@ -282,6 +306,7 @@ class NotificationTemplateControllerActionTest extends WebControllerTestCase
         $nt->subject_template = '[Test] {{ event }}';
         $nt->body_template = 'Event: {{ event }}';
         $nt->created_by = $userId;
+        $nt->delivers_as = $userId;
         $nt->save(false);
         return $nt;
     }

@@ -79,17 +79,25 @@ The production stack consists of:
 | `db` | MariaDB database (optional — see external DB) |
 | `redis` | Cache, sessions, job queue |
 | `queue-worker` | Runs project syncs and lint from the Redis queue |
-| `schedule-runner` | Every minute: due schedules and maintenance (stale project syncs, artifact retention, approval timeouts, deleted job and workflow templates and the jobs of ended workflow runs, encryption of old survey answers); its own failures are in its `runtime/logs/app.log`, not in `docker compose logs` |
+| `notification-worker` | Sends the notifications from a Redis queue of their own (`worker/start --queue=notificationQueue`), so that none waits behind a project sync; runs the app image as the queue-worker does, with the same `.env` (`OUTBOUND_CA_BUNDLE` included); needs Redis, the database and outbound connections to the endpoints of the notification templates (see [notifications.md](notifications.md#the-notification-worker)) |
+| `schedule-runner` | Every minute: due schedules and maintenance (stale project syncs, artifact retention, approval timeouts, deleted job and workflow templates and the jobs of ended workflow runs, the notification deliveries whose queue message was lost or whose worker stopped, encryption of old survey answers); its own failures are in its `runtime/logs/app.log`, not in `docker compose logs` |
 | `runner-1..N` | Pull-based Ansible execution agents |
 
 The runners sit on their own network (`ansilume_runner_network_name`, default
 `runners`) that only nginx joins. Playbooks therefore reach the server only
-through nginx, never php-fpm, the database or Redis. In both image modes the
+through nginx, never php-fpm, the database, Redis or the workers. In both image modes the
 runners use the standalone runner image (build mode builds it from
 `docker/runner/Dockerfile`) and mount nothing from the install directory, so
 playbooks cannot read `.env` either. The runners clone git projects
 themselves. A manual project only runs on them when its path exists inside the
 runner image, like the bundled selftest.
+
+The queue-worker lints projects and job templates: a save of a job template
+and **Run Lint** queue a lint run, which the queue-worker makes, never the
+app. A manual project's directory must therefore exist in the queue-worker
+too, not only in the app, whose project page lists its files. With the
+prebuilt images the two share only `runtime/projects`: mount a manual
+project's directory into both. The bundled selftest is in both images.
 
 ## Using an external database
 
@@ -163,6 +171,13 @@ All variables are documented in `deploy/roles/ansilume/defaults/main.yaml`. Key 
 | `ansilume_runner_count` | `2` | Number of runner containers |
 | `ansilume_runner_network_name` | `runners` | Network for the runners; must differ from `ansilume_network_name` |
 
+### Notifications
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ansilume_app_url` | `""` | The address your users open Ansilume at (`APP_URL`), such as `https://ansilume.example.com`: the base of the links of notifications and password-reset mails. Empty: `http://localhost:8080`, which only the server reaches; `bin/diagnose` warns about it |
+| `ansilume_outbound_ca_bundle` | `""` | A PEM file of CAs that the notification channels and the outbound webhooks trust on top of the system's (`OUTBOUND_CA_BUNDLE`), as a path inside the containers; with the prebuilt images, mount the file with an override in the install directory (see [notifications.md](notifications.md#outbound-http)) |
+
 ### Mail
 
 | Variable | Default | Description |
@@ -172,7 +187,7 @@ All variables are documented in `deploy/roles/ansilume/defaults/main.yaml`. Key 
 | `ansilume_smtp_encryption` | `tls` | `tls`, `ssl`, or empty |
 | `ansilume_smtp_user` | `""` | SMTP username |
 | `ansilume_smtp_password` | `""` | SMTP password |
-| `ansilume_admin_email` | `admin@example.com` | Admin notification address |
+| `ansilume_admin_email` | `admin@example.com` | Written to `.env` as `ADMIN_EMAIL`. Ansilume sends no alert to it: alerts go to the notification templates that listen to them (see [notifications.md](notifications.md#events)) |
 | `ansilume_sender_email` | `noreply@ansilume.local` | From address |
 
 ## Scaling runners
@@ -210,6 +225,16 @@ Critical data to back up:
 1. **Database** — `mysqldump` or volume snapshot of `db_data`
 2. **`.env` file** — contains encryption keys; losing `APP_SECRET_KEY` makes stored credentials, TOTP secrets and password survey answers unreadable
 3. **`runtime/projects/`** — cloned git repositories (can be re-synced, but saves time)
+
+Redis needs no backup: its volume `redis_data` holds the sessions, the
+cache and the queue of project syncs, nothing that must be kept. Without
+them everyone is signed out: a user who signed in with **Remember me** is
+signed in again by its cookie, everyone else signs in again. A sync that
+waited in the queue must be started again, and Ansilume fills the cache
+again by itself. The queue messages of lint runs and of notifications need
+none either: every delivery of a notification is kept in the database, and
+the maintenance run queues it again; a lint run that waited shows **Lint
+queued** until the template is saved again or **Run Lint** queues a new one.
 
 To restore a database backup, see [Rollback](updating.md#rollback); a
 backup taken after the update to encrypted survey password answers needs

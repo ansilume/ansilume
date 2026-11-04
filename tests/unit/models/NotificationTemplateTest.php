@@ -45,6 +45,7 @@ class NotificationTemplateTest extends TestCase
         $this->assertSame('webhook', NotificationTemplate::CHANNEL_WEBHOOK);
         $this->assertSame('telegram', NotificationTemplate::CHANNEL_TELEGRAM);
         $this->assertSame('pagerduty', NotificationTemplate::CHANNEL_PAGERDUTY);
+        $this->assertSame('mattermost', NotificationTemplate::CHANNEL_MATTERMOST);
     }
 
     public function testEventConstants(): void
@@ -67,6 +68,7 @@ class NotificationTemplateTest extends TestCase
         $this->assertSame('Webhook', $labels['webhook']);
         $this->assertSame('Telegram', $labels['telegram']);
         $this->assertSame('PagerDuty', $labels['pagerduty']);
+        $this->assertSame('Mattermost', $labels['mattermost']);
     }
 
     public function testChannelLabelUnknown(): void
@@ -121,9 +123,9 @@ class NotificationTemplateTest extends TestCase
     public function testEventLabels(): void
     {
         $labels = NotificationTemplate::eventLabels();
-        // 18 events across jobs (4), workflows (5), approvals (3), schedules (1),
+        // 21 events across jobs (4), workflows (8), approvals (3), schedules (1),
         // runners (2), projects (2), webhooks (1).
-        $this->assertCount(18, $labels);
+        $this->assertCount(21, $labels);
         $this->assertArrayHasKey('job.failed', $labels);
         $this->assertArrayHasKey('workflow.succeeded', $labels);
         $this->assertArrayHasKey('approval.requested', $labels);

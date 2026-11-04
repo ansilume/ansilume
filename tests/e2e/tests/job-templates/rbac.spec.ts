@@ -1,5 +1,6 @@
 import { test, expect, Page } from '@playwright/test';
 import { expectForbidden, fieldError, notAnInteger, postJsonWithPageCsrf, showAnswer, templateId } from '../../lib/helpers';
+import { LINT_QUEUED, LINT_RAN, expectLintResult, lintStatus } from '../../lib/lint';
 import { newestJobOf } from '../../lib/jobs';
 import { asAdmin, forgePost, idWhere, indexRows, optionLabels, optionValue } from '../../lib/scoping';
 import { PLACEHOLDER, expectNotInPage } from '../../lib/survey-secrets';
@@ -156,6 +157,50 @@ test.describe('Job Templates RBAC', () => {
   test('operator can create templates', async ({ page }) => {
     await page.goto('/job-template/create');
     await expect(page.locator('body')).not.toContainText(/\bForbidden\b/i);
+  });
+
+  // A save queues a lint run of the template, which the queue-worker makes
+  // (LintService::queueForTemplate()); e2e-operator's team operates e2e-project.
+  test('operator saves a template of a project their team operates, and its lint run is queued', async ({ page, browser }, testInfo) => {
+    test.setTimeout(150_000);
+    await page.goto('/job-template/create');
+    const fields = {
+      'JobTemplate[name]': `e2e-operator-lint-queue-${Date.now()}`,
+      'JobTemplate[project_id]': await optionValue(page, '#jobtemplate-project_id', 'e2e-project'),
+      'JobTemplate[playbook]': 'site.yml',
+      'JobTemplate[inventory_id]': await optionValue(page, '#jobtemplate-inventory_id', 'e2e-inventory'),
+      'JobTemplate[runner_group_id]': (await page.locator('#jobtemplate-runner_group_id option:not([value=""])').first().getAttribute('value')) ?? '',
+      'JobTemplate[verbosity]': '0',
+      'JobTemplate[forks]': '5',
+      'JobTemplate[timeout_minutes]': '30',
+    };
+    await page.goto('/job-template/index');
+    await forgePost(page, '/job-template/create', fields, /\/job-template\/view\?id=\d+$/);
+    const id = openTemplateId(page);
+    try {
+      await expect(page.getByTestId('lint-queued')).toHaveText(LINT_QUEUED);
+      await expectLintResult(page);
+      await expect(page.getByTestId('lint-badge')).toHaveText(LINT_RAN);
+    } finally {
+      // Operators may not delete templates; the admin removes it again.
+      await asAdmin(browser, testInfo, async (admin) => {
+        await admin.goto(`/job-template/view?id=${id}`);
+        await deleteOpenTemplate(admin);
+      });
+    }
+  });
+
+  // The poll of the lint card answers whoever may view the template, as the
+  // page: e2e-viewer's team has e2e-beta-tmpl, e2e-operator's e2e-alpha-tmpl.
+  test('viewer sees the lint state of their team\'s template and is refused it for one they cannot see', async ({ page, browser }, testInfo) => {
+    const hidden = await asAdmin(browser, testInfo, (admin) => templateId(admin, 'e2e-alpha-tmpl'));
+    await openTemplate(page, 'e2e-beta-tmpl');
+    await expect(page.getByTestId('lint-badge')).toBeVisible();
+
+    const answer = await lintStatus(page, 'job-template', openTemplateId(page));
+    expect(answer.status()).toBe(200);
+    expect(Object.keys(await answer.json()).sort()).toEqual(['lint_at', 'queued']);
+    expect((await lintStatus(page, 'job-template', hidden)).status()).toBe(403);
   });
 
   test('viewer gets 403 on template launch URL', async ({ page }) => {

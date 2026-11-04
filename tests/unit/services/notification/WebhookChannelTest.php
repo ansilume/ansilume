@@ -76,7 +76,13 @@ class WebhookChannelTest extends TestCase
         $this->assertContains('Content-Type: application/json', $channel->capturedHeaders);
     }
 
-    public function testNoCustomHeadersSendsOnlyContentType(): void
+    /**
+     * Without custom headers, only the channel's own are sent: the type,
+     * the event (a test send without one is sent for 'test') and the
+     * delivery, which a test send has none of: test-<16 hex digits>.
+     * Without a signing secret, no signature.
+     */
+    public function testNoCustomHeadersSendsOnlyTheChannelsOwn(): void
     {
         $nt = $this->makeTemplate('{"url": "https://example.com/hook"}');
 
@@ -93,8 +99,9 @@ class WebhookChannelTest extends TestCase
 
         $channel->send($nt, 'Test', 'Body', []);
 
-        $this->assertCount(1, $channel->capturedHeaders);
-        $this->assertSame('Content-Type: application/json', $channel->capturedHeaders[0]);
+        $this->assertCount(3, $channel->capturedHeaders);
+        $this->assertSame(['Content-Type: application/json', 'X-Ansilume-Event: test'], array_slice($channel->capturedHeaders, 0, 2));
+        $this->assertMatchesRegularExpression('/^X-Ansilume-Delivery: test-[0-9a-f]{16}$/', $channel->capturedHeaders[2]);
     }
 
     public function testMultipleCustomHeaders(): void
@@ -121,7 +128,37 @@ class WebhookChannelTest extends TestCase
         $this->assertContains('Content-Type: application/json', $channel->capturedHeaders);
         $this->assertContains('X-Token: abc', $channel->capturedHeaders);
         $this->assertContains('X-Source: ansilume', $channel->capturedHeaders);
-        $this->assertCount(3, $channel->capturedHeaders);
+        $this->assertCount(5, $channel->capturedHeaders, 'the channel’s own three and the two of the config');
+    }
+
+    /**
+     * regression: a header value that is a list or an object (a config
+     * stored through the API) was joined to its name as text, which PHP
+     * warns about ("Array to string conversion"), and the error handler
+     * turned the warning into an error of every attempt of the delivery. It
+     * is left out; an empty or a number value is sent as before.
+     */
+    public function testRegressionAHeaderValueThatIsAListIsLeftOut(): void
+    {
+        $nt = $this->makeTemplate((string)json_encode([
+            'url' => 'https://example.com/hook',
+            'headers' => ['X-List' => ['a'], 'X-Object' => ['k' => 'v'], 'X-Empty' => null, 'X-Number' => 5],
+        ]));
+
+        $channel = new class extends WebhookChannel {
+            /** @var string[] */
+            public array $capturedHeaders = [];
+
+            protected function post(string $url, string $payload, array $headers): string
+            {
+                $this->capturedHeaders = $headers;
+                return 'ok';
+            }
+        };
+
+        $channel->send($nt, 'Test', 'Body', []);
+
+        $this->assertSame(['X-Empty: ', 'X-Number: 5'], array_slice($channel->capturedHeaders, 3));
     }
 
     public function testInvalidConfigDoesNotSend(): void
@@ -220,7 +257,7 @@ class WebhookChannelTest extends TestCase
             $nt = $this->makeTemplate(json_encode(['url' => $baseUrl]) ?: '{}');
             $channel = new WebhookChannel();
             $this->expectException(\RuntimeException::class);
-            $this->expectExceptionMessage('WebhookChannel: HTTP 502');
+            $this->expectExceptionMessage('WebhookChannel: HTTP 502.');
             $channel->send($nt, 'Hello', 'World', []);
         } finally {
             $server->stop();
@@ -228,15 +265,15 @@ class WebhookChannelTest extends TestCase
     }
 
     /**
-     * curl_init() gives false for a URL longer than libcurl takes
-     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes).
+     * curl does not take a URL longer than libcurl takes
+     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes): curl error 43.
      */
     public function testAUrlThatCurlDoesNotTakeIsAnError(): void
     {
         $nt = $this->makeTemplate((string)json_encode(['url' => 'http://127.0.0.1/' . str_repeat('a', 8000000)]));
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('WebhookChannel: failed to init curl');
+        $this->expectExceptionMessage('WebhookChannel: The request could not be made (curl error 43).');
         (new WebhookChannel())->send($nt, 'Hello', 'World', []);
     }
 }

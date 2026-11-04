@@ -40,8 +40,9 @@ class JobTemplateControllerRuleSpellingsTest extends WebControllerTestCase
     {
         parent::setUp();
         $this->swapComponent('lintService', new class () extends LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
         $this->admin = $this->createUserWithRole('form-spelling-admin', 'admin');

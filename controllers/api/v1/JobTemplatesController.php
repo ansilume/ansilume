@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace app\controllers\api\v1;
 
 use app\components\JobTemplateWarnings;
+use app\components\LintState;
 use app\components\SubmittedInteger;
 use app\models\Credential;
 use app\models\JobTemplate;
@@ -14,6 +15,7 @@ use app\services\GatedJobTemplateLock;
 use app\services\JobTemplateDeletionService;
 use app\services\JobTemplateGate;
 use app\services\JobTemplateRuleAssignment;
+use app\services\LintService;
 use yii\data\ActiveDataProvider;
 use yii\db\ActiveRecord;
 use yii\web\NotFoundHttpException;
@@ -64,6 +66,12 @@ use yii\web\NotFoundHttpException;
  * lock (applyBodyUnlessRefused()). As approval_rule_id, it is a change of the
  * rule (403) for everyone but admins, and 422 "Approval rule must be an
  * integer." for them (ruleAssignmentError()).
+ *
+ * A create or an update that saved the template queues a lint run of its
+ * playbook (LintService::queueForTemplate()), which the queue-worker runs:
+ * lint.queued_at of the answer says when. A queue that cannot be reached
+ * leaves lint.queued_at null; the save stays. Every answer has the
+ * template's lint state (lint), one template also its output.
  */
 class JobTemplatesController extends BaseApiController
 {
@@ -140,7 +148,7 @@ class JobTemplatesController extends BaseApiController
         if ($userId === null || !$this->checker()->canViewChildResource($userId, $model->project_id)) {
             return $this->error('Forbidden.', 403);
         }
-        return $this->success($this->serialize($model, $this->mayChange($model)));
+        return $this->success($this->serialize($model, $this->mayChange($model), true));
     }
 
     /**
@@ -178,8 +186,9 @@ class JobTemplatesController extends BaseApiController
         if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, $audit, $userId)) {
             return $this->saveError($model);
         }
+        $this->lintService()->queueForTemplate($model);
 
-        return $this->success($this->serialize($model, $this->mayChange($model)), 201);
+        return $this->success($this->serialize($model, $this->mayChange($model), true), 201);
     }
 
     /**
@@ -221,8 +230,9 @@ class JobTemplatesController extends BaseApiController
         if (!$this->credentialService()->saveWithCredentials($model, $credentialIds, $audit, $userId)) {
             return $this->saveError($model);
         }
+        $this->lintService()->queueForTemplate($model);
 
-        return $this->success($this->serialize($model, $this->mayChange($model)));
+        return $this->success($this->serialize($model, $this->mayChange($model), true));
     }
 
     /**
@@ -403,9 +413,12 @@ class JobTemplatesController extends BaseApiController
      * only through its inventory has approval_rule_id null and an
      * approval_gate whose required_by is inventory.
      *
-     * @return array{id: int, name: string, description: string|null, project_id: int, project_name: string|null, inventory_id: int, inventory_name: string|null, runner_group_id: int|null, credential_id: int|null, credential_ids: list<int>, credentials: list<array{id: int, name: string, credential_type: string, role: string}>, approval_rule_id: int|null, approval_rule_name: string|null, approval_gate: array{approval_rule_id: int, approval_rule_name: string|null, required_by: string}|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, warnings: list<array{code: string, message: string, credential_ids: list<int>}>, created_by: int, created_at: int, updated_at: int, has_trigger_token?: bool, trigger_user_id?: int|null}
+     * lint is the template's lint state (LintState::toApi()), with its
+     * output for one template ($withLintOutput), not in lists.
+     *
+     * @return array{id: int, name: string, description: string|null, project_id: int, project_name: string|null, inventory_id: int, inventory_name: string|null, runner_group_id: int|null, credential_id: int|null, credential_ids: list<int>, credentials: list<array{id: int, name: string, credential_type: string, role: string}>, approval_rule_id: int|null, approval_rule_name: string|null, approval_gate: array{approval_rule_id: int, approval_rule_name: string|null, required_by: string}|null, playbook: string, verbosity: int, forks: int, become: bool, become_method: string, become_user: string, limit: string|null, tags: string|null, skip_tags: string|null, has_survey: bool, warnings: list<array{code: string, message: string, credential_ids: list<int>}>, lint: array{status: string|null, exit_code: int|null, checked_at: int|null, queued_at: int|null, output?: string|null}, created_by: int, created_at: int, updated_at: int, has_trigger_token?: bool, trigger_user_id?: int|null}
      */
-    private function serialize(JobTemplate $t, bool $withTrigger): array
+    private function serialize(JobTemplate $t, bool $withTrigger, bool $withLintOutput = false): array
     {
         $credentials = $this->credentialService()->describe($t);
         $additional = array_filter($credentials, static fn (array $c): bool => $c['role'] === Credential::ROLE_ADDITIONAL);
@@ -437,6 +450,7 @@ class JobTemplatesController extends BaseApiController
             'skip_tags' => $t->skip_tags,
             'has_survey' => $t->hasSurvey(),
             'warnings' => JobTemplateWarnings::forTemplate($t),
+            'lint' => LintState::of($t)->toApi($withLintOutput),
             'created_by' => (int)$t->created_by,
             'created_at' => $t->created_at,
             'updated_at' => $t->updated_at,
@@ -498,6 +512,14 @@ class JobTemplatesController extends BaseApiController
         $ids = $body['credential_ids'] ?? [];
 
         return is_array($ids) && array_is_list($ids) ? $ids : false;
+    }
+
+    private function lintService(): LintService
+    {
+        /** @var LintService $service */
+        $service = \Yii::$app->get('lintService');
+
+        return $service;
     }
 
     private function credentialService(): \app\services\JobTemplateCredentialService

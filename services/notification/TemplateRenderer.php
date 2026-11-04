@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace app\services\notification;
 
+use app\components\AppLinks;
+
 /**
  * Mustache-like template renderer used by notification channels.
  *
@@ -72,17 +74,11 @@ class TemplateRenderer
 
     private function baseUrl(): string
     {
-        // appBaseUrl (APP_URL in the env) is what the operator configured
-        // as the externally reachable URL — it must win over the current
-        // request's hostInfo. Otherwise notifications emitted from jobs
-        // finalising via an internal runner→nginx call ship the internal
-        // docker hostname (e.g. http://nginx) to end users.
-        if (!empty(\Yii::$app->params['appBaseUrl'])) {
-            return rtrim((string)\Yii::$app->params['appBaseUrl'], '/');
-        }
-        if (\Yii::$app->has('request') && \Yii::$app->request instanceof \yii\web\Request) {
-            return (string)\Yii::$app->request->hostInfo;
-        }
-        return '';
+        // appBaseUrl (APP_URL in the env) alone, never the current
+        // request's hostInfo: notifications emitted from jobs finalising
+        // via an internal runner→nginx call would otherwise ship the
+        // internal docker hostname (e.g. http://nginx) to end users
+        // (AppLinks).
+        return AppLinks::base();
     }
 }

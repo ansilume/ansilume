@@ -164,7 +164,7 @@ class SlackChannelTest extends TestCase
             $nt = $this->makeTemplate(json_encode(['webhook_url' => $baseUrl]) ?: '{}');
             $channel = new SlackChannel();
             $this->expectException(\RuntimeException::class);
-            $this->expectExceptionMessage('SlackChannel: HTTP 500');
+            $this->expectExceptionMessage('SlackChannel: HTTP 500.');
             $channel->send($nt, 'Hello', 'World', []);
         } finally {
             $server->stop();
@@ -172,8 +172,8 @@ class SlackChannelTest extends TestCase
     }
 
     /**
-     * curl_init() gives false for a URL longer than libcurl takes
-     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes).
+     * curl does not take a URL longer than libcurl takes
+     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes): curl error 43.
      */
     public function testAWebhookUrlThatCurlDoesNotTakeIsAnError(): void
     {
@@ -181,7 +181,7 @@ class SlackChannelTest extends TestCase
         $nt = $this->makeTemplate((string)json_encode(['webhook_url' => $url]));
 
         $this->expectException(\RuntimeException::class);
-        $this->expectExceptionMessage('SlackChannel: failed to init curl');
+        $this->expectExceptionMessage('SlackChannel: The request could not be made (curl error 43).');
         (new SlackChannel())->send($nt, 'Hello', 'World', []);
     }
 }

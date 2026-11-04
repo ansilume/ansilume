@@ -158,6 +158,96 @@ class PagerDutyChannelTest extends TestCase
     }
 
     /**
+     * The channel says which events it sends nothing for
+     * (SelectiveChannelInterface), so a template gets no delivery of them:
+     * the two info events of a step, and no other event of the catalogue.
+     */
+    public function testItSendsEveryEventButTheInfoEventsOfAStep(): void
+    {
+        $channel = new PagerDutyChannel();
+        $silent = [];
+        foreach (array_keys(NotificationTemplate::eventLabels()) as $event) {
+            if (!$channel->sendsEvent($event)) {
+                $silent[] = $event;
+            }
+        }
+
+        $this->assertSame([NotificationTemplate::EVENT_WORKFLOW_STEP_STARTED, NotificationTemplate::EVENT_WORKFLOW_STEP_SUCCEEDED], $silent);
+        $this->assertSame(PagerDutyChannel::NEVER_TRIGGERED, $silent);
+        $this->assertTrue($channel->sendsEvent('test'), 'the event of a test of a template without events');
+    }
+
+    /**
+     * Spec answer 3: PagerDuty keeps alerting on every event it alerted on,
+     * but the info events of a workflow step's start and success
+     * (workflow.step_started, workflow.step_succeeded) never trigger an
+     * incident: PagerDuty gets nothing for them. workflow.waiting, a
+     * warning, triggers one, as approval.requested does, and an info event
+     * that triggered before still does.
+     */
+    public function testTheNewInfoEventsNeverTriggerPagerDuty(): void
+    {
+        foreach ([NotificationTemplate::EVENT_WORKFLOW_STEP_STARTED, NotificationTemplate::EVENT_WORKFLOW_STEP_SUCCEEDED] as $event) {
+            $channel = $this->channel();
+
+            $channel->send($this->makeTemplate(self::config()), 'Step', 'Body', ['event' => $event, 'severity' => 'info', 'workflow.id' => '7']);
+
+            $this->assertSame([], $channel->posts, $event);
+        }
+
+        $waiting = $this->channel();
+        $waiting->send($this->makeTemplate(self::config()), 'Waits', 'Body', [
+            'event' => NotificationTemplate::EVENT_WORKFLOW_WAITING,
+            'severity' => NotificationTemplate::eventSeverity(NotificationTemplate::EVENT_WORKFLOW_WAITING),
+            'workflow.id' => '7',
+        ]);
+        $sent = self::event($waiting);
+        $this->assertSame('trigger', $sent['event_action']);
+        $this->assertSame('warning', $sent['payload']['severity'] ?? null);
+        $this->assertSame('ansilume:3:workflow.id=7', $sent['dedup_key']);
+
+        $launched = $this->channel();
+        $launched->send($this->makeTemplate(self::config()), 'Launched', 'Body', [
+            'event' => NotificationTemplate::EVENT_WORKFLOW_LAUNCHED,
+            'severity' => 'info',
+            'workflow.id' => '7',
+        ]);
+        $this->assertSame('trigger', self::event($launched)['event_action']);
+    }
+
+    /**
+     * Regression: since a job or an approval of a workflow step carries the
+     * run's context (workflow.id, RunContext), its incident moved to the
+     * run's, so a run's approval no longer paged on its own. A job or an
+     * approval event keeps the incident it had (its project, else its job
+     * template, else its job); a workflow event is the run's.
+     */
+    public function testTheEventsOfAStepKeepTheirIncident(): void
+    {
+        $cases = [
+            'the approval of a gated job step' => [
+                ['event' => NotificationTemplate::EVENT_APPROVAL_REQUESTED, 'job.id' => '42', 'job.template_id' => '7', 'workflow.id' => '9'],
+                'ansilume:3:job.template_id=7',
+            ],
+            'the approval of an approval step' => [
+                ['event' => NotificationTemplate::EVENT_APPROVAL_REJECTED, 'job.id' => '42', 'job.template_id' => '', 'workflow.id' => '9'],
+                'ansilume:3:job=42',
+            ],
+            'a workflow event' => [
+                ['event' => NotificationTemplate::EVENT_WORKFLOW_STEP_FAILED, 'workflow.id' => '9', 'step.job_id' => '42'],
+                'ansilume:3:workflow.id=9',
+            ],
+        ];
+        foreach ($cases as $what => [$variables, $dedupKey]) {
+            $channel = $this->channel();
+
+            $channel->send($this->makeTemplate(self::config()), 'Subject', 'Body', $variables);
+
+            $this->assertSame($dedupKey, self::event($channel)['dedup_key'], $what);
+        }
+    }
+
+    /**
      * @dataProvider recoveryEvents
      */
     public function testARecoveryEventResolvesItsIncident(string $event): void
@@ -315,10 +405,11 @@ class PagerDutyChannelTest extends TestCase
     }
 
     /**
-     * An answer outside 2xx is an error with its code and the first 200
-     * bytes of its body, which notification.failed records.
+     * An answer outside 2xx is an error with its code, which
+     * notification.failed records; never with the answer's body, which
+     * held the first 200 bytes of it before (ChannelSchemeRegressionTest).
      */
-    public function testAnAnswerOutside2xxIsAnErrorWithItsCodeAndTheStartOfItsBody(): void
+    public function testAnAnswerOutside2xxIsAnErrorWithItsCodeOnly(): void
     {
         $answer = '{"status":"invalid event","message":"Event object is invalid","errors":["'
             . str_repeat('x', 300) . '"]}';
@@ -332,23 +423,27 @@ class PagerDutyChannelTest extends TestCase
             $server->stop();
         }
 
-        $this->assertSame('PagerDutyChannel: HTTP 400 — ' . substr($answer, 0, 200), $error);
+        $this->assertSame('PagerDutyChannel: HTTP 400.', $error);
         $this->assertCount(1, $requests);
     }
 
-    public function testAReceiverThatCannotBeReachedIsAnErrorWithoutCode(): void
+    /**
+     * A receiver that cannot be reached is an error with curl's code: 7,
+     * the connection was refused.
+     */
+    public function testAReceiverThatCannotBeReachedIsAConnectError(): void
     {
         $channel = $this->channel('http://127.0.0.1:1/v2/enqueue');
         $template = $this->makeTemplate(self::config());
 
         $error = self::errorOf(fn () => $channel->send($template, 'Alert', 'Body', ['event' => 'test']));
 
-        $this->assertSame('PagerDutyChannel: HTTP 0 — ', $error);
+        $this->assertSame('PagerDutyChannel: Could not connect (curl error 7).', $error);
     }
 
     /**
-     * curl_init() gives false for a URL longer than libcurl takes
-     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes).
+     * curl does not take a URL longer than libcurl takes
+     * (CURL_MAX_INPUT_LENGTH, 8000000 bytes): curl error 43.
      */
     public function testAUrlThatCurlDoesNotTakeIsAnError(): void
     {
@@ -357,7 +452,7 @@ class PagerDutyChannelTest extends TestCase
 
         $error = self::errorOf(fn () => $channel->send($template, 'Alert', 'Body', ['event' => 'test']));
 
-        $this->assertSame('PagerDutyChannel: failed to init curl', $error);
+        $this->assertSame('PagerDutyChannel: The request could not be made (curl error 43).', $error);
     }
 
     /**

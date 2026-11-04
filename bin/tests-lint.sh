@@ -356,12 +356,39 @@ else
     fail "composer.json validation failed"
 fi
 
-AUDIT=$(dc composer audit --no-dev 2>&1 || true)
-if grep -qiP "CVE-|GHSA-|Found \d+ vulnerab" <<< "$AUDIT"; then
+# Judged by the exit code of composer audit (bin/tests-common.sh): Composer
+# 2.10 exits 0 when it has nothing to report and 1 for a security advisory,
+# for an abandoned package (its default for audit.abandoned is "fail", which
+# composer.json keeps; config.audit.ignore-abandoned names one that may
+# stay), for an installed package on a filter list whose audit is "fail"
+# (Packagist's malware list, which Composer's built-in config.policy.malware
+# audits with "fail" by default; composer.json sets no policy) and for an
+# error of the command, such as "No installed packages found"; it exits 100
+# when it cannot reach a repository, such as the advisories API of
+# Packagist, and 255 on a fatal error. Composer prints the filter list's
+# table last, after the advisories and the abandoned packages, so that
+# check comes first and shows the end of the output: a malware hit is never
+# filed as advisories with its table cut off, nor as an audit that did not
+# complete. The check read only the output for "CVE-" or "GHSA-", so an
+# audit that could not reach Packagist passed, and so would one whose
+# advisories have no CVE, for which Composer prints NO CVE and an ID of
+# PKSA- (tests/unit/bin/LintSuiteComposerAuditTest.php).
+AUDIT_RC=0
+AUDIT=$(dc composer audit --no-dev 2>&1) || AUDIT_RC=$?
+if [[ $AUDIT_RC -eq 0 ]]; then
+    ok "No known security vulnerabilities in dependencies"
+elif [[ $AUDIT_RC -eq 1 ]] && grep -qP '^Found \d+ packages? matching filters' <<< "$AUDIT"; then
+    fail "composer audit found packages on a filter list (malware)"
+    show_output_tail "$AUDIT"
+elif [[ $AUDIT_RC -eq 1 ]] && grep -qP 'Found \d+ security vulnerability advisor' <<< "$AUDIT"; then
     fail "composer audit found security advisories"
     head -20 <<< "$AUDIT" | sed 's/^/     /'
+elif [[ $AUDIT_RC -eq 1 ]] && grep -qP 'Found \d+ abandoned package' <<< "$AUDIT"; then
+    fail "composer audit found abandoned packages"
+    head -20 <<< "$AUDIT" | sed 's/^/     /'
 else
-    ok "No known security vulnerabilities in dependencies"
+    fail "composer audit did not complete (exit $AUDIT_RC)"
+    show_output_tail "$AUDIT"
 fi
 
 # =============================================================================

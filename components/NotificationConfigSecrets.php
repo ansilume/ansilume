@@ -5,24 +5,34 @@ declare(strict_types=1);
 namespace app\components;
 
 use app\models\NotificationTemplate;
+use app\services\notification\ChannelRegistry;
 
 /**
- * The secrets of a notification template's channel config
- * (NotificationTemplate::SECRET_CONFIG_KEYS and SECRET_CONFIG_MAPS).
+ * The secrets of a notification template's channel config: the secretKeys
+ * and secretMaps of the channels of the installation (ChannelDefinition,
+ * ChannelRegistry).
  *
  * The template page, its edit form and the API show SurveySecrets::PLACEHOLDER
  * for every secret value (redacted()). A key that is a secret for one channel
  * is redacted in every config, so neither a key left over from another
  * channel nor the config of a channel no handler sends shows a secret. Header
- * names are shown, their values are not.
+ * names are shown, their values are not. The config of a channel that the
+ * installation does not have (a channel of its own taken out of its
+ * configuration) shows no value at all: what was a secret of that channel
+ * is no longer known as one.
  *
  * A submitted config that holds the placeholder at a secret's place keeps the
  * stored value there (restore(), which the template's validator runs). Only
- * while the template keeps its channel, and for a header only while every
- * other secret of its channel (the webhook's url) keeps its stored value:
- * whoever may edit a template but not read it could otherwise send the
- * stored header to a server of their own. The placeholder is refused at a
- * place without a stored value, and after such a change.
+ * while the template keeps its channel; and for a secret bound to another
+ * key (the boundTo of its channel's definition: the headers and the signing
+ * secret of a webhook template to its url, the bot token of a Mattermost
+ * template to its server_url)
+ * only while that key keeps its stored value, typed again or, for a key
+ * that is a secret itself, sent back as the placeholder: whoever may edit a
+ * template but not read it could otherwise send the stored header or token
+ * to a server of their own, or have the stored signing secret sign for one.
+ * The placeholder is refused at a place without a stored value, and after
+ * such a change.
  *
  * The configs it works on are properties: no method takes a secret as a
  * parameter, so none reaches a stack trace (CLAUDE.md security rule 11).
@@ -35,7 +45,11 @@ final class NotificationConfigSecrets
     /** A placeholder after a channel change; sprintf(): the place. */
     public const CHANNEL_CHANGED = '%s: the channel changed; enter the real value.';
 
-    /** A header placeholder after another secret of the channel changed; sprintf(): the place, then that secret's key (url). */
+    /**
+     * A bound secret's placeholder after the key it is bound to (the
+     * channel's boundTo) changed; sprintf(): the place, then that key (url,
+     * server_url).
+     */
     public const URL_CHANGED = '%s: %s changed; enter the real value.';
 
     /** The config with the stored values put back cannot be written as JSON. */
@@ -77,6 +91,9 @@ final class NotificationConfigSecrets
         }
         foreach (self::secretMaps() as $map) {
             $this->redactMap($map);
+        }
+        if (ChannelRegistry::definitionOf((string)$this->template->channel) === null) {
+            $this->redactEveryOtherValue();
         }
 
         return $this->config;
@@ -121,59 +138,49 @@ final class NotificationConfigSecrets
     }
 
     /**
-     * Every key that is a secret for some channel.
+     * Every key that is a secret for some channel of the installation.
      *
      * @return list<string>
      */
     private static function secretKeys(): array
     {
-        return self::union(NotificationTemplate::SECRET_CONFIG_KEYS);
+        $keys = [];
+        foreach (ChannelRegistry::installed() as $definition) {
+            $keys = array_merge($keys, $definition->secretKeys);
+        }
+
+        return array_values(array_unique($keys));
     }
 
     /**
-     * Every key whose values are secrets for some channel.
+     * Every key whose values are secrets for some channel of the
+     * installation.
      *
      * @return list<string>
      */
     private static function secretMaps(): array
     {
-        return self::union(NotificationTemplate::SECRET_CONFIG_MAPS);
+        $maps = [];
+        foreach (ChannelRegistry::installed() as $definition) {
+            $maps = array_merge($maps, $definition->secretMaps);
+        }
+
+        return array_values(array_unique($maps));
     }
 
     /**
-     * @param array<string, list<string>> $byChannel
-     * @return list<string>
+     * The placeholder for every other value of the config that is set: of
+     * a channel the installation does not have, no key is known to hold no
+     * secret.
      */
-    private static function union(array $byChannel): array
+    private function redactEveryOtherValue(): void
     {
-        $keys = [];
-        foreach ($byChannel as $channelKeys) {
-            foreach ($channelKeys as $key) {
-                if (!in_array($key, $keys, true)) {
-                    $keys[] = $key;
-                }
+        $handled = array_merge(self::secretKeys(), self::secretMaps());
+        foreach (array_keys($this->config) as $key) {
+            if (!in_array($key, $handled, true) && $this->holdsValue((string)$key)) {
+                $this->config[$key] = SurveySecrets::PLACEHOLDER;
             }
         }
-
-        return $keys;
-    }
-
-    /**
-     * The secret keys of every channel that has the map $map: what its
-     * values go along with (for the headers, the webhook's url).
-     *
-     * @return list<string>
-     */
-    private static function keysBeside(string $map): array
-    {
-        $keys = [];
-        foreach (NotificationTemplate::SECRET_CONFIG_MAPS as $channel => $maps) {
-            if (in_array($map, $maps, true)) {
-                $keys = array_merge($keys, NotificationTemplate::SECRET_CONFIG_KEYS[$channel]);
-            }
-        }
-
-        return $keys;
     }
 
     /** Whether the config worked on holds a value at $key: anything but a missing key, null or ''. */
@@ -273,7 +280,7 @@ final class NotificationConfigSecrets
         if (!$this->keepsChannel()) {
             return sprintf(self::CHANNEL_CHANGED, $label);
         }
-        $changed = in_array($place[0], self::secretMaps(), true) ? $this->changedKeyBeside((string)$place[0]) : null;
+        $changed = $this->changedBinding((string)$place[0]);
 
         return $changed === null ? null : sprintf(self::URL_CHANGED, $label, $changed);
     }
@@ -300,19 +307,24 @@ final class NotificationConfigSecrets
     }
 
     /**
-     * The first secret key beside the map $map whose submitted value is
-     * neither the placeholder nor the stored value; null when none changed.
+     * The key that the secret key or map $key of the template's channel is
+     * bound to (its definition's boundTo), when it did not keep its stored value; null when
+     * it kept it, and for a key bound to none. A key keeps its stored value
+     * when it is submitted as stored, and a key that is a secret itself
+     * (the webhook's url) also when it is submitted as the placeholder,
+     * which restore() refuses unless the stored value can stay.
      */
-    private function changedKeyBeside(string $map): ?string
+    private function changedBinding(string $key): ?string
     {
-        foreach (self::keysBeside($map) as $key) {
-            $value = $this->config[$key] ?? null;
-            if ($value !== SurveySecrets::PLACEHOLDER && $value !== ($this->stored[$key] ?? null)) {
-                return $key;
-            }
+        $bound = ChannelRegistry::definitionOf((string)$this->template->channel)?->boundTo[$key] ?? null;
+        if ($bound === null) {
+            return null;
         }
+        $value = $this->config[$bound] ?? null;
+        $kept = $value === ($this->stored[$bound] ?? null)
+            || ($value === SurveySecrets::PLACEHOLDER && in_array($bound, self::secretKeys(), true));
 
-        return null;
+        return $kept ? null : $bound;
     }
 
     /**

@@ -313,6 +313,7 @@ class ScheduleService extends Component
                 'cron' => (string)$schedule->cron_expression,
                 'error' => $error,
             ],
+            NotificationDispatcher::REFS => ['job_template_id' => (int)$schedule->job_template_id],
         ]);
     }
 

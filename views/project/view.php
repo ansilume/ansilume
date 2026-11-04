@@ -9,9 +9,9 @@ declare(strict_types=1);
 /** @var list<string> $unreadable  ProjectFilesystemScanner::unreadable() */
 /** @var string|null $unreadableNote  ProjectFilesNote::of(), null when there is nothing to say */
 /** @var array<string, mixed> $vault  VaultOverviewService::forProject() */
+/** @var bool $lintWorkerMissing a lint run is queued, and no queue worker beats (LintCardTrait::lintCard()) */
 
 use app\components\GitSyncDiagnostics;
-use app\components\LintVerdict;
 use app\controllers\ProjectController;
 use app\helpers\ProjectTreeHelper;
 use app\models\Project;
@@ -132,6 +132,8 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
     // under the sync output asks for a reload.
     var stopStatuses = [401, 403, 404];
     var stoppedNote = <?= Json::htmlEncode(ProjectController::SYNC_LIVE_STOPPED) // xss-ok: hex-escaped JSON?>;
+    var noWorker = <?= Json::htmlEncode(ProjectController::NO_QUEUE_WORKER) // xss-ok: hex-escaped JSON?>;
+    var startWorker = <?= Json::htmlEncode(ProjectController::START_QUEUE_WORKER) // xss-ok: hex-escaped JSON?>;
     var stopped = false;
 
     function stop() {
@@ -168,8 +170,10 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
         workerEl.style.display = '';
         if (!w.alive) {
             workerEl.className = 'card-footer py-1 px-2 small text-danger';
-            workerEl.innerHTML = '\u26A0 No queue worker is running. Start one with: '
-                + '<code>docker compose up -d queue-worker</code>';
+            workerEl.textContent = '\u26A0 ' + noWorker + ' ';
+            var command = document.createElement('code');
+            command.textContent = startWorker;
+            workerEl.appendChild(command);
             return;
         }
         // Stuck-worker banner takes precedence over stale-code: if the
@@ -352,46 +356,14 @@ $showSyncPanel = $model->status === Project::STATUS_SYNCING
 
 <div class="row g-3 mt-1">
     <div class="col-12">
-        <div class="card">
-            <?php
-            $lintVerdict = LintVerdict::of($model->lint_exit_code, $model->lint_output);
-            ?>
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span>Ansible Lint <small class="text-muted fw-normal">(--profile production, full project)</small></span>
-                <span>
-                    <span class="badge <?= Html::encode(LintVerdict::badgeClass($lintVerdict)) ?>" data-testid="lint-badge"><?= Html::encode(LintVerdict::label($lintVerdict)) ?></span>
-                    <?php if ($model->lint_at !== null) : ?>
-                        <small class="text-muted ms-2"><?= date('Y-m-d H:i', $model->lint_at) // xss-ok: date() output?></small>
-                    <?php endif; ?>
-                </span>
-            </div>
-            <div class="card-body p-0">
-                <?php if ($model->lint_output) : ?>
-                    <?php if ($lintVerdict === LintVerdict::VAULT_SKIPPED) : ?>
-                        <p class="text-muted small px-3 pt-3 mb-2" data-testid="lint-vault-note"><?= Html::encode(LintVerdict::VAULT_NOTE) ?></p>
-                        <details><summary class="px-3 small">Show ansible-lint output</summary>
-                    <?php endif; ?>
-                    <pre class="job-log m-0" id="lint-output" style="max-height:400px;overflow-y:auto;"></pre>
-                    <?php if ($lintVerdict === LintVerdict::VAULT_SKIPPED) : ?>
-                        </details>
-                    <?php endif; ?>
-                    <script src="<?= \Yii::$app->request->baseUrl ?>/js/ansi_up.min.js"></script>
-                    <script>
-                    (function () {
-                        var au = new AnsiUp();
-                        au.use_classes = false;
-                        au.ansi_colors[0][0].rgb = [118, 118, 118];
-                        au.ansi_colors[0][4].rgb = [77, 159, 236];
-                        au.ansi_colors[0][5].rgb = [198, 120, 221];
-                        var el = document.getElementById('lint-output');
-                        el.innerHTML = au.ansi_to_html(<?= \yii\helpers\Json::htmlEncode($model->lint_output) // xss-ok: hex-escaped JSON?>);
-                    })();
-                    </script>
-                <?php else : ?>
-                    <p class="text-muted p-3 mb-0">No lint output yet. Click "Run Lint" or sync the project to generate a report.</p>
-                <?php endif; ?>
-            </div>
-        </div>
+        <?= $this->render('_lint', [
+            'model' => $model,
+            'scope' => '--profile production, full project',
+            'outputId' => 'lint-output',
+            'maxHeight' => 400,
+            'emptyText' => 'No lint output yet. Click "Run Lint" or sync the project to generate a report.',
+            'workerMissing' => $lintWorkerMissing,
+        ]) ?>
     </div>
 </div>
 

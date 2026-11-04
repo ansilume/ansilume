@@ -17,8 +17,10 @@ use yii\console\ExitCode;
  *
  * The check is in runAction(), before any action, option or help: a
  * beforeAction() that returns false makes the command exit 0. The refusal
- * exits non-zero and says neither "complete" nor "already exists", which
- * bin/tests-e2e.sh reads as a successful seed.
+ * exits ExitCode::CONFIG (78), and bin/tests-e2e.sh fails every seed that
+ * exits non-zero ("E2E seed failed (exit N)"). It also says neither
+ * "complete" nor "already exists", which the suite read as a successful
+ * seed up to 2.14.0.
  *
  * For a yii\console\Controller. A trait, so commands/E2eController stays
  * within the class length limit.

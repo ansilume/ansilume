@@ -54,8 +54,9 @@ class JobTemplateControllerGatedLockTest extends WebControllerTestCase
     {
         parent::setUp();
         $this->replace('lintService', new class () extends LintService {
-            public function runForTemplate(JobTemplate $template): void
+            public function queueForTemplate(JobTemplate $template): bool
             {
+                return true;
             }
         });
         $this->admin = $this->createUserWithRole('gl-admin', 'admin');

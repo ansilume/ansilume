@@ -33,8 +33,9 @@ trait SubmittedNumbersFixtures
      * runner group and another one (otherGroup), a job template with a
      * trigger token (token), a token credential, a vault password with a
      * secret (vault), an approval rule, a workflow with two job steps and an
-     * approval step, a team, another user, a runner, a schedule, and a
-     * runner with a token (runnerToken) that runs a job (job).
+     * approval step, a team, another user, a runner, a schedule, an email
+     * notification template (notificationTemplate), and a runner with a
+     * token (runnerToken) that runs a job (job).
      *
      * @return array<string, int|string>
      */
@@ -73,6 +74,7 @@ trait SubmittedNumbersFixtures
             'user' => (int)$this->createUserWithRole('numbers-guard-user', 'operator')->id,
             'runner' => (int)$this->createRunner((int)$group->id, $adminId)->id,
             'schedule' => $this->schedule((int)$template->id, $adminId),
+            'notificationTemplate' => (int)$this->createNotificationTemplate($adminId)->id,
         ];
         $this->reportingRunner((int)$group->id, (int)$template->id, $adminId);
 
