@@ -288,6 +288,20 @@ that uses it, as whoever has the secret registers runners: delete the
 runners you did not register, and check the audit log for `runner.created`
 and `runner.reregistered` entries you cannot account for.
 
+**The nginx image takes the fixes of its Alpine branch.** The prebuilt
+nginx image installs the updates of its Alpine branch when it is built
+(`apk upgrade --no-cache`). `nginx:1.30-alpine-slim` of 2026-11-18 still
+had OpenSSL 3.5.9-r0 and zlib 1.3.2-r1, while Alpine 3.24 had 3.5.9-r1 and
+1.4-r0 with fixes of high and critical severity (CVE-2026-95692,
+CVE-2026-95691, CVE-2026-107496, CVE-2026-88823, CVE-2026-4738). The
+release scan stopped 2.15.2 for them: its images were built, but it has no
+GitHub release, and `latest` stayed on 2.15.1. Do not install or pin
+2.15.2; this release has its changes. The development stack
+(`docker-compose.yml`) and the deploy role without
+`ansilume_use_prebuilt_images` run `nginx:1.30-alpine-slim` as Docker Hub
+publishes it, and get these fixes once Docker Hub builds it anew
+(`docker compose pull nginx`, then `docker compose up -d nginx`).
+
 **Schedules in Cuba run at their time again.** PHP brings its own time
 zone data: PHP 8.5.12, which 2.15.1 runs on, has 2026.5 (IANA's 2026e),
 and PHP 8.5.13 has 2026.6 (IANA's 2026f, of 2026-10-27). 2026.5 turns the

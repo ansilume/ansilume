@@ -473,6 +473,37 @@ class Php8513UpdateDocsContractTest extends TestCase
     }
 
     /**
+     * Regression: the release scan stopped 2.15.2, as the nginx image carried
+     * the OpenSSL and zlib of nginx:1.30-alpine-slim of 2026-11-18, which
+     * Alpine 3.24 had fixed. The section says that the image takes the fixes
+     * of its Alpine branch now, that 2.15.2 has no release and must not be
+     * pinned, and which installations run the upstream image as published;
+     * docs/releasing.md says why the image upgrades its packages.
+     */
+    public function testTheSectionSaysThatTheNginxImageTakesTheFixesOfAlpine(): void
+    {
+        $section = $this->flat(self::UPDATING, self::UPDATE_SECTION);
+        foreach (
+            [
+                '**The nginx image takes the fixes of its Alpine branch.** The prebuilt nginx image installs the updates'
+                    . ' of its Alpine branch when it is built (`apk upgrade --no-cache`).',
+                'The release scan stopped 2.15.2 for them: its images were built, but it has no GitHub release, and'
+                    . ' `latest` stayed on 2.15.1. Do not install or pin 2.15.2; this release has its changes.',
+                'run `nginx:1.30-alpine-slim` as Docker Hub publishes it',
+            ] as $needle
+        ) {
+            $this->assertMentions($needle, $section, 'the update notes');
+        }
+        $root = dirname(__DIR__, 3);
+        $this->assertStringContainsString("\nRUN apk upgrade --no-cache\n", (string)file_get_contents($root . '/docker/nginx/Dockerfile.prod'));
+        $this->assertMentions(
+            'so the nginx image installs the updates of its Alpine branch when it is built (`apk upgrade --no-cache`',
+            $this->flat('docs/releasing.md', '### Vulnerability scan'),
+            'docs/releasing.md'
+        );
+    }
+
+    /**
      * The anchor GitHub gives a heading.
      */
     private static function anchor(string $heading): string

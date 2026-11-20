@@ -139,7 +139,15 @@ grype registry:ghcr.io/ansilume/ansilume:2.12.2 --platform linux/amd64 --only-fi
 
 A vulnerability of high or critical severity that has a fix fails the
 release. Fix it in the image (a newer base image, package or dependency)
-and release the next version. A finding that does not apply to Ansilume
+and release the next version. A base image can lag behind the fixes of
+its distribution for days, so the nginx image installs the updates of its
+Alpine branch when it is built (`apk upgrade --no-cache`, right after
+`FROM`, `NginxBaseImageTest`): the scan stopped 2.15.2 for OpenSSL
+3.5.9-r0 and zlib 1.3.2-r1 of `nginx:1.30-alpine-slim` of 2026-11-18, which
+Alpine 3.24 had fixed. Scan an image you built yourself before the tag
+with the same grype image, through the Docker socket:
+`docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/src:ro" -w /src <GRYPE_IMAGE of release.yml> docker:<image> --only-fixed --fail-on high`.
+A finding that does not apply to Ansilume
 goes into `.grype.yaml` in the repository root, with its reason, as grype
 reads it from the checkout:
 
