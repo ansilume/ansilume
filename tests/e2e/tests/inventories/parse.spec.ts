@@ -60,6 +60,38 @@ test.describe('Inventory parse-hosts', () => {
     await expect(btn).toHaveText(/Refresh/, { timeout: 5_000 });
   });
 
+  // Regression (CI of 2.15.2, inventories/vault.spec.ts): the button is in
+  // the page before the script that binds its click handler, which runs once
+  // jQuery has loaded at the end of the page (registerJs, POS_READY). A click
+  // in between did nothing: no request, no "Parsing…", and the spec waited
+  // for a POST that never came. The button stays disabled until its handler
+  // is bound, so the click waits for it, as a user's click does.
+  test('regression: a click before the page script has run is not lost', async ({ page }) => {
+    if (!(await gotoFirstInventory(page))) return;
+    const url = page.url();
+
+    // Hold back every script of the page, so that the button is there long
+    // before its handler. Routing turns the HTTP cache off, so they load anew.
+    await page.route((u) => u.pathname.endsWith('.js'), async (route) => {
+      await new Promise((r) => setTimeout(r, 2_000));
+      await route.continue();
+    });
+    // Only until the server answered: 'load' and 'domcontentloaded' would
+    // wait for the scripts, and the race would be gone.
+    await page.goto(url, { waitUntil: 'commit' });
+
+    const btn = page.locator('#btn-parse-inventory');
+    const [response] = await Promise.all([
+      page.waitForResponse((r) =>
+        r.request().method() === 'POST' && r.url().includes('/inventory/parse-hosts'),
+        { timeout: 15_000 },
+      ),
+      btn.click(),
+    ]);
+    expect(response.status()).toBe(200);
+    await expect(btn).toHaveText(/Refresh/, { timeout: 5_000 });
+  });
+
   test('parse button disables itself while the request is in flight', async ({ page }) => {
     if (!(await gotoFirstInventory(page))) return;
 

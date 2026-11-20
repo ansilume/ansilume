@@ -117,7 +117,12 @@ $vaultMarkerJson = \yii\helpers\Json::htmlEncode(\app\components\VaultValueMaske
                 <?php if ($model->parsed_at !== null) : ?>
                     <small class="text-muted me-2" id="parsed-at-label">Parsed <?= date('Y-m-d H:i', $model->parsed_at) ?></small>
                 <?php endif; ?>
-                <button type="button" class="btn btn-sm btn-outline-primary" id="btn-parse-inventory">
+                <?php
+                // Disabled until the script at the end of the page has bound
+                // its click handler: a click before that did nothing.
+                // Regression: tests/e2e/tests/inventories/parse.spec.ts.
+                ?>
+                <button type="button" class="btn btn-sm btn-outline-primary" id="btn-parse-inventory" disabled>
                     <?= Html::encode($cached !== null ? 'Refresh' : 'Parse Inventory') ?>
                 </button>
             </div>
@@ -338,6 +343,8 @@ document.getElementById('btn-parse-inventory').addEventListener('click', functio
         renderFailure('Network request failed', err.message, null);
     });
 });
+// The handler is bound: the button rendered disabled can take clicks now.
+document.getElementById('btn-parse-inventory').disabled = false;
 JS;
 
 $this->registerJs($js);
