@@ -133,13 +133,14 @@ The builds need Docker Hub (`php:8.5-fpm`, `composer:2.10`), which limits
 anonymous pulls: `docker login` lifts the limit. When a build fails after
 `git pull`, the running containers already serve the new code without its
 migrations: fix the cause and run step 3 again, or go back to the release
-you updated from until a build gets through (`git checkout v2.14.0` from
-2.14.0, `git checkout v2.13.1` from 2.13.1, `git checkout v2.12.2` from
-2.12.2; right after `git pull`, `git describe --tags ORIG_HEAD` names it,
-and a commit after a release as `v2.13.1-1-gc017f1c`, which
-`git checkout` takes too), and `git checkout main` again before the next
-update. Updating from 2.13.1 or older, a container that starts again
-before the build got through does not come up, see
+you updated from until a build gets through (`git checkout v2.15.1` from
+2.15.1, `git checkout v2.14.0` from 2.14.0, `git checkout v2.13.1` from
+2.13.1, `git checkout v2.12.2` from 2.12.2; right after `git pull`,
+`git describe --tags ORIG_HEAD` names it, and a commit after a release as
+`v2.13.1-1-gc017f1c`, which `git checkout` takes too), and
+`git checkout main` again before the next update. Updating from 2.13.1 or
+older, a container that starts again before the build got through does
+not come up, see
 [After updating from 2.13.1 or older](#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers),
 and from 2.12.2 or older
 [After updating from 2.12.2 or older](#after-updating-from-2122-or-older-php-83-cron-expressions-unreadable-files)
@@ -184,6 +185,212 @@ Run the diagnostics script if anything looks wrong:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ansilume/ansilume/main/bin/diagnose | bash
 ```
+
+---
+
+## After updating from 2.15.1 or older: PHP 8.5.13, schedules in Cuba
+
+**PHP 8.5.13 fixes security flaws.** The app and runner images run PHP
+8.5.13 of 2026-11-19 instead of PHP 8.5.12, the PHP of the images of
+2.15.1. They build on `php:8.5-fpm` and `php:8.5-cli` as before, which
+bring PHP 8.5.13 now. Of the flaws that 8.5.13 fixes, these concern
+Ansilume:
+
+- **PHP-FPM**, which answers every request of the web UI and the API
+  behind nginx: request smuggling through a request body that the script
+  does not read (CVE-2026-129289), and a use-after-free in its event loop
+  through which code that runs as `www-data` in the app container could
+  raise its rights to those of PHP-FPM's master process, which runs as
+  root (CVE-2026-129291). Its status page, whose fields 8.5.12 did not
+  escape (CVE-2026-129292), is off in the images: they set no
+  `pm.status_path`.
+- **Sessions**, which the web UI keeps in Redis through PHP's session
+  functions: a use-after-free when the end of a session is interrupted
+  (CVE-2026-129481), and CVE-2026-115560, a mismatch of session
+  serializers, which PHP had not fixed when 2.14.0 turned off upload
+  progress against it (see **PHP-FPM tracks no upload progress** under
+  [After updating from 2.13.1 or older](#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers)).
+  `session.upload_progress.enabled = Off` stays, as Ansilume shows no
+  upload progress. The flaw of session files (CVE-2026-126714) does not
+  reach Ansilume, which keeps no session in a file.
+- **The engine and the time zones**, in every PHP process of the server
+  and the runners: use-after-frees in the backtraces of magic methods
+  (CVE-2026-129474), which Yii's components use throughout, in the
+  backtrace of a fatal error after shutdown (CVE-2026-129182), and in
+  PHP's cache of time zones (CVE-2026-129496), in which Ansilume computes
+  the runs of schedules. PHP rates the first and the last as possible
+  remote code execution.
+- **The requests of the runners**: a runner sends its requests to the
+  server with PHP's HTTP stream wrapper (`file_get_contents()` with a
+  stream context), and hands it `API_URL` as written. The wrapper could
+  send what goes to an `https` URL whose scheme is not written in
+  lowercase, such as `HTTPS://ansilume.example.com`, in plain text
+  (CVE-2026-128064), and a server that answers with folded headers, such
+  as one that stands in for Ansilume's on the path of an `http://`
+  `API_URL`, could stop it (CVE-2026-127960). The notification channels
+  and the outbound webhooks send with curl, which these two do not
+  concern.
+
+The other flaws that 8.5.13 fixes are in parts that Ansilume does not use:
+PHP-CGI, SOAP, the signatures of Phar archives, the DOM serializer and the
+URI extension. Check the PHP and its time zone data after the update, in
+the app and in each runner container (`runner-1` in Ansilume's compose
+files, `runner` in
+[runners.md](runners.md#docker-compose-standalone-runner)):
+
+```bash
+docker compose exec -u www-data app php -r 'echo PHP_VERSION, " ", timezone_version_get(), PHP_EOL;'         # 8.5.13 2026.6
+docker compose exec -u www-data runner-1 php -r 'echo PHP_VERSION, " ", timezone_version_get(), PHP_EOL;'    # the same for each runner
+```
+
+- **Prebuilt images:** the update pulls the images of this release; there
+  is nothing else to do. This holds for an installation the quickstart
+  made from source too: it runs `docker-compose.prebuilt.yml`. Update the
+  runner on every other host too, with `docker compose pull` and
+  `docker compose up -d` there: a pulled image takes effect only once the
+  container is created anew. Pin no server or runner to 2.15.1 or older
+  (`ANSILUME_IMAGE_TAG`).
+- **Source installations** started from `docker-compose.yml`: step 3 of
+  [Manual update — source (git)](#manual-update--source-git) builds the
+  images on the current `php:8.5-fpm`, as every build pulls its base image
+  (`pull: true`), and creates every container anew: they run PHP 8.5.13
+  then. A `docker compose up -d` without `--build` keeps the images of
+  2.15.1, with PHP 8.5.12.
+- **The deploy role** builds the images at each run (`build: always`) on
+  the current base images (`pull: true`), or pulls the images of this
+  release with `ansilume_use_prebuilt_images`.
+- **Images of your own:** one built `FROM` the Ansilume images gets PHP
+  8.5.13 with its next build on the images of this release, and one built
+  from the Dockerfiles on a build that pulls its base image
+  (`docker build --pull`).
+- **A runner installed without Docker** (see
+  [runners.md](runners.md#running-without-docker)) runs the PHP of its
+  host, which the update does not change: update that PHP to 8.5.13 once
+  your packages bring it (packages.sury.org, `ppa:ondrej/php`, Remi's
+  repository or your distribution), check the PHP its service starts
+  (`/usr/bin/php -v`), and restart the runner
+  (`sudo systemctl restart ansilume-runner`): the runner that runs keeps
+  the PHP it started with. Until then write the scheme of its `API_URL` in
+  lowercase in its `.env`, `https://`, not `HTTPS://`, and restart it too:
+  the runner reads `.env` only when it starts.
+
+A runner on PHP older than 8.5.13 (the runner images of 2.15.1 and every
+release before it, those of 2.13.1 on PHP 8.3 too, and a runner without
+Docker on an older PHP of its host) whose `API_URL` starts with
+`HTTPS://`, or with `https` in another mix of cases, may have sent its
+secrets in plain text and received the credentials of its jobs so: its
+runner token, and, when it registers itself, `RUNNER_BOOTSTRAP_SECRET`.
+Write the scheme in lowercase, regenerate its token and rotate those
+credentials, as for a runner on plain HTTP (see
+[runners.md](runners.md#plain-http-warning)). When it registered itself,
+set a new `RUNNER_BOOTSTRAP_SECRET` on the server and on every runner
+that uses it, as whoever has the secret registers runners: delete the
+runners you did not register, and check the audit log for `runner.created`
+and `runner.reregistered` entries you cannot account for.
+
+**Schedules in Cuba run at their time again.** PHP brings its own time
+zone data: PHP 8.5.12, which 2.15.1 runs on, has 2026.5 (IANA's 2026e),
+and PHP 8.5.13 has 2026.6 (IANA's 2026f, of 2026-10-27). 2026.5 turns the
+clocks of Cuba, `America/Havana` and its alias `Cuba`, back to UTC-5 on
+2026-11-01 and forward to UTC-4 again on 2027-03-14, as the data of 2.13.1
+and older releases do. By 2026.6 Cuba stays at UTC-4 from 2026-03-08 until
+2027-11-07 and turns its clocks back to UTC-5 then, as before; from then
+on the two agree. Between 2020 and 2040 they differ in no other zone. So
+2.15.1 stores and runs the schedules in Cuba an hour late from 2026-11-01
+to 2027-03-14: 9:00 at 14:00 UTC, where 9:00 in Havana is 13:00 UTC.
+The notes of the update from 2.13.1 warned of it (see
+[After updating from 2.13.1 or older](#after-updating-from-2131-or-older-php-85-time-zone-data-csv-exports-whole-numbers)).
+
+The update (migration `m000095_000000_recompute_schedule_next_runs_for_cuba`)
+computes anew the next run of every schedule in `America/Havana` and
+`Cuba` that is not yet due, as the update from 2.13.1 did for the zones
+it changed (`m000090`): a next run that 2.15.1 stored an hour late moves
+to its time. An update in the hour after a run's time, where 2.15.1 has
+that run an hour later, does not lose the run: when its time came after
+the schedule's last run and its last change, the schedule's next run
+becomes the moment of the update, so the scheduler launches it as soon as
+the migrations have run, and the runs after it at their times. The same
+holds for a run that 2.15.1 stored after a run it launched an hour late,
+as 9:00 of `0 8,9 * * *` after 8:00. A change after that time (a save,
+enabling the schedule) counts as it does without the update: the schedule
+runs from the change on. A disabled schedule launches nothing and owes no
+run: it gets the first run after the update, and enabling it computes its
+next run from then on. A schedule that is due keeps its next run, which
+the scheduler launches at once, one run for all the runs that passed; a
+schedule whose next run cannot be computed, or that changed meanwhile,
+keeps its next run too.
+
+Schedules in other zones keep their next runs, those in
+`America/Puerto_Rico` too. An update from 2027-03-14 06:00 UTC on (2:00
+in Havana) moves nothing: from then on the next runs 2.15.1 stores are
+the same by both data. An update from 2.13.1 or older runs `m000090`
+first, which replaces the next run 2.13.1 stored: a run that passed in the
+hour before the update still comes, but not the second run of
+`0 8,9 * * *` after 2.13.1 launched the first an hour late. The migration
+prints how many next runs moved, and how many of them to the moment of
+the update, as in
+`Computed anew the next runs of the schedules in America/Havana and Cuba that are not yet due, with time zone data 2026.6: 2 moved, 1 of them to now for a run that passed in the past hour.`
+
+With time zone data older than 2026.6, as that of PHP 8.5.12, the
+migration moves nothing and says so:
+`Moved no next run: the time zone data 2026.5 of this PHP turns the clocks of America/Havana and Cuba back on 2026-11-01, which 2026.6 and later do not.`
+It does so when the app container starts the new code on PHP 8.5.12: in
+a source installation whose app container starts again after `git pull`
+before step 3 has built the images, or on an image of your own built on
+an older base. The migration counts as applied all the same, and each next
+run stored for a time from 2026-11-01 to 2027-03-14 stays an hour late
+until its schedule has run. Once the app container runs PHP 8.5.13, run
+the migration once more, as **Going back** below says for an update after
+going back.
+
+The notes of the update from 2.13.1 suggested `America/Puerto_Rico`, at
+UTC-4 all year, for schedules at Cuba's times until a release brings
+2026f: change such schedules back to `America/Havana` now. Puerto Rico
+stays at UTC-4, while Cuba turns its clocks back to UTC-5 on 2027-11-07:
+from then on such a schedule would run an hour early by Cuba's clocks in
+Cuba's winter. The update does not change their zone. Changing a
+schedule's time zone makes the user who saves it the user it runs as, who
+then never approves its runs; the schedule runs from that save on.
+
+**Going back.** Going back to 2.15.1 needs nothing for the database:
+`m000095` changes no schema, its `migrate/down` changes nothing, and
+2.15.1 launches the next runs the update stored at those times. The
+prebuilt images of 2.15.1 run PHP 8.5.12, with the flaws that 8.5.13
+fixes, on the server and on every runner that runs them, and compute the
+runs in Cuba with 2026.5 again: every run after the next one an hour late,
+until 2027-03-14. Pin them (`ANSILUME_IMAGE_TAG=2.15.1`, see
+[Rollback](#rollback)) only for as long as you must. A source installation
+started from `docker-compose.yml` goes back with `git checkout v2.15.1`
+and step 3, and the deploy role with `ansilume_version: "v2.15.1"` (without
+`ansilume_use_prebuilt_images`): both build 2.15.1 on the current
+`php:8.5-fpm`, that is on PHP 8.5.13, with its fixes and its time zone
+data. To go back further than 2.15.1, first revert the migration of this
+release with this release,
+`docker compose exec -u www-data app php yii migrate/down 1 --interactive=0`,
+which changes nothing: 2.15.1 does not have the migration, so its
+`migrate/down` cannot revert it, nor the migrations before it. Going back
+to 2.14.0, `migrate/down 5` with this release reverts it and the four
+migrations of 2.15.0 together; the rest is as **Going back** of
+[After updating from 2.14.0 or older](#after-updating-from-2140-or-older-redis-810-outbound-http-workflow-notifications-mattermost-lint-in-the-background-recovered-failures)
+says. Going back to 2.13.1 or older, run `migrate/down 6` instead, which
+reverts `m000090` too, whose down changes nothing either: the next update
+then runs it again and computes anew the next runs that 2.13.1 put an hour
+off in its zones. Without it, the advice of the 2.13.1 notes to run
+`m000090` again does not apply, as `m000095` is the newest migration then,
+and those next runs stay off until their schedules have run.
+
+Updating again after going back keeps the next runs that 2.15.1 computed
+meanwhile, as `m000095` ran already: one that 2.15.1 computed an hour late
+in Cuba stays so until its schedule has run. Right after that update, run
+the migration once more, which computes them anew, while it is the newest
+one: when
+`docker compose exec -u www-data app php yii migrate/history 1` names
+`m000095_000000_recompute_schedule_next_runs_for_cuba`,
+`docker compose exec -u www-data app php yii migrate/redo 1 --interactive=0`
+reverts it, which changes nothing, and runs it again. `migrate/redo 1`
+redoes the newest migration, whichever it is. An installation the
+quickstart made from source adds `-f docker-compose.prebuilt.yml` to these
+commands, as to each `docker compose` command.
 
 ---
 
@@ -7714,6 +7921,18 @@ The compose files of 2.14.0 and older run Redis 7.2, which cannot load the
 data of Redis 8.10 in the volume `redis_data`: it exits with
 `Can't handle RDB format version 15` until you remove its container and
 that volume, which signs everyone out once more.
+
+To roll back from the update after 2.15.1 (PHP 8.5.13, and the migration
+`m000095`, which computes the next runs of the schedules in Cuba anew),
+see **Going back** at the end of
+[After updating from 2.15.1 or older](#after-updating-from-2151-or-older-php-8513-schedules-in-cuba):
+2.15.1 needs nothing, but to go back further, revert `m000095` first, with
+the release that has it; `migrate/down 5` there reverts `m000094` to
+`m000091` as well, as going back to 2.14.0 needs, and `migrate/down 6`
+`m000090` too, as going back to 2.13.1 or older needs. The prebuilt images of
+2.15.1 run PHP 8.5.12, with the flaws that 8.5.13 fixes, and run the
+schedules in Cuba an hour late until 2027-03-14: pin them only for as long
+as you must.
 
 ---
 

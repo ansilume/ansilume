@@ -102,18 +102,18 @@ class Redis810UpdateDocsContractTest extends TestCase
     private const EXAMPLE_SECONDS = 930;
 
     /**
-     * The section is the newest, the one of the update to PHP 8.5 follows,
-     * and the rollback and the troubleshooting entry link to it under the
-     * anchor GitHub gives its heading. A failed build of the manual source
-     * update goes back to the release it updated from, 2.14.0 first, which
-     * `git describe` names after a `git pull` (checked in a clone).
-     * Review finding: it named only the release before this one, and an
-     * update from 2.13.1 that went there served 2.14.0's code on the
-     * containers of 2.13.1.
+     * The section follows the one of the update to PHP 8.5.13, the one of
+     * the update to PHP 8.5 follows it, and the rollback and the
+     * troubleshooting entry link to it under the anchor GitHub gives its
+     * heading. A failed build of the manual source update goes back to the
+     * release it updated from, 2.14.0 among them, which `git describe` names
+     * after a `git pull` (checked in a clone). Review finding: it named only
+     * the release before this one, and an update from 2.13.1 that went there
+     * served 2.14.0's code on the containers of 2.13.1.
      */
-    public function testTheSectionIsTheNewest(): void
+    public function testTheSectionFollowsTheUpdateToPhp8513(): void
     {
-        $this->assertUpdateSectionBetween(null, self::UPDATE_SECTION, Php85UpdateDocsContractTest::UPDATE_SECTION);
+        $this->assertUpdateSectionBetween(Php8513UpdateDocsContractTest::UPDATE_SECTION, self::UPDATE_SECTION, Php85UpdateDocsContractTest::UPDATE_SECTION);
         $this->assertSame(self::SECTION_ANCHOR, self::anchor(self::UPDATE_SECTION), 'The anchor GitHub gives the heading.');
         $this->assertSame(self::RDB_ANCHOR, self::anchor(self::RDB_ENTRY), 'The anchor GitHub gives the entry.');
 
@@ -122,7 +122,7 @@ class Redis810UpdateDocsContractTest extends TestCase
         $this->assertMentions('(troubleshooting.md#' . self::RDB_ANCHOR . ')', $this->flat(self::UPDATING, self::UPDATE_SECTION), 'the update notes');
 
         $update = $this->flat(self::UPDATING, self::MANUAL_SOURCE_UPDATE);
-        $this->assertMentions('go back to the release you updated from until a build gets through (`git checkout v2.14.0` from 2.14.0,', $update, 'the manual source update');
+        $this->assertMentions('`git checkout v2.14.0` from 2.14.0,', $update, 'the manual source update: the release this section updates from');
         $this->assertMentions('right after `git pull`, `git describe --tags ORIG_HEAD` names it, and a commit after a release as `v2.13.1-1-gc017f1c`, which `git checkout` takes too', $update, 'the manual source update');
     }
 

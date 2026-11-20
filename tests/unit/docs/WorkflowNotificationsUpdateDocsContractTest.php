@@ -180,7 +180,16 @@ final class WorkflowNotificationsUpdateDocsContractTest extends TestCase
     {
         $raw = $this->section('docs/updating.md', self::SECTION);
         $notes = $this->flat('docs/updating.md', self::SECTION);
-        $this->assertCount(count(self::MIGRATIONS), glob(dirname(__DIR__, 3) . '/migrations/m00009[1-9]_*.php') ?: [], 'migrate/down 4 reverts every migration of the release');
+        // The migrations after m000090 up to the first of a later release:
+        // m000095 came with the update to PHP 8.5.13, whose notes and
+        // rollback revert it first (Php8513UpdateDocsContractTest).
+        // Regression: this counted every migration from m000091 on, so the
+        // first migration of the next release failed the history of this one.
+        $ofTheRelease = array_filter(
+            glob(dirname(__DIR__, 3) . '/migrations/m00009[1-9]_*.php') ?: [],
+            static fn (string $file): bool => strcmp(basename($file), 'm000095') < 0
+        );
+        $this->assertCount(count(self::MIGRATIONS), $ofTheRelease, 'migrate/down 4 reverts every migration of the release');
         foreach (self::MIGRATIONS as $migration) {
             $this->assertMentions('`' . $migration . '`', $notes, 'the update notes, on the migrations');
         }
